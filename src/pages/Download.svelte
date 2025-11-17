@@ -30,6 +30,7 @@
 
  // Auto-detect protocol based on file metadata
   let detectedProtocol: 'WebRTC' | 'Bitswap' | null = null
+  let torrentDownloads = new Map<string, any>();
   onMount(() => {
     // Initialize payment service to load persisted wallet and transactions
     paymentService.initialize();
@@ -38,6 +39,61 @@
 
     // Listen for multi-source download events
     const setupEventListeners = async () => {
+      // Listen for BitTorrent events
+      const unlistenTorrentEvent = await listen('torrent_event', (event) => {
+        const payload = event.payload as any;
+        console.log('Received torrent event:', payload);
+
+        if (payload.Progress) {
+          const { info_hash, downloaded, total, speed, peers, eta_seconds } = payload.Progress;
+          torrentDownloads.set(info_hash, {
+            info_hash,
+            name: torrentDownloads.get(info_hash)?.name || 'Fetching name...',
+            status: 'downloading',
+            progress: total > 0 ? (downloaded / total) * 100 : 0,
+            speed: toHumanReadableSize(speed) + '/s',
+            eta: eta_seconds ? `${eta_seconds}s` : 'N/A',
+            peers,
+            size: total,
+          });
+          torrentDownloads = new Map(torrentDownloads); // Trigger reactivity
+        } else if (payload.Complete) {
+          const { info_hash, name } = payload.Complete;
+          const existing = torrentDownloads.get(info_hash);
+          if (existing) {
+            torrentDownloads.set(info_hash, { ...existing, status: 'completed', progress: 100 });
+            torrentDownloads = new Map(torrentDownloads);
+            showNotification(`Torrent download complete: ${name}`, 'success');
+          }
+        } else if (payload.Added) {
+            const { info_hash, name } = payload.Added;
+            torrentDownloads.set(info_hash, {
+                info_hash,
+                name,
+                status: 'downloading',
+                progress: 0,
+                speed: '0 B/s',
+                eta: 'N/A',
+                peers: 0,
+                size: 0,
+            });
+            torrentDownloads = new Map(torrentDownloads);
+            showNotification(`Torrent added: ${name}`, 'info');
+        } else if (payload.Removed) {
+            const { info_hash } = payload.Removed;
+            if (torrentDownloads.has(info_hash)) {
+                const name = torrentDownloads.get(info_hash)?.name || 'Unknown';
+                torrentDownloads.delete(info_hash);
+                torrentDownloads = new Map(torrentDownloads);
+                showNotification(`Torrent removed: ${name}`, 'warning');
+            }
+        }
+      });
+
+      // Cleanup torrent listener
+      onDestroy(() => {
+        unlistenTorrentEvent();
+      });
       try {
         const unlistenProgress = await listen('multi_source_progress_update', (event) => {
           const progress = event.payload as MultiSourceProgress
@@ -370,6 +426,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           unlistenDownloadCompleted()
           unlistenDhtError()
           unlistenWebRTCComplete()
+          unlistenTorrentEvent()
         }
       } catch (error) {
         console.error('Failed to setup event listeners:', error)
@@ -1809,6 +1866,48 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       />
     </div>
   </Card>
+
+  <!-- BitTorrent Downloads List -->
+  {#if torrentDownloads.size > 0}
+    <Card class="p-6">
+      <h2 class="text-xl font-semibold mb-4">BitTorrent Downloads</h2>
+      <div class="space-y-3">
+        {#each [...torrentDownloads.values()] as torrent (torrent.info_hash)}
+          <div class="p-3 bg-muted/60 rounded-lg">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="font-semibold text-sm">{torrent.name}</h3>
+                <p class="text-xs text-muted-foreground truncate">Info Hash: {torrent.info_hash}</p>
+              </div>
+              <Badge>{torrent.status}</Badge>
+            </div>
+            {#if torrent.status === 'downloading'}
+              <div class="mt-2">
+                <Progress value={torrent.progress || 0} class="h-2" />
+                <div class="flex justify-between text-xs text-muted-foreground mt-1">
+                  <span>{torrent.progress.toFixed(2)}%</span>
+                  <span>{torrent.speed}</span>
+                  <span>ETA: {torrent.eta}</span>
+                  <span>Peers: {torrent.peers}</span>
+                </div>
+              </div>
+            {/if}
+            <div class="flex gap-2 mt-2">
+                <Button size="sm" variant="outline" on:click={() => invoke('pause_torrent', { infoHash: torrent.info_hash })}>
+                    <Pause class="h-3 w-3 mr-1" /> Pause
+                </Button>
+                <Button size="sm" variant="outline" on:click={() => invoke('resume_torrent', { infoHash: torrent.info_hash })}>
+                    <Play class="h-3 w-3 mr-1" /> Resume
+                </Button>
+                <Button size="sm" variant="destructive" on:click={() => invoke('remove_torrent', { infoHash: torrent.info_hash, deleteFiles: false })}>
+                    <X class="h-3 w-3 mr-1" /> Remove
+                </Button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    </Card>
+  {/if}
 
   <!-- Unified Downloads List -->
   <Card class="p-6">

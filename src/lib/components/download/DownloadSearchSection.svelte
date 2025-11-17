@@ -45,7 +45,7 @@
   let showPeerSelectionModal = false;
   let selectedFile: FileMetadata | null = null;
   let peerSelectionMode: 'auto' | 'manual' = 'auto';
-  let selectedProtocol: 'http' | 'webrtc' = 'http';
+  let selectedProtocol: 'http' | 'webrtc' | 'bitswap' = 'http';
   let availablePeers: PeerInfo[] = [];
   let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
 
@@ -577,7 +577,7 @@
       await handleHttpDownload(selectedFile, selectedPeers);
     } else {
       // WebRTC download flow (existing)
-      console.log(`🔍 DEBUG: Initiating WebRTC download for file: ${selectedFile.fileName}`);
+      console.log(`🔍 DEBUG: Initiating ${selectedProtocol} download for file: ${selectedFile.fileName}`);
 
       const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
         ...selectedFile,
@@ -601,6 +601,21 @@
       const { invoke } = await import("@tauri-apps/api/core");
       const { save } = await import('@tauri-apps/plugin-dialog');
 
+      // For HTTP, use the first selected peer
+      const firstPeer = selectedPeerIds[0];
+      if (!firstPeer) {
+        throw new Error('No peers selected for HTTP download');
+      }
+
+      // PAYMENT PROCESSING: Calculate and check payment before download
+      const paymentAmount = await paymentService.calculateDownloadCost(file.fileSize);
+      console.log(`💰 Payment required for HTTP download: ${paymentAmount.toFixed(6)} Chiral for ${file.fileName}`);
+
+      // Check if user has sufficient balance
+      if (paymentAmount > 0 && !paymentService.hasSufficientBalance(paymentAmount)) {
+        throw new Error(`Insufficient balance. Need ${paymentAmount.toFixed(4)} Chiral`);
+      }
+
       // Show file save dialog
       const outputPath = await save(buildSaveDialogOptions(file.fileName));
 
@@ -609,27 +624,61 @@
         return;
       }
 
-      // For HTTP, use the first selected peer
-      // Get HTTP URL from DHT metadata
-      const firstPeer = selectedPeerIds[0];
-      if (!firstPeer) {
-        throw new Error('No peers selected for HTTP download');
-      }
-
       // Get HTTP URL from file metadata (published to DHT)
       const seederUrl = file.httpSources?.[0]?.url || `http://localhost:8080`;
       const merkleRoot = file.fileHash || file.merkleRoot || '';
 
       console.log(`📡 Starting HTTP download from ${seederUrl}`);
-      await invoke('download_file_http', {
-        seederUrl,
-        merkleRoot,
-        outputPath
-      });
+      console.log(`   File hash: ${merkleRoot}`);
+      console.log(`   Output path: ${outputPath}`);
+      
+      pushMessage(`Starting HTTP download to ${outputPath}`, 'info');
+      
+      try {
+        await invoke('download_file_http', {
+          seederUrl,
+          merkleRoot,
+          outputPath
+        });
 
-      pushMessage(`HTTP download started successfully`, 'success');
+        console.log(`✅ HTTP download completed: ${outputPath}`);
+
+        // Process payment after successful download
+        // Use uploaderAddress from file metadata (this is the wallet address of who uploaded the file)
+        const seederWalletAddress = paymentService.isValidWalletAddress(file.uploaderAddress)
+          ? file.uploaderAddress!
+          : null;
+
+        if (!seederWalletAddress) {
+          console.warn('⚠️ Skipping HTTP download payment due to missing or invalid uploader wallet address', {
+            file: file.fileName,
+            uploaderAddress: file.uploaderAddress
+          });
+          pushMessage(`Download completed but payment skipped: missing uploader wallet address`, 'warning', 6000);
+        } else {
+          const paymentResult = await paymentService.processDownloadPayment(
+            merkleRoot,
+            file.fileName,
+            file.fileSize,
+            seederWalletAddress,
+            firstPeer
+          );
+
+          if (paymentResult.success) {
+            console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress}`);
+            pushMessage(`Download completed! Paid ${paymentAmount.toFixed(4)} Chiral to seeder`, 'success', 8000);
+          } else {
+            console.error('❌ Payment failed:', paymentResult.error);
+            pushMessage(`Download completed but payment failed: ${paymentResult.error}`, 'warning', 6000);
+          }
+        }
+      } catch (invokeError) {
+        // Log the actual error from Rust
+        console.error('❌ HTTP download invoke error:', invokeError);
+        throw invokeError;
+      }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = error instanceof Error ? error.message : String(error);
       pushMessage(`HTTP download failed: ${errorMessage}`, 'error', 6000);
       console.error('HTTP download failed:', error);
     }

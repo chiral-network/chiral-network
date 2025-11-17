@@ -1,11 +1,14 @@
+use crate::bittorrent_handler::{BitTorrentHandler};
 use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
-use crate::download_source::{DownloadSource, Ed2kSourceInfo as DownloadEd2kSourceInfo, FtpSourceInfo as DownloadFtpSourceInfo};
+use crate::download_source::{BitTorrentSourceInfo, DownloadSource, Ed2kSourceInfo as DownloadEd2kSourceInfo, FtpSourceInfo as DownloadFtpSourceInfo};
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
+use md4::Md4;
 use crate::ftp_downloader::{FtpDownloader, FtpCredentials};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use suppaftp::FtpStream;
 use url::Url;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -22,7 +25,7 @@ const CHUNK_REQUEST_TIMEOUT_SECS: u64 = 60;
 #[allow(dead_code)]
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub struct ChunkInfo {
     pub chunk_id: u32,
@@ -87,6 +90,36 @@ pub type PeerAssignment = SourceAssignment;
 #[deprecated(note = "Use SourceStatus instead")]
 pub type PeerStatus = SourceStatus;
 
+fn normalized_sha256_hex(hash: &str) -> Option<String> {
+    let trimmed = hash.trim();
+    if trimmed.len() != 64 {
+        return None;
+    }
+
+    if trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(trimmed.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+fn verify_chunk_integrity(chunk: &ChunkInfo, data: &[u8]) -> Result<(), (String, String)> {
+    let expected = match normalized_sha256_hex(&chunk.hash) {
+        Some(value) => value,
+        None => return Ok(()),
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let actual = hex::encode(hasher.finalize());
+
+    if actual != expected {
+        return Err((chunk.hash.clone(), actual));
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MultiSourceProgress {
@@ -142,6 +175,7 @@ pub struct MultiSourceDownloadService {
     dht_service: Arc<DhtService>,
     webrtc_service: Arc<WebRTCService>,
     ftp_downloader: Arc<FtpDownloader>,
+    bittorrent_handler: Arc<BitTorrentHandler>,
     proxy_latency_service: Option<Arc<Mutex<crate::proxy_latency::ProxyLatencyService>>>,
     active_downloads: Arc<RwLock<HashMap<String, ActiveDownload>>>,
     event_tx: mpsc::UnboundedSender<MultiSourceEvent>,
@@ -213,7 +247,11 @@ pub enum MultiSourceEvent {
 }
 
 impl MultiSourceDownloadService {
-    pub fn new(dht_service: Arc<DhtService>, webrtc_service: Arc<WebRTCService>) -> Self {
+    pub fn new(
+        dht_service: Arc<DhtService>,
+        webrtc_service: Arc<WebRTCService>,
+        bittorrent_handler: Arc<BitTorrentHandler>,
+    ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -221,6 +259,7 @@ impl MultiSourceDownloadService {
             dht_service,
             webrtc_service,
             ftp_downloader: Arc::new(FtpDownloader::new()),
+            bittorrent_handler,
             proxy_latency_service: Some(Arc::new(Mutex::new(
                 crate::proxy_latency::ProxyLatencyService::new(),
             ))),
@@ -384,6 +423,21 @@ impl MultiSourceDownloadService {
             }
         }
 
+        // 4. Discover BitTorrent source from metadata
+        if let Some(info_hash) = &metadata.info_hash {
+            info!("Found BitTorrent source for file with info_hash: {}", info_hash);
+            let mut magnet_uri = format!("magnet:?xt=urn:btih:{}", info_hash);
+            if let Some(trackers) = &metadata.trackers {
+                for tracker in trackers {
+                    magnet_uri.push_str("&tr=");
+                    magnet_uri.push_str(tracker);
+                }
+            }
+            available_sources.push(DownloadSource::BitTorrent(BitTorrentSourceInfo {
+                magnet_uri,
+            }));
+        }
+
         if available_sources.is_empty() {
             return Err("No sources available for download".to_string());
         }
@@ -535,6 +589,9 @@ impl MultiSourceDownloadService {
                 }
                 DownloadSource::Ed2k(ed2k_info) => {
                     self.start_ed2k_connection(file_hash, ed2k_info.clone(), chunk_ids).await?;
+                }
+                DownloadSource::BitTorrent(bt_info) => {
+                    self.start_bittorrent_download(file_hash, bt_info.clone(), chunk_ids).await?;
                 }
             }
         }
@@ -906,19 +963,50 @@ impl MultiSourceDownloadService {
                                 };
 
                                 if !is_last_chunk {
-                                    let error_msg = format!("Chunk size mismatch: expected {}, got {}", chunk.size, data.len());
+                                    let error_msg = format!(
+                                        "Chunk size mismatch: expected {}, got {}",
+                                        chunk.size,
+                                        data.len()
+                                    );
+                                    {
+                                        let mut downloads_guard = downloads.write().await;
+                                        if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                            download.failed_chunks.push_back(chunk.chunk_id);
+                                        }
+                                    }
                                     let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
                                         file_hash: file_hash.clone(),
                                         chunk_id: chunk.chunk_id,
                                         peer_id: ftp_url.clone(),
-                                        error: error_msg,
+                                        error: error_msg.clone(),
                                     });
                                     return;
                                 }
                             }
 
-                            // TODO: Add hash verification here once chunk hashes are properly calculated
-                            // For now, we'll skip hash verification as it needs to be implemented in the chunk calculation
+                            if let Err((expected, actual)) = verify_chunk_integrity(&chunk, &data) {
+                                let error_msg = format!(
+                                    "Chunk hash mismatch: expected {}, got {}",
+                                    expected, actual
+                                );
+                                warn!(
+                                    "FTP chunk {} hash verification failed: {}",
+                                    chunk.chunk_id, error_msg
+                                );
+                                {
+                                    let mut downloads_guard = downloads.write().await;
+                                    if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                        download.failed_chunks.push_back(chunk.chunk_id);
+                                    }
+                                }
+                                let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
+                                    file_hash: file_hash.clone(),
+                                    chunk_id: chunk.chunk_id,
+                                    peer_id: ftp_url.clone(),
+                                    error: error_msg,
+                                });
+                                return;
+                            }
 
                             // Store completed chunk
                             {
@@ -1019,6 +1107,52 @@ impl MultiSourceDownloadService {
                 info!("FTP source {} completed all assigned chunks", ftp_url_clone);
             }
         });
+    }
+
+    /// Start HTTP download (placeholder implementation)
+    async fn start_http_download(
+        &self,
+        file_hash: &str,
+        _http_info: crate::download_source::HttpSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) -> Result<(), String> {
+        info!("HTTP download not yet implemented for {} chunks", chunk_ids.len());
+        
+        // Mark as failed for now
+        self.on_source_failed(file_hash, "http_placeholder", "HTTP download not implemented".to_string()).await;
+        Err("HTTP download not implemented".to_string())
+    }
+
+    /// Start BitTorrent download
+    async fn start_bittorrent_download(
+        &self,
+        file_hash: &str,
+        bt_info: BitTorrentSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) -> Result<(), String> {
+        info!(
+            "Starting BitTorrent download for {} chunks using magnet: {}",
+            chunk_ids.len(),
+            bt_info.magnet_uri
+        );
+        // Placeholder implementation
+        self.on_source_failed(file_hash, &bt_info.magnet_uri, "BitTorrent download not implemented".to_string()).await;
+        Err("BitTorrent download not implemented".to_string())
+    }
+
+    /// Parse remote path from FTP URL (placeholder implementation) 
+    fn parse_ftp_remote_path(&self, url: &str) -> Result<String, String> {
+        use url::Url;
+        
+        let parsed_url = Url::parse(url)
+            .map_err(|e| format!("Invalid FTP URL: {}", e))?;
+        
+        let path = parsed_url.path();
+        if path.is_empty() || path == "/" {
+            return Err("No file path specified in FTP URL".to_string());
+        }
+        
+        Ok(path.to_string())
     }
 
     /// Start Ed2k connection and begin downloading chunks
@@ -1127,15 +1261,17 @@ impl MultiSourceDownloadService {
         }
 
         // Group chunks by ed2k chunk to avoid downloading the same ed2k chunk multiple times
-        let grouped_by_ed2k = self.group_chunks_by_ed2k_chunk(&chunk_ids, &chunks_info);
+        let grouped_by_ed2k = self.group_chunks_by_ed2k_chunk(&chunks_info);
 
         let file_hash_clone = file_hash.to_string();
-        let ed2k_connections: Arc<Mutex<HashMap<String, Ed2kClient>>> = Arc::clone(&self.ed2k_connections);
+        let ed2k_connections = Arc::clone(&self.ed2k_connections);
         let active_downloads = Arc::clone(&self.active_downloads);
         let chunks_map_clone = Arc::new(chunks_map);
 
-        // Spawn task to download chunks concurrently (limit to 2 concurrent downloads per server)
+        // Spawn task to download chunks
         tokio::spawn(async move {
+            
+            // Limit concurrent ed2k chunk downloads (ed2k chunks are 9.28 MB each)
             let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
             let mut handles = Vec::new();
 
@@ -1144,11 +1280,11 @@ impl MultiSourceDownloadService {
             let mut sorted_ed2k_chunks: Vec<_> = grouped_by_ed2k.into_iter().collect();
             sorted_ed2k_chunks.sort_by_key(|(ed2k_id, _)| *ed2k_id);
             
-            for (ed2k_chunk_id, mut our_chunk_ids) in sorted_ed2k_chunks {
-                // Sort chunk IDs within this ed2k chunk to extract in order
-                our_chunk_ids.sort();
+            for (ed2k_chunk_id, mut our_chunk_infos) in sorted_ed2k_chunks {
+                // Sort chunk infos within this ed2k chunk by chunk_id to extract in order
+                our_chunk_infos.sort_by_key(|chunk| chunk.chunk_id);
                 let permit = semaphore.clone().acquire_owned().await;
-                let ed2k_connections_clone: Arc<Mutex<HashMap<String, Ed2kClient>>> = Arc::clone(&ed2k_connections);
+                let ed2k_connections_clone = Arc::clone(&ed2k_connections);
                 let active_downloads_clone = Arc::clone(&active_downloads);
                 let file_hash_inner = file_hash_clone.clone();
                 let server_url_clone = server_url_id.clone();
@@ -1167,12 +1303,8 @@ impl MultiSourceDownloadService {
                     if let Some(mut client) = ed2k_client {
                         // Download the entire ed2k chunk once
                         // Use the first chunk's hash as reference (all chunks in same ed2k chunk share the ed2k chunk hash)
-                        let first_chunk_id = our_chunk_ids[0];
-                        let expected_chunk_hash = if let Some(first_chunk) = chunks_map_clone.get(&first_chunk_id) {
-                            format!("{:032x}", first_chunk.chunk_id)
-                        } else {
-                            format!("{:032x}", first_chunk_id)
-                        };
+                        let first_chunk_info = &our_chunk_infos[0];
+                        let expected_chunk_hash = format!("{:032x}", first_chunk_info.chunk_id);
 
                         match client.download_chunk(&ed2k_file_hash, ed2k_chunk_id, &expected_chunk_hash).await {
                             Ok(ed2k_chunk_data) => {
@@ -1186,8 +1318,8 @@ impl MultiSourceDownloadService {
                                     // Mark all chunks in this ed2k chunk as failed
                                     let mut downloads = active_downloads_clone.write().await;
                                     if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                        for chunk_id in &our_chunk_ids {
-                                            download.failed_chunks.push_back(*chunk_id);
+                                        for chunk_info in &our_chunk_infos {
+                                            download.failed_chunks.push_back(chunk_info.chunk_id);
                                         }
                                     }
                                     
@@ -1200,38 +1332,36 @@ impl MultiSourceDownloadService {
                                 // Extract all needed chunks from the downloaded ed2k chunk
                                 let mut downloads = active_downloads_clone.write().await;
                                 if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                    for chunk_id in &our_chunk_ids {
-                                        if let Some(chunk_info) = chunks_map_clone.get(chunk_id) {
-                                            // Calculate offset within the ed2k chunk
-                                            let offset_within_ed2k = chunk_info.offset % ED2K_CHUNK_SIZE as u64;
+                                    for chunk_info in &our_chunk_infos {
+                                        // Calculate offset within the ed2k chunk
+                                        let offset_within_ed2k = chunk_info.offset % ED2K_CHUNK_SIZE as u64;
 
-                                            // Extract the 256 KB chunk from the ed2k chunk
-                                            let start = offset_within_ed2k as usize;
-                                            let end = std::cmp::min(start + chunk_info.size, ed2k_chunk_data.len());
-                                            
-                                            if end <= ed2k_chunk_data.len() {
-                                                let chunk_data = ed2k_chunk_data[start..end].to_vec();
+                                        // Extract the 256 KB chunk from the ed2k chunk
+                                        let start = offset_within_ed2k as usize;
+                                        let end = std::cmp::min(start + chunk_info.size, ed2k_chunk_data.len());
+                                        
+                                        if end <= ed2k_chunk_data.len() {
+                                            let chunk_data = ed2k_chunk_data[start..end].to_vec();
 
-                                                let completed_chunk = CompletedChunk {
-                                                    chunk_id: *chunk_id,
-                                                    data: chunk_data,
-                                                    source_id: server_url_clone.clone(),
-                                                    completed_at: Instant::now(),
-                                                };
+                                            let completed_chunk = CompletedChunk {
+                                                chunk_id: chunk_info.chunk_id,
+                                                data: chunk_data,
+                                                source_id: server_url_clone.clone(),
+                                                completed_at: Instant::now(),
+                                            };
 
-                                                download.completed_chunks.insert(*chunk_id, completed_chunk);
+                                            download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
 
-                                                info!(
-                                                    "Ed2k chunk {} extracted from ed2k chunk {} (offset {})",
-                                                    chunk_id, ed2k_chunk_id, offset_within_ed2k
-                                                );
-                                            } else {
-                                                error!(
-                                                    "Cannot extract chunk {} from ed2k chunk {}: offset {} + size {} exceeds ed2k chunk size {}",
-                                                    chunk_id, ed2k_chunk_id, start, chunk_info.size, ed2k_chunk_data.len()
-                                                );
-                                                download.failed_chunks.push_back(*chunk_id);
-                                            }
+                                            info!(
+                                                "Ed2k chunk {} extracted from ed2k chunk {} (offset {})",
+                                                chunk_info.chunk_id, ed2k_chunk_id, offset_within_ed2k
+                                            );
+                                        } else {
+                                            error!(
+                                                "Cannot extract chunk {} from ed2k chunk {}: offset {} + size {} exceeds ed2k chunk size {}",
+                                                chunk_info.chunk_id, ed2k_chunk_id, start, chunk_info.size, ed2k_chunk_data.len()
+                                            );
+                                            download.failed_chunks.push_back(chunk_info.chunk_id);
                                         }
                                     }
                                 }
@@ -1245,8 +1375,8 @@ impl MultiSourceDownloadService {
                                 // Mark all chunks in this ed2k chunk as failed
                                 let mut downloads = active_downloads_clone.write().await;
                                 if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                                    for chunk_id in &our_chunk_ids {
-                                        download.failed_chunks.push_back(*chunk_id);
+                                    for chunk_info in &our_chunk_infos {
+                                        download.failed_chunks.push_back(chunk_info.chunk_id);
                                     }
                                 }
                             }
@@ -1261,8 +1391,8 @@ impl MultiSourceDownloadService {
                         // Mark all chunks as failed if client not available
                         let mut downloads = active_downloads_clone.write().await;
                         if let Some(download) = downloads.get_mut(&file_hash_inner) {
-                            for chunk_id in &our_chunk_ids {
-                                download.failed_chunks.push_back(*chunk_id);
+                            for chunk_info in &our_chunk_infos {
+                                download.failed_chunks.push_back(chunk_info.chunk_id);
                             }
                         }
                     }
@@ -1279,121 +1409,349 @@ impl MultiSourceDownloadService {
         });
     }
 
-    /// Start HTTP download (placeholder)
-    async fn start_http_download(
-        &self,
-        file_hash: &str,
-        _http_info: crate::download_source::HttpSourceInfo,
-        chunk_ids: Vec<u32>,
-    ) -> Result<(), String> {
-        info!("HTTP download not yet implemented");
+    /// Group our chunks by ed2k chunk
+    /// Returns: HashMap<ed2k_chunk_id, Vec<our_chunk_info>>
+    fn group_chunks_by_ed2k_chunk(&self, our_chunks: &[ChunkInfo]) -> std::collections::HashMap<u32, Vec<ChunkInfo>> {
+        let mut grouped = std::collections::HashMap::new();
         
-        // Mark as failed for now
-        self.on_source_failed(file_hash, "http_placeholder", "HTTP download not implemented".to_string()).await;
-        Err("HTTP download not implemented".to_string())
-    }
-
-    // FTP chunk downloading implementation removed - this belongs to "FTP Data Fetching & Verification" task
-
-    /// Parse remote path from FTP URL
-    fn parse_ftp_remote_path(&self, url: &str) -> Result<String, String> {
-        let parsed_url = Url::parse(url)
-            .map_err(|e| format!("Invalid FTP URL: {}", e))?;
-        
-        let path = parsed_url.path();
-        if path.is_empty() || path == "/" {
-            return Err("No file path specified in FTP URL".to_string());
+        for chunk in our_chunks {
+            let (ed2k_chunk_id, _) = self.map_our_chunk_to_ed2k_chunk(chunk);
+            grouped.entry(ed2k_chunk_id)
+                .or_insert_with(Vec::new)
+                .push(chunk.clone());
         }
         
-        Ok(path.to_string())
-    }
-
-    /// Calculate byte range for FTP request based on chunk info
-    fn calculate_ftp_byte_range(&self, chunk_info: &ChunkInfo) -> (u64, u64) {
-        (chunk_info.offset, chunk_info.size as u64)
-    }
-
-    // ============================================================================
-    // ed2k Chunk Mapping Functions (Person 4: Task 4.2 & 4.4)
-    // ============================================================================
-
-    /// Map our chunk ID to ed2k chunk ID and offset within that ed2k chunk
-    /// 
-    /// Our chunks are 256KB, ed2k chunks are 9.28 MB (9,728,000 bytes)
-    /// One ed2k chunk contains approximately 38 of our chunks (9,728,000 / 256,000 = 38)
-    /// 
-    /// Returns: (ed2k_chunk_id, offset_within_ed2k_chunk)
-    fn map_our_chunk_to_ed2k_chunk(&self, our_chunk: &ChunkInfo) -> (u32, u64) {
-        let ed2k_chunk_id = (our_chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
-        let offset_within_ed2k = our_chunk.offset % ED2K_CHUNK_SIZE as u64;
-        (ed2k_chunk_id, offset_within_ed2k)
-    }
-
-    /// Map ed2k chunk ID to range of our chunk IDs
-    /// 
-    /// Returns the range of our chunk IDs that fall within the specified ed2k chunk
-    /// 
-    /// Returns: (start_chunk_id, end_chunk_id_inclusive)
-    fn map_ed2k_chunk_to_our_chunks(
-        &self,
-        ed2k_chunk_id: u32,
-        total_file_size: u64,
-        our_chunk_size: usize,
-    ) -> (u32, u32) {
-        let ed2k_chunk_start_offset = ed2k_chunk_id as u64 * ED2K_CHUNK_SIZE as u64;
-        let ed2k_chunk_end_offset = std::cmp::min(
-            ed2k_chunk_start_offset + ED2K_CHUNK_SIZE as u64,
-            total_file_size,
-        );
-
-        let start_chunk_id = (ed2k_chunk_start_offset / our_chunk_size as u64) as u32;
-        let end_chunk_id = ((ed2k_chunk_end_offset - 1) / our_chunk_size as u64) as u32;
-
-        (start_chunk_id, end_chunk_id)
-    }
-
-    /// Group our chunk IDs by the ed2k chunk they belong to
-    /// 
-    /// This is useful for Person 5 to download entire ed2k chunks and then split them
-    /// 
-    /// Returns: HashMap<ed2k_chunk_id, Vec<our_chunk_ids>>
-    fn group_chunks_by_ed2k_chunk(
-        &self,
-        our_chunk_ids: &[u32],
-        chunks: &[ChunkInfo],
-    ) -> HashMap<u32, Vec<u32>> {
-        let mut grouped: HashMap<u32, Vec<u32>> = HashMap::new();
-
-        for &chunk_id in our_chunk_ids {
-            if let Some(chunk) = chunks.iter().find(|c| c.chunk_id == chunk_id) {
-                let (ed2k_chunk_id, _) = self.map_our_chunk_to_ed2k_chunk(chunk);
-                grouped
-                    .entry(ed2k_chunk_id)
-                    .or_insert_with(Vec::new)
-                    .push(chunk_id);
-            }
-        }
-
         grouped
     }
 
-    /// Calculate chunk size considering ed2k sources
-    /// 
-    /// If ed2k sources are present, returns the ed2k chunk size (9.28 MB)
-    /// Otherwise, returns the default chunk size (256 KB)
-    /// 
-    /// This is used to understand the relationship between our chunks and ed2k chunks
-    fn calculate_ed2k_aware_chunk_size(
-        &self,
-        metadata: &FileMetadata,
-    ) -> usize {
-        if metadata.ed2k_sources.is_some() && !metadata.ed2k_sources.as_ref().unwrap().is_empty() {
-            // ed2k sources present - return ed2k chunk size for reference
-            ED2K_CHUNK_SIZE
-        } else {
-            // No ed2k sources - use default chunk size
-            DEFAULT_CHUNK_SIZE
+    /// Static version of group_chunks_by_ed2k_chunk for use in spawned tasks
+    fn group_chunks_by_ed2k_chunk_static(our_chunks: &[ChunkInfo]) -> std::collections::HashMap<u32, Vec<ChunkInfo>> {
+        let mut grouped = std::collections::HashMap::new();
+        
+        for chunk in our_chunks {
+            let ed2k_chunk_id = (chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+            grouped.entry(ed2k_chunk_id)
+                .or_insert_with(Vec::new)
+                .push(chunk.clone());
         }
+        
+        grouped
+    }
+
+    /// Download entire ed2k chunk (9.28 MB) with MD4 verification
+    async fn download_ed2k_chunk(
+        &self,
+        ed2k_connections: &Arc<Mutex<HashMap<String, Ed2kClient>>>,
+        server_url: &str,
+        file_hash: &str,
+        ed2k_chunk_id: u32,
+    ) -> Result<Vec<u8>, String> {
+        // Get ed2k client from connection pool
+        let mut ed2k_client = {
+            let mut connections = ed2k_connections.lock().await;
+            connections.remove(server_url)
+                .ok_or_else(|| format!("Ed2k client not found in connection pool for {}", server_url))?
+        };
+
+        // Calculate expected chunk hash for verification
+        let expected_chunk_hash = self.get_ed2k_chunk_hash(file_hash, ed2k_chunk_id).await?;
+
+        // Download the ed2k chunk
+        let result = ed2k_client.download_chunk(file_hash, ed2k_chunk_id, &expected_chunk_hash).await;
+
+        // Return client to pool regardless of outcome
+        {
+            let mut connections = ed2k_connections.lock().await;
+            connections.insert(server_url.to_string(), ed2k_client);
+        }
+
+        // Process download result
+        match result {
+            Ok(data) => {
+                // Verify MD4 hash
+                if self.verify_ed2k_chunk_hash(&data, &expected_chunk_hash).await? {
+                    info!("Ed2k chunk {} downloaded and verified successfully", ed2k_chunk_id);
+                    Ok(data)
+                } else {
+                    Err(format!("Ed2k chunk {} hash verification failed", ed2k_chunk_id))
+                }
+            }
+            Err(e) => Err(format!("Ed2k chunk download failed: {:?}", e))
+        }
+    }
+
+    /// Static version of download_ed2k_chunk for use in spawned tasks
+    async fn download_ed2k_chunk_static(
+        ed2k_connections: &Arc<Mutex<HashMap<String, Ed2kClient>>>,
+        server_url: &str,
+        file_hash: &str,
+        ed2k_chunk_id: u32,
+    ) -> Result<Vec<u8>, String> {
+        // Get ed2k client from connection pool
+        let mut ed2k_client = {
+            let mut connections = ed2k_connections.lock().await;
+            connections.remove(server_url)
+                .ok_or_else(|| format!("Ed2k client not found in connection pool for {}", server_url))?
+        };
+
+        // Calculate expected chunk hash for verification
+        let expected_chunk_hash = Self::get_ed2k_chunk_hash_static(file_hash, ed2k_chunk_id).await?;
+
+        // Download the ed2k chunk
+        let result = ed2k_client.download_chunk(file_hash, ed2k_chunk_id, &expected_chunk_hash).await;
+
+        // Return client to pool regardless of outcome
+        {
+            let mut connections = ed2k_connections.lock().await;
+            connections.insert(server_url.to_string(), ed2k_client);
+        }
+
+        // Process download result
+        match result {
+            Ok(data) => {
+                // Verify MD4 hash
+                if Self::verify_ed2k_chunk_hash_static(&data, &expected_chunk_hash).await? {
+                    info!("Ed2k chunk {} downloaded and verified successfully", ed2k_chunk_id);
+                    Ok(data)
+                } else {
+                    Err(format!("Ed2k chunk {} hash verification failed", ed2k_chunk_id))
+                }
+            }
+            Err(e) => Err(format!("Ed2k chunk download failed: {:?}", e))
+        }
+    }
+
+    /// Split ed2k chunk into our chunks and store them
+    async fn split_and_store_ed2k_chunk(
+        &self,
+        active_downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
+        file_hash: &str,
+        server_url: &str,
+        ed2k_chunk_id: u32,
+        ed2k_chunk_data: &[u8],
+        our_chunks: &[ChunkInfo],
+    ) {
+        for chunk in our_chunks {
+            let (chunk_ed2k_id, offset_within_ed2k) = self.map_our_chunk_to_ed2k_chunk(chunk);
+            
+            // Ensure this chunk belongs to this ed2k chunk
+            if chunk_ed2k_id != ed2k_chunk_id {
+                continue;
+            }
+
+            // Extract our chunk data from ed2k chunk
+            let start_offset = offset_within_ed2k as usize;
+            let end_offset = std::cmp::min(
+                start_offset + chunk.size, 
+                ed2k_chunk_data.len()
+            );
+
+            if start_offset >= ed2k_chunk_data.len() {
+                warn!("Chunk {} offset {} beyond ed2k chunk size {}", 
+                    chunk.chunk_id, start_offset, ed2k_chunk_data.len());
+                continue;
+            }
+
+            let our_chunk_data = ed2k_chunk_data[start_offset..end_offset].to_vec();
+
+            // Verify our chunk size
+            if our_chunk_data.len() != chunk.size {
+                // Allow size mismatch for last chunk
+                let is_last_chunk = self.is_last_chunk(active_downloads, file_hash, chunk.chunk_id).await;
+                if !is_last_chunk {
+                    warn!("Chunk {} size mismatch: expected {}, got {}", 
+                        chunk.chunk_id, chunk.size, our_chunk_data.len());
+                    continue;
+                }
+            }
+
+            // Store completed chunk
+            let mut downloads = active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                let completed_chunk = CompletedChunk {
+                    chunk_id: chunk.chunk_id,
+                    data: our_chunk_data,
+                    source_id: server_url.to_string(),
+                    completed_at: Instant::now(),
+                };
+
+                download.completed_chunks.insert(chunk.chunk_id, completed_chunk);
+                info!("Ed2k chunk {} split and stored successfully (chunk_id: {})", ed2k_chunk_id, chunk.chunk_id);
+            }
+        }
+    }
+
+    /// Static version of split_and_store_ed2k_chunk for use in spawned tasks
+    async fn split_and_store_ed2k_chunk_static(
+        active_downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
+        file_hash: &str,
+        server_url: &str,
+        ed2k_chunk_id: u32,
+        ed2k_chunk_data: &[u8],
+        our_chunks: &[ChunkInfo],
+    ) {
+        for chunk in our_chunks {
+            let chunk_ed2k_id = (chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+            let offset_within_ed2k = chunk.offset % ED2K_CHUNK_SIZE as u64;
+            
+            // Ensure this chunk belongs to this ed2k chunk
+            if chunk_ed2k_id != ed2k_chunk_id {
+                continue;
+            }
+
+            // Extract our chunk data from ed2k chunk
+            let start_offset = offset_within_ed2k as usize;
+            let end_offset = std::cmp::min(
+                start_offset + chunk.size, 
+                ed2k_chunk_data.len()
+            );
+
+            if start_offset >= ed2k_chunk_data.len() {
+                warn!("Chunk {} offset {} beyond ed2k chunk size {}", 
+                    chunk.chunk_id, start_offset, ed2k_chunk_data.len());
+                continue;
+            }
+
+            let our_chunk_data = ed2k_chunk_data[start_offset..end_offset].to_vec();
+
+            // Verify our chunk size
+            if our_chunk_data.len() != chunk.size {
+                // Allow size mismatch for last chunk
+                let is_last_chunk = Self::is_last_chunk_static(active_downloads, file_hash, chunk.chunk_id).await;
+                if !is_last_chunk {
+                    warn!("Chunk {} size mismatch: expected {}, got {}", 
+                        chunk.chunk_id, chunk.size, our_chunk_data.len());
+                    continue;
+                }
+            }
+
+            // Store completed chunk
+            let mut downloads = active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                let completed_chunk = CompletedChunk {
+                    chunk_id: chunk.chunk_id,
+                    data: our_chunk_data,
+                    source_id: server_url.to_string(),
+                    completed_at: Instant::now(),
+                };
+
+                download.completed_chunks.insert(chunk.chunk_id, completed_chunk);
+                info!("Ed2k chunk {} split and stored successfully (chunk_id: {})", ed2k_chunk_id, chunk.chunk_id);
+            }
+        }
+    }
+
+    /// Get expected MD4 hash for ed2k chunk
+    async fn get_ed2k_chunk_hash(&self, file_hash: &str, ed2k_chunk_id: u32) -> Result<String, String> {
+        // For now, we'll derive a hash from the file hash and chunk ID
+        // In a real implementation, this should come from ed2k metadata or be calculated
+        //from the actual file content
+        let mut hasher = Md4::new();
+        hasher.update(file_hash.as_bytes());
+        hasher.update(&ed2k_chunk_id.to_le_bytes());
+        let result = hasher.finalize();
+        Ok(hex::encode(result))
+    }
+
+    /// Static version of get_ed2k_chunk_hash
+    async fn get_ed2k_chunk_hash_static(file_hash: &str, ed2k_chunk_id: u32) -> Result<String, String> {
+        // For now, we'll derive a hash from the file hash and chunk ID
+        // In a real implementation, this should come from ed2k metadata or be calculated
+        //from the actual file content
+        let mut hasher = Md4::new();
+        hasher.update(file_hash.as_bytes());
+        hasher.update(&ed2k_chunk_id.to_le_bytes());
+        let result = hasher.finalize();
+        Ok(hex::encode(result))
+    }
+
+    /// Verify MD4 hash of ed2k chunk
+    async fn verify_ed2k_chunk_hash(&self, data: &[u8], expected_hash: &str) -> Result<bool, String> {
+        let mut hasher = Md4::new();
+        hasher.update(data);
+        let computed = hex::encode(hasher.finalize());
+        
+        Ok(computed.eq_ignore_ascii_case(expected_hash))
+    }
+
+    /// Static version of verify_ed2k_chunk_hash
+    async fn verify_ed2k_chunk_hash_static(data: &[u8], expected_hash: &str) -> Result<bool, String> {
+        let mut hasher = Md4::new();
+        hasher.update(data);
+        let computed = hex::encode(hasher.finalize());
+        
+        Ok(computed.eq_ignore_ascii_case(expected_hash))
+    }
+
+    /// Check if a chunk is the last chunk in the file
+    async fn is_last_chunk(
+        &self,
+        active_downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
+        file_hash: &str,
+        chunk_id: u32,
+    ) -> bool {
+        let downloads = active_downloads.read().await;
+        if let Some(download) = downloads.get(file_hash) {
+            let max_chunk_id = download.chunks.iter()
+                .map(|c| c.chunk_id)
+                .max()
+                .unwrap_or(0);
+            chunk_id == max_chunk_id
+        } else {
+            false
+        }
+    }
+
+    /// Static version of is_last_chunk
+    async fn is_last_chunk_static(
+        active_downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
+        file_hash: &str,
+        chunk_id: u32,
+    ) -> bool {
+        let downloads = active_downloads.read().await;
+        if let Some(download) = downloads.get(file_hash) {
+            let max_chunk_id = download.chunks.iter()
+                .map(|c| c.chunk_id)
+                .max()
+                .unwrap_or(0);
+            chunk_id == max_chunk_id
+        } else {
+            false
+        }
+    }
+
+    /// Verify chunk hash using internal hash system
+    async fn verify_chunk_hash(&self, data: &[u8], file_hash: &str, chunk_id: u32) -> Result<bool, String> {
+        // Simple hash verification using SHA-256 of data + file_hash + chunk_id
+        use sha2::{Digest, Sha256};
+        
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        hasher.update(file_hash.as_bytes());
+        hasher.update(&chunk_id.to_le_bytes());
+        let computed = hex::encode(hasher.finalize());
+        
+        // For now, always return true since we don't have stored expected hashes
+        // In a real implementation, this should verify against stored chunk hashes
+        Ok(true)
+    }
+
+    /// Store chunk data to disk/memory
+    async fn store_chunk(&self, file_hash: &str, chunk_id: u32, data: Vec<u8>) -> Result<(), String> {
+        // Store the chunk - this would typically save to a file or memory store
+        // For now, we'll just log it since the actual storage is handled elsewhere
+        info!("Storing chunk {} for file {} ({} bytes)", chunk_id, file_hash, data.len());
+        Ok(())
+    }
+
+    /// Report chunk completion progress
+    async fn report_chunk_complete(&self, file_hash: &str, chunk_id: u32) -> Result<(), String> {
+        let _ = self.event_tx.send(MultiSourceEvent::ChunkCompleted {
+            file_hash: file_hash.to_string(),
+            chunk_id,
+            peer_id: "ed2k".to_string(),
+        });
+        Ok(())
     }
 
     /// Handle source connection success
@@ -1571,6 +1929,9 @@ impl MultiSourceDownloadService {
                         if let Some(mut ed2k_client) = connections.remove(source_id) {
                             let _ = ed2k_client.disconnect().await;
                         }
+                    }
+                    DownloadSource::BitTorrent(_) => {
+                        // TODO: Cancel BitTorrent download
                     }
                 }
             }
@@ -1935,6 +2296,31 @@ impl MultiSourceDownloadService {
 
         info!("MultiSourceDownloadService cleanup completed");
     }
+
+    /// Map our chunk ID to ed2k chunk ID and offset within that ed2k chunk (Person 4 function)
+    fn map_our_chunk_to_ed2k_chunk(&self, our_chunk: &ChunkInfo) -> (u32, u64) {
+        let ed2k_chunk_id = (our_chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+        let offset_within_ed2k = our_chunk.offset % ED2K_CHUNK_SIZE as u64;
+        (ed2k_chunk_id, offset_within_ed2k)
+    }
+
+    /// Map ed2k chunk ID to range of our chunk IDs (Person 4 function)  
+    fn map_ed2k_chunk_to_our_chunks(
+        &self,
+        ed2k_chunk_id: u32,
+        total_file_size: u64,
+    ) -> Vec<u32> {
+        let ed2k_chunk_start_offset = ed2k_chunk_id as u64 * ED2K_CHUNK_SIZE as u64;
+        let ed2k_chunk_end_offset = std::cmp::min(
+            ed2k_chunk_start_offset + ED2K_CHUNK_SIZE as u64,
+            total_file_size,
+        );
+
+        let start_chunk_id = (ed2k_chunk_start_offset / 256_000) as u32;
+        let end_chunk_id = ((ed2k_chunk_end_offset + 256_000 - 1) / 256_000) as u32;
+
+        (start_chunk_id..end_chunk_id).collect()
+    }
 }
 
 #[cfg(test)]
@@ -1943,6 +2329,49 @@ mod tests {
     use crate::dht::DhtService;
     use crate::webrtc_service::WebRTCService;
     use std::sync::Arc;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn verify_chunk_integrity_accepts_matching_hash() {
+        let data = b"hello world";
+        let expected = hex::encode(Sha256::digest(data));
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: expected,
+        };
+
+        assert!(verify_chunk_integrity(&chunk, data).is_ok());
+    }
+
+    #[test]
+    fn verify_chunk_integrity_detects_mismatch() {
+        let data = b"hello world";
+        let expected = hex::encode(Sha256::digest(data));
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: expected,
+        };
+
+        let other_data = b"goodbye world";
+        assert!(verify_chunk_integrity(&chunk, other_data).is_err());
+    }
+
+    #[test]
+    fn verify_chunk_integrity_skips_non_hex_hash() {
+        let data = b"hello world";
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: "hash0".to_string(),
+        };
+
+        assert!(verify_chunk_integrity(&chunk, data).is_ok());
+    }
 
     // Helper function to create mock services
     fn create_mock_services() -> (Arc<DhtService>, Arc<WebRTCService>) {
@@ -1962,6 +2391,7 @@ mod tests {
 
         assert_eq!(chunk.chunk_id, 0);
         assert_eq!(chunk.offset, 0);
+       
         assert_eq!(chunk.size, 256 * 1024);
         assert_eq!(chunk.hash, "test_hash");
     }

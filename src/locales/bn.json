@@ -1,6 +1,6 @@
 {
-  "settings.title": "Settings",
-  "settings.subtitle": "Configure your Chiral Network preferences",
+  "settings.title": "সেটিংস",
+  "settings.subtitle": "আপনার চিরাল নেটওয়ার্ক পছন্দসমূহ কনফিগার করুন",
   "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
   "settings.autorelay.relays": "Preferred Relay Nodes",
   "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
@@ -430,8 +430,8 @@
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
   "regions.apac": "Asia Pacific",
-  "language.title": "Language",
-  "language.select": "Select Language",
+  "language.title": "ভাষা",
+  "language.select": "ভাষা নির্বাচন করুন",
   "language.english": "English",
   "language.spanish": "Español",
   "language.chinese": "中文",
@@ -443,27 +443,24 @@
   "language.bengali": "বাংলা",
   "language.arabic": "العربية",
   "nav": {
-    "menu": "Menu",
-    "download": "Download",
-    "upload": "Upload",
-    "torrents": "Torrents",
-    "network": "Network",
-    "relay": "Relay",
-    "mining": "Mining",
-    "proxy": "Proxy",
-    "proxySelfTest": "Proxy Self-Test",
-    "analytics": "Analytics",
-    "reputation": "Reputation",
-    "blockchain": "Blockchain",
-    "account": "Account",
-    "settings": "Settings",
-    "connected": "Connected",
-    "disconnected": "Disconnected",
-    "expandSidebar": "Expand sidebar",
-    "collapseSidebar": "Collapse sidebar",
-    "closeSidebarMenu": "Close sidebar menu",
-    "blockchainUnavailable": "Blockchain is unavailable. Please start the Chiral node from the",
-    "networkPageLink": "Network page"
+    "menu": "মেনু",
+    "download": "ডাউনলোড",
+    "upload": "আপলোড",
+    "torrents": "টরেন্ট",
+    "network": "নেটওয়ার্ক",
+    "relay": "রিলে",
+    "mining": "মাইনিং",
+    "proxy": "প্রক্সি",
+    "proxySelfTest": "প্রক্সি স্ব-পরীক্ষা",
+    "analytics": "বিশ্লেষণ",
+    "reputation": "সুনাম",
+    "account": "অ্যাকাউন্ট",
+    "settings": "সেটিংস",
+    "connected": "সংযুক্ত",
+    "disconnected": "সংযোগ বিচ্ছিন্ন",
+    "expandSidebar": "সাইডবার প্রসারিত করুন",
+    "collapseSidebar": "সাইডবার সংকুচিত করুন",
+    "closeSidebarMenu": "সাইডবার মেনু বন্ধ করুন"
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
@@ -508,7 +505,6 @@
   "account": {
     "title": "Account",
     "subtitle": "Manage your wallet and account settings",
-    "balanceWarning": "Your balance may show as 0 until connected.",
     "firstRun": {
       "welcome": "Welcome to Chiral Network!",
       "description": "To start mining and earning rewards, you'll need to create a wallet account.",
@@ -576,7 +572,6 @@
   "transactions": {
     "title": "Transaction History",
     "manual": "Manual transaction",
-    "scanInfo": "Showing transactions from the last 1,000 blocks (mining rewards from last 2,000 blocks). Real blockchain data.",
     "empty": {
       "title": "No transactions yet",
       "desc": "Transactions will appear here once you send or receive Chiral"
@@ -688,7 +683,6 @@
     "typeAll": "All",
     "typeSent": "Sent",
     "typeReceived": "Received",
-    "typeMining": "Mining Rewards",
     "from": "From",
     "to": "To",
     "sort": "Sort",
@@ -1533,65 +1527,65 @@
     }
   },
   "blockchain": {
-    "title": "Blockchain Explorer",
-    "subtitle": "View blocks, transactions, and account balances on the Chiral Network",
-    "refresh": "Refresh",
-    "refreshed": "Data refreshed",
-    "copied": "Copied to clipboard",
+    "title": "ব্লকচেইন এক্সপ্লোরার",
+    "subtitle": "চাইরাল নেটওয়ার্কে ব্লক, লেনদেন এবং অ্যাকাউন্ট ব্যালেন্স দেখুন",
+    "refresh": "রিফ্রেশ",
+    "refreshed": "ডেটা রিফ্রেশ হয়েছে",
+    "copied": "ক্লিপবোর্ডে কপি হয়েছে",
     "stats": {
-      "totalBlocks": "Total Blocks",
-      "hashrate": "Network Hashrate",
-      "difficulty": "Difficulty",
-      "peers": "Network Peers"
+      "totalBlocks": "মোট ব্লক",
+      "hashrate": "নেটওয়ার্ক হ্যাশরেট",
+      "difficulty": "কঠিনতা",
+      "peers": "নেটওয়ার্ক পিয়ার"
     },
     "tabs": {
-      "blocks": "Latest Blocks",
-      "search": "Search",
-      "stats": "Balance Checker"
+      "blocks": "সর্বশেষ ব্লক",
+      "search": "অনুসন্ধান",
+      "stats": "ব্যালেন্স পরীক্ষক"
     },
     "blocks": {
-      "latest": "Latest Blocks",
-      "noBlocks": "No blocks found"
+      "latest": "সর্বশেষ ব্লক",
+      "noBlocks": "কোনো ব্লক পাওয়া যায়নি"
     },
     "search": {
-      "title": "Search Blockchain",
-      "address": "Address",
-      "transaction": "Transaction",
-      "block": "Block",
-      "emptyQuery": "Please enter a search query",
-      "error": "Search failed: {error}",
-      "unknownError": "Unknown error",
-      "invalidBlock": "Invalid block number",
-      "notFound": "Not found",
-      "addressDetails": "Address Details",
-      "addressLabel": "Address",
-      "balance": "Balance",
-      "txDetails": "Transaction Details",
-      "status": "Status",
-      "blockNumber": "Block Number",
-      "from": "From",
-      "to": "To",
-      "value": "Value",
-      "blockDetails": "Block Details",
-      "hash": "Hash",
-      "timestamp": "Timestamp"
+      "title": "ব্লকচেইনে অনুসন্ধান করুন",
+      "address": "ঠিকানা",
+      "transaction": "লেনদেন",
+      "block": "ব্লক",
+      "emptyQuery": "অনুসন্ধানের জন্য একটি প্রশ্ন লিখুন",
+      "error": "অনুসন্ধান ব্যর্থ হয়েছে: {error}",
+      "unknownError": "অজানা ত্রুটি",
+      "invalidBlock": "অবৈধ ব্লক নম্বর",
+      "notFound": "খুঁজে পাওয়া যায়নি",
+      "addressDetails": "ঠিকানার বিস্তারিত",
+      "addressLabel": "ঠিকানা",
+      "balance": "ব্যালেন্স",
+      "txDetails": "লেনদেনের বিস্তারিত",
+      "status": "অবস্থা",
+      "blockNumber": "ব্লক নম্বর",
+      "from": "থেকে",
+      "to": "প্রতি",
+      "value": "মান",
+      "blockDetails": "ব্লকের বিস্তারিত",
+      "hash": "হ্যাশ",
+      "timestamp": "টাইমস্ট্যাম্প"
     },
     "balance": {
-      "checker": "Balance Checker",
-      "address": "Address",
-      "check": "Check Balance",
-      "result": "Balance",
-      "emptyAddress": "Please enter an address",
-      "error": "Failed to check balance: {error}",
-      "errorLabel": "Error"
+      "checker": "ব্যালেন্স পরীক্ষক",
+      "address": "ঠিকানা",
+      "check": "ব্যালেন্স পরীক্ষা করুন",
+      "result": "ব্যালেন্স",
+      "emptyAddress": "দয়া করে একটি ঠিকানা লিখুন",
+      "error": "ব্যালেন্স পরীক্ষা ব্যর্থ হয়েছে: {error}",
+      "errorLabel": "ত্রুটি"
     },
     "error": {
-      "fetchBlocks": "Failed to fetch blocks"
+      "fetchBlocks": "ব্লক আনতে ব্যর্থ"
     }
   },
   "toasts": {
     "common": {
-      "copied": "Copied!"
+      "copied": "কপি হয়েছে!"
     },
     "wallet": {
       "accountList": {
@@ -1654,67 +1648,67 @@
       "syncComplete": "Blockchain sync complete! Mining is now active."
     },
     "blockchain": {
-      "noBlocks": "No blocks found. Start mining to create blocks.",
-      "fetchError": "Failed to fetch blocks: {error}"
+      "noBlocks": "কোনো ব্লক পাওয়া যায়নি। ব্লক তৈরি করতে মাইনিং শুরু করুন।",
+      "fetchError": "ব্লক আনতে ব্যর্থ: {error}"
     },
     "settings": {
-      "updated": "Settings Updated!",
-      "networkingError": "Settings saved, but networking update failed",
-      "proxyRelayWarning": "Add at least one trusted proxy relay before enabling Hide My IP."
+      "updated": "সেটিংস আপডেট হয়েছে!",
+      "networkingError": "সেটিংস সংরক্ষণ করা হয়েছে, কিন্তু নেটওয়ার্ক আপডেট ব্যর্থ হয়েছে",
+      "proxyRelayWarning": "হাইড মাই আইপি সক্রিয় করার আগে অন্তত একটি বিশ্বস্ত প্রক্সি রিলে যোগ করুন।"
     },
     "analytics": {
       "direction": {
-        "upload": "Upload",
-        "download": "Download"
+        "upload": "আপলোড",
+        "download": "ডাউনলোড"
       },
-      "bandwidthWarning": "{direction} cap warning: {used} GB consumed ({percent}% of {cap} GB).",
-      "bandwidthTitle": "{direction} cap warning"
+      "bandwidthWarning": "{direction} সীমা সতর্কতা: {used} জিবি ব্যবহার হয়েছে ({percent}% / {cap} জিবি)।",
+      "bandwidthTitle": "{direction} সীমা সতর্কতা"
     },
     "upload": {
-      "loginRequired": "Please log in to your account before uploading files",
-      "verifyAccountFailed": "Failed to verify account status. Please try logging in again.",
-      "dhtDisconnected": "DHT network is not connected. Please start the DHT network before uploading files.",
-      "fileSuccess": "{name} uploaded successfully",
-      "torrentSeeding": "{name} is now seeding as a torrent"
+      "loginRequired": "ফাইল আপলোড করার আগে আপনার অ্যাকাউন্টে লগইন করুন",
+      "verifyAccountFailed": "অ্যাকাউন্টের অবস্থা যাচাই করা যায়নি। অনুগ্রহ করে আবার লগইন করুন।",
+      "dhtDisconnected": "DHT নেটওয়ার্ক সংযুক্ত নয়। ফাইল আপলোড করার আগে DHT নেটওয়ার্ক চালু করুন।",
+      "fileSuccess": "{name} সফলভাবে আপলোড হয়েছে",
+      "torrentSeeding": "{name} এখন টরেন্ট হিসেবে সিড করছে"
     },
     "network": {
-      "signalingConnected": "Connected to signaling server",
-      "signalingError": "Failed to connect to signaling server for web mode testing",
-      "peerAddressRequired": "Please enter a peer address",
-      "dhtRequired": "DHT not connected. Please start DHT first.",
-      "alreadyConnected": "Peer is already connected",
-      "connecting": "Connecting to peer via DHT...",
-      "connectionSuccess": "Connection Success!",
-      "connectionFailed": "Connection failed. Peer may be unreachable or address invalid.",
-      "connectError": "Failed to connect to peer: {error}",
-      "signalingMissing": "Signaling server not connected. Please start DHT first.",
-      "peerNotFound": "Peer {peer} not found in discovered peers",
-      "messageReceived": "Received from peer: {message}",
-      "webrtcConnected": "Successfully connected to peer!",
-      "webrtcFailed": "Connection to peer failed",
-      "dataChannelOpen": "Data channel open - you can now send messages!",
-      "dataChannelClosed": "Data channel closed",
-      "webrtcError": "WebRTC error: {error}",
-      "webrtcConnecting": "Connecting to peer: {peer}",
-      "webrtcCreateError": "Failed to create connection: {error}",
-      "noConnection": "No active WebRTC connection",
-      "messageSent": "Test message sent: {message}",
-      "sendError": "Failed to send message: {error}",
-      "gethInstalled": "Geth is already installed",
-      "gethDownloadError": "Failed to download Geth: {error}"
+      "signalingConnected": "সিগন্যালিং সার্ভারে সংযোগ স্থাপিত হয়েছে",
+      "signalingError": "ওয়েব মোড পরীক্ষার জন্য সিগন্যালিং সার্ভারে সংযোগ ব্যর্থ হয়েছে",
+      "peerAddressRequired": "একটি পিয়ার ঠিকানা লিখুন",
+      "dhtRequired": "DHT সংযুক্ত নয়। প্রথমে DHT চালু করুন।",
+      "alreadyConnected": "পিয়ার ইতিমধ্যে সংযুক্ত রয়েছে",
+      "connecting": "DHT এর মাধ্যমে পিয়ারের সাথে সংযোগ করা হচ্ছে...",
+      "connectionSuccess": "সংযোগ সফল!",
+      "connectionFailed": "সংযোগ ব্যর্থ। পিয়ার অনুপলব্ধ হতে পারে বা ঠিকানা অবৈধ।",
+      "connectError": "পিয়ারের সাথে সংযোগ ব্যর্থ: {error}",
+      "signalingMissing": "সিগন্যালিং সার্ভার সংযুক্ত নয়। প্রথমে DHT চালু করুন।",
+      "peerNotFound": "আবিষ্কৃত পিয়ারদের মধ্যে {peer} পাওয়া যায়নি",
+      "messageReceived": "পিয়ার থেকে প্রাপ্ত: {message}",
+      "webrtcConnected": "পিয়ারের সাথে সফলভাবে সংযুক্ত!",
+      "webrtcFailed": "পিয়ারের সাথে সংযোগ ব্যর্থ",
+      "dataChannelOpen": "ডেটা চ্যানেল খোলা - এখন আপনি বার্তা পাঠাতে পারবেন!",
+      "dataChannelClosed": "ডেটা চ্যানেল বন্ধ",
+      "webrtcError": "WebRTC ত্রুটি: {error}",
+      "webrtcConnecting": "পিয়ারের সাথে সংযোগ করা হচ্ছে: {peer}",
+      "webrtcCreateError": "সংযোগ তৈরি করতে ব্যর্থ: {error}",
+      "noConnection": "কোন সক্রিয় WebRTC সংযোগ নেই",
+      "messageSent": "পরীক্ষামূলক বার্তা পাঠানো হয়েছে: {message}",
+      "sendError": "বার্তা পাঠাতে ব্যর্থ: {error}",
+      "gethInstalled": "Geth ইতিমধ্যেই ইনস্টল করা আছে",
+      "gethDownloadError": "Geth ডাউনলোড ব্যর্থ: {error}"
     },
     "download": {
       "payment": {
-        "invalidAddress": "Cannot process payment: uploader wallet address is missing or invalid",
-        "failed": "Payment failed: {error}",
-        "successWithHash": "Payment successful! Transaction: {hash}...",
-        "success": "Payment successful!"
+        "invalidAddress": "পেমেন্ট প্রক্রিয়া করা যাবে না: আপলোডারের ওয়ালেট ঠিকানা অনুপস্থিত বা অবৈধ",
+        "failed": "পেমেন্ট ব্যর্থ: {error}",
+        "successWithHash": "পেমেন্ট সফল! লেনদেন: {hash}...",
+        "success": "পেমেন্ট সফল!"
       }
     },
     "transactions": {
-      "copied": "{label} copied to clipboard",
-      "copyError": "Failed to copy {label}",
-      "exported": "Transaction exported"
+      "copied": "{label} ক্লিপবোর্ডে কপি হয়েছে",
+      "copyError": "{label} কপি করতে ব্যর্থ",
+      "exported": "লেনদেন রপ্তানি করা হয়েছে"
     }
   }
 }

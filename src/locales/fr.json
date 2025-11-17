@@ -1,6 +1,6 @@
 {
-  "settings.title": "Settings",
-  "settings.subtitle": "Configure your Chiral Network preferences",
+  "settings.title": "Paramètres",
+  "settings.subtitle": "Configurez vos préférences du réseau Chiral",
   "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
   "settings.autorelay.relays": "Preferred Relay Nodes",
   "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
@@ -430,8 +430,8 @@
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
   "regions.apac": "Asia Pacific",
-  "language.title": "Language",
-  "language.select": "Select Language",
+  "language.title": "Langue",
+  "language.select": "Sélectionner la langue",
   "language.english": "English",
   "language.spanish": "Español",
   "language.chinese": "中文",
@@ -444,26 +444,23 @@
   "language.arabic": "العربية",
   "nav": {
     "menu": "Menu",
-    "download": "Download",
-    "upload": "Upload",
+    "download": "Télécharger",
+    "upload": "Envoyer",
     "torrents": "Torrents",
-    "network": "Network",
-    "relay": "Relay",
-    "mining": "Mining",
+    "network": "Réseau",
+    "relay": "Relais",
+    "mining": "Minage",
     "proxy": "Proxy",
-    "proxySelfTest": "Proxy Self-Test",
-    "analytics": "Analytics",
-    "reputation": "Reputation",
-    "blockchain": "Blockchain",
-    "account": "Account",
-    "settings": "Settings",
-    "connected": "Connected",
-    "disconnected": "Disconnected",
-    "expandSidebar": "Expand sidebar",
-    "collapseSidebar": "Collapse sidebar",
-    "closeSidebarMenu": "Close sidebar menu",
-    "blockchainUnavailable": "Blockchain is unavailable. Please start the Chiral node from the",
-    "networkPageLink": "Network page"
+    "proxySelfTest": "Auto-test du proxy",
+    "analytics": "Analyses",
+    "reputation": "Réputation",
+    "account": "Compte",
+    "settings": "Paramètres",
+    "connected": "Connecté",
+    "disconnected": "Déconnecté",
+    "expandSidebar": "Développer la barre latérale",
+    "collapseSidebar": "Réduire la barre latérale",
+    "closeSidebarMenu": "Fermer le menu latéral"
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
@@ -508,7 +505,6 @@
   "account": {
     "title": "Account",
     "subtitle": "Manage your wallet and account settings",
-    "balanceWarning": "Your balance may show as 0 until connected.",
     "firstRun": {
       "welcome": "Welcome to Chiral Network!",
       "description": "To start mining and earning rewards, you'll need to create a wallet account.",
@@ -576,7 +572,6 @@
   "transactions": {
     "title": "Transaction History",
     "manual": "Manual transaction",
-    "scanInfo": "Showing transactions from the last 1,000 blocks (mining rewards from last 2,000 blocks). Real blockchain data.",
     "empty": {
       "title": "No transactions yet",
       "desc": "Transactions will appear here once you send or receive Chiral"
@@ -688,7 +683,6 @@
     "typeAll": "All",
     "typeSent": "Sent",
     "typeReceived": "Received",
-    "typeMining": "Mining Rewards",
     "from": "From",
     "to": "To",
     "sort": "Sort",
@@ -1533,65 +1527,65 @@
     }
   },
   "blockchain": {
-    "title": "Blockchain Explorer",
-    "subtitle": "View blocks, transactions, and account balances on the Chiral Network",
-    "refresh": "Refresh",
-    "refreshed": "Data refreshed",
-    "copied": "Copied to clipboard",
+    "title": "Explorateur de blockchain",
+    "subtitle": "Consultez les blocs, transactions et soldes de comptes sur le réseau Chiral",
+    "refresh": "Actualiser",
+    "refreshed": "Données actualisées",
+    "copied": "Copié dans le presse-papiers",
     "stats": {
-      "totalBlocks": "Total Blocks",
-      "hashrate": "Network Hashrate",
-      "difficulty": "Difficulty",
-      "peers": "Network Peers"
+      "totalBlocks": "Nombre total de blocs",
+      "hashrate": "Taux de hachage du réseau",
+      "difficulty": "Difficulté",
+      "peers": "Pairs du réseau"
     },
     "tabs": {
-      "blocks": "Latest Blocks",
-      "search": "Search",
-      "stats": "Balance Checker"
+      "blocks": "Derniers blocs",
+      "search": "Recherche",
+      "stats": "Vérificateur de solde"
     },
     "blocks": {
-      "latest": "Latest Blocks",
-      "noBlocks": "No blocks found"
+      "latest": "Derniers blocs",
+      "noBlocks": "Aucun bloc trouvé"
     },
     "search": {
-      "title": "Search Blockchain",
-      "address": "Address",
+      "title": "Rechercher dans la blockchain",
+      "address": "Adresse",
       "transaction": "Transaction",
-      "block": "Block",
-      "emptyQuery": "Please enter a search query",
-      "error": "Search failed: {error}",
-      "unknownError": "Unknown error",
-      "invalidBlock": "Invalid block number",
-      "notFound": "Not found",
-      "addressDetails": "Address Details",
-      "addressLabel": "Address",
-      "balance": "Balance",
-      "txDetails": "Transaction Details",
-      "status": "Status",
-      "blockNumber": "Block Number",
-      "from": "From",
-      "to": "To",
-      "value": "Value",
-      "blockDetails": "Block Details",
+      "block": "Bloc",
+      "emptyQuery": "Veuillez saisir une requête de recherche",
+      "error": "Échec de la recherche : {error}",
+      "unknownError": "Erreur inconnue",
+      "invalidBlock": "Numéro de bloc invalide",
+      "notFound": "Introuvable",
+      "addressDetails": "Détails de l'adresse",
+      "addressLabel": "Adresse",
+      "balance": "Solde",
+      "txDetails": "Détails de la transaction",
+      "status": "Statut",
+      "blockNumber": "Numéro de bloc",
+      "from": "De",
+      "to": "À",
+      "value": "Valeur",
+      "blockDetails": "Détails du bloc",
       "hash": "Hash",
-      "timestamp": "Timestamp"
+      "timestamp": "Horodatage"
     },
     "balance": {
-      "checker": "Balance Checker",
-      "address": "Address",
-      "check": "Check Balance",
-      "result": "Balance",
-      "emptyAddress": "Please enter an address",
-      "error": "Failed to check balance: {error}",
-      "errorLabel": "Error"
+      "checker": "Vérificateur de solde",
+      "address": "Adresse",
+      "check": "Vérifier le solde",
+      "result": "Solde",
+      "emptyAddress": "Veuillez saisir une adresse",
+      "error": "Échec de la vérification du solde : {error}",
+      "errorLabel": "Erreur"
     },
     "error": {
-      "fetchBlocks": "Failed to fetch blocks"
+      "fetchBlocks": "Échec de la récupération des blocs"
     }
   },
   "toasts": {
     "common": {
-      "copied": "Copied!"
+      "copied": "Copié !"
     },
     "wallet": {
       "accountList": {
@@ -1654,67 +1648,67 @@
       "syncComplete": "Blockchain sync complete! Mining is now active."
     },
     "blockchain": {
-      "noBlocks": "No blocks found. Start mining to create blocks.",
-      "fetchError": "Failed to fetch blocks: {error}"
+      "noBlocks": "Aucun bloc trouvé. Lancez le minage pour créer des blocs.",
+      "fetchError": "Échec de la récupération des blocs : {error}"
     },
     "settings": {
-      "updated": "Settings Updated!",
-      "networkingError": "Settings saved, but networking update failed",
-      "proxyRelayWarning": "Add at least one trusted proxy relay before enabling Hide My IP."
+      "updated": "Paramètres mis à jour !",
+      "networkingError": "Paramètres enregistrés, mais la mise à jour réseau a échoué",
+      "proxyRelayWarning": "Ajoutez au moins un relais proxy de confiance avant d’activer Masquer mon IP."
     },
     "analytics": {
       "direction": {
-        "upload": "Upload",
-        "download": "Download"
+        "upload": "Téléversement",
+        "download": "Téléchargement"
       },
-      "bandwidthWarning": "{direction} cap warning: {used} GB consumed ({percent}% of {cap} GB).",
-      "bandwidthTitle": "{direction} cap warning"
+      "bandwidthWarning": "Avertissement de limite {direction} : {used} Go utilisés ({percent}% de {cap} Go).",
+      "bandwidthTitle": "Avertissement de limite {direction}"
     },
     "upload": {
-      "loginRequired": "Please log in to your account before uploading files",
-      "verifyAccountFailed": "Failed to verify account status. Please try logging in again.",
-      "dhtDisconnected": "DHT network is not connected. Please start the DHT network before uploading files.",
-      "fileSuccess": "{name} uploaded successfully",
-      "torrentSeeding": "{name} is now seeding as a torrent"
+      "loginRequired": "Veuillez vous connecter à votre compte avant de téléverser des fichiers",
+      "verifyAccountFailed": "Impossible de vérifier l’état du compte. Veuillez vous reconnecter.",
+      "dhtDisconnected": "Le réseau DHT n’est pas connecté. Veuillez démarrer le réseau DHT avant de téléverser des fichiers.",
+      "fileSuccess": "{name} téléversé avec succès",
+      "torrentSeeding": "{name} est désormais partagé en torrent"
     },
     "network": {
-      "signalingConnected": "Connected to signaling server",
-      "signalingError": "Failed to connect to signaling server for web mode testing",
-      "peerAddressRequired": "Please enter a peer address",
-      "dhtRequired": "DHT not connected. Please start DHT first.",
-      "alreadyConnected": "Peer is already connected",
-      "connecting": "Connecting to peer via DHT...",
-      "connectionSuccess": "Connection Success!",
-      "connectionFailed": "Connection failed. Peer may be unreachable or address invalid.",
-      "connectError": "Failed to connect to peer: {error}",
-      "signalingMissing": "Signaling server not connected. Please start DHT first.",
-      "peerNotFound": "Peer {peer} not found in discovered peers",
-      "messageReceived": "Received from peer: {message}",
-      "webrtcConnected": "Successfully connected to peer!",
-      "webrtcFailed": "Connection to peer failed",
-      "dataChannelOpen": "Data channel open - you can now send messages!",
-      "dataChannelClosed": "Data channel closed",
-      "webrtcError": "WebRTC error: {error}",
-      "webrtcConnecting": "Connecting to peer: {peer}",
-      "webrtcCreateError": "Failed to create connection: {error}",
-      "noConnection": "No active WebRTC connection",
-      "messageSent": "Test message sent: {message}",
-      "sendError": "Failed to send message: {error}",
-      "gethInstalled": "Geth is already installed",
-      "gethDownloadError": "Failed to download Geth: {error}"
+      "signalingConnected": "Connecté au serveur de signalisation",
+      "signalingError": "Échec de connexion au serveur de signalisation pour les tests en mode web",
+      "peerAddressRequired": "Veuillez saisir une adresse de pair",
+      "dhtRequired": "DHT non connecté. Veuillez démarrer DHT d’abord.",
+      "alreadyConnected": "Le pair est déjà connecté",
+      "connecting": "Connexion au pair via DHT...",
+      "connectionSuccess": "Connexion réussie !",
+      "connectionFailed": "Échec de la connexion. Le pair est peut-être indisponible ou l’adresse invalide.",
+      "connectError": "Impossible de se connecter au pair : {error}",
+      "signalingMissing": "Serveur de signalisation non connecté. Veuillez démarrer DHT d’abord.",
+      "peerNotFound": "Pair {peer} introuvable parmi les pairs découverts",
+      "messageReceived": "Reçu du pair : {message}",
+      "webrtcConnected": "Connexion au pair réussie !",
+      "webrtcFailed": "Échec de la connexion au pair",
+      "dataChannelOpen": "Canal de données ouvert – vous pouvez maintenant envoyer des messages !",
+      "dataChannelClosed": "Canal de données fermé",
+      "webrtcError": "Erreur WebRTC : {error}",
+      "webrtcConnecting": "Connexion au pair : {peer}",
+      "webrtcCreateError": "Impossible de créer la connexion : {error}",
+      "noConnection": "Aucune connexion WebRTC active",
+      "messageSent": "Message de test envoyé : {message}",
+      "sendError": "Impossible d’envoyer le message : {error}",
+      "gethInstalled": "Geth est déjà installé",
+      "gethDownloadError": "Échec du téléchargement de Geth : {error}"
     },
     "download": {
       "payment": {
-        "invalidAddress": "Cannot process payment: uploader wallet address is missing or invalid",
-        "failed": "Payment failed: {error}",
-        "successWithHash": "Payment successful! Transaction: {hash}...",
-        "success": "Payment successful!"
+        "invalidAddress": "Impossible de traiter le paiement : l’adresse du portefeuille de l’expéditeur est manquante ou invalide",
+        "failed": "Paiement échoué : {error}",
+        "successWithHash": "Paiement réussi ! Transaction : {hash}...",
+        "success": "Paiement réussi !"
       }
     },
     "transactions": {
-      "copied": "{label} copied to clipboard",
-      "copyError": "Failed to copy {label}",
-      "exported": "Transaction exported"
+      "copied": "{label} copié dans le presse-papiers",
+      "copyError": "Impossible de copier {label}",
+      "exported": "Transaction exportée"
     }
   }
 }

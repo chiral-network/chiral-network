@@ -1,6 +1,6 @@
 {
-  "settings.title": "Settings",
-  "settings.subtitle": "Configure your Chiral Network preferences",
+  "settings.title": "الإعدادات",
+  "settings.subtitle": "قم بتكوين تفضيلات شبكة Chiral الخاصة بك",
   "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
   "settings.autorelay.relays": "Preferred Relay Nodes",
   "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
@@ -430,8 +430,8 @@
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
   "regions.apac": "Asia Pacific",
-  "language.title": "Language",
-  "language.select": "Select Language",
+  "language.title": "اللغة",
+  "language.select": "اختر اللغة",
   "language.english": "English",
   "language.spanish": "Español",
   "language.chinese": "中文",
@@ -443,27 +443,24 @@
   "language.bengali": "বাংলা",
   "language.arabic": "العربية",
   "nav": {
-    "menu": "Menu",
-    "download": "Download",
-    "upload": "Upload",
-    "torrents": "Torrents",
-    "network": "Network",
-    "relay": "Relay",
-    "mining": "Mining",
-    "proxy": "Proxy",
-    "proxySelfTest": "Proxy Self-Test",
-    "analytics": "Analytics",
-    "reputation": "Reputation",
-    "blockchain": "Blockchain",
-    "account": "Account",
-    "settings": "Settings",
-    "connected": "Connected",
-    "disconnected": "Disconnected",
-    "expandSidebar": "Expand sidebar",
-    "collapseSidebar": "Collapse sidebar",
-    "closeSidebarMenu": "Close sidebar menu",
-    "blockchainUnavailable": "Blockchain is unavailable. Please start the Chiral node from the",
-    "networkPageLink": "Network page"
+    "menu": "القائمة",
+    "download": "تحميل",
+    "upload": "رفع",
+    "torrents": "التورنت",
+    "network": "الشبكة",
+    "relay": "المرحل",
+    "mining": "التعدين",
+    "proxy": "البروكسي",
+    "proxySelfTest": "اختبار البروكسي الذاتي",
+    "analytics": "التحليلات",
+    "reputation": "السمعة",
+    "account": "الحساب",
+    "settings": "الإعدادات",
+    "connected": "متصل",
+    "disconnected": "غير متصل",
+    "expandSidebar": "توسيع الشريط الجانبي",
+    "collapseSidebar": "طي الشريط الجانبي",
+    "closeSidebarMenu": "إغلاق القائمة الجانبية"
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
@@ -508,7 +505,6 @@
   "account": {
     "title": "Account",
     "subtitle": "Manage your wallet and account settings",
-    "balanceWarning": "Your balance may show as 0 until connected.",
     "firstRun": {
       "welcome": "Welcome to Chiral Network!",
       "description": "To start mining and earning rewards, you'll need to create a wallet account.",
@@ -576,7 +572,6 @@
   "transactions": {
     "title": "Transaction History",
     "manual": "Manual transaction",
-    "scanInfo": "Showing transactions from the last 1,000 blocks (mining rewards from last 2,000 blocks). Real blockchain data.",
     "empty": {
       "title": "No transactions yet",
       "desc": "Transactions will appear here once you send or receive Chiral"
@@ -688,7 +683,6 @@
     "typeAll": "All",
     "typeSent": "Sent",
     "typeReceived": "Received",
-    "typeMining": "Mining Rewards",
     "from": "From",
     "to": "To",
     "sort": "Sort",
@@ -1533,65 +1527,65 @@
     }
   },
   "blockchain": {
-    "title": "Blockchain Explorer",
-    "subtitle": "View blocks, transactions, and account balances on the Chiral Network",
-    "refresh": "Refresh",
-    "refreshed": "Data refreshed",
-    "copied": "Copied to clipboard",
+    "title": "مستكشف سلسلة الكتل",
+    "subtitle": "اعرض الكتل والمعاملات وأرصدة الحسابات على شبكة كايرال",
+    "refresh": "تحديث",
+    "refreshed": "تم تحديث البيانات",
+    "copied": "تم النسخ إلى الحافظة",
     "stats": {
-      "totalBlocks": "Total Blocks",
-      "hashrate": "Network Hashrate",
-      "difficulty": "Difficulty",
-      "peers": "Network Peers"
+      "totalBlocks": "إجمالي الكتل",
+      "hashrate": "معدل الهاش للشبكة",
+      "difficulty": "الصعوبة",
+      "peers": "أقران الشبكة"
     },
     "tabs": {
-      "blocks": "Latest Blocks",
-      "search": "Search",
-      "stats": "Balance Checker"
+      "blocks": "أحدث الكتل",
+      "search": "بحث",
+      "stats": "مدقق الرصيد"
     },
     "blocks": {
-      "latest": "Latest Blocks",
-      "noBlocks": "No blocks found"
+      "latest": "أحدث الكتل",
+      "noBlocks": "لم يتم العثور على كتل"
     },
     "search": {
-      "title": "Search Blockchain",
-      "address": "Address",
-      "transaction": "Transaction",
-      "block": "Block",
-      "emptyQuery": "Please enter a search query",
-      "error": "Search failed: {error}",
-      "unknownError": "Unknown error",
-      "invalidBlock": "Invalid block number",
-      "notFound": "Not found",
-      "addressDetails": "Address Details",
-      "addressLabel": "Address",
-      "balance": "Balance",
-      "txDetails": "Transaction Details",
-      "status": "Status",
-      "blockNumber": "Block Number",
-      "from": "From",
-      "to": "To",
-      "value": "Value",
-      "blockDetails": "Block Details",
-      "hash": "Hash",
-      "timestamp": "Timestamp"
+      "title": "البحث في سلسلة الكتل",
+      "address": "العنوان",
+      "transaction": "المعاملة",
+      "block": "الكتلة",
+      "emptyQuery": "يرجى إدخال عبارة بحث",
+      "error": "فشل البحث: {error}",
+      "unknownError": "خطأ غير معروف",
+      "invalidBlock": "رقم كتلة غير صالح",
+      "notFound": "غير موجود",
+      "addressDetails": "تفاصيل العنوان",
+      "addressLabel": "العنوان",
+      "balance": "الرصيد",
+      "txDetails": "تفاصيل المعاملة",
+      "status": "الحالة",
+      "blockNumber": "رقم الكتلة",
+      "from": "من",
+      "to": "إلى",
+      "value": "القيمة",
+      "blockDetails": "تفاصيل الكتلة",
+      "hash": "التجزئة",
+      "timestamp": "الطابع الزمني"
     },
     "balance": {
-      "checker": "Balance Checker",
-      "address": "Address",
-      "check": "Check Balance",
-      "result": "Balance",
-      "emptyAddress": "Please enter an address",
-      "error": "Failed to check balance: {error}",
-      "errorLabel": "Error"
+      "checker": "مدقق الرصيد",
+      "address": "العنوان",
+      "check": "تحقق من الرصيد",
+      "result": "الرصيد",
+      "emptyAddress": "يرجى إدخال عنوان",
+      "error": "فشل التحقق من الرصيد: {error}",
+      "errorLabel": "خطأ"
     },
     "error": {
-      "fetchBlocks": "Failed to fetch blocks"
+      "fetchBlocks": "فشل في جلب الكتل"
     }
   },
   "toasts": {
     "common": {
-      "copied": "Copied!"
+      "copied": "تم النسخ!"
     },
     "wallet": {
       "accountList": {
@@ -1654,67 +1648,67 @@
       "syncComplete": "Blockchain sync complete! Mining is now active."
     },
     "blockchain": {
-      "noBlocks": "No blocks found. Start mining to create blocks.",
-      "fetchError": "Failed to fetch blocks: {error}"
+      "noBlocks": "لم يتم العثور على أي كتل. ابدأ التعدين لإنشاء كتل.",
+      "fetchError": "فشل في جلب الكتل: {error}"
     },
     "settings": {
-      "updated": "Settings Updated!",
-      "networkingError": "Settings saved, but networking update failed",
-      "proxyRelayWarning": "Add at least one trusted proxy relay before enabling Hide My IP."
+      "updated": "تم تحديث الإعدادات!",
+      "networkingError": "تم حفظ الإعدادات، لكن فشل تحديث الشبكة",
+      "proxyRelayWarning": "أضف على الأقل مرحل وكيل موثوق قبل تفعيل إخفاء عنوان IP."
     },
     "analytics": {
       "direction": {
-        "upload": "Upload",
-        "download": "Download"
+        "upload": "رفع",
+        "download": "تنزيل"
       },
-      "bandwidthWarning": "{direction} cap warning: {used} GB consumed ({percent}% of {cap} GB).",
-      "bandwidthTitle": "{direction} cap warning"
+      "bandwidthWarning": "تحذير حد {direction}: تم استهلاك {used} جيجابايت ({percent}% من {cap} جيجابايت).",
+      "bandwidthTitle": "تحذير حد {direction}"
     },
     "upload": {
-      "loginRequired": "Please log in to your account before uploading files",
-      "verifyAccountFailed": "Failed to verify account status. Please try logging in again.",
-      "dhtDisconnected": "DHT network is not connected. Please start the DHT network before uploading files.",
-      "fileSuccess": "{name} uploaded successfully",
-      "torrentSeeding": "{name} is now seeding as a torrent"
+      "loginRequired": "يرجى تسجيل الدخول إلى حسابك قبل تحميل الملفات",
+      "verifyAccountFailed": "فشل التحقق من حالة الحساب. يرجى تسجيل الدخول مرة أخرى.",
+      "dhtDisconnected": "شبكة DHT غير متصلة. يرجى تشغيل شبكة DHT قبل تحميل الملفات.",
+      "fileSuccess": "تم تحميل {name} بنجاح",
+      "torrentSeeding": "{name} يقوم الآن بالبذر كتورنت"
     },
     "network": {
-      "signalingConnected": "Connected to signaling server",
-      "signalingError": "Failed to connect to signaling server for web mode testing",
-      "peerAddressRequired": "Please enter a peer address",
-      "dhtRequired": "DHT not connected. Please start DHT first.",
-      "alreadyConnected": "Peer is already connected",
-      "connecting": "Connecting to peer via DHT...",
-      "connectionSuccess": "Connection Success!",
-      "connectionFailed": "Connection failed. Peer may be unreachable or address invalid.",
-      "connectError": "Failed to connect to peer: {error}",
-      "signalingMissing": "Signaling server not connected. Please start DHT first.",
-      "peerNotFound": "Peer {peer} not found in discovered peers",
-      "messageReceived": "Received from peer: {message}",
-      "webrtcConnected": "Successfully connected to peer!",
-      "webrtcFailed": "Connection to peer failed",
-      "dataChannelOpen": "Data channel open - you can now send messages!",
-      "dataChannelClosed": "Data channel closed",
-      "webrtcError": "WebRTC error: {error}",
-      "webrtcConnecting": "Connecting to peer: {peer}",
-      "webrtcCreateError": "Failed to create connection: {error}",
-      "noConnection": "No active WebRTC connection",
-      "messageSent": "Test message sent: {message}",
-      "sendError": "Failed to send message: {error}",
-      "gethInstalled": "Geth is already installed",
-      "gethDownloadError": "Failed to download Geth: {error}"
+      "signalingConnected": "تم الاتصال بخادم الإشارات",
+      "signalingError": "فشل الاتصال بخادم الإشارات لاختبار وضع الويب",
+      "peerAddressRequired": "يرجى إدخال عنوان نظير",
+      "dhtRequired": "شبكة DHT غير متصلة. يرجى تشغيل DHT أولاً.",
+      "alreadyConnected": "النظير متصل بالفعل",
+      "connecting": "جارٍ الاتصال بالنظير عبر DHT...",
+      "connectionSuccess": "تم الاتصال بنجاح!",
+      "connectionFailed": "فشل الاتصال. قد يكون النظير غير متاح أو العنوان غير صالح.",
+      "connectError": "فشل الاتصال بالنظير: {error}",
+      "signalingMissing": "خادم الإشارات غير متصل. يرجى تشغيل DHT أولاً.",
+      "peerNotFound": "لم يتم العثور على النظير {peer} بين الأقران المكتشفين",
+      "messageReceived": "تم الاستلام من النظير: {message}",
+      "webrtcConnected": "تم الاتصال بالنظير بنجاح!",
+      "webrtcFailed": "فشل الاتصال بالنظير",
+      "dataChannelOpen": "قناة البيانات مفتوحة - يمكنك الآن إرسال الرسائل!",
+      "dataChannelClosed": "تم إغلاق قناة البيانات",
+      "webrtcError": "خطأ WebRTC: {error}",
+      "webrtcConnecting": "جارٍ الاتصال بالنظير: {peer}",
+      "webrtcCreateError": "فشل إنشاء الاتصال: {error}",
+      "noConnection": "لا يوجد اتصال WebRTC نشط",
+      "messageSent": "تم إرسال رسالة اختبار: {message}",
+      "sendError": "فشل إرسال الرسالة: {error}",
+      "gethInstalled": "تم تثبيت Geth بالفعل",
+      "gethDownloadError": "فشل تنزيل Geth: {error}"
     },
     "download": {
       "payment": {
-        "invalidAddress": "Cannot process payment: uploader wallet address is missing or invalid",
-        "failed": "Payment failed: {error}",
-        "successWithHash": "Payment successful! Transaction: {hash}...",
-        "success": "Payment successful!"
+        "invalidAddress": "لا يمكن معالجة الدفع: عنوان محفظة الرافع مفقود أو غير صالح",
+        "failed": "فشل الدفع: {error}",
+        "successWithHash": "تم الدفع بنجاح! المعاملة: {hash}...",
+        "success": "تم الدفع بنجاح!"
       }
     },
     "transactions": {
-      "copied": "{label} copied to clipboard",
-      "copyError": "Failed to copy {label}",
-      "exported": "Transaction exported"
+      "copied": "تم نسخ {label} إلى الحافظة",
+      "copyError": "فشل نسخ {label}",
+      "exported": "تم تصدير المعاملة"
     }
   }
 }

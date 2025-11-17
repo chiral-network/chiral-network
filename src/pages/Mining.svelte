@@ -16,7 +16,12 @@
   import { walletService } from '$lib/wallet';
   import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte';
   import { showToast } from '$lib/toast';
-  
+  type TranslateParams = { values?: Record<string, unknown>; default?: string };
+  // const tr = (key: string, params?: TranslateParams) => get(t)(key, params);
+  const tr = (key: string, params?: TranslateParams): string =>
+  $t(key, params);
+
+
   // Local UI state only
   let isTauri = false
   let isGethRunning = false
@@ -214,7 +219,8 @@
 
       // Show notification when sync completes
       if (wasSyncing && !isSyncing && !lastSyncNotificationShown && $miningState.isMining) {
-        showToast('Blockchain sync complete! Mining is now active.', 'success')
+        // showToast('Blockchain sync complete! Mining is now active.', 'success')
+        showToast(tr('toasts.mining.syncComplete'), 'success')
         lastSyncNotificationShown = true
       }
 
