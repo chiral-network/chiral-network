@@ -116,6 +116,7 @@ function handleFirstRunComplete() {
     let stopNetworkMonitoring: () => void = () => {};
     let stopGethMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
+    let unlistenTorrentPayment: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
     syncBandwidthScheduler(get(settings));
@@ -129,6 +130,51 @@ function handleFirstRunComplete() {
       // Listen for payment notifications from backend
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
+          // Listener for BitTorrent protocol payments
+          const torrentUnlisten = await listen(
+            "torrent_seeder_payment_received",
+            async (event: any) => {
+              const payload = event.payload;
+              console.log(
+                "💰 Torrent seeder payment notification received:",
+                payload,
+              );
+
+              const currentWalletAddress = get(wallet).address;
+              const seederAddress = payload.seeder_wallet_address;
+
+              if (
+                !seederAddress ||
+                !currentWalletAddress ||
+                currentWalletAddress.toLowerCase() !==
+                  seederAddress.toLowerCase()
+              ) {
+                console.log("⏭️ Skipping torrent payment credit - not for us.");
+                return;
+              }
+
+              console.log(
+                "✅ This torrent payment is for us! Crediting...",
+              );
+
+              const result = await paymentService.creditSeederPayment(
+                payload.info_hash, // For torrents, this would be the info_hash
+                payload.file_name,
+                payload.file_size,
+                payload.downloader_address,
+                payload.transaction_hash,
+              );
+
+              if (!result.success) {
+                console.error(
+                  "❌ Failed to credit torrent seeder payment:",
+                  result.error,
+                );
+              }
+            },
+          );
+          unlistenTorrentPayment = torrentUnlisten;
+
           const unlisten = await listen(
             "seeder_payment_received",
             async (event: any) => {
@@ -405,6 +451,9 @@ function handleFirstRunComplete() {
       }
       if (unlistenSeederPayment) {
         unlistenSeederPayment();
+      }
+      if (unlistenTorrentPayment) {
+        unlistenTorrentPayment();
       }
       if (unsubscribeScheduler) {
         unsubscribeScheduler();

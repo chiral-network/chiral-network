@@ -1,11 +1,17 @@
 use crate::protocols::ProtocolHandler;
 use async_trait::async_trait;
-use librqbit::{AddTorrent, Session, SessionOptions};
+use librqbit::{
+    AddTorrent, AddTorrentOptions, ManagedTorrent, Session, SessionOptions,
+};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
 use tokio::time::{self, Duration};
-use tracing::{info, instrument, error, warn};
+use tracing::{error, info, instrument, warn};
 use thiserror::Error;
+
+const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
 
 /// Custom error type for BitTorrent operations
 #[derive(Debug, Error)]
@@ -139,11 +145,31 @@ impl From<BitTorrentError> for String {
     }
 }
 
+/// State for tracking per-peer data transfer deltas.
+#[derive(Default, Debug, Clone)]
+struct PeerTransferState {
+    last_uploaded_bytes: u64,
+    last_downloaded_bytes: u64,
+}
+
+/// Payload for the `payment_required` event.
+#[derive(Debug, Clone, serde::Serialize)]
+struct PaymentRequiredPayload {
+    info_hash: String,
+    peer_id: String,
+    bytes_uploaded: u64,
+    // In a real implementation, you'd also need the peer's wallet address.
+    // This would be discovered during an initial handshake.
+}
 /// BitTorrent protocol handler implementing the ProtocolHandler trait.
 /// This handler manages BitTorrent downloads and seeding operations using librqbit.
 pub struct BitTorrentHandler {
     rqbit_session: Arc<Session>,
     download_directory: std::path::PathBuf,
+    // NEW: Manage active torrents and their stats.
+    active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
+    peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
+    app_handle: Option<AppHandle>,
 }
 
 impl BitTorrentHandler {
@@ -158,17 +184,16 @@ impl BitTorrentHandler {
         listen_port_range: Option<std::ops::Range<u16>>,
     ) -> Result<Self, BitTorrentError> {
         let mut opts = SessionOptions::default();
-        
+
         // Set port range if provided (helps run multiple instances)
         if let Some(range) = listen_port_range {
             opts.listen_port_range = Some(range);
         }
-        
+
         // Use instance-specific DHT config if available (for multiple instances)
         // The DHT state file will be stored in the download directory
-        opts.dht_config = Some(librqbit::dht::PersistentDhtConfig {
-            config_filename: Some(download_directory.join("dht.json")),
-            dump_interval: Some(Duration::from_secs(300)), // Save DHT state every 5 minutes
+        opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
+            folder: Some(download_directory.clone()),
         });
         
         let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
@@ -176,15 +201,77 @@ impl BitTorrentHandler {
                 message: format!("Failed to create session: {}", e),
             }
         })?;
-        
-        info!(
-            "Initializing BitTorrentHandler with download directory: {:?}",
-            download_directory
-        );
-        Ok(Self {
+
+        let handler = Self {
             rqbit_session: session,
             download_directory,
-        })
+            active_torrents: Default::default(),
+            peer_states: Default::default(),
+            app_handle: None,
+        };
+
+        // Spawn the background task for statistics polling.
+        handler.spawn_stats_poller();
+
+        info!(
+            "Initializing BitTorrentHandler with download directory: {:?}",
+            handler.download_directory
+        );
+        Ok(handler)
+    }
+
+    /// Spawns a background task to periodically poll for and process per-peer statistics.
+    fn spawn_stats_poller(&self) {
+        let active_torrents = self.active_torrents.clone();
+        let peer_states = self.peer_states.clone();
+    let app_handle = self.app_handle.clone();
+
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                let torrents = active_torrents.lock().await;
+                let mut states = peer_states.lock().await;
+
+                for (info_hash_str, handle) in torrents.iter() {
+                    // Use aggregate torrent stats instead of per-peer API (API surface varies between librqbit versions).
+                    let stats = handle.stats();
+                    let torrent_peer_states = states.entry(info_hash_str.clone()).or_default();
+                    // Use a synthetic key for session-level accumulation when per-peer IDs are not available.
+                    let session_key = "__session__".to_string();
+                    let state = torrent_peer_states.entry(session_key.clone()).or_default();
+
+                    let uploaded_total = stats.uploaded_bytes;
+                    let downloaded_total = stats.progress_bytes;
+
+                    let uploaded_delta = uploaded_total.saturating_sub(state.last_uploaded_bytes);
+                    if uploaded_delta >= PAYMENT_THRESHOLD_BYTES {
+                        info!(
+                            info_hash = %info_hash_str,
+                            bytes = uploaded_delta,
+                            "Payment threshold reached for session"
+                        );
+
+                        let payload = PaymentRequiredPayload {
+                            info_hash: info_hash_str.clone(),
+                            peer_id: session_key.clone(),
+                            bytes_uploaded: uploaded_delta,
+                        };
+
+                        if let Some(handle) = app_handle.as_ref() {
+                            if let Err(e) = handle.emit("payment_required", payload) {
+                                error!("Failed to emit payment_required event: {}", e);
+                            }
+                        } else {
+                            warn!("No AppHandle available; skipping emit of payment_required event");
+                        }
+
+                        state.last_uploaded_bytes = uploaded_total;
+                    }
+                    state.last_downloaded_bytes = downloaded_total;
+                }
+            }
+        });
     }
 
     /// Validate magnet link format
@@ -198,9 +285,12 @@ impl BitTorrentHandler {
         // Extract info hash to validate length
         if let Some(hash_start) = url.find("urn:btih:") {
             let hash_start = hash_start + 9; // Length of "urn:btih:"
-            let hash_end = url[hash_start..].find('&').unwrap_or(url.len() - hash_start) + hash_start;
+            let hash_end = url[hash_start..]
+                .find('&')
+                .unwrap_or(url.len() - hash_start)
+                + hash_start;
             let hash = &url[hash_start..hash_end];
-            
+
             // Check hash length (40 chars for SHA-1, 64 for SHA-256)
             if hash.len() != 40 && hash.len() != 64 {
                 return Err(BitTorrentError::InvalidMagnetLink {
@@ -222,7 +312,7 @@ impl BitTorrentHandler {
     /// Validate torrent file path
     fn validate_torrent_file(path: &str) -> Result<(), BitTorrentError> {
         let file_path = Path::new(path);
-        
+
         if !file_path.exists() {
             return Err(BitTorrentError::TorrentFileError {
                 message: format!("Torrent file not found: {}", path),
@@ -247,7 +337,7 @@ impl BitTorrentHandler {
     /// Map generic errors to our custom error type
     fn map_generic_error(error: impl std::fmt::Display) -> BitTorrentError {
         let error_msg = error.to_string();
-        
+
         if error_msg.contains("network") || error_msg.contains("connection") {
             BitTorrentError::NetworkError {
                 message: error_msg,
@@ -255,9 +345,7 @@ impl BitTorrentHandler {
         } else if error_msg.contains("timeout") {
             BitTorrentError::DownloadTimeout { timeout_secs: 30 }
         } else if error_msg.contains("parse") || error_msg.contains("invalid") {
-            BitTorrentError::TorrentParsingError { 
-                message: error_msg.clone() 
-            }
+            BitTorrentError::TorrentParsingError { message: error_msg }
         } else {
             BitTorrentError::Unknown {
                 message: error_msg,
@@ -287,7 +375,7 @@ impl ProtocolHandler for BitTorrentHandler {
                 e
             })?;
             AddTorrent::from_url(identifier)
-        } else {
+            } else {
             Self::validate_torrent_file(identifier).map_err(|e| {
                 error!("Torrent file validation failed: {}", e);
                 e
@@ -300,21 +388,25 @@ impl ProtocolHandler for BitTorrentHandler {
             })?
         };
 
-        let add_torrent_response = self
+        let torrent = self
             .rqbit_session
-            .add_torrent(add_torrent, None)
+            .add_torrent(add_torrent, Some(AddTorrentOptions::default()))
             .await
             .map_err(|e| {
                 error!("Failed to add torrent to session: {}", e);
                 Self::map_generic_error(e)
-            })?;
-
-        let handle = add_torrent_response
+            })?
             .into_handle()
             .ok_or_else(|| {
                 error!("Failed to get torrent handle");
                 BitTorrentError::HandleUnavailable
             })?;
+
+        // Store the handle for statistics polling.
+        self.active_torrents
+            .lock()
+            .await
+            .insert(hex::encode(torrent.info_hash().0), torrent.clone());
 
         info!(
             "BitTorrent download started for: {}. Monitoring progress...",
@@ -327,7 +419,8 @@ impl ProtocolHandler for BitTorrentHandler {
 
         loop {
             interval.tick().await;
-            let stats = handle.stats();
+            // librqbit's stats() returns a TorrentStats struct (not a Result)
+            let stats = torrent.stats();
             let downloaded = stats.progress_bytes;
             let total = stats.total_bytes;
             let progress = if total > 0 {
@@ -349,12 +442,15 @@ impl ProtocolHandler for BitTorrentHandler {
 
             // Check for timeout (no progress for extended period)
             if downloaded == 0 {
-                no_progress_count += 1;
-                if no_progress_count >= MAX_NO_PROGRESS_ITERATIONS {
-                    error!("Download timeout: no progress after {} seconds", MAX_NO_PROGRESS_ITERATIONS);
-                    return Err(BitTorrentError::DownloadTimeout {
-                        timeout_secs: MAX_NO_PROGRESS_ITERATIONS as u64,
-                    }.into());
+                if stats.live.is_some() {
+                    let live_peers = stats.live.as_ref().map(|l| l.snapshot.peer_stats.live).unwrap_or(0);
+                    if live_peers == 0 {
+                        no_progress_count += 1;
+                        if no_progress_count >= MAX_NO_PROGRESS_ITERATIONS {
+                            error!("Download timeout: no progress after {} seconds", MAX_NO_PROGRESS_ITERATIONS);
+                            return Err(BitTorrentError::DownloadTimeout { timeout_secs: MAX_NO_PROGRESS_ITERATIONS as u64 }.into());
+                        }
+                    }
                 }
             } else {
                 no_progress_count = 0; // Reset counter when progress is made
@@ -414,8 +510,11 @@ impl BitTorrentHandler {
     pub fn extract_info_hash(magnet: &str) -> Option<String> {
         if let Ok(_) = Self::validate_magnet_link(magnet) {
             if let Some(hash_start) = magnet.find("urn:btih:") {
-                let hash_start = hash_start + 9;
-                let hash_end = magnet[hash_start..].find('&').unwrap_or(magnet.len() - hash_start) + hash_start;
+                let hash_start = hash_start + 9; // "urn:btih:".len()
+                let hash_end = magnet[hash_start..]
+                    .find('&')
+                    .map(|i| i + hash_start)
+                    .unwrap_or(magnet.len());
                 Some(magnet[hash_start..hash_end].to_string())
             } else {
                 None
