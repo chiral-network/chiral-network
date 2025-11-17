@@ -444,18 +444,40 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     disposeDownloadTelemetry()
   })
 
+  // Load saved download page settings
+  const loadDownloadSettings = () => {
+    try {
+      const saved = localStorage.getItem('downloadPageSettings')
+      if (saved) {
+        return JSON.parse(saved)
+      }
+    } catch (error) {
+      console.error('Failed to load download settings:', error)
+    }
+    return {
+      autoStartQueue: true,
+      maxConcurrentDownloads: 3,
+      autoClearCompleted: false,
+      filterStatus: 'all',
+      multiSourceEnabled: true,
+      maxPeersPerDownload: 3
+    }
+  }
+
+  const savedSettings = loadDownloadSettings()
+
   let searchFilter = ''  // For searching existing downloads
-  let maxConcurrentDownloads: string | number = 3
+  let maxConcurrentDownloads: string | number = savedSettings.maxConcurrentDownloads
   let lastValidMaxConcurrent = 3 // Store the last valid value
-  let autoStartQueue = true
-  let autoClearCompleted = false // New setting for auto-clearing
-  let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
+  let autoStartQueue = savedSettings.autoStartQueue
+  let autoClearCompleted = savedSettings.autoClearCompleted
+  let filterStatus = savedSettings.filterStatus
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
   // Multi-source download state
   let multiSourceProgress = new Map<string, MultiSourceProgress>()
-  let multiSourceEnabled = true
-  let maxPeersPerDownload = 3
+  let multiSourceEnabled = savedSettings.multiSourceEnabled
+  let maxPeersPerDownload = savedSettings.maxPeersPerDownload
 
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
@@ -990,6 +1012,19 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   // Auto-clear completed downloads when setting is enabled
   $: if (autoClearCompleted) {
     files.update(f => f.filter(file => file.status !== 'completed'))
+  }
+
+  // Persist download page settings
+  $: {
+    const settings = {
+      autoStartQueue,
+      maxConcurrentDownloads: typeof maxConcurrentDownloads === 'number' ? maxConcurrentDownloads : parseInt(maxConcurrentDownloads as string) || 3,
+      autoClearCompleted,
+      filterStatus,
+      multiSourceEnabled,
+      maxPeersPerDownload
+    }
+    localStorage.setItem('downloadPageSettings', JSON.stringify(settings))
   }
 
   // Smart Resume: Auto-save download state when files or queue changes
