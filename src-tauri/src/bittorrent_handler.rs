@@ -6,6 +6,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 use tracing::{error, info, instrument, warn};
+use crate::dht::DhtService;
+use librqbit::AddTorrentOptions;
 use thiserror::Error;
 
 /// Custom error type for BitTorrent operations
@@ -161,46 +163,52 @@ impl From<BitTorrentError> for String {
 #[derive(Clone)]
 pub struct BitTorrentHandler {
     rqbit_session: Arc<Session>,
+    dht_service: Arc<DhtService>,
     download_directory: std::path::PathBuf,
 }
 
 impl BitTorrentHandler {
     /// Creates a new BitTorrentHandler with the specified download directory.
-    pub async fn new(download_directory: std::path::PathBuf) -> Result<Self, BitTorrentError> {
-        Self::new_with_port_range(download_directory, None).await
+    pub async fn new(
+        download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
+    ) -> Result<Self, BitTorrentError> {
+        Self::new_with_port_range(download_directory, dht_service, None).await
     }
 
     /// Creates a new BitTorrentHandler with a specific port range to avoid conflicts.
     pub async fn new_with_port_range(
         download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
     ) -> Result<Self, BitTorrentError> {
         let mut opts = SessionOptions::default();
-        
+
         // Set port range if provided (helps run multiple instances)
         if let Some(range) = listen_port_range {
             opts.listen_port_range = Some(range);
         }
-        
+
         // Use instance-specific DHT config if available (for multiple instances)
         // The DHT state file will be stored in the download directory
         opts.dht_config = Some(librqbit::dht::PersistentDhtConfig {
             config_filename: Some(download_directory.join("dht.json")),
             dump_interval: Some(Duration::from_secs(300)), // Save DHT state every 5 minutes
         });
-        
+
         let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
             BitTorrentError::SessionInit {
                 message: format!("Failed to create session: {}", e),
             }
         })?;
-        
+
         info!(
             "Initializing BitTorrentHandler with download directory: {:?}",
             download_directory
         );
         Ok(Self {
             rqbit_session: session,
+            dht_service,
             download_directory,
         })
     }
@@ -213,17 +221,23 @@ impl BitTorrentHandler {
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
+        let info_hash: Option<String>;
+
         let add_torrent = if identifier.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| {
                 error!("Magnet link validation failed: {}", e);
                 e
             })?;
+            info_hash = Some(Self::extract_info_hash(identifier).ok_or(BitTorrentError::InvalidMagnetLink { url: identifier.to_string() })?);
             AddTorrent::from_url(identifier)
         } else {
             Self::validate_torrent_file(identifier).map_err(|e| {
                 error!("Torrent file validation failed: {}", e);
                 e
             })?;
+            // For .torrent files, info_hash will be available after parsing,
+            // which librqbit does internally. For now, we can only prioritize for magnets.
+            info_hash = None;
             AddTorrent::from_local_filename(identifier).map_err(|e| {
                 error!("Failed to load torrent file: {}", e);
                 BitTorrentError::TorrentFileError {
@@ -232,9 +246,42 @@ impl BitTorrentHandler {
             })?
         };
 
+        let mut add_opts = AddTorrentOptions::default();
+
+        if let Some(hash) = info_hash {
+            info!("Searching for Chiral peers for info_hash: {}", hash);
+            match self.dht_service.search_peers_by_infohash(hash).await {
+                Ok(chiral_peer_ids) => {
+                    if !chiral_peer_ids.is_empty() {
+                        info!("Found {} Chiral peers. Prioritizing them.", chiral_peer_ids.len());
+                        
+                        // Here you would use PeerSelectionService to rank them and resolve PeerId to SocketAddr.
+                        // For now, we initialize the Vec with the correct type.
+                        let mut peers_to_add: Vec<std::net::SocketAddr> = Vec::new();
+                        for peer_id_str in chiral_peer_ids {
+                            // We need to get the address for the peer.
+                            // This is a simplification. A real implementation would query the DHT
+                            // for the peer's addresses.
+                            // For now, we can't resolve PeerId to SocketAddr easily here.
+                            // librqbit's `AddTorrentOptions` takes `Vec<Peer>`, which is `SocketAddr`.
+                            // We will skip adding them directly until we can resolve addresses.
+                            // However, the logic for discovery is here.
+                            warn!("Discovered Chiral peer {}, but cannot resolve address to add to librqbit yet.", peer_id_str);
+                        }
+                        // add_opts.peers = Some(peers_to_add);
+                    } else {
+                        info!("No additional Chiral peers found for this torrent.");
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to search for Chiral peers: {}", e);
+                }
+            }
+        }
+
         let add_torrent_response = self
             .rqbit_session
-            .add_torrent(add_torrent, None)
+            .add_torrent(add_torrent, Some(add_opts))
             .await
             .map_err(|e| {
                 error!("Failed to add torrent to session: {}", e);
@@ -467,7 +514,7 @@ impl BitTorrentHandler {
     /// Extract info hash from magnet link
     pub fn extract_info_hash(magnet: &str) -> Option<String> {
         if let Ok(_) = Self::validate_magnet_link(magnet) {
-            if let Some(hash_start) = magnet.find("urn:btih:") {
+            if let Some(hash_start) = magnet.to_lowercase().find("urn:btih:") {
                 let hash_start = hash_start + 9;
                 let hash_end = magnet[hash_start..]
                     .find('&')
