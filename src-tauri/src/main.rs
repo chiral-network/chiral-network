@@ -1072,6 +1072,28 @@ async fn get_recent_mined_blocks_pub(
 }
 
 #[tauri::command]
+async fn get_mined_blocks_range(
+    address: String,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<MinedBlock>, String> {
+    ethereum::get_mined_blocks_range(&address, from_block, to_block).await
+}
+
+#[tauri::command]
+async fn get_total_mining_rewards(address: String) -> Result<f64, String> {
+    ethereum::get_total_mining_rewards(&address).await
+}
+
+#[tauri::command]
+async fn calculate_accurate_totals(
+    address: String,
+    app: tauri::AppHandle,
+) -> Result<ethereum::AccurateTotals, String> {
+    ethereum::calculate_accurate_totals(&address, app).await
+}
+
+#[tauri::command]
 async fn get_transaction_history(
     address: String,
     lookback: u64,
@@ -1084,6 +1106,15 @@ async fn get_transaction_history(
 
     // Scan transactions
     ethereum::get_transaction_history(&address, from_block, current_block).await
+}
+
+#[tauri::command]
+async fn get_transaction_history_range(
+    address: String,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<ethereum::TransactionHistoryItem>, String> {
+    ethereum::get_transaction_history(&address, from_block, to_block).await
 }
 
 #[tauri::command]
@@ -5563,10 +5594,14 @@ fn main() {
             get_network_stats,
             get_block_details_by_number,
             get_transaction_history,
+            get_transaction_history_range,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
             get_recent_mined_blocks_pub,
+            get_mined_blocks_range,
+            get_total_mining_rewards,
+            calculate_accurate_totals,
             get_cpu_temperature,
             start_dht_node,
             stop_dht_node,
