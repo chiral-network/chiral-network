@@ -5344,7 +5344,7 @@ async fn get_download_status_restart(
 }
 
 #[cfg(not(test))]
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
     // so we can configure file logging properly
     use crate::dht::DhtService;
@@ -5390,7 +5390,7 @@ fn main() {
             eprintln!("Error in headless mode: {}", e);
             std::process::exit(1);
         }
-        return;
+        return Ok(());
     }
 
     println!("Starting Chiral Network...");
@@ -5446,7 +5446,7 @@ fn main() {
     let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
     let relay_reputation_arc_for_pump = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
-    tokio::spawn(async move {
+     runtime.spawn(async move {
         pump_dht_events(
             app_handle_for_pump,
             dht_clone_for_pump,
@@ -6042,6 +6042,8 @@ fn main() {
             }
             _ => {}
         });
+
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -6646,4 +6648,4 @@ async fn pump_dht_events(
             }
         }
     }
-}
+}      
