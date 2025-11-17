@@ -30,6 +30,7 @@ pub mod file_transfer;
 pub mod ftp_client;
 pub mod ftp_downloader;
 pub mod geth_downloader;
+pub mod geth_bootstrap;
 pub mod headless;
 pub mod http_download;
 pub mod http_server;
@@ -4373,6 +4374,11 @@ fn read_last_lines(path: &Path, max_lines: usize) -> Result<Vec<String>, String>
 }
 
 #[tauri::command]
+async fn check_bootstrap_health() -> Result<geth_bootstrap::BootstrapHealthReport, String> {
+    Ok(geth_bootstrap::check_all_bootstrap_nodes().await)
+}
+
+#[tauri::command]
 async fn get_geth_status(
     state: State<'_, AppState>,
     data_dir: Option<String>,
@@ -5553,6 +5559,7 @@ fn main() {
             check_geth_binary,
             get_geth_status,
             download_geth_binary,
+            check_bootstrap_health,
             set_miner_address,
             start_miner,
             stop_miner,

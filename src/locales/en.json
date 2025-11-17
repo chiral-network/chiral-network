@@ -79,7 +79,23 @@
       "logUnavailable": "Log file not found.",
       "logTruncated": "Showing the last {count} lines.",
       "errorGeneric": "Could not load Geth status.",
-      "lastUpdated": "Updated {time}"
+      "lastUpdated": "Updated {time}",
+      "bootstrap": {
+        "title": "Bootstrap Node Health",
+        "description": "Bootstrap nodes help your Chiral node discover and connect to other peers in the blockchain network. Check their reachability to diagnose connectivity issues.",
+        "checkNow": "Check Bootstrap Health",
+        "checking": "Checking...",
+        "totalNodes": "Total",
+        "reachable": "Reachable",
+        "unreachable": "Unreachable",
+        "nodeDetails": "Node Details",
+        "error": "Error",
+        "allNodesDown": "All bootstrap nodes are unreachable",
+        "cannotConnect": "Your Chiral node may have difficulty connecting to the blockchain network. Check your internet connection or firewall settings.",
+        "someNodesDown": "Some bootstrap nodes are unreachable",
+        "usingAvailable": "Your Chiral node will use the available nodes. Network connectivity should be stable.",
+        "allNodesHealthy": "All bootstrap nodes are healthy and reachable"
+      }
     },
     "dht": {
       "title": "DHT Network",
