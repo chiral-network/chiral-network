@@ -342,6 +342,7 @@ struct AppState {
     // HTTP server for serving chunks and keys
     http_server_state: Arc<http_server::HttpServerState>,
     http_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
+    http_server_shutdown: Arc<Mutex<Option<tokio::sync::broadcast::Sender<()>>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -5159,16 +5160,22 @@ async fn start_http_server(
 
     tracing::info!("Starting HTTP server on {}", bind_addr);
 
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+
     // Start the server
     let server_state = state.http_server_state.clone();
-    let bound_addr = http_server::start_server(server_state, bind_addr)
+    let bound_addr = http_server::start_server(server_state, bind_addr, shutdown_rx)
         .await
         .map_err(|e| format!("Failed to start HTTP server: {}", e))?;
 
-    // Store the bound address
+    // Store the bound address and shutdown sender
     {
         let mut addr_lock = state.http_server_addr.lock().await;
         *addr_lock = Some(bound_addr);
+        
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        *shutdown_lock = Some(shutdown_tx);
     }
 
     Ok(format!("http://{}", bound_addr))
@@ -5178,17 +5185,25 @@ async fn start_http_server(
 #[tauri::command]
 async fn stop_http_server(state: State<'_, AppState>) -> Result<(), String> {
     let mut addr_lock = state.http_server_addr.lock().await;
+    let mut shutdown_lock = state.http_server_shutdown.lock().await;
 
     if addr_lock.is_none() {
         return Err("HTTP server is not running".to_string());
     }
 
-    tracing::info!("Stopping HTTP server");
+    tracing::info!("Stopping HTTP server gracefully");
 
-    // TODO: Implement graceful shutdown
-    // For now, just clear the address (server task will continue running)
+    // Send shutdown signal to the server
+    if let Some(shutdown_tx) = shutdown_lock.take() {
+        // Send shutdown signal (ignore if no receivers)
+        let _ = shutdown_tx.send(());
+        tracing::info!("Shutdown signal sent to HTTP server");
+    }
+
+    // Clear the address
     *addr_lock = None;
 
+    tracing::info!("HTTP server stopped");
     Ok(())
 }
 
@@ -5483,6 +5498,7 @@ fn main() {
                     .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
             })),
             http_server_addr: Arc::new(Mutex::new(None)),
+            http_server_shutdown: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
@@ -5926,10 +5942,17 @@ fn main() {
 
                         tracing::info!("Auto-starting HTTP server on port 8080...");
 
-                        match http_server::start_server(state.http_server_state.clone(), bind_addr).await {
+                        // Create shutdown channel for auto-started server
+                        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+
+                        match http_server::start_server(state.http_server_state.clone(), bind_addr, shutdown_rx).await {
                             Ok(bound_addr) => {
                                 let mut addr_lock = state.http_server_addr.lock().await;
                                 *addr_lock = Some(bound_addr);
+                                
+                                let mut shutdown_lock = state.http_server_shutdown.lock().await;
+                                *shutdown_lock = Some(shutdown_tx);
+                                
                                 tracing::info!("HTTP server started at http://{}", bound_addr);
                                 println!("✅ HTTP server listening on http://{}", bound_addr);
                             }

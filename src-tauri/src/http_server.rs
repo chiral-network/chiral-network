@@ -362,9 +362,12 @@ pub fn create_router(state: Arc<HttpServerState>) -> Router {
 /// Starts the HTTP server on the specified address
 ///
 /// Returns the server's actual bound address (useful if port 0 was used)
+///
+/// The server will run until a shutdown signal is received via the provided receiver.
 pub async fn start_server(
     state: Arc<HttpServerState>,
     addr: SocketAddr,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) -> Result<SocketAddr, String> {
     let app = create_router(state);
 
@@ -375,10 +378,19 @@ pub async fn start_server(
 
     tracing::info!("HTTP server listening on http://{}", bound_addr);
 
-    // Spawn server in background
+    // Spawn server in background with graceful shutdown support
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+        let server = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                // Wait for shutdown signal
+                let _ = shutdown_rx.recv().await;
+                tracing::info!("HTTP server received shutdown signal, closing connections gracefully...");
+            });
+
+        if let Err(e) = server.await {
             tracing::error!("HTTP server error: {}", e);
+        } else {
+            tracing::info!("HTTP server shut down successfully");
         }
     });
 
