@@ -12,6 +12,13 @@ export interface ManifestForReassembly {
   merkleRoot?: string; // optional
 }
 
+export enum ChunkState {
+  UNREQUESTED = "UNREQUESTED",
+  REQUESTED = "REQUESTED",
+  RECEIVED = "RECEIVED",
+  CORRUPTED = "CORRUPTED",
+}
+
 interface TransferState {
   transferId: string;
   manifest: ManifestForReassembly;
@@ -19,17 +26,34 @@ interface TransferState {
   receivedChunks: Set<number>;
   corruptedChunks: Set<number>;
   offsets: number[]; // byte offset for each chunk
-  // Promise chain used to serialize concurrent operations for this transfer
+  // Promise chain used to serialize concurrent operations for this transfer (compat)
   pending?: Promise<any>;
+  // explicit per-chunk states
+  chunkStates: ChunkState[];
+  // bounded write queue to limit memory usage
+  writeQueue: Array<{
+    run: () => Promise<boolean>;
+    resolve: (v: boolean) => void;
+    reject: (e: any) => void;
+  }>;
+  writeInFlight: number;
+  maxConcurrentWrites: number;
+  // hard cap on queued write jobs (to limit memory used by queued chunk buffers)
+  maxQueueLength: number;
 }
+
+export type ReassemblyEventName = "chunkState" | "progress" | "finalized";
 
 export class ReassemblyManager {
   private transfers = new Map<string, TransferState>();
+  private listeners = new Map<ReassemblyEventName, Set<(payload: any) => void>>();
 
   initReassembly(
     transferId: string,
     manifest: ManifestForReassembly,
-    tmpPath: string
+    tmpPath: string,
+    maxConcurrentWrites = 2,
+    maxQueueLength = 1000
   ): void {
     if (this.transfers.has(transferId)) {
       throw new Error(`Transfer ${transferId} already initialized`);
@@ -43,6 +67,8 @@ export class ReassemblyManager {
       cursor += ch.encryptedSize;
     }
 
+    const chunkStates = manifest.chunks.map(() => ChunkState.UNREQUESTED);
+
     const state: TransferState = {
       transferId,
       manifest,
@@ -51,13 +77,81 @@ export class ReassemblyManager {
       corruptedChunks: new Set(),
       offsets,
       pending: Promise.resolve(null),
+      chunkStates,
+      writeQueue: [],
+      writeInFlight: 0,
+      maxConcurrentWrites,
+      maxQueueLength,
     };
 
     this.transfers.set(transferId, state);
   }
 
-  getState(transferId: string): TransferState | null {
-    return this.transfers.get(transferId) ?? null;
+  // Event API
+  on(eventName: ReassemblyEventName, cb: (payload: any) => void): void {
+    if (!this.listeners.has(eventName)) this.listeners.set(eventName, new Set());
+    this.listeners.get(eventName)!.add(cb);
+  }
+  off(eventName: ReassemblyEventName, cb: (payload: any) => void): void {
+    this.listeners.get(eventName)?.delete(cb);
+  }
+  private emit(eventName: ReassemblyEventName, payload: any): void {
+    this.listeners.get(eventName)?.forEach((cb) => {
+      try {
+        cb(payload);
+      } catch (e) {
+        // swallow listener errors
+      }
+    });
+  }
+
+  // Return a safe snapshot of internal state for test/debug; do not rely on this API for production.
+  getState(transferId: string): any {
+    const state = this.transfers.get(transferId);
+    if (!state) return null;
+
+    // Return copies only (no references to internal mutable structures)
+    return {
+      transferId: state.transferId,
+      manifest: state.manifest,
+      tmpPath: state.tmpPath,
+      offsets: state.offsets.slice(),
+      receivedChunks: Array.from(state.receivedChunks.values()),
+      corruptedChunks: Array.from(state.corruptedChunks.values()),
+      chunkStates: state.chunkStates.slice(),
+      writeInFlight: state.writeInFlight,
+      writeQueueLength: state.writeQueue.length,
+      maxConcurrentWrites: state.maxConcurrentWrites,
+      maxQueueLength: state.maxQueueLength,
+    };
+  }
+
+  private processWriteQueue(state: TransferState): void {
+    while (
+      state.writeInFlight < state.maxConcurrentWrites &&
+      state.writeQueue.length > 0
+    ) {
+      const job = state.writeQueue.shift()!;
+      state.writeInFlight += 1;
+      job
+        .run()
+        .then((res) => {
+          try {
+            job.resolve(res);
+          } finally {
+            state.writeInFlight -= 1;
+            this.processWriteQueue(state);
+          }
+        })
+        .catch((err) => {
+          try {
+            job.reject(err);
+          } finally {
+            state.writeInFlight -= 1;
+            this.processWriteQueue(state);
+          }
+        });
+    }
   }
 
   async acceptChunk(
@@ -68,29 +162,45 @@ export class ReassemblyManager {
     const state = this.transfers.get(transferId);
     if (!state) throw new Error(`Unknown transfer ${transferId}`);
 
-    // Serialize concurrent acceptChunk calls per-transfer using pending chain
-    const task = async () => {
-      if (chunkIndex < 0 || chunkIndex >= state.manifest.chunks.length) {
-        throw new Error(`Invalid chunk index ${chunkIndex}`);
+    // Quick index validation
+    if (chunkIndex < 0 || chunkIndex >= state.manifest.chunks.length) {
+      throw new Error(`Invalid chunk index ${chunkIndex}`);
+    }
+
+    const info = state.manifest.chunks[chunkIndex];
+
+    // Validate checksum when available
+    if (info.checksum) {
+      const calculated = await calculateSHA256Hex(chunkData);
+      if (calculated !== info.checksum) {
+        state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
+        state.corruptedChunks.add(chunkIndex);
+        this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.CORRUPTED });
+        return false;
       }
+    }
 
-      const info = state.manifest.chunks[chunkIndex];
+    // Mark requested
+    state.chunkStates[chunkIndex] = ChunkState.REQUESTED;
+    this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.REQUESTED });
 
-      // Validate checksum when available
-      if (info.checksum) {
-        const calculated = await calculateSHA256Hex(chunkData);
-        if (calculated !== info.checksum) {
-          // Mark corrupted and do not persist
-          state.corruptedChunks.add(chunkIndex);
-          return false;
-        }
-      }
+    // Enforce hard queue length cap to bound memory
+    // Count both queued and in-flight writes against the cap
+    if (state.writeQueue.length + state.writeInFlight >= state.maxQueueLength) {
+      throw new Error("Write queue full");
+    }
 
-      // Persist chunk to temporary file via backend
+    // Create write task and enqueue
+    let resolveFn: (v: boolean) => void;
+    let rejectFn: (e: any) => void;
+    const p = new Promise<boolean>((resolve, reject) => {
+      resolveFn = resolve;
+      rejectFn = reject;
+    });
+
+    const run = async (): Promise<boolean> => {
       const offset = state.offsets[chunkIndex] || 0;
-
       try {
-        // Convert to plain number[] for Tauri IPC
         const bytes = Array.from(chunkData as Uint8Array);
         await invoke("write_chunk_temp", {
           transferId,
@@ -100,45 +210,59 @@ export class ReassemblyManager {
         });
 
         state.receivedChunks.add(chunkIndex);
-        // If previously marked corrupted, remove
+        state.chunkStates[chunkIndex] = ChunkState.RECEIVED;
         state.corruptedChunks.delete(chunkIndex);
+        this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.RECEIVED });
+        this.emit("progress", {
+          transferId,
+          received: state.receivedChunks.size,
+          total: state.manifest.chunks.length,
+        });
         return true;
       } catch (err) {
-        // Mark as corrupted/failed to persist
+        state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
         state.corruptedChunks.add(chunkIndex);
+        this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.CORRUPTED });
         return false;
       }
     };
 
-    // Chain the task onto the pending promise so operations execute sequentially
-    const prev = state.pending ?? Promise.resolve(null);
-    const next = prev.then(() => task(), () => task());
-    // Store next as pending, but ensure any rejection is caught later by caller
-    state.pending = next;
+    state.writeQueue.push({ run, resolve: resolveFn!, reject: rejectFn! });
+    this.processWriteQueue(state);
 
-    try {
-      const result = await next;
-      return Boolean(result);
-    } catch (err) {
-      // propagate error
-      throw err;
-    }
+    const result = await p;
+    return result;
   }
 
   markChunkCorrupt(transferId: string, chunkIndex: number): void {
     const state = this.transfers.get(transferId);
     if (!state) return;
+    state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
     state.corruptedChunks.add(chunkIndex);
     state.receivedChunks.delete(chunkIndex);
+    this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.CORRUPTED });
+  }
+
+  // Public helper to mark a chunk as received without going through acceptChunk (useful for resume/fake tests)
+  markChunkReceived(transferId: string, chunkIndex: number): void {
+    const state = this.transfers.get(transferId);
+    if (!state) return;
+    state.receivedChunks.add(chunkIndex);
+    state.corruptedChunks.delete(chunkIndex);
+    state.chunkStates[chunkIndex] = ChunkState.RECEIVED;
+    this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.RECEIVED });
+    this.emit("progress", {
+      transferId,
+      received: state.receivedChunks.size,
+      total: state.manifest.chunks.length,
+    });
   }
 
   isComplete(transferId: string): boolean {
     const state = this.transfers.get(transferId);
     if (!state) return false;
-    return (
-      state.receivedChunks.size === state.manifest.chunks.length &&
-      state.corruptedChunks.size === 0
-    );
+    const allReceived = state.chunkStates.every((s) => s === ChunkState.RECEIVED);
+    return allReceived && state.corruptedChunks.size === 0;
   }
 
   async finalize(
@@ -161,11 +285,11 @@ export class ReassemblyManager {
         tmpPath: state.tmpPath,
       });
 
-      // Backend should return truthy success object or boolean
       const ok = (res as any) === true || (res && (res as any).ok === true);
 
       if (ok) {
         this.transfers.delete(transferId);
+        this.emit("finalized", { transferId, finalPath });
         return true;
       }
 
