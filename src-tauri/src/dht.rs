@@ -160,6 +160,9 @@ pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
 use anyhow::Result;
 
+// Rate limiting for connection error logs (log at most once every 30 seconds)
+static LAST_CONNECTION_ERROR_LOG: AtomicU64 = AtomicU64::new(0);
+
 use libp2p::{
     autonat::v2,
     core::{
@@ -3776,7 +3779,16 @@ async fn run_dht_node(
                                 if let Some(pid) = peer_id {
                                     // Only log error for addresses that should be reachable
                                     if !is_unreachable_addr {
-                                        error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                        // Rate limit connection errors to once every 30 seconds
+                                        let now = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as u64;
+                                        let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
+                                        if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
+                                            LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
+                                            error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                        }
 
                                         let is_bootstrap = bootstrap_peer_ids.contains(&pid);
                                         if error.to_string().contains("rsa") {
@@ -3800,7 +3812,16 @@ async fn run_dht_node(
                                         debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
                                     }
                                 } else {
-                                    error!("❌ Outgoing connection error to unknown peer: {}", error);
+                                    // Rate limit connection errors to once every 30 seconds
+                                    let now = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                    let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
+                                    if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
+                                        LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
+                                        error!("❌ Outgoing connection error to unknown peer: {}", error);
+                                    }
                                 }
                                 let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
                             }
