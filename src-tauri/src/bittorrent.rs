@@ -669,6 +669,41 @@ pub async fn get_torrent_details(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn torrent_download(
+    handler: tauri::State<'_, Arc<RwLock<BitTorrentHandler>>>,
+    identifier: String,
+    download_path: String,
+) -> Result<(), String> {
+    let handler = handler.read().await;
+    handler
+        .download(&identifier, Path::new(&download_path))
+        .await
+        .map(|_| ()) // Discard the info_hash to match Result<(), String>
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn torrent_seed(
+    handler: tauri::State<'_, Arc<RwLock<BitTorrentHandler>>>,
+    file_path: String,
+    announce_urls: Option<Vec<String>>,
+) -> Result<String, String> {
+    let handler = handler.read().await;
+    handler
+        .seed(Path::new(&file_path), announce_urls)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn torrent_get_active(
+    handler: tauri::State<'_, Arc<RwLock<BitTorrentHandler>>>,
+) -> Result<Vec<TorrentStatus>, String> {
+    let handler = handler.read().await;
+    handler.get_torrent_status().await.map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

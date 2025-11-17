@@ -106,7 +106,6 @@ use tauri::{
     Emitter, Manager, State,
 };
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
-use tokio::runtime::Handle;
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
@@ -117,6 +116,9 @@ use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 use suppaftp::FtpStream;
 use std::io::Write;
+use crate::dht::Ed2kSourceInfo;
+use crate::ed2k_client::{Ed2kClient, Ed2kServerInfo, Ed2kSearchResult};
+use crate::dht::Ed2kDownloadStatus;
 
 // Settings structure for backend use
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -856,9 +858,19 @@ async fn upload_file(
             ft_guard.as_ref().cloned()
         };
         if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name, file_data)
+            ft.store_file_data(file_hash.clone(), file_name.clone(), file_data.clone())
                 .await;
         }
+
+        // Register file with HTTP server for HTTP downloads
+        state.http_server_state.register_file(http_server::HttpFileMetadata {
+            hash: file_hash.clone(),
+            name: file_name.clone(),
+            size: file_data.len() as u64,
+            encrypted: is_encrypted,
+        }).await;
+        
+        tracing::info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
 
         dht.publish_file(metadata.clone(), None).await?;
         Ok(metadata)
@@ -1058,6 +1070,22 @@ async fn get_recent_mined_blocks_pub(
 ) -> Result<Vec<MinedBlock>, String> {
     get_recent_mined_blocks(&address, lookback, limit).await
 }
+
+#[tauri::command]
+async fn get_transaction_history(
+    address: String,
+    lookback: u64,
+) -> Result<Vec<ethereum::TransactionHistoryItem>, String> {
+    // Get current block number
+    let current_block = ethereum::get_block_number().await?;
+
+    // Calculate from_block (current - lookback, but not less than 0)
+    let from_block = current_block.saturating_sub(lookback);
+
+    // Scan transactions
+    ethereum::get_transaction_history(&address, from_block, current_block).await
+}
+
 #[tauri::command]
 async fn start_dht_node(
     app: tauri::AppHandle,
@@ -2910,7 +2938,7 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
-        let multi_source_service = MultiSourceDownloadService::new(dht_service, webrtc_arc.clone());
+        let multi_source_service = MultiSourceDownloadService::new(dht_service, webrtc_arc.clone(), state.bittorrent_handler.clone());
         let multi_source_arc = Arc::new(multi_source_service);
 
         {
@@ -3058,6 +3086,16 @@ async fn upload_file_to_network(
                     ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
                         .await;
 
+                    // Register file with HTTP server for HTTP downloads
+                    state.http_server_state.register_file(http_server::HttpFileMetadata {
+                        hash: file_hash.clone(),
+                        name: file_name.to_string(),
+                        size: file_data.len() as u64,
+                        encrypted: false,
+                    }).await;
+                    
+                    info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
+
                     match dht.publish_file(metadata.clone(), None).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
@@ -3125,6 +3163,134 @@ async fn start_ftp_download(
     ftp.quit().ok();
 
     Ok(format!("Downloaded successfully to {}", output_path))
+}
+
+#[tauri::command]
+async fn add_ed2k_source(
+    file_hash: String,
+    ed2k_link: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+
+    let ed2k_info = Ed2kSourceInfo::from_ed2k_link(&ed2k_link)
+        .map_err(|e| format!("Invalid ed2k link: {}", e))?;
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let mut metadata = metadata_opt.ok_or("Metadata not found")?;
+
+    let mut list = metadata.ed2k_sources.take().unwrap_or_default();
+    list.push(ed2k_info);
+    metadata.ed2k_sources = Some(list);
+
+    dht.publish_file(metadata, None).await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_ed2k_sources(
+    file_hash: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<Ed2kSourceInfo>, String> {
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let metadata = metadata_opt.ok_or(format!("Metadata not found for {}", file_hash))?;
+
+    Ok(metadata.ed2k_sources.unwrap_or_default())
+}
+
+#[tauri::command]
+async fn remove_ed2k_source(
+    file_hash: String,
+    server_url: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let mut metadata = metadata_opt.ok_or("Metadata not found")?;
+
+    if let Some(list) = &mut metadata.ed2k_sources {
+        list.retain(|s| s.server_url != server_url);
+    }
+
+    dht.publish_file(metadata, None).await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn test_ed2k_connection(
+    server_url: String,
+) -> Result<Ed2kServerInfo, String> {
+    use crate::ed2k_client::Ed2kClient;
+    
+    let mut client = Ed2kClient::new(server_url.clone());
+    
+    // Try to connect
+    client.connect().await
+        .map_err(|e| format!("Connection failed: {}", e))?;
+    
+    // Get server info
+    let server_info = client.get_server_info().await
+        .map_err(|e| e.to_string())?;
+    
+    Ok(server_info)
+}
+
+#[tauri::command]
+async fn search_ed2k_file(
+    query: String,
+    server_url: Option<String>,
+) -> Result<Vec<Ed2kSearchResult>, String> {
+    let server = server_url.unwrap_or_else(|| 
+        "ed2k://|server|176.103.48.36|4661|/".to_string()
+    );
+    let mut client = Ed2kClient::new(server);
+
+    client.connect().await.map_err(|e| e.to_string())?;
+    let results = client.search(&query).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(results)
+}
+
+#[tauri::command]
+async fn get_ed2k_download_status(
+    file_hash: String,
+    state: State<'_, AppState>,
+) -> Result<Ed2kDownloadStatus, String> {
+    // Since ED2K downloading is not implemented yet,
+    // return a placeholder status
+    Ok(Ed2kDownloadStatus {
+        progress: 0.0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        state: format!("No ED2K download active for {}", file_hash),
+    })
+}
+
+#[tauri::command]
+fn parse_ed2k_link(ed2k_link: String) -> Result<Ed2kSourceInfo, String> {
+    Ed2kSourceInfo::from_ed2k_link(&ed2k_link)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -5072,14 +5238,24 @@ async fn download_file_http(
         merkle_root,
         seeder_url
     );
+    
+    tracing::info!("Output path: {}", output_path);
 
     // Create progress channel
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(100);
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<http_download::HttpDownloadProgress>(100);
 
     // Spawn progress event emitter
     let app_handle = app.clone();
-    tokio::spawn(async move {
+    let emit_task = tokio::spawn(async move {
         while let Some(progress) = progress_rx.recv().await {
+            tracing::info!(
+                "HTTP download progress: {}/{} chunks, {}/{} bytes, status: {:?}",
+                progress.chunks_downloaded,
+                progress.chunks_total,
+                progress.bytes_downloaded,
+                progress.bytes_total,
+                progress.status
+            );
             let _ = app_handle.emit("http_download_progress", &progress);
         }
     });
@@ -5088,18 +5264,28 @@ async fn download_file_http(
     let client = http_download::HttpDownloadClient::new();
 
     // Start download using Range requests
-    client
+    let result = client
         .download_file(
             &seeder_url,
             &merkle_root,
             std::path::Path::new(&output_path),
             Some(progress_tx),
         )
-        .await?;
-
-    tracing::info!("HTTP download completed: {}", output_path);
-
-    Ok(())
+        .await;
+    
+    // Wait for progress emitter to finish
+    drop(emit_task);
+    
+    match result {
+        Ok(()) => {
+            tracing::info!("HTTP download completed successfully: {}", output_path);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("HTTP download failed: {}", e);
+            Err(e)
+        }
+    }
 }
 
 // Download restart Tauri commands
@@ -5209,15 +5395,40 @@ fn main() {
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+        // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
+        let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
+            .ok()
+            .and_then(|id| id.parse::<u16>().ok())
+            .unwrap_or(1);
+        
+        let instance_suffix = if instance_id == 1 {
+            String::new()
+        } else {
+            format!("-{}", instance_id)
+        };
+        
         let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-            .map(|dirs| dirs.data_dir().join("downloads"))
-            .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+            .map(|dirs| dirs.data_dir().join(format!("downloads{}", instance_suffix)))
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join(format!("downloads{}", instance_suffix)));
         
         if let Err(e) = std::fs::create_dir_all(&download_dir) {
             eprintln!("Failed to create download directory: {}", e);
         }
 
-        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new(download_dir)
+        println!("Instance ID: {}", instance_id);
+        println!("Using download directory: {:?}", download_dir);
+
+        // Calculate port range based on instance ID to avoid conflicts
+        // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
+        let base_port = 6881 + ((instance_id - 1) * 11);
+        let port_range = base_port..(base_port + 10);
+        
+        println!("Using BitTorrent port range: {}-{}", port_range.start, port_range.end);
+
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+            download_dir,
+            Some(port_range)
+        )
             .await
             .expect("Failed to create BitTorrent handler");
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
@@ -5351,6 +5562,7 @@ fn main() {
             get_current_block,
             get_network_stats,
             get_block_details_by_number,
+            get_transaction_history,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
@@ -5432,6 +5644,14 @@ fn main() {
             get_contribution_history,
             reset_analytics,
             reset_network_services,
+            // ed2k server commands
+            add_ed2k_source,
+            list_ed2k_sources,
+            remove_ed2k_source,
+            test_ed2k_connection,
+            search_ed2k_file,
+            get_ed2k_download_status,
+            parse_ed2k_link,
             // HTTP server commands
             start_http_server,
             stop_http_server,

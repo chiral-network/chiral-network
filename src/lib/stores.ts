@@ -120,11 +120,12 @@ export interface NetworkStats {
 
 export interface Transaction {
   id: number;
-  type: "sent" | "received";
+  type: "sent" | "received" | "mining";
   amount: number;
   to?: string;
   from?: string;
   txHash?: string;
+  hash?: string; // Transaction hash (primary identifier)
   date: Date;
   description: string;
   status: "submitted" | "pending" | "success" | "failed"; // Match API statuses

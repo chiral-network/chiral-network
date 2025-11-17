@@ -26,7 +26,7 @@ pub enum JwksError {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct JwkDocument {
+pub struct JwkDocument {
     keys: Vec<Jwk>,
 }
 
