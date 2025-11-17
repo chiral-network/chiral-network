@@ -59,12 +59,13 @@
       // Create a regular account through backend
       await walletService.createAccount()
 
-      showToast('Test wallet "TestWallet" created!', 'success')
-
+      // showToast('Test wallet "TestWallet" created!', 'success')
+      showToast($t('toasts.account.firstRun.testWalletCreated'), 'success')
       onComplete()
     } catch (error) {
       console.error('Failed to create test wallet:', error)
-      showToast('Failed to create test wallet', 'error')
+      // showToast('Failed to create test wallet', 'error')
+      showToast($t('toasts.account.firstRun.testWalletError'), 'error')
     }
   }
 
