@@ -1804,17 +1804,17 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     input.click()
   }
 
-  function clearAllHistory() {
-    if (confirm(tr('downloadHistory.confirmClear'))) {
-      downloadHistoryService.clearHistory()
+  async function clearAllHistory() {
+    if (await confirm(tr('downloadHistory.confirmClear'))) {
+      await downloadHistoryService.clearHistory()
       downloadHistory = []
       showToast(tr('downloadHistory.messages.historyCleared'), 'success')
     }
   }
 
-  function clearFailedHistory() {
-    if (confirm(tr('downloadHistory.confirmClearFailed'))) {
-      downloadHistoryService.clearFailedDownloads()
+  async function clearFailedHistory() {
+    if (await confirm(tr('downloadHistory.confirmClearFailed'))) {
+      await downloadHistoryService.clearFailedDownloads()
       downloadHistory = downloadHistoryService.getFilteredHistory()
       showToast(tr('downloadHistory.messages.failedCleared'), 'success')
     }
