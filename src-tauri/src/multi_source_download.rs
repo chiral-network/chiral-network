@@ -1135,9 +1135,136 @@ impl MultiSourceDownloadService {
             chunk_ids.len(),
             bt_info.magnet_uri
         );
-        // Placeholder implementation
-        self.on_source_failed(file_hash, &bt_info.magnet_uri, "BitTorrent download not implemented".to_string()).await;
-        Err("BitTorrent download not implemented".to_string())
+
+        let magnet_uri = bt_info.magnet_uri.clone();
+
+        // Update source assignment status to connecting
+        {
+            let mut downloads = self.active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                let bt_source = DownloadSource::BitTorrent(bt_info.clone());
+                download.source_assignments.insert(
+                    magnet_uri.clone(),
+                    SourceAssignment::new(bt_source, chunk_ids.clone()),
+                );
+            }
+        }
+
+        // Start the BitTorrent download
+        let torrent_handle = match self.bittorrent_handler.start_download(&magnet_uri).await {
+            Ok(handle) => {
+                info!("Successfully started BitTorrent download: {}", magnet_uri);
+                self.on_source_connected(file_hash, &magnet_uri, chunk_ids.clone()).await;
+                handle
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to start BitTorrent download: {}", e);
+                error!("{}", error_msg);
+                self.on_source_failed(file_hash, &magnet_uri, error_msg.clone()).await;
+                return Err(error_msg);
+            }
+        };
+
+        // Monitor BitTorrent download in a background task
+        let file_hash_clone = file_hash.to_string();
+        let magnet_clone = magnet_uri.clone();
+        let handler = self.bittorrent_handler.clone();
+        let event_tx = self.event_tx.clone();
+        let active_downloads = self.active_downloads.clone();
+        let chunks_to_complete = chunk_ids.clone();
+
+        tokio::spawn(async move {
+            // Create channel for BitTorrent events
+            let (bt_event_tx, mut bt_event_rx) = tokio::sync::mpsc::channel(32);
+
+            // Start monitoring task
+            let monitor_handle = torrent_handle.clone();
+            tokio::spawn(async move {
+                handler.monitor_download(monitor_handle, bt_event_tx).await;
+            });
+
+            // Process BitTorrent events
+            while let Some(event) = bt_event_rx.recv().await {
+                match event {
+                    crate::bittorrent_handler::BitTorrentEvent::Progress { downloaded, total } => {
+                        // Update source status to downloading
+                        {
+                            let mut downloads = active_downloads.write().await;
+                            if let Some(download) = downloads.get_mut(&file_hash_clone) {
+                                if let Some(assignment) = download.source_assignments.get_mut(&magnet_clone) {
+                                    assignment.status = SourceStatus::Downloading;
+                                    assignment.last_activity = Some(
+                                        SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs(),
+                                    );
+                                }
+                            }
+                        }
+
+                        // Log progress (no specific event for non-P2P sources yet)
+                        info!(
+                            "BitTorrent progress: {}/{} bytes ({:.1}%)",
+                            downloaded,
+                            total,
+                            (downloaded as f64 / total as f64) * 100.0
+                        );
+                    }
+                    crate::bittorrent_handler::BitTorrentEvent::Completed => {
+                        info!("BitTorrent download completed for: {}", magnet_clone);
+                        
+                        // Mark all assigned chunks as complete
+                        // BitTorrent downloads the entire file, so all chunks are now available
+                        for chunk_id in &chunks_to_complete {
+                            let _ = event_tx.send(MultiSourceEvent::ChunkCompleted {
+                                file_hash: file_hash_clone.clone(),
+                                chunk_id: *chunk_id,
+                                peer_id: magnet_clone.clone(),
+                            });
+                        }
+
+                        // Mark source as completed
+                        let mut downloads = active_downloads.write().await;
+                        if let Some(download) = downloads.get_mut(&file_hash_clone) {
+                            if let Some(assignment) = download.source_assignments.get_mut(&magnet_clone) {
+                                assignment.status = SourceStatus::Completed;
+                            }
+                        }
+
+                        info!("BitTorrent download finished successfully: {}", magnet_clone);
+                        break;
+                    }
+                    crate::bittorrent_handler::BitTorrentEvent::Failed(error) => {
+                        let error_msg = format!("BitTorrent download failed: {}", error);
+                        error!("{}", error_msg);
+                        
+                        // Emit failure event
+                        let _ = event_tx.send(MultiSourceEvent::PeerFailed {
+                            file_hash: file_hash_clone.clone(),
+                            peer_id: magnet_clone.clone(),
+                            error: error_msg.clone(),
+                        });
+
+                        // Mark source as failed
+                        let mut downloads = active_downloads.write().await;
+                        if let Some(download) = downloads.get_mut(&file_hash_clone) {
+                            if let Some(assignment) = download.source_assignments.get_mut(&magnet_clone) {
+                                assignment.status = SourceStatus::Failed;
+                            }
+                            
+                            // Add failed chunks back to retry queue
+                            for chunk_id in &chunks_to_complete {
+                                download.failed_chunks.push_back(*chunk_id);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(())
     }
 
     /// Parse remote path from FTP URL (placeholder implementation) 
