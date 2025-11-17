@@ -1,15 +1,10 @@
 use crate::protocols::ProtocolHandler;
 use async_trait::async_trait;
-use librqbit::{
-    AddTorrent, AddTorrentOptions, ManagedTorrent, Session, SessionOptions,
-};
+use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use librqbit::{AddTorrent, Session, ManagedTorrent, SessionOptions};
-use std::path::Path;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 use tracing::{error, info, instrument, warn};
@@ -458,22 +453,14 @@ impl BitTorrentHandler {
     /// Map generic errors to our custom error type
     fn map_generic_error(error: impl std::fmt::Display) -> BitTorrentError {
         let error_msg = error.to_string();
-
         if error_msg.contains("network") || error_msg.contains("connection") {
-            BitTorrentError::NetworkError {
-                message: error_msg,
-            }
+            BitTorrentError::NetworkError { message: error_msg }
         } else if error_msg.contains("timeout") {
             BitTorrentError::DownloadTimeout { timeout_secs: 30 }
         } else if error_msg.contains("parse") || error_msg.contains("invalid") {
             BitTorrentError::TorrentParsingError { message: error_msg }
-            BitTorrentError::TorrentParsingError {
-                message: error_msg.clone(),
-            }
         } else {
-            BitTorrentError::Unknown {
-                message: error_msg,
-            }
+            BitTorrentError::Unknown { message: error_msg }
         }
     }
 }
@@ -491,95 +478,8 @@ impl ProtocolHandler for BitTorrentHandler {
     #[instrument(skip(self), fields(protocol = "bittorrent"))]
     async fn download(&self, identifier: &str) -> Result<(), String> {
         let handle = self.start_download(identifier).await?;
-        let (tx, mut rx) = mpsc::channel(10);
-
-        // Validate input based on type
-        let add_torrent = if identifier.starts_with("magnet:") {
-            Self::validate_magnet_link(identifier).map_err(|e| {
-                error!("Magnet link validation failed: {}", e);
-                e
-            })?;
-            AddTorrent::from_url(identifier)
-            } else {
-            Self::validate_torrent_file(identifier).map_err(|e| {
-                error!("Torrent file validation failed: {}", e);
-                e
-            })?;
-            AddTorrent::from_local_filename(identifier).map_err(|e| {
-                error!("Failed to load torrent file: {}", e);
-                BitTorrentError::TorrentFileError {
-                    message: format!("Cannot read torrent file {}: {}", identifier, e),
-                }
-            })?
-        };
-
-        let torrent = self
-            .rqbit_session
-            .add_torrent(add_torrent, Some(AddTorrentOptions::default()))
-            .await
-            .map_err(|e| {
-                error!("Failed to add torrent to session: {}", e);
-                Self::map_generic_error(e)
-            })?
-            .into_handle()
-            .ok_or_else(|| {
-                error!("Failed to get torrent handle");
-                BitTorrentError::HandleUnavailable
-            })?;
-
-        // Store the handle for statistics polling.
-        self.active_torrents
-            .lock()
-            .await
-            .insert(hex::encode(torrent.info_hash().0), torrent.clone());
-
-        info!(
-            "BitTorrent download started for: {}. Monitoring progress...",
-            identifier
-        );
-
-        let mut interval = time::interval(Duration::from_secs(1));
-        let mut no_progress_count = 0;
-        const MAX_NO_PROGRESS_ITERATIONS: u32 = 300; // 5 minutes with 1-second intervals
-
-        loop {
-            interval.tick().await;
-            // librqbit's stats() returns a TorrentStats struct (not a Result)
-            let stats = torrent.stats();
-            let downloaded = stats.progress_bytes;
-            let total = stats.total_bytes;
-            let progress = if total > 0 {
-                (downloaded as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
-
-            info!(
-                "Download progress for {}: {:.2}% ({}/{} bytes)",
-                identifier, progress, downloaded, total
-            );
-
-            // Check for completion
-            if total > 0 && downloaded >= total {
-                info!("Download completed for {}", identifier);
-                break;
-            }
-
-            // Check for timeout (no progress for extended period)
-            if downloaded == 0 {
-                if stats.live.is_some() {
-                    let live_peers = stats.live.as_ref().map(|l| l.snapshot.peer_stats.live).unwrap_or(0);
-                    if live_peers == 0 {
-                        no_progress_count += 1;
-                        if no_progress_count >= MAX_NO_PROGRESS_ITERATIONS {
-                            error!("Download timeout: no progress after {} seconds", MAX_NO_PROGRESS_ITERATIONS);
-                            return Err(BitTorrentError::DownloadTimeout { timeout_secs: MAX_NO_PROGRESS_ITERATIONS as u64 }.into());
-                        }
-                    }
-                }
-            } else {
-                no_progress_count = 0; // Reset counter when progress is made
         let self_arc = Arc::new(self.clone());
+        let (tx, mut rx) = mpsc::channel(10);
         tokio::spawn(async move {
             self_arc.monitor_download(handle, tx).await;
         });
@@ -591,6 +491,7 @@ impl ProtocolHandler for BitTorrentHandler {
                 _ => {}
             }
         }
+        // If the loop exits, it means the channel was closed without a final event.
         Err("Monitoring channel closed unexpectedly.".to_string())
     }
 
