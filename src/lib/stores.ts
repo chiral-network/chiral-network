@@ -120,11 +120,12 @@ export interface NetworkStats {
 
 export interface Transaction {
   id: number;
-  type: "sent" | "received";
+  type: "sent" | "received" | "mining";
   amount: number;
   to?: string;
   from?: string;
   txHash?: string;
+  hash?: string; // Transaction hash (primary identifier)
   date: Date;
   description: string;
   status: "submitted" | "pending" | "success" | "failed"; // Match API statuses
@@ -448,6 +449,8 @@ export interface AppSettings {
   monthlyUploadCapGb: number; // 0 = no cap
   monthlyDownloadCapGb: number; // 0 = no cap
   capWarningThresholds: number[]; // Percentages, e.g. [75, 90]
+  enableFileLogging: boolean; // Enable file-based logging
+  maxLogSizeMB: number; // Maximum size of a single log file in MB
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
   autoStartDHT: boolean; // Whether to automatically start DHT on app launch
@@ -497,6 +500,8 @@ export const settings = writable<AppSettings>({
   monthlyUploadCapGb: 0,
   monthlyDownloadCapGb: 0,
   capWarningThresholds: [75, 90],
+  enableFileLogging: false, // Disabled by default
+  maxLogSizeMB: 10, // 10 MB per log file by default
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
   autoStartDHT: false, // Don't auto-start DHT by default

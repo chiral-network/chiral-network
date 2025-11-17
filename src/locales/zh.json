@@ -307,6 +307,11 @@
   "language.chinese": "中文",
   "language.korean": "한국어",
   "language.russian": "Русский",
+  "language.portuguese": "Português",
+  "language.hindi": "हिन्दी",
+  "language.french": "Français",
+  "language.bengali": "বাংলা",
+  "language.arabic": "العربية",
   "nav": {
     "menu": "菜单",
     "download": "下载",
@@ -1414,5 +1419,190 @@
     "selectProtocol": "选择协议",
     "currentProtocol": "当前协议",
     "changeProtocol": "更改协议"
+  },
+  "blockchain": {
+    "title": "区块链浏览器",
+    "subtitle": "在 Chiral 网络上查看区块、交易和账户余额",
+    "refresh": "刷新",
+    "refreshed": "数据已刷新",
+    "copied": "已复制到剪贴板",
+    "stats": {
+      "totalBlocks": "区块总数",
+      "hashrate": "网络算力",
+      "difficulty": "难度",
+      "peers": "网络节点"
+    },
+    "tabs": {
+      "blocks": "最新区块",
+      "search": "搜索",
+      "stats": "余额查询"
+    },
+    "blocks": {
+      "latest": "最新区块",
+      "noBlocks": "未找到区块"
+    },
+    "search": {
+      "title": "搜索区块链",
+      "address": "地址",
+      "transaction": "交易",
+      "block": "区块",
+      "emptyQuery": "请输入搜索内容",
+      "error": "搜索失败：{error}",
+      "unknownError": "未知错误",
+      "invalidBlock": "无效的区块编号",
+      "notFound": "未找到",
+      "addressDetails": "地址详情",
+      "addressLabel": "地址",
+      "balance": "余额",
+      "txDetails": "交易详情",
+      "status": "状态",
+      "blockNumber": "区块编号",
+      "from": "来自",
+      "to": "发送至",
+      "value": "金额",
+      "blockDetails": "区块详情",
+      "hash": "哈希",
+      "timestamp": "时间戳"
+    },
+    "balance": {
+      "checker": "余额查询",
+      "address": "地址",
+      "check": "查询余额",
+      "result": "余额",
+      "emptyAddress": "请输入地址",
+      "error": "余额查询失败：{error}",
+      "errorLabel": "错误"
+    },
+    "error": {
+      "fetchBlocks": "获取区块失败"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "已复制！"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "未找到区块。请开始挖矿以生成区块。",
+      "fetchError": "获取区块失败：{error}"
+    },
+    "settings": {
+      "updated": "设置已更新！",
+      "networkingError": "设置已保存，但网络更新失败",
+      "proxyRelayWarning": "启用隐藏我的 IP 之前，请先添加至少一个可信的代理中继。"
+    },
+    "analytics": {
+      "direction": {
+        "upload": "上传",
+        "download": "下载"
+      },
+      "bandwidthWarning": "{direction} 限额警告：已使用 {used} GB（占 {cap} GB 的 {percent}%）。",
+      "bandwidthTitle": "{direction} 限额警告"
+    },
+    "upload": {
+      "loginRequired": "在上传文件之前请先登录您的账户",
+      "verifyAccountFailed": "无法验证账户状态。请重新登录。",
+      "dhtDisconnected": "DHT 网络未连接。请在上传文件前启动 DHT 网络。",
+      "fileSuccess": "{name} 上传成功",
+      "torrentSeeding": "{name} 现在作为种子进行分享"
+    },
+    "network": {
+      "signalingConnected": "已连接到信令服务器",
+      "signalingError": "无法连接到信令服务器进行网页模式测试",
+      "peerAddressRequired": "请输入一个节点地址",
+      "dhtRequired": "DHT 未连接。请先启动 DHT。",
+      "alreadyConnected": "该节点已连接",
+      "connecting": "通过 DHT 正在连接节点...",
+      "connectionSuccess": "连接成功！",
+      "connectionFailed": "连接失败。节点可能不可达或地址无效。",
+      "connectError": "无法连接到节点：{error}",
+      "signalingMissing": "信令服务器未连接。请先启动 DHT。",
+      "peerNotFound": "在已发现的节点中未找到 {peer}",
+      "messageReceived": "收到来自节点的消息：{message}",
+      "webrtcConnected": "已成功连接到节点！",
+      "webrtcFailed": "连接节点失败",
+      "dataChannelOpen": "数据通道已打开——现在可以发送消息！",
+      "dataChannelClosed": "数据通道已关闭",
+      "webrtcError": "WebRTC 错误：{error}",
+      "webrtcConnecting": "正在连接节点：{peer}",
+      "webrtcCreateError": "无法创建连接：{error}",
+      "noConnection": "没有活动的 WebRTC 连接",
+      "messageSent": "已发送测试消息：{message}",
+      "sendError": "发送消息失败：{error}",
+      "gethInstalled": "Geth 已安装",
+      "gethDownloadError": "下载 Geth 失败：{error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "无法处理付款：上传者的钱包地址缺失或无效",
+        "failed": "付款失败：{error}",
+        "successWithHash": "付款成功！交易：{hash}...",
+        "success": "付款成功！"
+      }
+    },
+    "transactions": {
+      "copied": "{label} 已复制到剪贴板",
+      "copyError": "复制 {label} 失败",
+      "exported": "交易已导出"
+    }
   }
 }

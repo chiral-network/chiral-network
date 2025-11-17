@@ -25,7 +25,7 @@
   export let peers: PeerInfo[];
   export let mode: 'auto' | 'manual' = 'auto';
   export let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
-  export let protocol: 'http' | 'webrtc' = 'http'; // Default to HTTP for WebRTC flow
+  export let protocol: 'http' | 'webrtc' | 'bitswap' = 'http'; 
   export let isTorrent = false; // Flag to indicate torrent download (no peer selection needed)
 
   const dispatch = createEventDispatcher<{
@@ -132,7 +132,7 @@
             </p>
           </div>
         {:else}
-        <!-- Protocol Selection (HTTP vs WebRTC only - Bitswap doesn't use peer selection) -->
+        <!-- Protocol Selection -->
         <div class="space-y-2">
           <div class="text-sm font-semibold text-foreground/90">Transfer Protocol</div>
           <div class="flex gap-2">
@@ -152,12 +152,22 @@
               <Wifi class="h-4 w-4 mr-2" />
               WebRTC
             </Button>
+            <Button
+              variant={protocol === 'bitswap' ? 'default' : 'outline'}
+              size="sm"
+              on:click={() => protocol = 'bitswap'}
+            >
+              <Zap class="h-4 w-4 mr-2" />
+              Bitswap
+            </Button>
           </div>
           <p class="text-xs text-muted-foreground">
             {#if protocol === 'http'}
               HTTP: Simple and fast for nodes with public IP addresses
             {:else if protocol === 'webrtc'}
               WebRTC: Peer-to-peer with NAT traversal (works behind firewalls)
+            {:else if protocol === 'bitswap'}
+              Bitswap: A peer-to-peer data exchange protocol for content-addressed data.
             {/if}
           </p>
         </div>

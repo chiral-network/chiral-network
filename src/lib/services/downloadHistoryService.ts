@@ -1,18 +1,18 @@
 /**
  * Download History Service
- * 
+ *
  * Manages persistent download history with re-download capabilities.
  * Stores completed, failed, and canceled downloads for future reference.
  */
 
-import type { FileItem } from '$lib/stores';
+import type { FileItem } from "$lib/stores";
 
 export interface DownloadHistoryEntry {
   id: string;
   hash: string;
   name: string;
   size: number;
-  status: 'completed' | 'failed' | 'canceled';
+  status: "completed" | "failed" | "canceled";
   downloadDate: number; // Timestamp
   downloadPath?: string;
   price?: number;
@@ -24,7 +24,7 @@ export interface DownloadHistoryEntry {
   cids?: string[];
 }
 
-const STORAGE_KEY = 'chiral.downloadHistory';
+const STORAGE_KEY = "chiral.downloadHistory";
 const MAX_HISTORY_ENTRIES = 1000; // Limit history to prevent storage bloat
 
 class DownloadHistoryService {
@@ -38,16 +38,15 @@ class DownloadHistoryService {
    * Load history from localStorage
    */
   private loadHistory(): void {
-    if (typeof window === 'undefined') return;
+    if (typeof window === "undefined") return;
 
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         this.history = JSON.parse(stored);
-        console.log(`📚 Loaded ${this.history.length} download history entries`);
       }
     } catch (error) {
-      console.error('Failed to load download history:', error);
+      console.error("Failed to load download history:", error);
       this.history = [];
     }
   }
@@ -56,7 +55,7 @@ class DownloadHistoryService {
    * Save history to localStorage
    */
   private saveHistory(): void {
-    if (typeof window === 'undefined') return;
+    if (typeof window === "undefined") return;
 
     try {
       // Limit history size
@@ -66,7 +65,7 @@ class DownloadHistoryService {
 
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.history));
     } catch (error) {
-      console.error('Failed to save download history:', error);
+      console.error("Failed to save download history:", error);
     }
   }
 
@@ -75,19 +74,21 @@ class DownloadHistoryService {
    */
   addToHistory(file: FileItem): void {
     // Only add completed, failed, or canceled downloads
-    if (!['completed', 'failed', 'canceled'].includes(file.status)) {
+    if (!["completed", "failed", "canceled"].includes(file.status)) {
       return;
     }
 
     // Check if already in history
-    const existingIndex = this.history.findIndex(entry => entry.hash === file.hash);
-    
+    const existingIndex = this.history.findIndex(
+      (entry) => entry.hash === file.hash
+    );
+
     const entry: DownloadHistoryEntry = {
       id: file.id,
       hash: file.hash,
       name: file.name,
       size: file.size,
-      status: file.status as 'completed' | 'failed' | 'canceled',
+      status: file.status as "completed" | "failed" | "canceled",
       downloadDate: Date.now(),
       downloadPath: file.downloadPath,
       price: file.price,
@@ -120,20 +121,21 @@ class DownloadHistoryService {
    * Get history entries with filters
    */
   getFilteredHistory(
-    status?: 'completed' | 'failed' | 'canceled',
+    status?: "completed" | "failed" | "canceled",
     searchQuery?: string
   ): DownloadHistoryEntry[] {
     let filtered = this.history;
 
     if (status) {
-      filtered = filtered.filter(entry => entry.status === status);
+      filtered = filtered.filter((entry) => entry.status === status);
     }
 
     if (searchQuery && searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(entry =>
-        entry.name.toLowerCase().includes(query) ||
-        entry.hash.toLowerCase().includes(query)
+      filtered = filtered.filter(
+        (entry) =>
+          entry.name.toLowerCase().includes(query) ||
+          entry.hash.toLowerCase().includes(query)
       );
     }
 
@@ -144,7 +146,7 @@ class DownloadHistoryService {
    * Remove a specific entry from history
    */
   removeFromHistory(hash: string): void {
-    const index = this.history.findIndex(entry => entry.hash === hash);
+    const index = this.history.findIndex((entry) => entry.hash === hash);
     if (index >= 0) {
       this.history.splice(index, 1);
       this.saveHistory();
@@ -163,7 +165,7 @@ class DownloadHistoryService {
    * Clear only failed downloads
    */
   clearFailedDownloads(): void {
-    this.history = this.history.filter(entry => entry.status !== 'failed');
+    this.history = this.history.filter((entry) => entry.status !== "failed");
     this.saveHistory();
   }
 
@@ -180,9 +182,9 @@ class DownloadHistoryService {
   } {
     return {
       total: this.history.length,
-      completed: this.history.filter(e => e.status === 'completed').length,
-      failed: this.history.filter(e => e.status === 'failed').length,
-      canceled: this.history.filter(e => e.status === 'canceled').length,
+      completed: this.history.filter((e) => e.status === "completed").length,
+      failed: this.history.filter((e) => e.status === "failed").length,
+      canceled: this.history.filter((e) => e.status === "canceled").length,
       totalSize: this.history.reduce((sum, e) => sum + e.size, 0),
       totalPrice: this.history.reduce((sum, e) => sum + (e.price || 0), 0),
     };
@@ -192,11 +194,15 @@ class DownloadHistoryService {
    * Export history as JSON
    */
   exportHistory(): string {
-    return JSON.stringify({
-      version: '1.0',
-      exportDate: new Date().toISOString(),
-      entries: this.history,
-    }, null, 2);
+    return JSON.stringify(
+      {
+        version: "1.0",
+        exportDate: new Date().toISOString(),
+        entries: this.history,
+      },
+      null,
+      2
+    );
   }
 
   /**
@@ -207,29 +213,57 @@ class DownloadHistoryService {
       const data = JSON.parse(jsonData);
       
       if (!data.entries || !Array.isArray(data.entries)) {
-        return { success: false, imported: 0, error: 'Invalid format: missing entries array' };
+        return { success: false, imported: 0, error: "Invalid format: missing entries array" };
       }
 
-      // Merge with existing history (avoid duplicates)
       let importedCount = 0;
+      let skippedCount = 0;
+      let duplicateCount = 0;
+      
       for (const entry of data.entries) {
-        if (!this.history.find(e => e.hash === entry.hash && e.downloadDate === entry.downloadDate)) {
+        // Validate required fields
+        if (!entry.hash || !entry.name || entry.size === undefined || !entry.status) {
+          console.warn("Skipping entry with missing required fields:", entry);
+          skippedCount++;
+          continue;
+        }
+        
+        // Validate status is one of allowed values
+        if (!["completed", "failed", "canceled"].includes(entry.status)) {
+          console.warn("Skipping entry with invalid status:", entry.status);
+          skippedCount++;
+          continue;
+        }
+        
+        const existingIndex = this.history.findIndex((e) => e.hash === entry.hash);
+        if (existingIndex === -1) {
           this.history.push(entry);
           importedCount++;
+        } else {
+          duplicateCount++;
         }
       }
+      
+      // Only fail if we had entries but ALL of them were invalid (not duplicates)
+      if (importedCount === 0 && skippedCount > 0 && duplicateCount === 0) {
+        return { 
+          success: false, 
+          imported: 0, 
+          error: "Missing required fields: all entries were invalid" 
+        };
+      }
 
-      // Sort by date (newest first)
       this.history.sort((a, b) => b.downloadDate - a.downloadDate);
-
+      this.history = this.history.slice(0, MAX_HISTORY_ENTRIES);
       this.saveHistory();
 
       return { success: true, imported: importedCount };
     } catch (error) {
-      return {
-        success: false,
-        imported: 0,
-        error: error instanceof Error ? error.message : 'Unknown error'
+      console.error("Failed to import history:", error);
+      return { 
+        success: false, 
+        imported: 0, 
+        error: error instanceof Error ? error.message : "Unknown error" 
       };
     }
   }

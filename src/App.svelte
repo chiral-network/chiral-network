@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server, Database } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     // import ProxyPage from './pages/Proxy.svelte' // DISABLED
@@ -12,6 +12,7 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
+    import BlockchainDashboard from './pages/BlockchainDashboard.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
@@ -25,6 +26,7 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
+    import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
@@ -112,6 +114,7 @@ function handleFirstRunComplete() {
 
   onMount(() => {
     let stopNetworkMonitoring: () => void = () => {};
+    let stopGethMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
@@ -183,11 +186,59 @@ function handleFirstRunComplete() {
 
         // setup i18n
         await setupI18n();
-        loading = false;
 
         // Check for first-run and show wizard if no account exists
+        // DO THIS BEFORE setting loading = false to prevent race conditions
         try {
-          const hasAccount = get(etcAccount) !== null;
+          // Check backend for active account
+          let hasAccount = false;
+          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+            try {
+              hasAccount = await invoke<boolean>('has_active_account');
+              
+              // If backend has account, restore it to frontend
+              if (hasAccount) {
+                try {
+                  const address = await invoke<string>('get_active_account_address');
+                  
+                  // Import wallet service to prevent sync during restoration
+                  const { walletService } = await import('./lib/wallet');
+                  walletService.setRestoringAccount(true);
+                  
+                  // Fetch private key from backend to restore it to the frontend store
+                  let privateKey = '';
+                  try {
+                    privateKey = await invoke<string>('get_active_account_private_key');
+                  } catch (error) {
+                    console.warn('Failed to get private key from backend:', error);
+                  }
+                  
+                  // Restore account with private key
+                  etcAccount.set({ address, private_key: privateKey });
+                  
+                  // Update wallet with address
+                  wallet.update(w => ({ 
+                    ...w, 
+                    address
+                  }));
+                  
+                  // Re-enable syncing and trigger a sync
+                  walletService.setRestoringAccount(false);
+                  
+                  // Now sync from blockchain
+                  await walletService.refreshTransactions();
+                  await walletService.refreshBalance();
+                } catch (error) {
+                  console.error('Failed to restore account from backend:', error);
+                }
+              }
+            } catch (error) {
+              console.warn('Failed to check account status:', error);
+            }
+          } else {
+            // For web/demo mode, check frontend store
+            hasAccount = get(etcAccount) !== null;
+          }
 
           // Check if there are any keystore files (Tauri only)
           let hasKeystoreFiles = false;
@@ -208,6 +259,9 @@ function handleFirstRunComplete() {
         } catch (error) {
           console.warn('Failed to check first-run status:', error);
         }
+
+        // Set loading to false AFTER wizard check to prevent race conditions
+        loading = false;
 
       let storedLocation: string | null = null;
       try {
@@ -273,13 +327,7 @@ function handleFirstRunComplete() {
         }
       } catch (error) {
         // Ignore "already running" errors - this is normal during hot reload
-        if (error && typeof error === 'object' && 'message' in error && 
-            typeof error.message === 'string' && 
-            error.message.includes('already running')) {
-          // Service already initialized, this is fine
-        } else {
-          console.error("Failed to initialize backend services:", error);
-        }
+        // Silently skip all errors since services may already be initialized
       }
 
       // set the currentPage var
@@ -287,6 +335,9 @@ function handleFirstRunComplete() {
 
       // Start network monitoring
       stopNetworkMonitoring = startNetworkMonitoring();
+
+      // Start Geth monitoring
+      stopGethMonitoring = startGethMonitoring();
     })();
 
       // popstate - event that tracks history of current tab
@@ -345,6 +396,7 @@ function handleFirstRunComplete() {
       window.removeEventListener("popstate", onPop);
       window.removeEventListener("keydown", handleKeyDown);
       stopNetworkMonitoring();
+      stopGethMonitoring();
       if (schedulerRunning) {
         bandwidthScheduler.stop();
         schedulerRunning = false;
@@ -402,6 +454,7 @@ function handleFirstRunComplete() {
       // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
       { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
       { id: "reputation", label: $t("nav.reputation"), icon: Star },
+      { id: "blockchain", label: $t("nav.blockchain"), icon: Database },
       { id: "account", label: $t("nav.account"), icon: Wallet },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
 
@@ -447,6 +500,10 @@ function handleFirstRunComplete() {
     {
       path: "reputation",
       component: ReputationPage,
+    },
+    {
+      path: "blockchain",
+      component: BlockchainDashboard,
     },
     {
       path: "account",
@@ -515,20 +572,24 @@ function handleFirstRunComplete() {
 
         <!-- Sidebar Nav Items -->
         {#each menuItems as item}
+          {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
           <button
             on:click={() => {
+              if (isBlockchainDisabled) return;
               currentPage = item.id;
               goto(`/${item.id}`);
             }}
-            class="w-full group"
+            class="w-full group {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : ''}"
             aria-current={currentPage === item.id ? "page" : undefined}
+            disabled={isBlockchainDisabled}
+            title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
           >
             <div
               class="flex items-center {sidebarCollapsed
                 ? 'justify-center'
                 : ''} rounded {currentPage === item.id
                 ? 'bg-gray-200'
-                : 'group-hover:bg-gray-100'}"
+                : isBlockchainDisabled ? '' : 'group-hover:bg-gray-100'}"
             >
               <span
                 class="flex items-center justify-center rounded w-10 h-10 relative"
@@ -608,14 +669,18 @@ function handleFirstRunComplete() {
         <!-- Sidebar Nav Items -->
         <nav class="flex-1 p-4 space-y-2">
           {#each menuItems as item}
+            {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
             <button
               on:click={() => {
+                if (isBlockchainDisabled) return;
                 currentPage = item.id;
                 goto(`/${item.id}`);
                 sidebarMenuOpen = false;
               }}
-              class="w-full flex items-center rounded px-4 py-3 text-lg hover:bg-gray-100"
+              class="w-full flex items-center rounded px-4 py-3 text-lg {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-gray-100'}"
               aria-current={currentPage === item.id ? "page" : undefined}
+              disabled={isBlockchainDisabled}
+              title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
             >
               <svelte:component this={item.icon} class="h-5 w-5 mr-3" />
               {item.label}

@@ -24,7 +24,7 @@
     Copy,
     Share2
   } from "lucide-svelte";
-  import { files, type FileItem, etcAccount } from "$lib/stores";
+  import { files, type FileItem } from "$lib/stores";
   import {
     loadSeedList,
     saveSeedList,
@@ -57,7 +57,7 @@
   function getFileIcon(fileName: string) {
     const ext = fileName.split(".").pop()?.toLowerCase() || "";
 
-    // Images
+    // Imageso
     if (
       ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico"].includes(ext)
     )
@@ -373,12 +373,27 @@
         // dataTransfer.files becomes empty after the event completes
         const droppedFiles = Array.from(e.dataTransfer?.files || []);
 
-        if (!$etcAccount) {
-          showToast(
-            tr("upload.requireAccount"),
-            "warning",
-          );
-          return;
+        // STEP 1: Verify backend has active account before proceeding
+        if (isTauri) {
+          try {
+            const hasAccount = await invoke<boolean>("has_active_account");
+            if (!hasAccount) {
+              showToast(
+                // "Please log in to your account before uploading files",
+                tr('toasts.upload.loginRequired'),
+                "error",
+              );
+              return;
+            }
+          } catch (error) {
+            console.error("Failed to verify account status:", error);
+            showToast(
+              // "Failed to verify account status. Please try logging in again.",
+              tr('toasts.upload.verifyAccountFailed'),
+              "error",
+            );
+            return;
+          }
         }
 
         if (isUploading) {
@@ -389,11 +404,12 @@
           return;
         }
 
-        // CHECK: Ensure DHT is connected before attempting upload
+        // STEP 2: Ensure DHT is connected before attempting upload
         const dhtConnected = await isDhtConnected();
         if (!dhtConnected) {
           showToast(
-            "DHT network is not connected. Please start the DHT network before uploading files.",
+            // "DHT network is not connected. Please start the DHT network before uploading files.",
+            tr('toasts.upload.dhtDisconnected'),
             "error",
           );
           return;
@@ -477,7 +493,11 @@
 
                 files.update((currentFiles) => [...currentFiles, newFile]);
                 addedCount++;
-                showToast(`${file.name} uploaded successfully`, "success");
+                // showToast(`${file.name} uploaded successfully`, "success");
+                showToast(
+                  tr('toasts.upload.fileSuccess', { values: { name: file.name } }),
+                  "success"
+                );
               } catch (error) {
                 console.error("Error uploading dropped file:", file.name, error);
                 showToast(
@@ -580,12 +600,27 @@
   });
 
   async function openFileDialog() {
-    if (!$etcAccount) {
-      showToast(
-        tr("upload.requireAccount"),
-        "warning",
-      );
-      return;
+    // Verify backend has active account before proceeding
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          showToast(
+            // "Please log in to your account before uploading files",
+            tr('toasts.upload.loginRequired'),
+            "error",
+          );
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        showToast(
+          // "Failed to verify account status. Please try logging in again.",
+          tr('toasts.upload.verifyAccountFailed'),
+          "error",
+        );
+        return;
+      }
     }
 
     if (isUploading) return;
@@ -636,19 +671,35 @@
   }
 
   async function addFilesFromPaths(paths: string[]) {
-    if (!$etcAccount) {
-      showToast(
-        tr("upload.requireAccount"),
-        "warning",
-      );
-      return;
+    // STEP 1: Verify backend has active account before proceeding
+    if (isTauri) {
+      try {
+        const hasAccount = await invoke<boolean>("has_active_account");
+        if (!hasAccount) {
+          showToast(
+            // "Please log in to your account before uploading files",
+            tr('toasts.upload.loginRequired'),
+            "error",
+          );
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to verify account status:", error);
+        showToast(
+          // "Failed to verify account status. Please try logging in again.",
+          tr('toasts.upload.verifyAccountFailed'),
+          "error",
+        );
+        return;
+      }
     }
 
-    // CHECK: Ensure DHT is connected before attempting upload
+    // STEP 2: Ensure DHT is connected before attempting upload
     const dhtConnected = await isDhtConnected();
     if (!dhtConnected) {
       showToast(
-        "DHT network is not connected. Please start the DHT network before uploading files.",
+        // "DHT network is not connected. Please start the DHT network before uploading files.",
+        tr('toasts.upload.dhtDisconnected'),
         "error",
       );
       return;
@@ -668,7 +719,7 @@
 
         // Handle BitTorrent differently - create and seed torrent
         if (selectedProtocol === "BitTorrent") {
-          const magnetLink = await invoke<string>('create_and_seed_torrent', { filePath });
+          const magnetLink = await invoke<string>('torrent_seed', { filePath, announceUrls: null });
           
           const torrentFile = {
             id: `torrent-${Date.now()}-${Math.random()}`,
@@ -678,12 +729,17 @@
             path: filePath,
             seederAddresses: [],
             uploadDate: new Date(),
+            seeders: 1,
             status: "seeding" as const,
             price: 0, // BitTorrent is free
           };
 
           files.update(f => [...f, torrentFile]);
-          showToast(`${fileName} is now seeding as a torrent`, "success");
+          // showToast(`${fileName} is now seeding as a torrent`, "success");
+          showToast(
+            tr('toasts.upload.torrentSeeding', { values: { name: fileName } }),
+            "success"
+          );
           continue; // Skip the normal Chiral upload flow
         }
 
@@ -748,7 +804,11 @@
           );
         } else {
           addedCount++;
-          showToast(`${fileName} uploaded successfully`, "success");
+          // showToast(`${fileName} uploaded successfully`, "success");
+          showToast(
+            tr('toasts.upload.fileSuccess', { values: { name: fileName } }),
+            "success"
+          );
         }
       } catch (error) {
         console.error(error);

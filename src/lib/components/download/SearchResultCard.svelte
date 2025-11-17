@@ -8,8 +8,13 @@
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
   import { files, wallet } from '$lib/stores';
   import { get } from 'svelte/store';
+  import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
   import { paymentService } from '$lib/services/paymentService';
+
+  type TranslateParams = { values?: Record<string, unknown>; default?: string };
+  const tr = (key: string, params?: TranslateParams): string =>
+  $t(key, params);
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; copy: string }>();
 
@@ -24,7 +29,7 @@
   let showDownloadConfirmDialog = false;
   let showPaymentConfirmDialog = false;
   let showSeedersSelection = false;
-  let selectedSeederIndex: number | null = null;
+  let selectedSeederIndex: number | null = 0;
 
   // Use reactive wallet balance from store
   $: userBalance = $wallet.balance;
@@ -62,12 +67,19 @@
   }
 
   async function handleDownload() {
+    // Skipping payment confirmation for now
     // Always show initial download confirmation dialog first
-    // showDownloadConfirmDialog = true;
+    // showDownloadConfirmDialog = true; 
+
     const freshSeeders = await dhtService.getSeedersForFile(metadata.fileHash);
     metadata.seeders = freshSeeders; 
     console.log("🔍 DEBUG: Seeders fetched:", freshSeeders);
-    showSeedersSelection = true
+
+    // Bitswap note: manual seeder selection was for demo purposes to show 
+    // peer-selection capability; now switching to intelligent peer selection.
+    // showSeedersSelection = true 
+
+    proceedWithDownload();
 
   }
 
@@ -115,7 +127,8 @@
     showPaymentConfirmDialog = false;
 
     if (!paymentService.isValidWalletAddress(metadata.uploaderAddress)) {
-      showToast('Cannot process payment: uploader wallet address is missing or invalid', 'error');
+      // showToast('Cannot process payment: uploader wallet address is missing or invalid', 'error');
+      showToast(tr('toasts.download.payment.invalidAddress'), 'error');
       return;
     }
 
@@ -131,17 +144,22 @@
 
       if (!paymentResult.success) {
         const errorMessage = paymentResult.error || 'Unknown error';
-        showToast(`Payment failed: ${errorMessage}`, 'error');
+        // showToast(`Payment failed: ${errorMessage}`, 'error');
+        showToast(tr('toasts.download.payment.failed', { values: { error: errorMessage } }), 'error');
         return;
       }
 
       if (paymentResult.transactionHash) {
         showToast(
-          `Payment successful! Transaction: ${paymentResult.transactionHash.substring(0, 10)}...`,
+          // `Payment successful! Transaction: ${paymentResult.transactionHash.substring(0, 10)}...`,
+          tr('toasts.download.payment.successWithHash', {
+            values: { hash: paymentResult.transactionHash.substring(0, 10) }
+          }),
           'success'
         );
       } else {
-        showToast('Payment successful!', 'success');
+        // showToast('Payment successful!', 'success');
+        showToast(tr('toasts.download.payment.success'), 'success');
       }
 
       // Refresh balance after payment to reflect the deduction
@@ -152,7 +170,8 @@
     } catch (error: any) {
       console.error('Payment processing failed:', error);
       const message = error?.message || error?.toString() || 'Unknown error';
-      showToast(`Payment failed: ${message}`, 'error');
+      // showToast(`Payment failed: ${message}`, 'error');
+      showToast(tr('toasts.download.payment.failed', { values: { error: message } }), 'error');
     }
   }
 

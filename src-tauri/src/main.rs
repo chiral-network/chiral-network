@@ -36,7 +36,10 @@ pub mod http_server;
 pub mod keystore;
 pub mod manager;
 pub mod multi_source_download;
+
+mod logger;
 pub mod bittorrent_handler;
+pub mod download_restart;
 
 use protocols::{ProtocolManager, ProtocolHandler};
 
@@ -102,7 +105,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::time::Duration as TokioDuration;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
@@ -114,6 +116,87 @@ use blockstore::block::Block;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
 use suppaftp::FtpStream;
 use std::io::Write;
+use crate::dht::Ed2kSourceInfo;
+use crate::ed2k_client::{Ed2kClient, Ed2kServerInfo, Ed2kSearchResult};
+use crate::dht::Ed2kDownloadStatus;
+
+// Settings structure for backend use
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackendSettings {
+    #[serde(rename = "storagePath")]
+    storage_path: String,
+    #[serde(rename = "enableFileLogging")]
+    enable_file_logging: bool,
+    #[serde(rename = "maxLogSizeMB")]
+    max_log_size_mb: u64,
+}
+
+impl Default for BackendSettings {
+    fn default() -> Self {
+        Self {
+            storage_path: "~/ChiralNetwork/Storage".to_string(),
+            enable_file_logging: false,
+            max_log_size_mb: 10,
+        }
+    }
+}
+
+/// Load settings from the Tauri app data directory
+fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .expect("Failed to get app data directory");
+    
+    let settings_file = app_data_dir.join("settings.json");
+    info!("Loading settings from: {}", settings_file.display());
+    
+    if settings_file.exists() {
+        match std::fs::read_to_string(&settings_file) {
+            Ok(contents) => {
+                match serde_json::from_str::<serde_json::Value>(&contents) {
+                    Ok(json) => {
+                        // Extract only the fields we need
+                        let storage_path = json.get("storagePath")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("~/ChiralNetwork/Storage")
+                            .to_string();
+                        let enable_file_logging = json.get("enableFileLogging")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let max_log_size_mb = json.get("maxLogSizeMB")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(10);
+                        
+                        return BackendSettings {
+                            storage_path,
+                            enable_file_logging,
+                            max_log_size_mb,
+                        };
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to parse settings file: {}. Using defaults.", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to read settings file: {}. Using defaults.", e);
+            }
+        }
+    }
+    
+    BackendSettings::default()
+}
+
+/// Expand tilde (~) in path to home directory
+fn expand_tilde(path: &str) -> PathBuf {
+    if path.starts_with("~/") || path == "~" {
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            return base_dirs.home_dir().join(path.strip_prefix("~/").unwrap_or(""));
+        }
+    }
+    PathBuf::from(path)
+}
 
 /// Detect MIME type from file extension
 fn detect_mime_type_from_filename(filename: &str) -> Option<String> {
@@ -280,8 +363,13 @@ struct AppState {
     // Protocol manager for handling different download/upload protocols
     protocol_manager: Arc<ProtocolManager>,
 
+    // File logger writer for dynamic log configuration updates
+    file_logger: Arc<Mutex<Option<logger::ThreadSafeWriter>>>,
     // BitTorrent handler for creating and seeding torrents
     bittorrent_handler: Arc<bittorrent_handler::BitTorrentHandler>,
+
+    // Download restart service for pause/resume functionality
+    download_restart: Mutex<Option<Arc<download_restart::DownloadRestartService>>>,
 }
 
 /// Tauri command to create a new Chiral account
@@ -438,6 +526,11 @@ async fn get_account_balance(address: String) -> Result<String, String> {
 async fn get_user_balance(state: State<'_, AppState>) -> Result<String, String> {
     let account = get_active_account(&state).await?;
     get_balance(&account).await
+}
+
+#[tauri::command]
+async fn get_transaction_receipt(tx_hash: String) -> Result<transaction_services::TransactionReceipt, String> {
+    transaction_services::get_transaction_receipt(&tx_hash).await
 }
 
 #[tauri::command]
@@ -765,9 +858,19 @@ async fn upload_file(
             ft_guard.as_ref().cloned()
         };
         if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name, file_data)
+            ft.store_file_data(file_hash.clone(), file_name.clone(), file_data.clone())
                 .await;
         }
+
+        // Register file with HTTP server for HTTP downloads
+        state.http_server_state.register_file(http_server::HttpFileMetadata {
+            hash: file_hash.clone(),
+            name: file_name.clone(),
+            size: file_data.len() as u64,
+            encrypted: is_encrypted,
+        }).await;
+        
+        tracing::info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
 
         dht.publish_file(metadata.clone(), None).await?;
         Ok(metadata)
@@ -894,6 +997,11 @@ async fn get_miner_status() -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn get_blockchain_sync_status() -> Result<ethereum::SyncStatus, String> {
+    ethereum::get_sync_status().await
+}
+
+#[tauri::command]
 async fn get_miner_hashrate() -> Result<String, String> {
     get_hashrate().await
 }
@@ -908,6 +1016,11 @@ async fn get_network_stats() -> Result<(String, String), String> {
     let difficulty = get_network_difficulty().await?;
     let hashrate = get_network_hashrate().await?;
     Ok((difficulty, hashrate.to_string()))
+}
+
+#[tauri::command]
+async fn get_block_details_by_number(block_number: u64) -> Result<Option<serde_json::Value>, String> {
+    ethereum::get_block_details_by_number(block_number).await
 }
 
 #[tauri::command]
@@ -957,12 +1070,28 @@ async fn get_recent_mined_blocks_pub(
 ) -> Result<Vec<MinedBlock>, String> {
     get_recent_mined_blocks(&address, lookback, limit).await
 }
+
+#[tauri::command]
+async fn get_transaction_history(
+    address: String,
+    lookback: u64,
+) -> Result<Vec<ethereum::TransactionHistoryItem>, String> {
+    // Get current block number
+    let current_block = ethereum::get_block_number().await?;
+
+    // Calculate from_block (current - lookback, but not less than 0)
+    let from_block = current_block.saturating_sub(lookback);
+
+    // Scan transactions
+    ethereum::get_transaction_history(&address, from_block, current_block).await
+}
+
 #[tauri::command]
 async fn start_dht_node(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     port: u16,
-    bootstrap_nodes: Vec<String>,
+    mut bootstrap_nodes: Vec<String>,
     enable_autonat: Option<bool>,
     autonat_probe_interval_secs: Option<u64>,
     autonat_servers: Option<Vec<String>>,
@@ -1016,6 +1145,19 @@ async fn start_dht_node(
     if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
+    }
+
+    // PHASE 2 FIX: Merge preferred relays into bootstrap nodes
+    // This ensures relay nodes serve dual purpose:
+    // 1. Circuit Relay v2 for NAT traversal
+    // 2. DHT bootstrap for file discovery/publishing
+    if let Some(relays) = &preferred_relays {
+        for relay in relays {
+            if !bootstrap_nodes.contains(relay) {
+                info!("🔗 Adding relay {} to bootstrap nodes for DHT operations", relay);
+                bootstrap_nodes.push(relay.clone());
+            }
+        }
     }
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
@@ -2796,7 +2938,7 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
-        let multi_source_service = MultiSourceDownloadService::new(dht_service, webrtc_arc.clone());
+        let multi_source_service = MultiSourceDownloadService::new(dht_service, webrtc_arc.clone(), state.bittorrent_handler.clone());
         let multi_source_arc = Arc::new(multi_source_service);
 
         {
@@ -2944,6 +3086,16 @@ async fn upload_file_to_network(
                     ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
                         .await;
 
+                    // Register file with HTTP server for HTTP downloads
+                    state.http_server_state.register_file(http_server::HttpFileMetadata {
+                        hash: file_hash.clone(),
+                        name: file_name.to_string(),
+                        size: file_data.len() as u64,
+                        encrypted: false,
+                    }).await;
+                    
+                    info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
+
                     match dht.publish_file(metadata.clone(), None).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
@@ -3014,6 +3166,134 @@ async fn start_ftp_download(
 }
 
 #[tauri::command]
+async fn add_ed2k_source(
+    file_hash: String,
+    ed2k_link: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+
+    let ed2k_info = Ed2kSourceInfo::from_ed2k_link(&ed2k_link)
+        .map_err(|e| format!("Invalid ed2k link: {}", e))?;
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let mut metadata = metadata_opt.ok_or("Metadata not found")?;
+
+    let mut list = metadata.ed2k_sources.take().unwrap_or_default();
+    list.push(ed2k_info);
+    metadata.ed2k_sources = Some(list);
+
+    dht.publish_file(metadata, None).await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_ed2k_sources(
+    file_hash: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<Ed2kSourceInfo>, String> {
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let metadata = metadata_opt.ok_or(format!("Metadata not found for {}", file_hash))?;
+
+    Ok(metadata.ed2k_sources.unwrap_or_default())
+}
+
+#[tauri::command]
+async fn remove_ed2k_source(
+    file_hash: String,
+    server_url: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
+
+    let metadata_opt = dht
+        .synchronous_search_metadata(file_hash.clone(), 3000)
+        .await?;
+
+    let mut metadata = metadata_opt.ok_or("Metadata not found")?;
+
+    if let Some(list) = &mut metadata.ed2k_sources {
+        list.retain(|s| s.server_url != server_url);
+    }
+
+    dht.publish_file(metadata, None).await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn test_ed2k_connection(
+    server_url: String,
+) -> Result<Ed2kServerInfo, String> {
+    use crate::ed2k_client::Ed2kClient;
+    
+    let mut client = Ed2kClient::new(server_url.clone());
+    
+    // Try to connect
+    client.connect().await
+        .map_err(|e| format!("Connection failed: {}", e))?;
+    
+    // Get server info
+    let server_info = client.get_server_info().await
+        .map_err(|e| e.to_string())?;
+    
+    Ok(server_info)
+}
+
+#[tauri::command]
+async fn search_ed2k_file(
+    query: String,
+    server_url: Option<String>,
+) -> Result<Vec<Ed2kSearchResult>, String> {
+    let server = server_url.unwrap_or_else(|| 
+        "ed2k://|server|176.103.48.36|4661|/".to_string()
+    );
+    let mut client = Ed2kClient::new(server);
+
+    client.connect().await.map_err(|e| e.to_string())?;
+    let results = client.search(&query).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(results)
+}
+
+#[tauri::command]
+async fn get_ed2k_download_status(
+    file_hash: String,
+    state: State<'_, AppState>,
+) -> Result<Ed2kDownloadStatus, String> {
+    // Since ED2K downloading is not implemented yet,
+    // return a placeholder status
+    Ok(Ed2kDownloadStatus {
+        progress: 0.0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        state: format!("No ED2K download active for {}", file_hash),
+    })
+}
+
+#[tauri::command]
+fn parse_ed2k_link(ed2k_link: String) -> Result<Ed2kSourceInfo, String> {
+    Ed2kSourceInfo::from_ed2k_link(&ed2k_link)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
     file_metadata: FileMetadata,
@@ -3076,9 +3356,13 @@ async fn download_file_from_network(
         };
 
         if let Some(dht_service) = dht {
-            // Search for file metadata in DHT with 5 second timeout
+            // Search for file metadata in DHT with 35 second timeout
+            // This is longer than the Kademlia query timeout (30s) to account for:
+            // - Provider queries that run in parallel (can take 3-5s)
+            // - Network latency and retries
+            // - Multiple query rounds for distant peers
             match dht_service
-                .synchronous_search_metadata(file_hash.clone(), 5000)
+                .synchronous_search_metadata(file_hash.clone(), 35000)
                 .await
             {
                 Ok(Some(metadata)) => {
@@ -4744,6 +5028,87 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// Logger configuration commands
+/// Saves application settings to a JSON file in the app data directory
+#[tauri::command]
+async fn save_app_settings(
+    app: tauri::AppHandle,
+    settings_json: String,
+) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    // Ensure the directory exists
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+    
+    let settings_file = app_data_dir.join("settings.json");
+    
+    std::fs::write(&settings_file, settings_json)
+        .map_err(|e| format!("Failed to write settings file: {}", e))?;
+    
+    info!("Settings saved to: {}", settings_file.display());
+    Ok(())
+}
+
+/// Updates the file logger configuration at runtime.
+/// This allows enabling/disabling file logging and changing log rotation settings
+/// without restarting the application.
+/// 
+/// All existing `info!()`, `debug!()`, `error!()` etc. calls throughout the codebase
+/// will automatically be captured and written to the log files when enabled.
+/// 
+/// Logs are always written to the AppData directory, not the user's storage directory.
+/// 
+/// Note: The tracing subscriber is initialized at startup, so changes to enable/disable
+/// logging will only affect whether logs are written to disk. Console logging remains active.
+#[tauri::command]
+async fn update_log_config(
+    app: tauri::AppHandle,
+    max_log_size_mb: u64,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // Get the app data directory (not the user's storage directory)
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let logs_dir = app_data_dir.join("logs");
+    let config = logger::LogConfig::new(&logs_dir, max_log_size_mb, enabled);
+    
+    let logger_lock = state.file_logger.lock().await;
+    if let Some(ref writer) = *logger_lock {
+        writer.update_config(config).map_err(|e| e.to_string())?;
+        
+        if enabled {
+            info!("File logging enabled: {} (max size: {} MB)", logs_dir.display(), max_log_size_mb);
+            // Force a write to create the log file if it doesn't exist
+            info!("Logger configuration updated");
+        } else {
+            info!("File logging disabled");
+        }
+    } else {
+        return Err("File logger not initialized. Please restart the application.".to_string());
+    }
+    
+    Ok(())
+}
+
+/// Get the directory where logs are stored
+#[tauri::command]
+fn get_logs_directory(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let logs_dir = app_data_dir.join("logs");
+    Ok(logs_dir.to_string_lossy().to_string())
+}
 #[tauri::command]
 async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String> {
     // Stop DHT if running
@@ -4873,14 +5238,24 @@ async fn download_file_http(
         merkle_root,
         seeder_url
     );
+    
+    tracing::info!("Output path: {}", output_path);
 
     // Create progress channel
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(100);
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<http_download::HttpDownloadProgress>(100);
 
     // Spawn progress event emitter
     let app_handle = app.clone();
-    tokio::spawn(async move {
+    let emit_task = tokio::spawn(async move {
         while let Some(progress) = progress_rx.recv().await {
+            tracing::info!(
+                "HTTP download progress: {}/{} chunks, {}/{} bytes, status: {:?}",
+                progress.chunks_downloaded,
+                progress.chunks_total,
+                progress.bytes_downloaded,
+                progress.bytes_total,
+                progress.status
+            );
             let _ = app_handle.emit("http_download_progress", &progress);
         }
     });
@@ -4889,25 +5264,95 @@ async fn download_file_http(
     let client = http_download::HttpDownloadClient::new();
 
     // Start download using Range requests
-    client
+    let result = client
         .download_file(
             &seeder_url,
             &merkle_root,
             std::path::Path::new(&output_path),
             Some(progress_tx),
         )
-        .await?;
+        .await;
+    
+    // Wait for progress emitter to finish
+    drop(emit_task);
+    
+    match result {
+        Ok(()) => {
+            tracing::info!("HTTP download completed successfully: {}", output_path);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("HTTP download failed: {}", e);
+            Err(e)
+        }
+    }
+}
 
-    tracing::info!("HTTP download completed: {}", output_path);
+// Download restart Tauri commands
 
-    Ok(())
+#[tauri::command]
+async fn start_download_restart(
+    request: download_restart::StartDownloadRequest,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.start_download(request).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn pause_download_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.pause_download(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn resume_download_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.resume_download(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_download_status_restart(
+    download_id: String,
+    state: State<'_, AppState>,
+) -> Result<download_restart::DownloadStatus, String> {
+    let dr_guard = state.download_restart.lock().await;
+    if let Some(ref service) = *dr_guard {
+        service.get_status(&download_id).await.map_err(|e| e.to_string())
+    } else {
+        Err("Download restart service not initialized".to_string())
+    }
 }
 
 #[cfg(not(test))]
 fn main() {
-    // Initialize logging for debug builds
-    #[cfg(debug_assertions)]
-    {
+    // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
+    // so we can configure file logging properly
+    
+    // Parse command line arguments
+    use clap::Parser;
+    let args = headless::CliArgs::parse();
+
+    // For headless mode, initialize basic console logging
+    if args.headless {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
         let mut filter = EnvFilter::from_default_env();
         
@@ -4932,14 +5377,7 @@ fn main() {
             .with(fmt::layer())
             .with(filter)
             .init();
-    }
-
-    // Parse command line arguments
-    use clap::Parser;
-    let args = headless::CliArgs::parse();
-
-    // If running in headless mode, don't start the GUI
-    if args.headless {
+            
         println!("Running in headless mode...");
 
         // Create a tokio runtime for async operations
@@ -4954,6 +5392,52 @@ fn main() {
     }
 
     println!("Starting Chiral Network...");
+
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+        // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
+        let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
+            .ok()
+            .and_then(|id| id.parse::<u16>().ok())
+            .unwrap_or(1);
+        
+        let instance_suffix = if instance_id == 1 {
+            String::new()
+        } else {
+            format!("-{}", instance_id)
+        };
+        
+        let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+            .map(|dirs| dirs.data_dir().join(format!("downloads{}", instance_suffix)))
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join(format!("downloads{}", instance_suffix)));
+        
+        if let Err(e) = std::fs::create_dir_all(&download_dir) {
+            eprintln!("Failed to create download directory: {}", e);
+        }
+
+        println!("Instance ID: {}", instance_id);
+        println!("Using download directory: {:?}", download_dir);
+
+        // Calculate port range based on instance ID to avoid conflicts
+        // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
+        let base_port = 6881 + ((instance_id - 1) * 11);
+        let port_range = base_port..(base_port + 10);
+        
+        println!("Using BitTorrent port range: {}-{}", port_range.start, port_range.end);
+
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+            download_dir,
+            Some(port_range)
+        )
+            .await
+            .expect("Failed to create BitTorrent handler");
+        let bittorrent_handler_arc = Arc::new(bittorrent_handler);
+        
+        let mut manager = ProtocolManager::new();
+        manager.register(bittorrent_handler_arc.clone());
+        
+        (bittorrent_handler_arc, Arc::new(manager))
+    });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -5018,39 +5502,26 @@ fn main() {
             relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Protocol Manager with BitTorrent support
-            protocol_manager: {
-                let mut manager = ProtocolManager::new();
-                
-                // Create default download directory
-                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("downloads"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
-                
-                // Ensure download directory exists
-                if let Err(e) = std::fs::create_dir_all(&download_dir) {
-                    eprintln!("Failed to create download directory: {}", e);
-                }
-                
-                // Register BitTorrent handler
-                let bittorrent_handler = Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir.clone()));
-                manager.register(bittorrent_handler);
-                
-                Arc::new(manager)
-            },
+            protocol_manager: protocol_manager_arc,
 
+          // File logger - will be initialized in setup phase after loading settings
+            file_logger: Arc::new(Mutex::new(None)),
+          
             // BitTorrent handler for creating and seeding torrents
-            bittorrent_handler: {
-                let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("downloads"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
-                Arc::new(bittorrent_handler::BitTorrentHandler::new(download_dir))
-            },
+            bittorrent_handler: bittorrent_handler_arc,
+
+            // Download restart service (will be initialized in setup)
+            download_restart: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
             import_chiral_account,
             has_active_account,
+            get_active_account_address,
+            get_active_account_private_key,
+            get_account_balance,
             get_user_balance,
+            get_transaction_receipt,
             can_afford_download,
             process_download_payment,
             record_download_payment,
@@ -5086,9 +5557,12 @@ fn main() {
             start_miner,
             stop_miner,
             get_miner_status,
+            get_blockchain_sync_status,
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
+            get_block_details_by_number,
+            get_transaction_history,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
@@ -5170,6 +5644,14 @@ fn main() {
             get_contribution_history,
             reset_analytics,
             reset_network_services,
+            // ed2k server commands
+            add_ed2k_source,
+            list_ed2k_sources,
+            remove_ed2k_source,
+            test_ed2k_connection,
+            search_ed2k_file,
+            get_ed2k_download_status,
+            parse_ed2k_link,
             // HTTP server commands
             start_http_server,
             stop_http_server,
@@ -5202,9 +5684,18 @@ fn main() {
             get_relay_reputation_stats,
             set_relay_alias,
             get_relay_alias,
+            save_app_settings,
+            update_log_config,
+            get_logs_directory,
+            check_directory_exists,
             get_multiaddresses,
             clear_seed_list,
-            get_full_network_stats
+            get_full_network_stats,
+            // Download restart commands
+            start_download_restart,
+            pause_download_restart,
+            resume_download_restart,
+            get_download_status_restart
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -5223,6 +5714,88 @@ fn main() {
             }
         })
         .setup(|app| {
+            // Load settings from disk
+            println!("Loading settings from app data directory...");
+            let settings = load_settings_from_file(&app.handle());
+            println!("Settings loaded: enable_file_logging={}, max_log_size_mb={}", 
+                  settings.enable_file_logging, settings.max_log_size_mb);
+            
+            // Initialize tracing subscriber with console output and optionally file output
+            use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+            
+            let env_filter = {
+                #[cfg(debug_assertions)]
+                {
+                    EnvFilter::from_default_env()
+                        .add_directive("chiral_network=info".parse().unwrap())
+                        .add_directive("libp2p=warn".parse().unwrap())
+                        .add_directive("libp2p_kad=warn".parse().unwrap())
+                        .add_directive("libp2p_swarm=warn".parse().unwrap())
+                        .add_directive("libp2p_mdns=warn".parse().unwrap())
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    EnvFilter::from_default_env()
+                        .add_directive("chiral_network=warn".parse().unwrap())
+                        .add_directive("libp2p=error".parse().unwrap())
+                }
+            };
+            
+            // Always create file logger (even if disabled) so it can be enabled/disabled later
+            let app_data_dir = app.path().app_data_dir()
+                .expect("Failed to get app data directory");
+            let logs_dir = app_data_dir.join("logs");
+            
+            println!("Initializing file logger at: {}", logs_dir.display());
+            
+            let log_config = logger::LogConfig::new(&logs_dir, settings.max_log_size_mb, settings.enable_file_logging);
+            
+            let file_logger_writer = match logger::RotatingFileWriter::new(log_config) {
+                Ok(writer) => {
+                    let thread_safe_writer = logger::ThreadSafeWriter::new(writer);
+                    println!("File logger initialized successfully (enabled: {})", settings.enable_file_logging);
+                    Some(thread_safe_writer)
+                }
+                Err(e) => {
+                    eprintln!("Failed to initialize file logger: {}", e);
+                    None
+                }
+            };
+            
+            // Initialize tracing subscriber with both console and file output
+            // File output will only write if enabled in config
+            if let Some(ref file_writer) = file_logger_writer {
+                tracing_subscriber::registry()
+                    .with(fmt::layer()) // Console output
+                    .with(fmt::layer().with_writer(file_writer.clone())) // File output (respects enabled flag)
+                    .with(env_filter)
+                    .init();
+            } else {
+                tracing_subscriber::registry()
+                    .with(fmt::layer()) // Console output only
+                    .with(env_filter)
+                    .init();
+            }
+            
+            info!("Chiral Network starting up...");
+            info!("Settings loaded: enable_file_logging={}, max_log_size_mb={}", 
+                  settings.enable_file_logging, settings.max_log_size_mb);
+            
+            // Store the file logger in app state so it can be updated later
+            if let Some(file_writer) = file_logger_writer {
+                if let Some(state) = app.try_state::<AppState>() {
+                    let mut file_logger = state.file_logger.blocking_lock();
+                    *file_logger = Some(file_writer.clone());
+                    
+                    // Log the current log file path if logging is enabled
+                    if settings.enable_file_logging {
+                        if let Some(path) = file_writer.current_log_file_path() {
+                            info!("Logs are being written to: {}", path.display());
+                        }
+                    }
+                }
+            }
+            
             // Clean up any orphaned geth processes on startup
             #[cfg(unix)]
             {
@@ -5364,6 +5937,22 @@ fn main() {
                                 tracing::error!("Failed to start HTTP server: {}", e);
                                 eprintln!("⚠️  HTTP server failed to start: {}", e);
                             }
+                        }
+                    }
+                });
+            }
+
+            // Initialize download restart service
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let download_restart_service = Arc::new(download_restart::DownloadRestartService::new(
+                            app_handle.clone()
+                        ));
+                        if let Ok(mut dr_guard) = state.download_restart.try_lock() {
+                            *dr_guard = Some(download_restart_service);
+                            tracing::info!("Download restart service initialized");
                         }
                     }
                 });
@@ -5542,6 +6131,26 @@ struct UploadResult {
 #[tauri::command]
 async fn has_active_account(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.active_account.lock().await.is_some())
+}
+
+#[tauri::command]
+async fn get_active_account_address(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .active_account
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
+}
+
+#[tauri::command]
+async fn get_active_account_private_key(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .active_account_private_key
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "No account is currently active. Please log in.".to_string())
 }
 
 #[tauri::command]
@@ -5725,7 +6334,7 @@ async fn stop_proof_of_storage_watcher(state: State<'_, AppState>) -> Result<(),
         // Abort the task to ensure it stops immediately.
         handle.abort();
         // Awaiting the aborted handle can confirm it's terminated.
-        match tokio::time::timeout(TokioDuration::from_secs(2), handle).await {
+    match tokio::time::timeout(tokio::time::Duration::from_secs(2), handle).await {
             Ok(_) => tracing::info!("Proof watcher task successfully joined."),
             Err(_) => tracing::warn!("Proof watcher abort timed out"),
         }

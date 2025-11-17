@@ -67,7 +67,7 @@
   let isGethInstalled = false
   let isStartingNode = false
   let isDownloading = false
-  let isCheckingGeth = true
+  let isCheckingGeth = false  // Start as false, will be set to true only when actually checking
   let downloadProgress = {
     downloaded: 0,
     total: 0,
@@ -96,6 +96,7 @@
   let natStatusUnlisten: (() => void) | null = null
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
+  let cancelConnection = false
 
   // Always preserve connections - no unreliable time-based detection
   
@@ -322,7 +323,12 @@
     if (!isTauri) {
       // Mock DHT connection for web
       dhtStatus = 'connecting'
+      cancelConnection = false
       setTimeout(() => {
+        if (cancelConnection) {
+          dhtStatus = 'disconnected'
+          return
+        }
         dhtStatus = 'connected'
         dhtPeerId = '12D3KooWMockPeerIdForWebDemo123456789'
       }, 1000)
@@ -331,6 +337,7 @@
     
     try {
       dhtError = null
+      cancelConnection = false
       
       // Check if DHT is already running in backend
       const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
@@ -370,6 +377,13 @@
       // Add a small delay to show the connecting state
       await new Promise(resolve => setTimeout(resolve, 500))
       
+      // Check if user cancelled during the delay
+      if (cancelConnection) {
+        dhtStatus = 'disconnected'
+        dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+        return
+      }
+      
       const peerId = await dhtService.start({
         port: dhtPort,
         bootstrapNodes: dhtBootstrapNodes,
@@ -395,6 +409,13 @@
         
         // Add another small delay to show the connection attempt
         await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        // Check if user cancelled during connection attempt
+        if (cancelConnection) {
+          await stopDht()
+          dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+          return
+        }
         
         try {
           // Try connecting to the first available bootstrap node
@@ -561,6 +582,13 @@
     }, 2000) as unknown as number
   }
   
+  function cancelDhtConnection() {
+    cancelConnection = true
+    dhtStatus = 'disconnected'
+    dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+    showToast($t('network.dht.connectionCancelled'), 'info')
+  }
+
   async function stopDht() {
     if (!isTauri) {
       dhtStatus = 'disconnected'
@@ -571,6 +599,7 @@
       copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
+      cancelConnection = false
       return
     }
     
@@ -591,6 +620,7 @@
       copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
+      cancelConnection = false
       
       // Small delay to ensure port is fully released
       await new Promise(resolve => setTimeout(resolve, 500))
@@ -705,10 +735,15 @@
             }
           }
         });
-        showToast('Connected to signaling server', 'success');
+        // showToast('Connected to signaling server', 'success');
+        showToast(tr('toasts.network.signalingConnected'), 'success');
       } catch (error) {
         console.error('Failed to connect to signaling server:', error);
-        showToast('Failed to connect to signaling server for web mode testing', 'error');
+        // showToast('Failed to connect to signaling server for web mode testing', 'error');
+        showToast(
+          tr('toasts.network.signalingError'),
+          'error'
+        );
         return;
       }
     }
@@ -721,7 +756,8 @@
   
   async function connectToPeer() {
     if (!newPeerAddress.trim()) {
-      showToast('Please enter a peer address', 'error');
+      // showToast('Please enter a peer address', 'error');
+      showToast(tr('toasts.network.peerAddressRequired'), 'error');
       return;
     }
 
@@ -730,7 +766,8 @@
     // In Tauri mode, use DHT backend for P2P connections
     if (isTauri) {
       if (dhtStatus !== 'connected') {
-        showToast('DHT not connected. Please start DHT first.', 'error');
+        // showToast('DHT not connected. Please start DHT first.', 'error');
+        showToast(tr('toasts.network.dhtRequired'), 'error');
         return;
       }
 
@@ -743,13 +780,15 @@
       );
 
       if (isAlreadyConnected) {
-        showToast('Peer is already connected', 'info');
+        // showToast('Peer is already connected', 'info');
+        showToast(tr('toasts.network.alreadyConnected'), 'info');
         newPeerAddress = '';
         return;
       }
 
       try {
-        showToast('Connecting to peer via DHT...', 'info');
+        // showToast('Connecting to peer via DHT...', 'info');
+        showToast(tr('toasts.network.connecting'), 'info');
         const currentPeerCount = $peers.length;
         await invoke('connect_to_peer', { peerAddress });
 
@@ -760,21 +799,28 @@
         setTimeout(async () => {
           await refreshConnectedPeers();
           if ($peers.length > currentPeerCount) {
-            showToast('Connection Success!', 'success');
+            // showToast('Connection Success!', 'success');
+            showToast(tr('toasts.network.connectionSuccess'), 'success')
           } else {
-            showToast('Connection failed. Peer may be unreachable or address invalid.', 'error');
+            // showToast('Connection failed. Peer may be unreachable or address invalid.', 'error');
+            showToast(tr('toasts.network.connectionFailed'), 'error');
           }
         }, 2000);
       } catch (error) {
         console.error('Failed to connect to peer:', error);
-        showToast('Failed to connect to peer: ' + error, 'error');
+        // showToast('Failed to connect to peer: ' + error, 'error');
+        showToast(
+          tr('toasts.network.connectError', { values: { error: String(error) } }),
+          'error'
+        );
       }
       return;
     }
 
     // In web mode, use WebRTC for testing
     if (!signalingConnected) {
-      showToast('Signaling server not connected. Please start DHT first.', 'error');
+      // showToast('Signaling server not connected. Please start DHT first.', 'error');
+      showToast(tr('toasts.network.signalingMissing'), 'error');
       return;
     }
 
@@ -783,7 +829,11 @@
     // Check if peer exists in discovered peers
     // if (!discoveredPeers.includes(peerId)) {
     if (!webDiscoveredPeers.includes(peerId)) {
-      showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
+      // showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
+      showToast(
+        tr('toasts.network.peerNotFound', { values: { peer: peerId } }),
+        'warning'
+      );
       // Still attempt connection in case peer was discovered recently
     }
 
@@ -793,18 +843,24 @@
         signaling,
         isInitiator: true,
         onMessage: (data) => {
-          showToast('Received from peer: ' + data, 'info');
+          // showToast('Received from peer: ' + data, 'info');
+          showToast(
+            tr('toasts.network.messageReceived', { values: { message: String(data) } }),
+            'info'
+          )
         },
         onConnectionStateChange: (state) => {
           console.log('[WebRTC] Connection state:', state);
 
           // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {
-            showToast('Successfully connected to peer!', 'success');
+            // showToast('Successfully connected to peer!', 'success');
+            showToast(tr('toasts.network.webrtcConnected'), 'success');
             // Add minimal PeerInfo to peers store if not present
             addConnectedPeer(peerId);
           } else if (state === 'failed') {
-            showToast('Connection to peer failed', 'error');
+            // showToast('Connection to peer failed', 'error');
+            showToast(tr('toasts.network.webrtcFailed'), 'error');
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           } else if (state === 'disconnected' || state === 'closed') {
@@ -814,16 +870,22 @@
           }
         },
         onDataChannelOpen: () => {
-          showToast('Data channel open - you can now send messages!', 'success');
+          // showToast('Data channel open - you can now send messages!', 'success');
+          showToast(tr('toasts.network.dataChannelOpen'), 'success');
           // Ensure peer is listed as connected when data channel opens
           addConnectedPeer(peerId);
         },
         onDataChannelClose: () => {
-          showToast('Data channel closed', 'warning');
+          // showToast('Data channel closed', 'warning');
+          showToast(tr('toasts.network.dataChannelClosed'), 'warning');
           markPeerDisconnected(peerId);
         },
         onError: (e) => {
-          showToast('WebRTC error: ' + e, 'error');
+          // showToast('WebRTC error: ' + e, 'error');
+          showToast(
+            tr('toasts.network.webrtcError', { values: { error: String(e) } }),
+            'error'
+          );
           console.error('WebRTC error:', e);
         }
       });
@@ -852,29 +914,46 @@
 
       // Create offer asynchronously (don't await to avoid freezing UI)
       webrtcSession.createOffer();
-      showToast('Connecting to peer: ' + peerId, 'success');
+      // showToast('Connecting to peer: ' + peerId, 'success');
+      showToast(
+        tr('toasts.network.webrtcConnecting', { values: { peer: peerId } }),
+        'success'
+      );
 
       // Clear input on successful connection attempt
       newPeerAddress = '';
 
     } catch (error) {
       console.error('Failed to create WebRTC session:', error);
-      showToast('Failed to create connection: ' + error, 'error');
+      // showToast('Failed to create connection: ' + error, 'error');
+      showToast(
+        tr('toasts.network.webrtcCreateError', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
   
   function sendTestMessage() {
     if (!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open') {
-      showToast('No active WebRTC connection', 'error');
+      // showToast('No active WebRTC connection', 'error');
+      showToast(tr('toasts.network.noConnection'), 'error');
       return;
     }
     
     const testMessage = `Hello from ${signaling.getClientId()} at ${new Date().toLocaleTimeString()}`;
     try {
       webrtcSession.send(testMessage);
-      showToast('Test message sent: ' + testMessage, 'success');
+      // showToast('Test message sent: ' + testMessage, 'success');
+      showToast(
+        tr('toasts.network.messageSent', { values: { message: testMessage } }),
+        'success'
+      );
     } catch (error) {
-      showToast('Failed to send message: ' + error, 'error');
+      // showToast('Failed to send message: ' + error, 'error');
+      showToast(
+        tr('toasts.network.sendError', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
   
@@ -942,25 +1021,14 @@
       // In web mode, simulate that geth is not installed
       isGethInstalled = false
       isGethRunning = false
-      isCheckingGeth = false
       return
     }
 
     isCheckingGeth = true
     try {
       const status = await fetchGethStatus('./bin/geth-data', 1)
-      // If node is running from previous session, stop it for clean state
-      if (status.running) {
-        console.log('Stopping node from previous session...')
-        await invoke('stop_geth_node')
-        // Wait a moment for it to stop
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        // Check status again
-        let updatedStatus = await fetchGethStatus('./bin/geth-data', 1)
-        applyGethStatus(updatedStatus)
-      } else {
-        applyGethStatus(status)
-      }
+      // Preserve the running state - don't stop the node if it's already running
+      applyGethStatus(status)
     } catch (error) {
       console.error('Failed to check geth status:', error)
     } finally {
@@ -982,7 +1050,8 @@
         // Geth is already installed, update state and return
         applyGethStatus(status)
         isCheckingGeth = false
-        showToast('Geth is already installed', 'info')
+        // showToast('Geth is already installed', 'info')
+        showToast(tr('toasts.network.gethInstalled'), 'info')
         return
       }
     } catch (error) {
@@ -1008,7 +1077,11 @@
     } catch (e) {
       downloadError = String(e)
       isDownloading = false
-      showToast('Failed to download Geth: ' + e, 'error')
+      // showToast('Failed to download Geth: ' + e, 'error')
+      showToast(
+        tr('toasts.network.gethDownloadError', { values: { error: String(e) } }),
+        'error'
+      )
     }
   }
 
@@ -1314,17 +1387,15 @@
     </div>
 
     <div class="space-y-3">
-      {#if isCheckingGeth}
-        <div class="text-center py-8">
-          <RefreshCw class="h-12 w-12 text-blue-500 mx-auto mb-2 animate-spin" />
-          <p class="text-sm text-muted-foreground mb-1">Checking if Geth is downloaded...</p>
-          <p class="text-xs text-muted-foreground">Please wait while we check your system</p>
-        </div>
-      {:else if !isGethInstalled}
+      {#if !isGethInstalled && !isGethRunning}
         <div class="text-center py-4">
           <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-1">Geth not installed</p>
-          <p class="text-xs text-muted-foreground mb-3">Download and install the Chiral Network node</p>
+          <p class="text-sm text-muted-foreground mb-1">
+            {isCheckingGeth ? 'Checking...' : 'Geth not installed'}
+          </p>
+          {#if !isCheckingGeth}
+            <p class="text-xs text-muted-foreground mb-3">Download and install the Chiral Network node</p>
+          {/if}
           {#if downloadError}
             <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-2 mb-3">
               <div class="flex items-center gap-2 justify-center">
@@ -1333,15 +1404,12 @@
               </div>
             </div>
           {/if}
-          <Button on:click={downloadGeth} disabled={isDownloading || isCheckingGeth}>
-            {#if isCheckingGeth}
-              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
-              Checking...
-            {:else}
+          {#if !isCheckingGeth}
+            <Button on:click={downloadGeth} disabled={isDownloading}>
               <Download class="h-4 w-4 mr-2" />
               Download Geth
-            {/if}
-          </Button>
+            </Button>
+          {/if}
         </div>
       {:else if isGethRunning}
         <div class="grid grid-cols-2 gap-4">
@@ -1459,6 +1527,12 @@
           <p class="text-sm text-muted-foreground">{$t('network.dht.connectingToBootstrap')}</p>
           <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
           <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts: connectionAttempts } })}</p>
+          <div class="mt-4">
+            <Button variant="outline" size="sm" on:click={cancelDhtConnection}>
+              <Square class="h-4 w-4 mr-2" />
+              {$t('network.dht.cancel')}
+            </Button>
+          </div>
         </div>
       {:else}
         <div class="space-y-3">

@@ -5,8 +5,14 @@
   import Dropdown from '$lib/components/ui/dropDown.svelte'
   import { deriveNext } from '$lib/wallet/hd'
   import { showToast } from '$lib/toast'
+  import { t } from 'svelte-i18n'
   import { wallet, etcAccount } from '$lib/stores'
   import { walletService } from '$lib/wallet'
+
+  type TranslateParams = { values?: Record<string, unknown>; default?: string }
+  // const tr = (key: string, params?: TranslateParams) => get(t)(key, params)
+  const tr = (key: string, params?: TranslateParams) =>
+  $t(key, params);
 
   interface AccountItem { index: number; change: number; address: string; label?: string; privateKeyHex?: string }
   export let mnemonic: string
@@ -36,10 +42,28 @@
     return `${addr.slice(0, prefix)}…${addr.slice(-suffix)}`
   }
 
-  function selectAccount(acc: AccountItem) {
+  async function selectAccount(acc: AccountItem) {
+    // Import to backend to set as active account
+    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+    if (isTauri && acc.privateKeyHex) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        const privateKeyWithPrefix = acc.privateKeyHex.startsWith('0x') ? acc.privateKeyHex : '0x' + acc.privateKeyHex
+        await invoke('import_chiral_account', { privateKey: privateKeyWithPrefix })
+      } catch (error) {
+        console.error('Failed to set backend account:', error)
+      }
+    }
+    
     etcAccount.set({ address: acc.address, private_key: acc.privateKeyHex || '' })
     wallet.update(w => ({ ...w, address: acc.address }))
-    showToast('Selected account ' + acc.address.slice(0, 10) + '...', 'success')
+    // showToast('Selected account ' + acc.address.slice(0, 10) + '...', 'success')
+    showToast(
+      tr('toasts.wallet.accountList.selected', {
+        values: { address: acc.address.slice(0, 10) }
+      }),
+      'success'
+    )
   }
 
   async function addNext() {
@@ -51,9 +75,21 @@
       if (updated.length > 3) {
         selectedAccountIndex = updated.length - 1;
       }
-      showToast('Derived account #' + item.index, 'success')
+      // showToast('Derived account #' + item.index, 'success')
+      showToast(
+        tr('toasts.wallet.accountList.derived', {
+          values: { index: item.index }
+        }),
+        'success'
+      )
     } catch (e) {
-      showToast('Derivation failed: ' + String(e), 'error')
+      // showToast('Derivation failed: ' + String(e), 'error')
+      showToast(
+        tr('toasts.wallet.accountList.deriveError', {
+          values: { error: String(e) }
+        }),
+        'error'
+      )
     }
   }
 
@@ -61,12 +97,20 @@
     try {
       if (!acc.privateKeyHex) return
       const pk = acc.privateKeyHex.startsWith('0x') ? acc.privateKeyHex : acc.privateKeyHex
-      const password = prompt('Enter keystore password') || ''
+      // const password = prompt('Enter keystore password') || ''
+      const password = prompt(tr('toasts.wallet.accountList.keystorePrompt')) || ''
       if (!password) return
       await walletService.saveToKeystore(password, { address: acc.address, private_key: pk })
-      showToast('Saved to keystore', 'success')
+      // showToast('Saved to keystore', 'success')
+      showToast(tr('toasts.wallet.accountList.keystoreSaved'), 'success')
     } catch (e) {
-      showToast('Keystore save failed: ' + String(e), 'error')
+      // showToast('Keystore save failed: ' + String(e), 'error')
+      showToast(
+        tr('toasts.wallet.accountList.keystoreError', {
+          values: { error: String(e) }
+        }),
+        'error'
+      )
     }
   }
 
