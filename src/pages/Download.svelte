@@ -703,7 +703,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       // Only auto-resume if less than 24 hours old
       const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
       if (hoursSinceLastSave > 24) {
-        console.log('Saved downloads are too old (>24h), skipping auto-resume')
+        diagnosticLogger.debug('Download', 'Saved downloads are too old, skipping auto-resume', { hoursSinceLastSave });
         localStorage.removeItem('pendingDownloads')
         return
       }
@@ -753,13 +753,13 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   }
 
   async function handleSearchDownload(metadata: FileMetadata) {
-    console.log('🔍 handleSearchDownload called with metadata:', metadata)
+    diagnosticLogger.debug('Download', 'handleSearchDownload called', { metadata });
 
     // Auto-detect protocol based on file metadata
     const hasCids = metadata.cids && metadata.cids.length > 0
     detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
     
-    console.log(`🔍 Auto-detected protocol: ${detectedProtocol} (hasCids: ${hasCids})`)
+    diagnosticLogger.debug('Download', 'Auto-detected protocol', { protocol: detectedProtocol, hasCids });
 
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
@@ -813,13 +813,13 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       cids: metadata.cids // IMPORTANT: Pass CIDs for Bitswap downloads
     }
 
-    console.log('📦 Created new file for queue:', newFile)
+    diagnosticLogger.debug('Download', 'Created new file for queue', { fileName: newFile.name, hash: newFile.hash });
     downloadQueue.update((queue) => [...queue, newFile])
     showNotification(tr('download.search.status.addedToQueue', { values: { name: metadata.fileName } }), 'success')
 
-    console.log('⏭️ autoStartQueue:', autoStartQueue)
+    diagnosticLogger.debug('Download', 'Auto-start queue check', { autoStartQueue });
     if (autoStartQueue) {
-      console.log('▶️ Calling processQueue...')
+      diagnosticLogger.debug('Download', 'Calling processQueue');
       await processQueue()
     }
   }
@@ -986,23 +986,23 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   // New function to download from search results
   async function processQueue() {
-    console.log('📋 processQueue called')
+    diagnosticLogger.debug('Download', 'processQueue called');
     // Only prevent starting new downloads if we've reached the max concurrent limit
     const activeDownloads = $files.filter(f => f.status === 'downloading').length
     // Handle case where maxConcurrentDownloads might be empty during typing
     const maxConcurrent = Math.max(1, Number(maxConcurrentDownloads) || 3)
-    console.log(`  Active downloads: ${activeDownloads}, Max: ${maxConcurrent}`)
+    diagnosticLogger.debug('Download', 'Queue status', { activeDownloads, maxConcurrent });
     if (activeDownloads >= maxConcurrent) {
-      console.log('  ⏸️ Max concurrent downloads reached, waiting...')
+      diagnosticLogger.debug('Download', 'Max concurrent downloads reached, waiting');
       return
     }
 
     const nextFile = $downloadQueue[0]
     if (!nextFile) {
-      console.log('  ℹ️ Queue is empty')
+      diagnosticLogger.debug('Download', 'Queue is empty');
       return
     }
-    console.log('  📄 Next file from queue:', nextFile)
+    diagnosticLogger.debug('Download', 'Next file from queue', { fileName: nextFile.name, hash: nextFile.hash });
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
     const downloadingFile = {
       ...nextFile,
@@ -1014,12 +1014,12 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       downloadedChunks: [], // Track downloaded chunks for Bitswap
       totalChunks: 0 // Will be set when first chunk arrives
     }
-    console.log('  ✏️ Created downloadingFile object:', downloadingFile)
+    diagnosticLogger.debug('Download', 'Created downloadingFile object', { fileName: downloadingFile.name });
     files.update(f => [...f, downloadingFile])
-    console.log('  ✅ Added file to files store, detected protocol:', detectedProtocol)
+    diagnosticLogger.debug('Download', 'Added file to files store', { fileName: downloadingFile.name, protocol: detectedProtocol });
 
     if (detectedProtocol === "Bitswap"){
-  console.log('  🔍 Starting Bitswap download for:', downloadingFile.name)
+  diagnosticLogger.debug('Download', 'Starting Bitswap download', { fileName: downloadingFile.name });
 
   // CRITICAL: Bitswap requires CIDs to download
   if (!downloadingFile.cids || downloadingFile.cids.length === 0) {
@@ -1112,7 +1112,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     // Construct full file path: directory + filename
     const fullPath = `${storagePath}/${downloadingFile.name}`;
     
-    console.log('✅ Using settings download path:', fullPath);
+    diagnosticLogger.debug('Download', 'Using settings download path', { fullPath });
 
     // Now start the actual Bitswap download
     const metadata = {
@@ -1127,15 +1127,17 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       downloadPath: fullPath  // Pass the full path
     }
     
-    console.log('  📤 Calling dhtService.downloadFile with metadata:', metadata)
-    console.log('  📦 CIDs:', downloadingFile.cids)
-    console.log('  👥 Seeders:', downloadingFile.seederAddresses)
-    console.log('  💾 Download path:', fullPath)
+    diagnosticLogger.debug('Download', 'Calling dhtService.downloadFile', { 
+      fileName: metadata.fileName, 
+      cids: downloadingFile.cids,
+      seeders: downloadingFile.seederAddresses,
+      downloadPath: fullPath
+    });
 
     // Start the download asynchronously
     dhtService.downloadFile(metadata)
       .then((result) => {
-        console.log('  ✅ Bitswap download completed for:', downloadingFile.name, result)
+        diagnosticLogger.debug('Download', 'Bitswap download completed', { fileName: downloadingFile.name });
         showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success')
       })
       .catch((error) => {
@@ -1242,13 +1244,13 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
       // Proceed directly to file dialog
       try {
-        console.log("🔍 DEBUG: Starting download for file:", fileToDownload.name);
+        diagnosticLogger.debug('Download', 'Starting download for file', { fileName: fileToDownload.name });
         const { save } = await import('@tauri-apps/plugin-dialog');
 
         // Show file save dialog
-        console.log("🔍 DEBUG: Opening file save dialog...");
+        diagnosticLogger.debug('Download', 'Opening file save dialog', { fileName: fileToDownload.name });
         const outputPath = await save(buildSaveDialogOptions(fileToDownload.name));
-        console.log("✅ DEBUG: File save dialog result:", outputPath);
+        diagnosticLogger.debug('Download', 'File save dialog result', { outputPath });
 
         if (!outputPath) {
           // User cancelled the save dialog
@@ -1300,9 +1302,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           try {
 
             let hash = fileToDownload.hash
-            console.log("🔍 DEBUG: Attempting to get file data for hash:", hash);
+            diagnosticLogger.debug('Download', 'Attempting to get file data for hash', { hash });
             const base64Data = await invoke('get_file_data', { fileHash: hash }) as string;
-            console.log("✅ DEBUG: Retrieved base64 data length:", base64Data.length);
+            diagnosticLogger.debug('Download', 'Retrieved base64 data', { hash, dataLength: base64Data.length });
 
             // Convert base64 to Uint8Array
             let data_ = new Uint8Array(0); // Default empty array
@@ -1312,21 +1314,21 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               for (let i = 0; i < binaryStr.length; i++) {
                 data_[i] = binaryStr.charCodeAt(i);
               }
-              console.log("Converted to Uint8Array with length:", data_.length);
+              diagnosticLogger.debug('Download', 'Converted to Uint8Array', { length: data_.length });
             } else {
-              console.warn("No file data found for hash:", hash);
+              diagnosticLogger.warn('Download', 'No file data found for hash', { hash });
             }
 
-            console.log("Final data array length:", data_.length);
+            diagnosticLogger.debug('Download', 'Final data array length', { length: data_.length });
 
             // Ensure the directory exists before writing
             await invoke('ensure_directory_exists', { path: outputPath });
             
             // Write the file data to the output path
-            console.log("🔍 DEBUG: About to write file to:", outputPath);
+            diagnosticLogger.debug('Download', 'About to write file', { outputPath, dataLength: data_.length });
             const { writeFile } = await import('@tauri-apps/plugin-fs');
             await writeFile(outputPath, data_);
-            console.log("✅ DEBUG: File written successfully to:", outputPath);
+            diagnosticLogger.debug('Download', 'File written successfully', { outputPath });
 
             // Process payment for local download (only if not already paid)
             if (!paidFiles.has(fileToDownload.hash)) {
@@ -1366,7 +1368,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
             files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
             activeSimulations.delete(fileId);
-            console.log("Done with downloading file")
+            diagnosticLogger.debug('Download', 'Done with downloading file', { fileName: fileToDownload.name, outputPath });
             return;
           } catch (e) {
             console.error('❌ DEBUG: Local copy fallback failed:', e);
