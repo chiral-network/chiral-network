@@ -472,6 +472,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   let downloadHistory: DownloadHistoryEntry[] = []
   let historySearchQuery = ''
   let historyFilter: 'all' | 'completed' | 'failed' | 'canceled' = 'all'
+  let statistics = downloadHistoryService.getStatistics()
 
   // Load history on mount
   $: downloadHistory = downloadHistoryService.getFilteredHistory(
@@ -479,11 +480,21 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     historySearchQuery
   )
 
+  $: if (downloadHistory) {
+    statistics = downloadHistoryService.getStatistics()
+  }
+
+
   // Track files to add to history when they complete/fail
   $: {
     for (const file of $files) {
       if (['completed', 'failed', 'canceled'].includes(file.status)) {
         downloadHistoryService.addToHistory(file)
+        //Refeshing history to keep it most updated
+        downloadHistory = downloadHistoryService.getFilteredHistory(
+          historyFilter === 'all' ? undefined : historyFilter,
+          historySearchQuery
+      )
       }
     }
   }
@@ -2403,7 +2414,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       <div class="flex items-center gap-3">
         <History class="h-5 w-5" />
         <h2 class="text-lg font-semibold">{$t('downloadHistory.title')}</h2>
-        <Badge variant="secondary">{downloadHistoryService.getStatistics().total}</Badge>
+        <Badge variant="secondary">{statistics.total}</Badge>
       </div>
       <Button
         size="sm"
@@ -2439,21 +2450,21 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               variant={historyFilter === 'all' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'all'}
             >
-              {$t('downloadHistory.filterAll')} ({downloadHistoryService.getStatistics().total})
+              {$t('downloadHistory.filterAll')} ({statistics.total})
             </Button>
             <Button
               size="sm"
               variant={historyFilter === 'completed' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'completed'}
             >
-              {$t('downloadHistory.filterCompleted')} ({downloadHistoryService.getStatistics().completed})
+              {$t('downloadHistory.filterCompleted')} ({statistics.completed})
             </Button>
             <Button
               size="sm"
               variant={historyFilter === 'failed' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'failed'}
             >
-              {$t('downloadHistory.filterFailed')} ({downloadHistoryService.getStatistics().failed})
+              {$t('downloadHistory.filterFailed')} ({statistics.failed})
             </Button>
           </div>
         </div>
@@ -2476,7 +2487,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             <DownloadIcon class="h-3 w-3 mr-1" />
             {$t('downloadHistory.importHistory')}
           </Button>
-          {#if downloadHistoryService.getStatistics().failed > 0}
+          {#if statistics.failed > 0}
             <Button
               size="sm"
               variant="outline"
