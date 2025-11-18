@@ -315,7 +315,7 @@
           const eventStr = event.payload as string;
           if (eventStr.startsWith('error:')) {
             const errorMsg = eventStr.substring(6); // Remove 'error:' prefix
-            console.error('DHT Error:', errorMsg);
+            errorLogger.dhtInitError(errorMsg);
 
             // Try to match error to a download in progress
             if (errorMsg.includes('No root CID found')) {
@@ -409,7 +409,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     showNotification(`Successfully saved "${data.fileName}"`, 'success');
     
   } catch (error) {
-    console.error('Failed to save WebRTC file:', error);
+    errorLogger.fileOperationError('Save WebRTC file', error instanceof Error ? error.message : String(error));
     const errorMessage = error instanceof Error ? error.message : String(error);
     showNotification(`Failed to save file: ${errorMessage}`, 'error');
 
@@ -434,7 +434,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           unlistenTorrentEvent()
         }
       } catch (error) {
-        console.error('Failed to setup event listeners:', error)
+        errorLogger.fileOperationError('Setup event listeners', error instanceof Error ? error.message : String(error));
         return () => {} // Return empty cleanup function
       }
     }
@@ -692,7 +692,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         timestamp: Date.now()
       }))
     } catch (error) {
-      console.error('Failed to save download state:', error)
+      errorLogger.fileOperationError('Save download state', error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -746,7 +746,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       // Clear saved state after successful restore
       localStorage.removeItem('pendingDownloads')
     } catch (error) {
-      console.error('Failed to load download state:', error)
+      errorLogger.fileOperationError('Load download state', error instanceof Error ? error.message : String(error));
       localStorage.removeItem('pendingDownloads')
     }
   }
@@ -1027,7 +1027,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   // CRITICAL: Bitswap requires CIDs to download
   if (!downloadingFile.cids || downloadingFile.cids.length === 0) {
-    console.error('  ❌ No CIDs found for Bitswap download')
+    errorLogger.fileOperationError('Bitswap download', 'No CIDs found for Bitswap download');
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
@@ -1043,7 +1043,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   // Verify seeders are available
   if (!downloadingFile.seederAddresses || downloadingFile.seederAddresses.length === 0) {
-    console.error('  ❌ No seeders found for download')
+    errorLogger.fileOperationError('Download', 'No seeders found for download');
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
@@ -1145,7 +1145,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success')
       })
       .catch((error) => {
-        console.error('  ❌ Bitswap download failed:', error)
+        errorLogger.fileOperationError('Bitswap download', error instanceof Error ? error.message : String(error));
         const errorMessage = error instanceof Error ? error.message : String(error)
 
         files.update(f => f.map(file =>
@@ -1161,7 +1161,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         )
       })
   } catch (error) {
-    console.error('Path validation error:', error);
+    errorLogger.fileOperationError('Path validation', error instanceof Error ? error.message : String(error));
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
@@ -1382,8 +1382,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             diagnosticLogger.debug('Download', 'Done with downloading file', { fileName: fileToDownload.name, outputPath });
             return;
           } catch (e) {
-            console.error('❌ DEBUG: Local copy fallback failed:', e);
-            console.error('❌ DEBUG: Error details:', e);
+            errorLogger.fileOperationError('Local copy fallback', e instanceof Error ? e.message : String(e));
             showNotification(`Download failed: ${e}`, 'error');
             activeSimulations.delete(fileId);
             files.update(f => f.map(file =>
@@ -1538,12 +1537,12 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                   downloadDuration
                 );
               } catch (error) {
-                console.error(`Failed to record success for peer ${peerId}:`, error);
+                errorLogger.networkError(`Failed to record success for peer ${peerId}: ${error instanceof Error ? error.message : String(error)}`);
               }
             }
 
           } catch (error) {
-            console.error('Multi-source download failed, falling back to P2P:', error);
+            errorLogger.fileOperationError('Multi-source download', error instanceof Error ? error.message : String(error));
 
             // Record transfer failures for each peer
             for (const peerId of seeders) {
@@ -1553,7 +1552,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                   error instanceof Error ? error.message : 'Multi-source download failed'
                 );
               } catch (recordError) {
-                console.error(`Failed to record failure for peer ${peerId}:`, recordError);
+                errorLogger.networkError(`Failed to record failure for peer ${peerId}: ${recordError instanceof Error ? recordError.message : String(recordError)}`);
               }
             }
 
@@ -1649,7 +1648,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                           'success'
                         );
                       } else {
-                        console.error('Payment failed:', paymentResult.error);
+                        errorLogger.fileOperationError('Payment', paymentResult.error || 'Unknown error');
                         showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
                         showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
                       }
@@ -1662,7 +1661,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                     try {
                       await PeerSelectionService.recordTransferSuccess(peerId, fileToDownload.size, duration);
                     } catch (error) {
-                      console.error(`Failed to record P2P success for peer ${peerId}:`, error);
+                      errorLogger.networkError(`Failed to record P2P success for peer ${peerId}: ${error instanceof Error ? error.message : String(error)}`);
                     }
                   }
                 } else if (transfer.status === 'failed' && fileToDownload) {
@@ -1673,7 +1672,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                     try {
                       await PeerSelectionService.recordTransferFailure(peerId, 'P2P download failed');
                     } catch (error) {
-                      console.error(`Failed to record P2P failure for peer ${peerId}:`, error);
+                      errorLogger.networkError(`Failed to record P2P failure for peer ${peerId}: ${error instanceof Error ? error.message : String(error)}`);
                     }
                   }
                 }
@@ -1689,7 +1688,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             activeSimulations.delete(fileId);
 
           } catch (error) {
-            console.error('P2P download failed:', error);
+            errorLogger.fileOperationError('P2P download', error instanceof Error ? error.message : String(error));
             const errorMessage = error instanceof Error ? error.message : String(error);
             showNotification(`P2P download failed: ${errorMessage}`, 'error');
             activeSimulations.delete(fileId);
@@ -1714,7 +1713,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       ));
 
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error('Download failed:', error, fileToDownload);
+      errorLogger.fileOperationError('Download', error instanceof Error ? error.message : String(error));
       showNotification(
         tr('download.notifications.downloadFailed', { values: { name: fileToDownload?.name || 'Unknown file' } }) + (errorMsg ? `: ${errorMsg}` : ''),
         'error'
@@ -1734,7 +1733,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('show_in_folder', { path: file.downloadPath });
       } catch (error) {
-        console.error('Failed to show file in folder:', error);
+        errorLogger.fileOperationError('Show file in folder', error instanceof Error ? error.message : String(error));
         showNotification('Failed to open file location', 'error');
       }
     }
