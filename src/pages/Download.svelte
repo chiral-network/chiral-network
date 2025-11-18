@@ -259,7 +259,7 @@
                 const seederWalletAddress = paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
                   ? completedFile.seederAddresses?.[0]!
                   : null;                if (!seederWalletAddress) {
-                  console.warn('Skipping Bitswap payment due to missing or invalid uploader wallet address', {
+                  diagnosticLogger.warn('Download', 'Skipping Bitswap payment due to missing or invalid uploader wallet address', {
                       file: completedFile.name,
                       seederAddresses: completedFile.seederAddresses
                   });
@@ -1345,7 +1345,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                 : null;
 
               if (!seederWalletAddress) {
-                console.warn('Skipping local copy payment due to missing or invalid uploader wallet address', {
+                diagnosticLogger.warn('Download', 'Skipping local copy payment due to missing or invalid uploader wallet address', {
                   file: fileToDownload.name,
                   seederAddresses: fileToDownload.seederAddresses
                 });
@@ -1428,7 +1428,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             : null;
 
           if (!seederWalletAddress) {
-            console.warn('Skipping encrypted download payment due to missing or invalid uploader wallet address', {
+            diagnosticLogger.warn('Download', 'Skipping encrypted download payment due to missing or invalid uploader wallet address', {
               file: fileToDownload.name,
               seederAddresses: fileToDownload.seederAddresses
             });
@@ -1498,7 +1498,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                 : null;
 
               if (!seederWalletAddress) {
-                console.warn('Skipping multi-source payment due to missing or invalid uploader wallet address', {
+                diagnosticLogger.warn('Download', 'Skipping multi-source payment due to missing or invalid uploader wallet address', {
                   file: fileToDownload.name,
                   seederAddresses: fileToDownload.seederAddresses
                 });
@@ -1622,7 +1622,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                       : null;
 
                     if (!seederWalletAddress) {
-                      console.warn('Skipping P2P payment due to missing or invalid uploader wallet address', {
+                      diagnosticLogger.warn('Download', 'Skipping P2P payment due to missing or invalid uploader wallet address', {
                         file: fileToDownload.name,
                         seederAddresses: fileToDownload.seederAddresses
                       });
