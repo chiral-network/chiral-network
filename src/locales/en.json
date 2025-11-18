@@ -1497,10 +1497,12 @@
     "remove": "Remove",
     "clearHistory": "Clear History",
     "clearFailed": "Clear Failed",
+    "clearCanceled": "Clear Canceled",
     "exportHistory": "Export History",
     "importHistory": "Import History",
     "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
     "confirmClearFailed": "Clear all failed downloads from history?",
+    "confirmClearCanceled": "Clear all canceled downloads from history?",
     "stats": {
       "total": "Total Downloads",
       "completed": "Completed",
@@ -1512,6 +1514,7 @@
     "messages": {
       "historyCleared": "Download history cleared",
       "failedCleared": "Failed downloads cleared",
+      "canceledCleared": "Canceled downloads cleared",
       "entryRemoved": "Entry removed from history",
       "exportSuccess": "History exported successfully",
       "importSuccess": "Imported {count} history entries",
