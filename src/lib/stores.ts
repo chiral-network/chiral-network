@@ -454,6 +454,7 @@ export interface AppSettings {
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
   autoStartDHT: boolean; // Whether to automatically start DHT on app launch
+  selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | null; // Protocol selected for file uploads
 }
 
 // Export the settings store
@@ -505,6 +506,7 @@ export const settings = writable<AppSettings>({
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
   autoStartDHT: false, // Don't auto-start DHT by default
+  selectedProtocol: "Bitswap" as "WebRTC" | "Bitswap" | "BitTorrent", // Default to Bitswap
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
