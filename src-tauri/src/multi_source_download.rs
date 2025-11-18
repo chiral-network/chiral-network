@@ -1,5 +1,6 @@
+use crate::bittorrent_handler::{BitTorrentHandler};
 use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
-use crate::download_source::{DownloadSource, Ed2kSourceInfo as DownloadEd2kSourceInfo, FtpSourceInfo as DownloadFtpSourceInfo};
+use crate::download_source::{BitTorrentSourceInfo, DownloadSource, Ed2kSourceInfo as DownloadEd2kSourceInfo, FtpSourceInfo as DownloadFtpSourceInfo};
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
 use md4::Md4;
 use crate::ftp_downloader::{FtpDownloader, FtpCredentials};
@@ -174,6 +175,7 @@ pub struct MultiSourceDownloadService {
     dht_service: Arc<DhtService>,
     webrtc_service: Arc<WebRTCService>,
     ftp_downloader: Arc<FtpDownloader>,
+    bittorrent_handler: Arc<BitTorrentHandler>,
     proxy_latency_service: Option<Arc<Mutex<crate::proxy_latency::ProxyLatencyService>>>,
     active_downloads: Arc<RwLock<HashMap<String, ActiveDownload>>>,
     event_tx: mpsc::UnboundedSender<MultiSourceEvent>,
@@ -245,7 +247,11 @@ pub enum MultiSourceEvent {
 }
 
 impl MultiSourceDownloadService {
-    pub fn new(dht_service: Arc<DhtService>, webrtc_service: Arc<WebRTCService>) -> Self {
+    pub fn new(
+        dht_service: Arc<DhtService>,
+        webrtc_service: Arc<WebRTCService>,
+        bittorrent_handler: Arc<BitTorrentHandler>,
+    ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -253,6 +259,7 @@ impl MultiSourceDownloadService {
             dht_service,
             webrtc_service,
             ftp_downloader: Arc::new(FtpDownloader::new()),
+            bittorrent_handler,
             proxy_latency_service: Some(Arc::new(Mutex::new(
                 crate::proxy_latency::ProxyLatencyService::new(),
             ))),
@@ -416,6 +423,21 @@ impl MultiSourceDownloadService {
             }
         }
 
+        // 4. Discover BitTorrent source from metadata
+        if let Some(info_hash) = &metadata.info_hash {
+            info!("Found BitTorrent source for file with info_hash: {}", info_hash);
+            let mut magnet_uri = format!("magnet:?xt=urn:btih:{}", info_hash);
+            if let Some(trackers) = &metadata.trackers {
+                for tracker in trackers {
+                    magnet_uri.push_str("&tr=");
+                    magnet_uri.push_str(tracker);
+                }
+            }
+            available_sources.push(DownloadSource::BitTorrent(BitTorrentSourceInfo {
+                magnet_uri,
+            }));
+        }
+
         if available_sources.is_empty() {
             return Err("No sources available for download".to_string());
         }
@@ -567,6 +589,9 @@ impl MultiSourceDownloadService {
                 }
                 DownloadSource::Ed2k(ed2k_info) => {
                     self.start_ed2k_connection(file_hash, ed2k_info.clone(), chunk_ids).await?;
+                }
+                DownloadSource::BitTorrent(bt_info) => {
+                    self.start_bittorrent_download(file_hash, bt_info.clone(), chunk_ids).await?;
                 }
             }
         }
@@ -1236,6 +1261,23 @@ impl MultiSourceDownloadService {
         }
 
         Ok(())
+    }
+
+    /// Start BitTorrent download
+    async fn start_bittorrent_download(
+        &self,
+        file_hash: &str,
+        bt_info: BitTorrentSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) -> Result<(), String> {
+        info!(
+            "Starting BitTorrent download for {} chunks using magnet: {}",
+            chunk_ids.len(),
+            bt_info.magnet_uri
+        );
+        // Placeholder implementation
+        self.on_source_failed(file_hash, &bt_info.magnet_uri, "BitTorrent download not implemented".to_string()).await;
+        Err("BitTorrent download not implemented".to_string())
     }
 
     /// Parse remote path from FTP URL (placeholder implementation) 
@@ -2027,6 +2069,9 @@ impl MultiSourceDownloadService {
                         if let Some(mut ed2k_client) = connections.remove(source_id) {
                             let _ = ed2k_client.disconnect().await;
                         }
+                    }
+                    DownloadSource::BitTorrent(_) => {
+                        // TODO: Cancel BitTorrent download
                     }
                 }
             }

@@ -576,6 +576,19 @@
       "title": "Ainda não há transações",
       "desc": "As transações aparecerão aqui assim que você enviar ou receber Chiral"
     },
+    "receipt": {
+      "title": "लेनदेन रसीद",
+      "from": "से",
+      "to": "को",
+      "hash": "लेन-देन हैश",
+      "blockNumber": "ब्लॉक संख्या",
+      "gasInfo": "गैस की जानकारी",
+      "gasUsed": "गैस उपयोग की गई",
+      "gasPrice": "गैस की कीमत",
+      "fee": "लेनदेन शुल्क",
+      "timestamp": "समय स्टैम्प",
+      "close": "रसीद बंद करें"
+    },
     "item": {
       "from": "De",
       "to": "Para"

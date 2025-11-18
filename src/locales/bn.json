@@ -580,6 +580,19 @@
       "from": "From",
       "to": "To"
     },
+    "receipt": {
+      "title": "লেনদেনের রসিদ",
+      "from": "সে",
+      "to": "কে",
+      "hash": "লেনদেন হ্যাশ",
+      "blockNumber": "ব্লক নম্বর",
+      "gasInfo": "গ্যাস তথ্য",
+      "gasUsed": "গ্যাস ব্যবহৃত",
+      "gasPrice": "গ্যাসের দাম",
+      "fee": "লেনদেন ফি",
+      "timestamp": "সময়স্ট্যাম্প",
+      "close": "রসিদ বন্ধ করুন"
+    },
     "searchPlaceholder": "Search by address, description, or ID..."
   },
   "keystore": {
