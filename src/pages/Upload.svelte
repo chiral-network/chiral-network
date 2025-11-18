@@ -32,12 +32,12 @@
     type SeedRecord,
   } from "$lib/services/seedPersistence";
   import { t } from "svelte-i18n";
-  import { get } from "svelte/store";
+  import { get, derived } from "svelte/store";
   import { onMount, onDestroy } from "svelte";
   import { showToast } from "$lib/toast";
   import { getStorageStatus } from "$lib/uploadHelpers";
   import { fileService } from "$lib/services/fileService";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { open, confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from "$lib/dht";
   import Label from "$lib/components/ui/label.svelte";
@@ -849,6 +849,55 @@
 
   // BitTorrent seeding functions - REMOVED: Now integrated into main upload flow
 
+
+  const seedingDownloads = derived(files, ($files) =>
+    $files.filter(
+      (file) => file.isDownload && file.isSeedingDownload,
+    ),
+  );
+
+  async function stopSeedingDownload(fileHash: string) {
+    const confirmed = await showStopSeedingConfirm();
+    if (!confirmed) return;
+
+    try {
+      await invoke('stop_publishing_file', { fileHash });
+      files.update((existing) =>
+        existing.map((file) =>
+          file.hash === fileHash
+            ? {
+                ...file,
+                status: "completed",
+                isDownload: true,
+                isSeedingDownload: false,
+              }
+            : file,
+        ),
+      );
+      showToast('Stopped seeding file', 'success');
+    } catch (error) {
+      console.error('Failed to stop seeding:', error);
+      showToast('Failed to stop seeding', 'error');
+    }
+  }
+
+  async function showStopSeedingConfirm(): Promise<boolean> {
+    const message =
+      'Stop seeding this downloaded file?\n\n' +
+      'Other users will no longer be able to download it from you.';
+
+    if (isTauri && typeof tauriConfirm === "function") {
+      try {
+        return await tauriConfirm(message, { title: "Stop Seeding?" });
+      } catch (error) {
+        console.warn("Tauri confirm dialog unavailable, falling back:", error);
+      }
+    }
+
+    return window.confirm(message);
+  }
+
+
 </script>
 
 <div class="space-y-6">
@@ -1442,6 +1491,80 @@
                 </div>
               {/if}
             {/if}
+          </div>
+        </div>
+      </Card>
     {/if}
   </Card>
+
+  <!-- Add this after your main uploads section -->
+<div class="mt-8 pt-8 border-t border-border">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h2 class="text-xl font-semibold flex items-center gap-2">
+        <Download class="w-5 h-5" />
+        {tr("upload.seedingDownloads.title", { default: "Seeding Downloads" })}
+      </h2>
+      <p class="text-sm text-muted-foreground mt-1">
+        {tr("upload.seedingDownloads.subtitle", { 
+          default: "Files you've downloaded and are sharing with the network" 
+        })}
+      </p>
+    </div>
+  </div>
+
+  {#if $seedingDownloads.length === 0}
+    <Card className="p-8 text-center">
+      <div class="flex flex-col items-center gap-3 text-muted-foreground">
+        <Download class="w-12 h-12 opacity-50" />
+        <p>{tr("upload.seedingDownloads.empty", { default: "No downloaded files being seeded" })}</p>
+        <p class="text-sm">
+          {tr("upload.seedingDownloads.emptyHint", { 
+            default: "When you download files, you'll automatically seed them to help the network" 
+          })}
+        </p>
+      </div>
+    </Card>
+  {:else}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {#each $seedingDownloads as file (file.id)}
+        <Card className="p-4 bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900">
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+              <div class={`p-2 rounded-lg bg-background ${getFileColor(file.name)}`}>
+                <svelte:component this={getFileIcon(file.name)} class="w-5 h-5" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <h3 class="font-medium truncate text-sm" title={file.name}>
+                  {file.name}
+                </h3>
+                <p class="text-xs text-muted-foreground">
+                  {formatFileSize(file.size)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 mb-3">
+            <Badge variant="outline" className="bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700">
+              <Upload class="w-3 h-3 mr-1" />
+              Seeding
+            </Badge>
+            <Badge variant="outline">
+              {file.seeders} {file.seeders === 1 ? 'seeder' : 'seeders'}
+            </Badge>
+          </div>
+
+          <button
+            on:click={() => stopSeedingDownload(file.hash)}
+            class="w-full px-3 py-1.5 text-sm bg-destructive/10 hover:bg-destructive/20 text-destructive rounded-md transition-colors"
+          >
+            Stop Seeding
+          </button>
+        </Card>
+      {/each}
+    </div>
+  {/if}
+</div>
+
 </div>

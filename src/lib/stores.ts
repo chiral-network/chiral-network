@@ -39,6 +39,8 @@ export interface FileItem {
   totalChunks?: number;
   downloadStartTime?: number;
   price?: number; // Price in Chiral for this file
+  isDownload?: boolean;
+  isSeedingDownload?: boolean;
 }
 
 export interface ProxyNode {
