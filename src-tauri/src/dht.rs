@@ -243,6 +243,8 @@ pub struct FileMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
@@ -6291,6 +6293,7 @@ impl DhtService {
             is_encrypted,
             encryption_method,
             key_fingerprint,
+            version: None,
             encrypted_key_bundle: None,
             parent_hash: None,
             cids: None,

@@ -3766,6 +3766,7 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            version: None,
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             encrypted_key_bundle: None,
             parent_hash: None,
@@ -5702,9 +5703,7 @@ fn main() {
             start_download_restart,
             pause_download_restart,
             resume_download_restart,
-            get_download_status_restart
-            clear_seed_list,
-            get_full_network_stats
+            get_download_status_restart,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
