@@ -43,7 +43,7 @@
       // Listen for BitTorrent events
       const unlistenTorrentEvent = await listen('torrent_event', (event) => {
         const payload = event.payload as any;
-        console.log('Received torrent event:', payload);
+        diagnosticLogger.debug('Download', 'Received torrent event', { eventType: Object.keys(payload)[0] });
 
         if (payload.Progress) {
           const { info_hash, downloaded, total, speed, peers, eta_seconds } = payload.Progress;
@@ -243,12 +243,12 @@
 
             if (completedFile && !paidFiles.has(completedFile.hash)) {
                 // Process payment for Bitswap download (only once per file)
-                console.log('💰 Bitswap download completed, processing payment...');
+                diagnosticLogger.info('Download', 'Bitswap download completed, processing payment', { fileName: completedFile.name });
                 const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
                 
                 // Skip payment check for free files (price = 0)
                 if (paymentAmount === 0) {
-                    console.log('Free file, skipping payment');
+                    diagnosticLogger.info('Download', 'Free file, skipping payment', { fileName: completedFile.name });
                     paidFiles.add(completedFile.hash);
                     showNotification(`Download complete! "${completedFile.name}" (Free)`, 'success');
                     return;
@@ -276,17 +276,21 @@
 
                         if (paymentResult.success) {
                             paidFiles.add(completedFile.hash); // Mark as paid
-                            console.log(`✅ Bitswap payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                            diagnosticLogger.info('Download', 'Bitswap payment processed', { 
+                              amount: paymentAmount.toFixed(6), 
+                              seederWalletAddress, 
+                              seederPeerId 
+                            });
                             showNotification(
                                 `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
                                 'success'
                             );
                         } else {
-                            console.error('Bitswap payment failed:', paymentResult.error);
+                            errorLogger.fileOperationError('Bitswap payment', paymentResult.error || 'Unknown error');
                             showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
                         }
                     } catch (error) {
-                        console.error('Error processing Bitswap payment:', error);
+                        errorLogger.fileOperationError('Bitswap payment processing', error instanceof Error ? error.message : String(error));
                         showNotification(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'warning');
                     }
                 }
@@ -386,14 +390,14 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     const { join } = await import('@tauri-apps/api/path');
     const outputPath = await join(storagePath, data.fileName);
     
-    console.log(`✅ Saving WebRTC file to: ${outputPath}`);
+    fileLogger.downloadStarted(data.fileName);
 
     // Write the file to disk
     const { writeFile } = await import('@tauri-apps/plugin-fs');
     const fileData = new Uint8Array(data.data);
     await writeFile(outputPath, fileData);
 
-    console.log(`✅ File saved successfully: ${outputPath}`);
+    fileLogger.downloadCompleted(data.fileName);
 
     // Update status to completed
     files.update(f => f.map(file => 
@@ -1265,7 +1269,10 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
         // PAYMENT PROCESSING: Calculate and deduct payment before download
         const paymentAmount = await paymentService.calculateDownloadCost(fileToDownload.size);
-        console.log(`💰 Payment required: ${paymentAmount.toFixed(6)} Chiral for ${fileToDownload.name}`);
+        diagnosticLogger.info('Download', 'Payment required', { 
+          fileName: fileToDownload.name, 
+          amount: paymentAmount.toFixed(6) 
+        });
 
         // Check if user has sufficient balance
         if (paymentAmount > 0 && !paymentService.hasSufficientBalance(paymentAmount)) {
@@ -1354,13 +1361,17 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
                 if (paymentResult.success) {
                   paidFiles.add(fileToDownload.hash); // Mark as paid
-                  console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                  diagnosticLogger.info('Download', 'Payment processed', { 
+                    amount: paymentAmount.toFixed(6), 
+                    seederWalletAddress, 
+                    seederPeerId 
+                  });
                   showNotification(
                     `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
                     'success'
                   );
                 } else {
-                  console.error('Payment failed:', paymentResult.error);
+                  errorLogger.fileOperationError('Payment', paymentResult.error || 'Unknown error');
                   showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
                 }
               }
@@ -1434,9 +1445,13 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
             if (paymentResult.success) {
               paidFiles.add(fileToDownload.hash); // Mark as paid
-              console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+              diagnosticLogger.info('Download', 'Payment processed', { 
+                amount: paymentAmount.toFixed(6), 
+                seederWalletAddress, 
+                seederPeerId 
+              });
             } else {
-              console.error('Payment failed:', paymentResult.error);
+              errorLogger.fileOperationError('Payment', paymentResult.error || 'Unknown error');
               showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
             }
           }
@@ -1500,10 +1515,14 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
                 if (paymentResult.success) {
                   paidFiles.add(fileToDownload.hash); // Mark as paid
-                  console.log(`✅ Multi-source payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                  diagnosticLogger.info('Download', 'Multi-source payment processed', { 
+                    amount: paymentAmount.toFixed(6), 
+                    seederWalletAddress, 
+                    seederPeerId 
+                  });
                   showNotification(`Multi-source download completed! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
                 } else {
-                  console.error('Multi-source payment failed:', paymentResult.error);
+                  errorLogger.fileOperationError('Multi-source payment', paymentResult.error || 'Unknown error');
                   showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
                 }
               }
@@ -1620,7 +1639,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
                       if (paymentResult.success) {
                         paidFiles.add(fileToDownload.hash); // Mark as paid
-                        console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+                        diagnosticLogger.info('Download', 'Payment processed', { 
+                          amount: paymentAmount.toFixed(6), 
+                          seederWalletAddress, 
+                          seederPeerId 
+                        });
                         showNotification(
                           `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
                           'success'
