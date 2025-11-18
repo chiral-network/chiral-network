@@ -60,11 +60,6 @@
     return $t('reputation.card.justNow');
   };
 
-  // Calculate success rate and star rating
-  const successRate = peer.totalInteractions > 0 
-    ? (peer.successfulInteractions / peer.totalInteractions) * 100 
-    : 0;
-
   const latencyLabel = (val: number) => (val && val > 0 ? `${val}ms` : 'N/A');
   const bandwidthLabel = (mbps: number) => (mbps && mbps > 0 ? `${mbps} Mbps` : 'N/A');
   const uptimeLabel = (pct: number) => {

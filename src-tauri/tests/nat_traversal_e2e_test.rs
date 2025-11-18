@@ -32,7 +32,6 @@ fn create_test_file(hash: &str, name: &str, size: u64) -> FileMetadata {
         is_encrypted: false,
         encryption_method: None,
         key_fingerprint: None,
-        version: Some(1),
         parent_hash: None,
         cids: None,
         encrypted_key_bundle: None,
@@ -56,12 +55,13 @@ async fn test_autonat_detection() {
         vec![],                       // No custom AutoNAT servers
         None,                         // No proxy
         None,                         // No file transfer service
+        None,                         // No chunk manager
         Some(256),                    // chunk_size_kb
         Some(1024),                   // cache_size_mb
         false,                        // enable_autorelay
         Vec::new(),                   // preferred_relays
         false,                        // enable_relay_server
-        None,
+        None,                         // blockstore_db_path
     )
     .await;
 
@@ -103,11 +103,13 @@ async fn test_dht_peer_discovery() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service1");
@@ -141,11 +143,13 @@ async fn test_dht_peer_discovery() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service2");
@@ -191,11 +195,13 @@ async fn test_file_publish_and_search() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service1");
@@ -221,11 +227,13 @@ async fn test_file_publish_and_search() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service2");
@@ -235,7 +243,7 @@ async fn test_file_publish_and_search() {
 
     // Publish a file from service1
     let test_file = create_test_file("QmTest123", "test_file.dat", 1024);
-    let publish_result = service1.publish_file(test_file.clone()).await;
+    let publish_result = service1.publish_file(test_file.clone(), None).await;
     assert!(publish_result.is_ok(), "Failed to publish file");
     println!("✅ File published: {}", test_file.merkle_root);
 
@@ -277,11 +285,13 @@ async fn test_dcutr_enabled() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service");
@@ -328,11 +338,13 @@ async fn test_multiple_autonat_servers() {
         autonat_servers.clone(),
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service");
@@ -362,11 +374,13 @@ async fn test_reachability_history_tracking() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service");
@@ -405,11 +419,13 @@ async fn test_connection_metrics_tracking() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service1");
@@ -435,11 +451,13 @@ async fn test_connection_metrics_tracking() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create service2");
@@ -485,11 +503,13 @@ async fn test_nat_resilience_private_to_public() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create public peer");
@@ -524,11 +544,13 @@ async fn test_nat_resilience_private_to_public() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await
     .expect("Failed to create private peer");
@@ -585,11 +607,13 @@ async fn test_nat_resilience_connection_fallback() {
         vec![],
         None,
         None,
+        None,
         Some(256),
         Some(1024),
         false,      // enable_autorelay
         Vec::new(), // preferred_relays
         false,      // enable_relay_server
+        None,       // blockstore_db_path
     )
     .await;
 

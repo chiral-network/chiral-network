@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { TrustLevel, type PeerReputation, type ReputationAnalytics } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
@@ -48,7 +48,20 @@
 
   // State
   let peers: PeerReputation[] = [];
-  let analytics: ReputationAnalytics;
+  let analytics: ReputationAnalytics = {
+    totalPeers: 0,
+    trustedPeers: 0,
+    averageScore: 0,
+    topPerformers: [],
+    recentEvents: [],
+    trustLevelDistribution: {
+      [TrustLevel.Trusted]: 0,
+      [TrustLevel.High]: 0,
+      [TrustLevel.Medium]: 0,
+      [TrustLevel.Low]: 0,
+      [TrustLevel.Unknown]: 0
+    }
+  };
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
   let searchQuery = '';
   let debouncedSearchQuery = ''; // Debounced version for filtering
@@ -88,11 +101,9 @@
   $: updateDebouncedSearch(searchQuery);
 
   // Persist UI toggles when they change
+  // Persist UI toggles when they change (consolidated)
   $: {
     persistToggle(STORAGE_KEY_SHOW_ANALYTICS, showAnalytics);
-  }
-  
-  $: {
     persistToggle(STORAGE_KEY_SHOW_RELAY_LEADERBOARD, showRelayLeaderboard);
   }
 
@@ -189,10 +200,17 @@
       const trustedPeers = mappedPeers.filter(p => p.trustLevel === TrustLevel.Trusted).length;
       const averageScore = totalPeers > 0 ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers : 0;
       const topPerformers = [...mappedPeers].sort((a, b) => b.score - a.score).slice(0, 10);
-      const trustLevelDistribution = Object.values(TrustLevel).reduce((acc, level) => {
+      // Build trust level distribution deterministically from the known options
+      const trustLevelDistribution = trustLevelOptions.reduce((acc, level) => {
         acc[level] = mappedPeers.filter(p => p.trustLevel === level).length;
         return acc;
-      }, {} as Record<TrustLevel, number>);
+      }, {
+        [TrustLevel.Trusted]: 0,
+        [TrustLevel.High]: 0,
+        [TrustLevel.Medium]: 0,
+        [TrustLevel.Low]: 0,
+        [TrustLevel.Unknown]: 0
+      } as Record<TrustLevel, number>);
 
       analytics = {
         totalPeers,

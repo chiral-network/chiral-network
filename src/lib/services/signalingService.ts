@@ -14,6 +14,7 @@ export interface SignalingOptions {
   url?: string; // WebSocket URL
   preferDht?: boolean;
   wsHeartbeatInterval?: number; // ms
+  wsConnectTimeoutMs?: number; // ms for WS connect timeout
   peerTtlMs?: number; // ms to consider a peer stale
   persistPeers?: boolean; // persist peers to localStorage
 }
@@ -52,9 +53,11 @@ export class SignalingService {
 
   // heartbeat + garbage collection
   private wsHeartbeatIntervalMs: number;
+  private wsConnectTimeoutMs: number;
   private wsHeartbeatTimer: any = null;
   private peerTtlMs: number;
   private peerGcTimer: any = null;
+  private teardownFns: Array<() => void | Promise<void>> = [];
   private persistPeersFlag = true;
 
   constructor(opts: SignalingOptions = {}) {
@@ -62,6 +65,12 @@ export class SignalingService {
     this.wsUrl = opts.url ?? "ws://localhost:9000";
     this.preferDht = opts.preferDht ?? true;
     this.wsHeartbeatIntervalMs = opts.wsHeartbeatInterval ?? 20000; // 20s
+    // connection timeout for WebSocket connect attempts
+    this.wsConnectTimeoutMs =
+      opts.wsConnectTimeoutMs ??
+      (typeof process !== "undefined" && (process as any).env && (process as any).env.SIGNALLING_CONNECT_TIMEOUT_MS
+        ? parseInt((process as any).env.SIGNALLING_CONNECT_TIMEOUT_MS)
+        : 5000);
     this.peerTtlMs = opts.peerTtlMs ?? 1000 * 60 * 60 * 24; // 24h
     this.persistPeersFlag = opts.persistPeers ?? true;
 
@@ -77,6 +86,7 @@ export class SignalingService {
      ---------------------- */
   async connect(): Promise<void> {
     this.state.set("connecting");
+    this.startPeerGc();
     try {
       await this.detectDht();
       // prefer DHT when available
@@ -196,6 +206,7 @@ export class SignalingService {
   }
 
   private startPeerGc() {
+    if (this.peerGcTimer) return;
     // run once per hour by default
     const interval = Math.max(1000 * 60 * 30, Math.floor(this.peerTtlMs / 24));
     this.peerGcTimer = setInterval(() => this.gcPeers(), interval);
@@ -216,6 +227,26 @@ export class SignalingService {
     }
   }
 
+  private registerTeardown(fn: () => void | Promise<void>) {
+    this.teardownFns.push(fn);
+  }
+
+  private async cleanupListeners() {
+    if (!this.teardownFns.length) return;
+    const pending = this.teardownFns.splice(0);
+    for (const fn of pending) {
+      if (!fn) continue;
+      try {
+        const result = fn();
+        if (result && typeof (result as any).then === "function") {
+          await result;
+        }
+      } catch (e) {
+        console.warn("[SignalingService] cleanup listener failed", e);
+      }
+    }
+  }
+
   /* ----------------------
      DHT integration (shallow but usable)
      ---------------------- */
@@ -229,20 +260,39 @@ export class SignalingService {
     try {
       if (this.dhtService) {
         if (typeof this.dhtService.on === "function") {
+          const peersHandler = (list: any[]) => {
+            const ids = (list || []).map((p: any) =>
+              typeof p === "string" ? p : p.peerId || p.id || p.clientId
+            );
+            this.mergePeers(ids);
+          };
           try {
-            this.dhtService.on("peers", (list: any[]) => {
-              const ids = (list || []).map((p: any) =>
-                typeof p === "string" ? p : p.peerId || p.id || p.clientId
-              );
-              this.mergePeers(ids);
-            });
+            this.dhtService.on("peers", peersHandler);
+            const off =
+              typeof this.dhtService.off === "function"
+                ? () => this.dhtService.off("peers", peersHandler)
+                : typeof this.dhtService.removeListener === "function"
+                ? () => this.dhtService.removeListener("peers", peersHandler)
+                : null;
+            if (off) this.registerTeardown(off);
           } catch (_) {
             /* ignore */
           }
         }
 
         if (typeof this.dhtService.onSignal === "function") {
-          this.dhtService.onSignal((msg: any) => this.handleIncoming(msg));
+          const unbind = this.dhtService.onSignal((msg: any) =>
+            this.handleIncoming(msg)
+          );
+          if (typeof unbind === "function") {
+            this.registerTeardown(() => {
+              try {
+                unbind();
+              } catch (_) {
+                /* ignore */
+              }
+            });
+          }
         }
 
         // some adapters expose an event emitter name 'signal'
@@ -250,10 +300,20 @@ export class SignalingService {
           typeof this.dhtService.on === "function" &&
           typeof (this.dhtService as any).on === "function"
         ) {
+          const signalHandler = (msg: any) => this.handleIncoming(msg);
           try {
-            (this.dhtService as any).on("signal", (msg: any) =>
-              this.handleIncoming(msg)
-            );
+            (this.dhtService as any).on("signal", signalHandler);
+            const off =
+              typeof (this.dhtService as any).off === "function"
+                ? () => (this.dhtService as any).off("signal", signalHandler)
+                : typeof (this.dhtService as any).removeListener === "function"
+                ? () =>
+                    (this.dhtService as any).removeListener(
+                      "signal",
+                      signalHandler
+                    )
+                : null;
+            if (off) this.registerTeardown(off);
           } catch (_) {
             /* ignore */
           }
@@ -264,13 +324,27 @@ export class SignalingService {
       try {
         const evt = await import("@tauri-apps/api/event").catch(() => null);
         if (evt && typeof (evt as any).listen === "function") {
-          (evt as any)
-            .listen("dht_peer_update", (e: any) => {
-              const payload = e.payload;
-              if (payload && Array.isArray(payload.peers))
-                this.mergePeers(payload.peers);
-            })
-            .catch(() => {});
+          try {
+            const unlisten = await (evt as any).listen(
+              "dht_peer_update",
+              (e: any) => {
+                const payload = e.payload;
+                if (payload && Array.isArray(payload.peers))
+                  this.mergePeers(payload.peers);
+              }
+            );
+            if (typeof unlisten === "function") {
+              this.registerTeardown(() => {
+                try {
+                  unlisten();
+                } catch (_) {
+                  /* ignore */
+                }
+              });
+            }
+          } catch (_) {
+            /* ignore */
+          }
         }
       } catch (_) {
         /* ignore */
@@ -327,7 +401,7 @@ export class SignalingService {
           this.state.set("disconnected");
           this.connected.set(false);
           reject(new Error("WebSocket connection timeout"));
-        }, 2000); // 2 second timeout
+        }, this.wsConnectTimeoutMs);
 
         this.ws.onopen = () => {
           clearTimeout(connectionTimeout);
@@ -530,6 +604,7 @@ export class SignalingService {
       if (this.dhtAvailable) await this.connectDht();
     } else if (kind === "ws") {
       this.preferDht = false;
+      await this.cleanupListeners();
       await this.connectWebSocket();
     } else {
       this.disconnect();
@@ -550,6 +625,8 @@ export class SignalingService {
     try {
       if (this.peerGcTimer) clearInterval(this.peerGcTimer);
     } catch (_) {}
+    this.peerGcTimer = null;
+    void this.cleanupListeners();
   }
 
   getClientId(): string {

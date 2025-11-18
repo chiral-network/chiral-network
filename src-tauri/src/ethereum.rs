@@ -1,5 +1,6 @@
 use chrono;
 use ethers::prelude::*;
+use once_cell::sync::Lazy;
 use rand::rngs::OsRng;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,51 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+
+// ============================================================================
+// Configuration & Shared Resources
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct NetworkConfig {
+    pub rpc_endpoint: String,
+    pub chain_id: u64,
+    pub network_id: u64,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            rpc_endpoint: "http://127.0.0.1:8545".to_string(),
+            chain_id: 98765,
+            network_id: 98765,
+        }
+    }
+}
+
+// Global configuration - can be updated via environment variables
+pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
+    NetworkConfig {
+        rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
+            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+        chain_id: std::env::var("CHIRAL_CHAIN_ID")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(98765),
+        network_id: std::env::var("CHIRAL_NETWORK_ID")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(98765),
+    }
+});
+
+// Shared HTTP client for all RPC calls
+pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("Failed to create HTTP client")
+});
 
 //Structs
 #[derive(Debug, Serialize, Deserialize)]
@@ -222,6 +268,8 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
+            .arg("snap")
+            .arg("--gcmode")
             .arg("full")
             .arg("--maxpeers")
             .arg("50")
@@ -365,8 +413,6 @@ pub fn get_account_from_private_key(private_key_hex: &str) -> Result<EthAccount,
 }
 
 pub async fn get_balance(address: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_getBalance",
@@ -374,8 +420,8 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -405,8 +451,6 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
 }
 
 pub async fn get_peer_count() -> Result<u32, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "net_peerCount",
@@ -414,8 +458,8 @@ pub async fn get_peer_count() -> Result<u32, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -442,15 +486,13 @@ pub async fn get_peer_count() -> Result<u32, String> {
 }
 
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
-    let client = reqwest::Client::new();
-
     // First, ensure geth is ready to accept RPC calls
     let mut attempts = 0;
     let max_attempts = 10; // 10 seconds max wait
     loop {
         // Check if geth is responding to RPC calls
-        if let Ok(response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "net_version",
@@ -488,8 +530,8 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&set_etherbase)
         .send()
         .await
@@ -515,8 +557,8 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         "id": 2
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&start_mining)
         .send()
         .await
@@ -535,8 +577,6 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
 }
 
 pub async fn stop_mining() -> Result<(), String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "miner_stop",
@@ -544,8 +584,8 @@ pub async fn stop_mining() -> Result<(), String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -564,8 +604,6 @@ pub async fn stop_mining() -> Result<(), String> {
 }
 
 pub async fn get_mining_status() -> Result<bool, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_mining",
@@ -573,8 +611,8 @@ pub async fn get_mining_status() -> Result<bool, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -596,9 +634,97 @@ pub async fn get_mining_status() -> Result<bool, String> {
     Ok(is_mining)
 }
 
-pub async fn get_hashrate() -> Result<String, String> {
-    let client = reqwest::Client::new();
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncStatus {
+    pub syncing: bool,
+    pub current_block: u64,
+    pub highest_block: u64,
+    pub starting_block: u64,
+    pub progress_percent: f64,
+    pub blocks_remaining: u64,
+    pub estimated_seconds_remaining: Option<u64>,
+}
 
+pub async fn get_sync_status() -> Result<SyncStatus, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_syncing",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get sync status: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    // eth_syncing returns false if not syncing, or an object if syncing
+    let result = &json_response["result"];
+    
+    if result.is_boolean() && result.as_bool() == Some(false) {
+        // Not syncing - fully synced
+        let block_number = get_block_number().await?;
+        return Ok(SyncStatus {
+            syncing: false,
+            current_block: block_number,
+            highest_block: block_number,
+            starting_block: block_number,
+            progress_percent: 100.0,
+            blocks_remaining: 0,
+            estimated_seconds_remaining: Some(0),
+        });
+    }
+
+    // Parse sync progress
+    let current_hex = result["currentBlock"].as_str().ok_or("Missing currentBlock")?;
+    let highest_hex = result["highestBlock"].as_str().ok_or("Missing highestBlock")?;
+    let starting_hex = result["startingBlock"].as_str().ok_or("Missing startingBlock")?;
+
+    let current_block = u64::from_str_radix(current_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid currentBlock: {}", e))?;
+    let highest_block = u64::from_str_radix(highest_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid highestBlock: {}", e))?;
+    let starting_block = u64::from_str_radix(starting_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid startingBlock: {}", e))?;
+
+    let blocks_remaining = highest_block.saturating_sub(current_block);
+    let total_blocks = highest_block.saturating_sub(starting_block);
+    let progress_percent = if total_blocks > 0 {
+        ((current_block - starting_block) as f64 / total_blocks as f64) * 100.0
+    } else {
+        100.0
+    };
+
+    // Estimate time remaining based on ~850 blocks per 8 seconds (observed rate)
+    let estimated_seconds_remaining = if blocks_remaining > 0 {
+        Some((blocks_remaining as f64 / 850.0 * 8.0) as u64)
+    } else {
+        Some(0)
+    };
+
+    Ok(SyncStatus {
+        syncing: true,
+        current_block,
+        highest_block,
+        starting_block,
+        progress_percent,
+        blocks_remaining,
+        estimated_seconds_remaining,
+    })
+}
+
+pub async fn get_hashrate() -> Result<String, String> {
     // First try eth_hashrate
     let payload = json!({
         "jsonrpc": "2.0",
@@ -607,8 +733,8 @@ pub async fn get_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -628,8 +754,8 @@ pub async fn get_hashrate() -> Result<String, String> {
             "id": 1
         });
 
-        if let Ok(miner_response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(miner_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&miner_payload)
             .send()
             .await
@@ -679,8 +805,8 @@ pub async fn get_hashrate() -> Result<String, String> {
             "id": 1
         });
 
-        if let Ok(gethashrate_response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(gethashrate_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&gethashrate_payload)
             .send()
             .await
@@ -758,8 +884,6 @@ pub async fn get_hashrate() -> Result<String, String> {
 }
 
 pub async fn get_block_number() -> Result<u64, String> {
-    let client = reqwest::Client::new();
-
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_blockNumber",
@@ -767,8 +891,8 @@ pub async fn get_block_number() -> Result<u64, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -795,8 +919,6 @@ pub async fn get_block_number() -> Result<u64, String> {
 }
 
 pub async fn get_network_difficulty() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     // Get the latest block to extract difficulty
     let payload = json!({
         "jsonrpc": "2.0",
@@ -805,8 +927,8 @@ pub async fn get_network_difficulty() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1216,7 +1338,6 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
 }
 
 pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> {
-    let client = reqwest::Client::new();
     let mut blocks_mined = 0u64;
 
     // Get the current block number
@@ -1227,8 +1348,8 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&block_number_payload)
         .send()
         .await
@@ -1265,8 +1386,8 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
             "id": 1
         });
 
-        if let Ok(response) = client
-            .post("http://127.0.0.1:8545")
+        if let Ok(response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&block_payload)
             .send()
             .await
@@ -1292,11 +1413,9 @@ pub async fn get_recent_mined_blocks(
     lookback: u64,
     limit: usize,
 ) -> Result<Vec<MinedBlock>, String> {
-    let client = reqwest::Client::new();
-
     // Fetch latest block number
-    let latest_v = client
-        .post("http://127.0.0.1:8545")
+    let latest_v = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_blockNumber",
@@ -1326,8 +1445,8 @@ pub async fn get_recent_mined_blocks(
             break;
         }
 
-        let block_v = client
-            .post("http://127.0.0.1:8545")
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",
@@ -1455,8 +1574,6 @@ pub async fn get_recent_mined_blocks(
 
 #[tauri::command]
 pub async fn get_network_hashrate() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
     // First, try to get the actual network hashrate from eth_hashrate
     // This will return the sum of all miners that have submitted their hashrate
     let hashrate_payload = json!({
@@ -1466,8 +1583,8 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    if let Ok(response) = client
-        .post("http://127.0.0.1:8545")
+    if let Ok(response) = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&hashrate_payload)
         .send()
         .await
@@ -1513,8 +1630,8 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         "id": 1
     });
 
-    let response = client
-        .post("http://127.0.0.1:8545")
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&latest_block)
         .send()
         .await
@@ -1537,13 +1654,55 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     let difficulty = u128::from_str_radix(&difficulty_hex[2..], 16)
         .map_err(|e| format!("Failed to parse difficulty: {}", e))?;
 
-    // For Chiral private network, estimate network hashrate from difficulty
-    // The relationship between hashrate and difficulty depends on the algorithm
-    // For Ethash on a private network with CPU mining:
-    // Network Hashrate ≈ Difficulty / Block Time
-    // This gives us the hash rate needed to mine a block at this difficulty
-    let estimated_block_time = 15.0; // seconds (Ethereum default)
-    let hashrate = difficulty as f64 / estimated_block_time;
+    // Get actual block time from recent blocks instead of using a hard-coded estimate
+    let latest_block_number_hex = json_response["result"]["number"]
+        .as_str()
+        .ok_or("Invalid block number response")?;
+    let latest_block_number = u64::from_str_radix(&latest_block_number_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse block number: {}", e))?;
+    
+    let latest_timestamp_hex = json_response["result"]["timestamp"]
+        .as_str()
+        .ok_or("Invalid timestamp response")?;
+    let latest_timestamp = u64::from_str_radix(&latest_timestamp_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse timestamp: {}", e))?;
+
+    // Calculate actual average block time from the last 100 blocks (or fewer if network is new)
+    let lookback_blocks = 100.min(latest_block_number.saturating_sub(1));
+    let mut actual_block_time = 15.0; // Default fallback
+    
+    if lookback_blocks > 0 {
+        let previous_block_number = latest_block_number.saturating_sub(lookback_blocks);
+        let previous_block = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [format!("0x{:x}", previous_block_number), false],
+            "id": 1
+        });
+
+        if let Ok(prev_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&previous_block)
+            .send()
+            .await
+        {
+            if let Ok(prev_json) = prev_response.json::<serde_json::Value>().await {
+                if let Some(prev_timestamp_hex) = prev_json["result"]["timestamp"].as_str() {
+                    if let Ok(prev_timestamp) = u64::from_str_radix(&prev_timestamp_hex[2..], 16) {
+                        let time_diff = latest_timestamp.saturating_sub(prev_timestamp);
+                        if time_diff > 0 {
+                            actual_block_time = time_diff as f64 / lookback_blocks as f64;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // For Chiral private network, estimate network hashrate from difficulty and actual block time
+    // Network Hashrate = Difficulty / Block Time
+    // This gives us the hash rate needed to mine a block at this difficulty in the observed time
+    let hashrate = difficulty as f64 / actual_block_time;
 
     // Convert to human-readable format
     let formatted = if hashrate >= 1_000_000_000_000.0 {
@@ -1661,4 +1820,162 @@ pub async fn get_block_details_by_number(
     }
 
     Ok(json_response["result"].clone().into())
+}
+
+// ============================================================================
+// Transaction History Scanning
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionHistoryItem {
+    pub hash: String,
+    pub from: String,
+    pub to: Option<String>,
+    pub value: String,  // Wei as string
+    pub block_number: u64,
+    pub timestamp: u64,
+    pub status: String,  // "success" or "failed"
+    pub tx_type: String, // "sent" or "received"
+    pub gas_used: Option<String>,
+    pub gas_price: Option<String>,
+}
+
+/// Scan blocks for transactions involving a specific address
+/// Returns transactions from newest to oldest
+pub async fn get_transaction_history(
+    address: &str,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<TransactionHistoryItem>, String> {
+    let client = reqwest::Client::new();
+    let address_lower = address.to_lowercase();
+    let mut transactions = Vec::new();
+
+    // Scan blocks from newest to oldest
+    for block_num in (from_block..=to_block).rev() {
+        // Fetch block with full transaction objects
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [format!("0x{:x}", block_num), true],
+            "id": 1
+        });
+
+        let response = client
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch block {}: {}", block_num, e))?;
+
+        let json_response: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse block {}: {}", block_num, e))?;
+
+        if let Some(error) = json_response.get("error") {
+            return Err(format!("RPC error for block {}: {}", block_num, error));
+        }
+
+        let block = match json_response["result"].as_object() {
+            Some(b) => b,
+            None => continue, // No block data
+        };
+
+        // Get block timestamp
+        let timestamp = block.get("timestamp")
+            .and_then(|t| t.as_str())
+            .and_then(|t| u64::from_str_radix(t.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+
+        // Check all transactions in this block
+        if let Some(txs) = block.get("transactions").and_then(|t| t.as_array()) {
+            for tx in txs {
+                let tx_obj = match tx.as_object() {
+                    Some(obj) => obj,
+                    None => continue,
+                };
+
+                let tx_hash = tx_obj.get("hash")
+                    .and_then(|h| h.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let from = tx_obj.get("from")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                let to = tx_obj.get("to")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_lowercase());
+
+                let value = tx_obj.get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0x0")
+                    .to_string();
+
+                let gas_price = tx_obj.get("gasPrice")
+                    .and_then(|g| g.as_str())
+                    .map(|s| s.to_string());
+
+                // Check if this transaction involves our address
+                let is_from_us = from == address_lower;
+                let is_to_us = to.as_ref().map_or(false, |t| t == &address_lower);
+
+                if !is_from_us && !is_to_us {
+                    continue; // Skip transactions not involving our address
+                }
+
+                // Get transaction receipt to check status
+                let receipt_payload = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "eth_getTransactionReceipt",
+                    "params": [tx_hash],
+                    "id": 1
+                });
+
+                let receipt_response = client
+                    .post(&NETWORK_CONFIG.rpc_endpoint)
+                    .json(&receipt_payload)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Failed to fetch receipt: {}", e))?;
+
+                let receipt_json: serde_json::Value = receipt_response
+                    .json()
+                    .await
+                    .map_err(|e| format!("Failed to parse receipt: {}", e))?;
+
+                let receipt = receipt_json["result"].as_object();
+
+                let status = receipt
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| if s == "0x1" { "success" } else { "failed" })
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let gas_used = receipt
+                    .and_then(|r| r.get("gasUsed"))
+                    .and_then(|g| g.as_str())
+                    .map(|s| s.to_string());
+
+                transactions.push(TransactionHistoryItem {
+                    hash: tx_hash,
+                    from: from.clone(),
+                    to,
+                    value,
+                    block_number: block_num,
+                    timestamp,
+                    status,
+                    tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
+                    gas_used,
+                    gas_price,
+                });
+            }
+        }
+    }
+
+    Ok(transactions)
 }

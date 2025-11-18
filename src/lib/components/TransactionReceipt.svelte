@@ -1,13 +1,13 @@
 <script lang="ts">
   import Button from '$lib/components/ui/button.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { 
-    X, 
-    Copy, 
-    Calendar, 
-    Hash, 
-    Clock, 
-    CheckCircle, 
+  import {
+    X,
+    Copy,
+    Calendar,
+    Hash,
+    Clock,
+    CheckCircle,
     XCircle,
     ArrowUpRight,
     ArrowDownLeft,
@@ -18,6 +18,8 @@
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
   import { showToast } from '$lib/toast'
+  import { invoke } from '@tauri-apps/api/core'
+  import { onMount } from 'svelte'
 
   const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
 
@@ -26,18 +28,31 @@
   export let onClose: () => void = () => {}
 
   let showRawData = false
+  let currentBlockNumber = 0
 
-  // Mock transaction data - in real app this would come from backend
+  // Fetch current block number for confirmations calculation
+  onMount(async () => {
+    try {
+      if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+        currentBlockNumber = await invoke<number>('get_current_block');
+      }
+    } catch (error) {
+      console.error('Failed to get current block:', error);
+    }
+  });
+
+  // Real transaction data from blockchain
   $: txData = transaction ? {
     ...transaction,
-    hash: transaction.hash || `0x${Math.random().toString(16).substr(2, 64)}`,
-    blockNumber: transaction.blockNumber || Math.floor(Math.random() * 1000000),
-    gasUsed: transaction.gasUsed || Math.floor(Math.random() * 21000),
-    gasPrice: transaction.gasPrice || Math.floor(Math.random() * 20) + 1,
-    nonce: transaction.nonce || Math.floor(Math.random() * 1000),
-    fee: transaction.fee || (transaction.amount * 0.001),
-    timestamp: transaction.timestamp || transaction.date.getTime(),
-    confirmations: transaction.confirmations || Math.floor(Math.random() * 12) + 1
+    hash: transaction.hash || 'N/A',
+    blockNumber: transaction.block_number || 0,
+    gasUsed: transaction.gas_used || 0,
+    gasPrice: transaction.gas_price || 0,
+    fee: transaction.fee || 0,
+    timestamp: transaction.timestamp ? transaction.timestamp * 1000 : transaction.date?.getTime(),
+    confirmations: currentBlockNumber && transaction.block_number
+      ? Math.max(0, currentBlockNumber - transaction.block_number + 1)
+      : 0
   } : null
 
   function getStatusIcon(status: string) {
@@ -78,9 +93,17 @@
 
   function copyToClipboard(text: string, label: string) {
     navigator.clipboard.writeText(text).then(() => {
-      showToast(`${label} copied to clipboard`, 'success')
+      // showToast(`${label} copied to clipboard`, 'success')
+      showToast(
+        tr('toasts.transactions.copied', { values: { label } }),
+        'success'
+      )
     }).catch(() => {
-      showToast(`Failed to copy ${label}`, 'error')
+      // showToast(`Failed to copy ${label}`, 'error')
+      showToast(
+        tr('toasts.transactions.copyError', { values: { label } }),
+        'error'
+      )
     })
   }
 
@@ -136,7 +159,8 @@
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
     
-    showToast('Transaction exported', 'success')
+    // showToast('Transaction exported', 'success')
+    showToast(tr('toasts.transactions.exported'), 'success')
   }
 
   function handleBackdropClick(e: MouseEvent) {
@@ -347,7 +371,6 @@
             </div>
           </div>
         </div>
-
         <!-- Gas Information -->
         <div class="space-y-6">
           <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center">
@@ -403,46 +426,29 @@
           </div>
         </div>
 
-        <!-- Timestamp and Nonce -->
+        <!-- Timestamp -->
         <div class="space-y-6">
           <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center">
             <Calendar class="w-5 h-5 mr-2 text-indigo-600" />
             Additional Information
           </h3>
-          
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="space-y-2">
-              <label for="timestamp" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.timestamp')}
-              </label>
-              <div id="timestamp" class="p-4 bg-gradient-to-r from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/20 rounded-xl border border-indigo-200 dark:border-indigo-700">
-                <div class="flex items-center space-x-3">
-                  <div class="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center">
-                    <Calendar class="w-4 h-4 text-white" />
-                  </div>
-                  <div>
-                    <div class="text-sm font-medium text-indigo-900 dark:text-indigo-100">
-                      {formatDate(new Date(txData.timestamp))}
-                    </div>
-                    <div class="text-xs text-indigo-600 dark:text-indigo-300">
-                      {new Date(txData.timestamp).toLocaleTimeString()}
-                    </div>
-                  </div>
+
+          <div class="space-y-2">
+            <label for="timestamp" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              {tr('transactions.receipt.timestamp')}
+            </label>
+            <div id="timestamp" class="p-4 bg-gradient-to-r from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/20 rounded-xl border border-indigo-200 dark:border-indigo-700">
+              <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center">
+                  <Calendar class="w-4 h-4 text-white" />
                 </div>
-              </div>
-            </div>
-            <div class="space-y-2">
-              <label for="nonce" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {tr('transactions.receipt.nonce')}
-              </label>
-              <div class="p-4 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-xl border border-gray-200 dark:border-gray-600">
-                <div class="flex items-center space-x-3">
-                  <div class="w-8 h-8 bg-gray-500 rounded-lg flex items-center justify-center">
-                    <span class="text-white font-bold text-sm">N</span>
+                <div>
+                  <div class="text-sm font-medium text-indigo-900 dark:text-indigo-100">
+                    {formatDate(new Date(txData.timestamp))}
                   </div>
-                  <code id="nonce" class="text-lg font-mono font-bold text-gray-900 dark:text-gray-100">
-                    {txData.nonce}
-                  </code>
+                  <div class="text-xs text-indigo-600 dark:text-indigo-300">
+                    {new Date(txData.timestamp).toLocaleTimeString()}
+                  </div>
                 </div>
               </div>
             </div>
@@ -486,7 +492,7 @@
               on:click={onClose}
               class="px-6 py-2"
             >
-              {tr('common.close')}
+              {tr('transactions.receipt.close')}
             </Button>
             <Button
               on:click={() => {

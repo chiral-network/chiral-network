@@ -14,10 +14,13 @@
     RefreshCw,
     Database,
     Languages,
+    FileText,
     Activity,
     CheckCircle,
     AlertTriangle,
-    Copy
+    Copy,
+    Download as DownloadIcon,
+    Upload as UploadIcon
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -31,18 +34,42 @@
   import { showToast } from "$lib/toast";
   import { invoke } from "@tauri-apps/api/core";
   import Expandable from "$lib/components/ui/Expandable.svelte";
-import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
+  import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
+  import { settingsBackupService } from "$lib/services/settingsBackupService";
+
+  const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
   let showResetConfirmModal = false;
   let storageSectionOpen = false;
   let networkSectionOpen = false;
   let advancedSectionOpen = false;
+  let bandwidthSectionOpen = false;
+  let languageSectionOpen = false;
+  let privacySectionOpen = false;
+  let notificationsSectionOpen = false;
+  let diagnosticsSectionOpen = false;
+
+  const ACCORDION_STORAGE_KEY = "settingsAccordionState";
+
+  type AccordionState = {
+    storage: boolean;
+    network: boolean;
+    bandwidthScheduling: boolean;
+    language: boolean;
+    privacy: boolean;
+    notifications: boolean;
+    advanced: boolean;
+    diagnostics: boolean;
+    backupRestore: boolean;
+  };
+
+  let accordionStateInitialized = false;
 
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
-    storagePath: "~/ChiralNetwork/Storage",
+    storagePath: "~/Chiral-Network-Storage",
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
@@ -51,6 +78,9 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     maxConnections: 50,
     uploadBandwidth: 0, // 0 = unlimited
     downloadBandwidth: 0, // 0 = unlimited
+    monthlyUploadCapGb: 0, // 0 = unlimited
+    monthlyDownloadCapGb: 0, // 0 = unlimited
+    capWarningThresholds: [75, 90],
     port: 30303,
     enableUPnP: true,
     enableNAT: true,
@@ -68,25 +98,31 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     enableAutorelay: true,
     preferredRelays: [],
     enableRelayServer: false,
-    autoStartDht: false,
     anonymousMode: false,
     shareAnalytics: true,
+    customBootstrapNodes: [],
+    autoStartDHT: false,
 
     // Notifications
     enableNotifications: true,
     notifyOnComplete: true,
     notifyOnError: true,
     soundAlerts: false,
+    notifyOnBandwidthCap: true,
+    notifyOnBandwidthCapDesktop: false,
 
     // Advanced
-    enableDHT: true,
     enableIPFS: false,
     chunkSize: 256, // KB
     cacheSize: 1024, // MB
     logLevel: "info",
     autoUpdate: true,
+    relayServerAlias: "", // Empty by default - user can set a friendly name
+    pricePerMb: 0.001, // Default price: 0.001 Chiral per MB
     enableBandwidthScheduling: false,
     bandwidthSchedules: [],
+    enableFileLogging: false, // Logging to disk
+    maxLogSizeMB: 10, // MB per log file
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
@@ -107,9 +143,19 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   let diagnostics: DiagItem[] = [];
   let diagnosticsReport = "";
 
+  // Backup/Restore state
+  let backupRestoreSectionOpen = false;
+  let isExporting = false;
+  let isImporting = false;
+  let backupMessage: { text: string; type: 'success' | 'error' | 'warning' } | null = null;
+
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let trustedProxyText = '';
+  
+  // Logs directory (loaded from backend)
+  let logsDirectory: string | null = null;
+  let newBootstrapNode = '';
 
   const locationOptions = GEO_REGIONS
     .filter((region) => region.id !== UNKNOWN_REGION_ID)
@@ -117,12 +163,24 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     .sort((a, b) => a.label.localeCompare(b.label));
 
   let languages = [];
+  // $: languages = [
+  //   { value: "en", label: (get(t) as any)("language.english") },
+  //   { value: "es", label: (get(t) as any)("language.spanish") },
+  //   { value: "zh", label: (get(t) as any)("language.chinese") },
+  //   { value: "ko", label: (get(t) as any)("language.korean") },
+  //   { value: "ru", label: (get(t) as any)("language.russian") },
+  // ];
   $: languages = [
-    { value: "en", label: $t("language.english") },
-    { value: "es", label: $t("language.spanish") },
-    { value: "zh", label: $t("language.chinese") },
-    { value: "ko", label: $t("language.korean") },
-    { value: "ru", label: $t("language.russian") },
+    { value: "en", label: tr("language.english") },
+    { value: "es", label: tr("language.spanish") },
+    { value: "zh", label: tr("language.chinese") },
+    { value: "ko", label: tr("language.korean") },
+    { value: "ru", label: tr("language.russian") },
+    { value: "pt", label: tr("language.portuguese") },
+    { value: "hi", label: tr("language.hindi") },
+    { value: "fr", label: tr("language.french") },
+    { value: "bn", label: tr("language.bengali") },
+    { value: "ar", label: tr("language.arabic") },
   ];
 
   // Initialize configuration text from arrays
@@ -150,6 +208,54 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   >;
 
   let anonymousModeRestore: PrivacySnapshot | null = null;
+  let prevNetworkError = false;
+  let prevAdvancedError = false;
+
+  onMount(() => {
+    if (typeof window === "undefined") {
+      accordionStateInitialized = true;
+      return;
+    }
+
+    try {
+      const storedAccordion = window.localStorage.getItem(ACCORDION_STORAGE_KEY);
+      if (storedAccordion) {
+        const parsed = JSON.parse(storedAccordion) as Partial<AccordionState>;
+        if (typeof parsed.storage === "boolean") storageSectionOpen = parsed.storage;
+        if (typeof parsed.network === "boolean") networkSectionOpen = parsed.network;
+        if (typeof parsed.bandwidthScheduling === "boolean") bandwidthSectionOpen = parsed.bandwidthScheduling;
+        if (typeof parsed.language === "boolean") languageSectionOpen = parsed.language;
+        if (typeof parsed.privacy === "boolean") privacySectionOpen = parsed.privacy;
+        if (typeof parsed.notifications === "boolean") notificationsSectionOpen = parsed.notifications;
+        if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
+        if (typeof parsed.diagnostics === "boolean") diagnosticsSectionOpen = parsed.diagnostics;
+        if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
+      }
+    } catch (error) {
+      console.warn("Failed to restore settings accordion state:", error);
+    } finally {
+      accordionStateInitialized = true;
+    }
+  });
+
+  $: if (accordionStateInitialized && typeof window !== "undefined") {
+    try {
+      const accordionState: AccordionState = {
+        storage: storageSectionOpen,
+        network: networkSectionOpen,
+        bandwidthScheduling: bandwidthSectionOpen,
+        language: languageSectionOpen,
+        privacy: privacySectionOpen,
+        notifications: notificationsSectionOpen,
+        advanced: advancedSectionOpen,
+        diagnostics: diagnosticsSectionOpen,
+        backupRestore: backupRestoreSectionOpen,
+      };
+      window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
+    } catch (error) {
+      console.warn("Failed to persist settings accordion state:", error);
+    }
+  }
 
   const formatBandwidthLimit = (limitKbps: number): string => {
     if (!Number.isFinite(limitKbps) || limitKbps <= 0) {
@@ -260,11 +366,47 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       localSettings.preferredRelays = localSettings.trustedProxyRelays;
     }
 
+    const sanitizedThresholds = Array.isArray(localSettings.capWarningThresholds)
+      ? Array.from(
+          new Set(
+            localSettings.capWarningThresholds
+              .map((value) => Math.round(Number(value)))
+              .filter(
+                (value) => Number.isFinite(value) && value > 0 && value <= 100
+              )
+          )
+        ).sort((a, b) => a - b)
+      : [];
+
+    localSettings = {
+      ...localSettings,
+      capWarningThresholds: sanitizedThresholds,
+    };
+
     // Save local changes to the Svelte store
     settings.set(localSettings);
 
-    // Save to local storage
+    // Save to local storage (for web compatibility)
     localStorage.setItem("chiralSettings", JSON.stringify(localSettings));
+   
+    // Save to Tauri app data directory (for backend access)
+    
+    let isTauri = false;
+    try {
+      await getVersion();
+      isTauri = true;
+    } catch {
+
+    }
+  if (isTauri) {
+      try {
+        await invoke("save_app_settings", {
+          settingsJson: JSON.stringify(localSettings),
+        });
+      } catch (error) {
+        console.error("Failed to save settings to app data directory:", error);
+      }
+    }
     
     savedSettings = JSON.parse(JSON.stringify(localSettings));
     userLocation.set(localSettings.userLocation);
@@ -277,20 +419,139 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     try {
       await applyPrivacyRoutingSettings();
       await restartDhtWithProxy();
-      showToast("Settings Updated!");
+      await updateLogConfiguration();
+      // showToast("Settings Updated!");
+      showToast(tr('toasts.settings.updated'));
     } catch (error) {
       console.error("Failed to apply networking settings:", error);
-      showToast("Settings saved, but networking update failed", "error");
+      // showToast("Settings saved, but networking update failed", "error");
+      showToast(tr('toasts.settings.networkingError'), "error");
     }
   }
 
+// Logging improvements
+  async function updateLogConfiguration() {
+    if (typeof window === "undefined" || !window.navigator.userAgent.includes("tauri")) {
+      return;
+    }
+
+    try {
+      await invoke("update_log_config", {
+        maxLogSizeMb: localSettings.maxLogSizeMB,
+        enabled: localSettings.enableFileLogging,
+      });
+    } catch (error) {
+      console.warn("Failed to update log configuration:", error);
+    }
+  }
+
+  
+  // Backup/Restore Functions
+  async function exportSettings() {
+    isExporting = true;
+    backupMessage = null;
+
+    try {
+      const result = await settingsBackupService.exportSettings(true);
+      
+      if (result.success && result.data) {
+        // Download as file
+        settingsBackupService.downloadBackupFile(result.data);
+        backupMessage = {
+          text: $t('settingsBackup.messages.exportSuccess'),
+          type: 'success'
+        };
+        showToast($t('settingsBackup.messages.exportSuccess'), 'success');
+      } else {
+        throw new Error(result.error || 'Export failed');
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      backupMessage = {
+        text: $t('settingsBackup.messages.exportError', { values: { error: errorMsg } }),
+        type: 'error'
+      };
+      showToast(backupMessage.text, 'error');
+    } finally {
+      isExporting = false;
+      
+      // Clear message after 5 seconds
+      setTimeout(() => {
+        backupMessage = null;
+      }, 5000);
+    }
+  }
+
+  async function importSettings() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      isImporting = true;
+      backupMessage = null;
+
+      try {
+        const text = await file.text();
+        const result = await settingsBackupService.importSettings(text, { merge: false });
+        
+        if (result.success && result.imported) {
+          // Update local settings from imported data
+          localSettings = { ...result.imported };
+          savedSettings = JSON.parse(JSON.stringify(localSettings));
+          settings.set(localSettings);
+          
+          if (result.warnings && result.warnings.length > 0) {
+            backupMessage = {
+              text: $t('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
+              type: 'warning'
+            };
+            showToast(backupMessage.text, 'warning');
+          } else {
+            backupMessage = {
+              text: $t('settingsBackup.messages.importSuccess'),
+              type: 'success'
+            };
+            showToast(backupMessage.text, 'success');
+          }
+
+          // Apply new settings
+          await saveSettings();
+        } else {
+          throw new Error(result.error || 'Import failed');
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        backupMessage = {
+          text: $t('settingsBackup.messages.importError', { values: { error: errorMsg } }),
+          type: 'error'
+        };
+        showToast(backupMessage.text, 'error');
+      } finally {
+        isImporting = false;
+        
+        // Clear message after 5 seconds
+        setTimeout(() => {
+          backupMessage = null;
+        }, 5000);
+      }
+    };
+
+    input.click();
+  }
+
+  
   async function applyPrivacyRoutingSettings() {
     if (typeof window === "undefined" || !("__TAURI__" in window)) {
       return;
     }
 
     if (localSettings.ipPrivacyMode !== "off" && (!localSettings.trustedProxyRelays || localSettings.trustedProxyRelays.length === 0)) {
-      showToast("Add at least one trusted proxy relay before enabling Hide My IP.", "warning");
+      // showToast("Add at least one trusted proxy relay before enabling Hide My IP.", "warning");
+      showToast(tr('toasts.settings.proxyRelayWarning'), "warning");
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
@@ -325,16 +586,21 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       console.debug("stop_dht_node failed (probably already stopped):", error);
     }
 
+    // Use custom bootstrap nodes if configured, otherwise use defaults
     let bootstrapNodes: string[] = [];
-    try {
-      bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
-    } catch (error) {
-      console.error("Failed to fetch bootstrap nodes:", error);
-      throw error;
-    }
+    if (localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0) {
+      bootstrapNodes = localSettings.customBootstrapNodes;
+    } else {
+      try {
+        bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+      } catch (error) {
+        console.error("Failed to fetch bootstrap nodes:", error);
+        throw error;
+      }
 
-    if (!Array.isArray(bootstrapNodes) || bootstrapNodes.length === 0) {
-      throw new Error("No bootstrap nodes available to restart DHT");
+      if (!Array.isArray(bootstrapNodes) || bootstrapNodes.length === 0) {
+        throw new Error("No bootstrap nodes available to restart DHT");
+      }
     }
 
     const payload: Record<string, unknown> = {
@@ -365,16 +631,26 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
 
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
-    const hasStorageError = !!maxStorageError || !!storagePathError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
-    const hasNetworkError = !!errors.maxConnections || !!errors.port || !!errors.uploadBandwidth || !!errors.downloadBandwidth;
-    if (hasNetworkError) networkSectionOpen = true;
+    const hasNetworkError =
+      !!errors.maxConnections ||
+      !!errors.port ||
+      !!errors.uploadBandwidth ||
+      !!errors.downloadBandwidth ||
+      !!errors.monthlyUploadCapGb ||
+      !!errors.monthlyDownloadCapGb ||
+      !!errors.capWarningThresholds;
+    if (hasNetworkError && (!accordionStateInitialized || !prevNetworkError)) networkSectionOpen = true;
 
     // Open Advanced section if it has any errors (but don't close it if already open)
     const hasAdvancedError = !!errors.chunkSize || !!errors.cacheSize;
-    if (hasAdvancedError) advancedSectionOpen = true;
+    if (hasAdvancedError && (!accordionStateInitialized || !prevAdvancedError)) advancedSectionOpen = true;
+
+    prevNetworkError = hasNetworkError;
+    prevAdvancedError = hasAdvancedError;
   }
 
   async function handleConfirmReset() {
@@ -389,7 +665,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   }
 
   async function selectStoragePath() {
-    const tr = get(t) as (key: string, params?: any) => string;
+    // const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
     try {
       // Try Tauri first
       await getVersion(); // only works in Tauri
@@ -446,7 +722,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     }, 2000);
   }
 
-  function exportSettings() {
+  function exportSettingsOld() {
     const blob = new Blob([JSON.stringify(localSettings, null, 2)], {
       type: "application/json",
     });
@@ -457,14 +733,14 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
     a.click();
     URL.revokeObjectURL(url);
     importExportFeedback = {
-      message: $t("advanced.exportSuccess", {
+      message: tr("advanced.exportSuccess", {
         default: "Settings exported to your browser's download folder.",
       }),
       type: "success",
     };
   }
 
-  function importSettings(event: Event) {
+  function importSettingsOld(event: Event) {
     const file = (event.target as HTMLInputElement).files?.[0];
     if (!file) return;
 
@@ -476,7 +752,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
         await saveSettings(); // This saves, updates savedSettings, and clears any old feedback.
         // Now we set the new feedback for the import action.
         importExportFeedback = {
-          message: $t("advanced.importSuccess", {
+          message: tr("advanced.importSuccess", {
             default: "Settings imported successfully.",
           }),
           type: "success",
@@ -484,7 +760,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       } catch (err) {
         console.error("Failed to import settings:", err);
         importExportFeedback = {
-          message: $t("advanced.importError", {
+          message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
           }),
           type: "error",
@@ -511,6 +787,18 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       .filter((line) => line.length > 0);
   }
 
+  function addBootstrapNode() {
+    const trimmed = newBootstrapNode.trim();
+    if (trimmed && !localSettings.customBootstrapNodes.includes(trimmed)) {
+      localSettings.customBootstrapNodes = [...localSettings.customBootstrapNodes, trimmed];
+      newBootstrapNode = '';
+    }
+  }
+
+  function removeBootstrapNode(index: number) {
+    localSettings.customBootstrapNodes = localSettings.customBootstrapNodes.filter((_, i) => i !== index);
+  }
+
   async function runDiagnostics() {
     diagnosticsRunning = true;
     diagnostics = [];
@@ -520,7 +808,7 @@ import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
       diagnostics = [...diagnostics, item];
     };
 
-    const tr = get(t) as (key: string, params?: any) => string;
+    // const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
 
     // 1) Environment (Web vs Tauri)
     const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
@@ -619,6 +907,15 @@ const saved = await loadLocale(); // 'en' | 'ko' | null
 const initial = saved || "en";
 selectedLanguage = initial; // Synchronize dropdown display value
 // (From root, setupI18n() has already been called, so only once here)
+
+// Fetch logs directory from backend (Tauri only)
+  try {
+    await getVersion();
+    logsDirectory = await invoke("get_logs_directory");
+  } catch (error) {
+    console.error("Failed to get logs directory:", error);
+  }
+
 });
 
   async function onLanguageChange(lang: string) {
@@ -643,14 +940,65 @@ selectedLanguage = initial; // Synchronize dropdown display value
       max: Infinity,
       label: "Download Limit (MB/s)",
     },
+    monthlyUploadCapGb: { min: 0, max: 100000, label: "Monthly Upload Cap (GB)" },
+    monthlyDownloadCapGb: { min: 0, max: 100000, label: "Monthly Download Cap (GB)" },
     chunkSize: { min: 64, max: 1024, label: "Chunk Size (KB)" },
     cacheSize: { min: 256, max: 8192, label: "Cache Size (MB)" },
   } as const;
 
   let errors: Record<string, string | null> = {};
 
+  let capThresholdInput = (localSettings.capWarningThresholds ?? []).join(", ");
+  let editingCapThresholds = false;
+
+  function parseCapThresholds(value: string): number[] {
+    if (!value) {
+      return [];
+    }
+
+    const tokens = value
+      .split(/[,\\s]+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+
+    if (tokens.length === 0) {
+      return [];
+    }
+
+    const numbers = tokens
+      .map((token) => Number.parseFloat(token))
+      .filter((num) => Number.isFinite(num));
+
+    const sanitized = Array.from(new Set(numbers.map((num) => Math.round(num))))
+      .filter((num) => num > 0 && num <= 100)
+      .sort((a, b) => a - b);
+
+    return sanitized;
+  }
+
+  function handleCapThresholdInput(event: Event) {
+    const target = event.target as HTMLInputElement;
+    capThresholdInput = target.value;
+  }
+
+  function handleCapThresholdFocus() {
+    editingCapThresholds = true;
+  }
+
+  function handleCapThresholdBlur() {
+    const parsed = parseCapThresholds(capThresholdInput);
+    capThresholdInput = parsed.join(", ");
+    localSettings.capWarningThresholds = parsed;
+    localSettings = { ...localSettings };
+    editingCapThresholds = false;
+  }
+
+  $: if (!editingCapThresholds) {
+    capThresholdInput = (localSettings.capWarningThresholds ?? []).join(", ");
+  }
+
   function rangeMessage(label: string, min: number, max: number) {
-    if (max === Infinity) return `${label} must be ≥ ${min}.`;
+    if (max === Infinity) return `${label} must be >= ${min}.`;
     return `${label} must be between ${min} and ${max}.`;
   }
 
@@ -662,57 +1010,35 @@ selectedLanguage = initial; // Synchronize dropdown display value
             next[key] = rangeMessage(cfg.label, cfg.min, cfg.max);
         }
     }
+
+    const thresholds = Array.isArray(localSettings.capWarningThresholds)
+      ? localSettings.capWarningThresholds
+      : [];
+
+    const hasInvalidThreshold = thresholds.some(
+      (value: number) => !Number.isFinite(value) || value <= 0 || value > 100
+    );
+
+    if (hasInvalidThreshold) {
+      next.capWarningThresholds = "Thresholds must be between 1 and 100.";
+    } else if (thresholds.length > 6) {
+      next.capWarningThresholds = "Keep warning thresholds to six entries or fewer.";
+    } else {
+      next.capWarningThresholds = null;
+    }
+
     errors = next;
 }
 
   // Revalidate whenever settings change
   $: validate(localSettings);
 
-  // Valid when no error messages remain
-  let isValid = true;
-  $: isValid = Object.values(errors).every((e) => !e);
-
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
-  let storagePathError: string | null = null;
 
   onMount(async () => {
     freeSpaceGB = await invoke('get_available_storage');
   });
-
-  // Check if storage path exists
-  async function checkStoragePathExists(path: string) {
-    if (!path || path.trim() === '') {
-      storagePathError = null;
-      return;
-    }
-
-    try {
-      // Expand ~ to actual home directory for checking
-      let pathToCheck = path;
-      if (path.startsWith("~/") || path.startsWith("~\\")) {
-        const home = await homeDir();
-        pathToCheck = path.replace(/^~/, home);
-      } else if (path === "~") {
-        pathToCheck = await homeDir();
-      }
-
-      const exists = await invoke<boolean>('check_directory_exists', { path: pathToCheck });
-      if (!exists) {
-        storagePathError = 'Directory does not exist';
-      } else {
-        storagePathError = null;
-      }
-    } catch (error) {
-      console.error('Failed to check directory:', error);
-      storagePathError = null;
-    }
-  }
-
-  // Check storage path whenever it changes
-  $: if (localSettings.storagePath) {
-    checkStoragePathExists(localSettings.storagePath);
-  }
 
   $: {
     if (freeSpaceGB !== null && localSettings.maxStorageSize > freeSpaceGB) {
@@ -724,24 +1050,88 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
   let search = '';
 
-const sectionLabels: Record<string, string[]> = {
+// const sectionLabels: Record<string, string[]> = {
+//   storage: [
+//     (get(t) as any)("storage.title"),
+//     (get(t) as any)("storage.location"),
+//     (get(t) as any)("storage.maxSize"),
+//     (get(t) as any)("storage.cleanupThreshold"),
+//     (get(t) as any)("storage.enableCleanup"),
+//   ],
+//   network: [
+//     (get(t) as any)("network.title"),
+//     (get(t) as any)("network.maxConnections"),
+//     (get(t) as any)("network.port"),
+//     (get(t) as any)("network.uploadLimit"),
+//     (get(t) as any)("network.downloadLimit"),
+//     (get(t) as any)("network.userLocation"),
+//     (get(t) as any)("network.enableUpnp"),
+//     (get(t) as any)("network.enableNat"),
+//     (get(t) as any)("network.enableDht"),
+//     "Bootstrap Nodes",
+//     "Custom Bootstrap Nodes",
+//   ],
+//   bandwidthScheduling: [
+//     "Bandwidth Scheduling",
+//     "Enable Bandwidth Scheduling",
+//     "Schedule different bandwidth limits",
+//   ],
+//   language: [
+//     (get(t) as any)("language.title"),
+//     (get(t) as any)("language.select"),
+//   ],
+//   privacy: [
+//     (get(t) as any)("privacy.title"),
+//     (get(t) as any)("privacy.enableProxy"),
+//     (get(t) as any)("privacy.anonymousMode"),
+//     (get(t) as any)("privacy.shareAnalytics"),
+//   ],
+//   notifications: [
+//     (get(t) as any)("notifications.title"),
+//     (get(t) as any)("notifications.enable"),
+//     (get(t) as any)("notifications.notifyComplete"),
+//     (get(t) as any)("notifications.notifyError"),
+//     (get(t) as any)("notifications.soundAlerts"),
+//   ],
+//   advanced: [
+//     (get(t) as any)("advanced.title"),
+//     (get(t) as any)("advanced.chunkSize"),
+//     (get(t) as any)("advanced.cacheSize"),
+//     (get(t) as any)("advanced.logLevel"),
+//     (get(t) as any)("advanced.autoUpdate"),
+//     (get(t) as any)("advanced.exportSettings"),
+//     (get(t) as any)("advanced.importSettings"),
+//   ],
+// };
+
+// function sectionMatches(section: string, query: string) {
+//   if (!query) return true;
+//   const labels = sectionLabels[section] || [];
+//   return labels.some((label) =>
+//     label.toLowerCase().includes(query.toLowerCase())
+//   );
+// }
+let sectionLabels: Record<string, string[]> = {};
+$: sectionLabels = {
   storage: [
-    $t("storage.title"),
-    $t("storage.location"),
-    $t("storage.maxSize"),
-    $t("storage.cleanupThreshold"),
-    $t("storage.enableCleanup"),
+    tr("storage.title"),
+    tr("storage.location"),
+    tr("storage.maxSize"),
+    tr("storage.cleanupThreshold"),
+    tr("storage.enableCleanup"),
   ],
   network: [
-    $t("network.title"),
-    $t("network.maxConnections"),
-    $t("network.port"),
-    $t("network.uploadLimit"),
-    $t("network.downloadLimit"),
-    $t("network.userLocation"),
-    $t("network.enableUpnp"),
-    $t("network.enableNat"),
-    $t("network.enableDht"),
+    tr("network.title"),
+    tr("network.maxConnections"),
+    tr("network.port"),
+    tr("network.uploadLimit"),
+    tr("network.downloadLimit"),
+    tr("network.userLocation"),
+    tr("network.enableUpnp"),
+    tr("network.enableNat"),
+    tr("network.enableDht"),
+    "Bootstrap Nodes",
+    "Custom Bootstrap Nodes",
   ],
   bandwidthScheduling: [
     "Bandwidth Scheduling",
@@ -749,30 +1139,37 @@ const sectionLabels: Record<string, string[]> = {
     "Schedule different bandwidth limits",
   ],
   language: [
-    $t("language.title"),
-    $t("language.select"),
+    tr("language.title"),
+    tr("language.select"),
   ],
   privacy: [
-    $t("privacy.title"),
-    $t("privacy.enableProxy"),
-    $t("privacy.anonymousMode"),
-    $t("privacy.shareAnalytics"),
+    tr("privacy.title"),
+    tr("privacy.enableProxy"),
+    tr("privacy.anonymousMode"),
+    tr("privacy.shareAnalytics"),
   ],
   notifications: [
-    $t("notifications.title"),
-    $t("notifications.enable"),
-    $t("notifications.notifyComplete"),
-    $t("notifications.notifyError"),
-    $t("notifications.soundAlerts"),
+    tr("notifications.title"),
+    tr("notifications.enable"),
+    tr("notifications.notifyComplete"),
+    tr("notifications.notifyError"),
+    tr("notifications.soundAlerts"),
+  ],
+  logs: [
+    "Logs",
+    "Enable File Logging",
+    "Maximum Log File Size",
+    "Disk logging",
+    "Debug logs",
   ],
   advanced: [
-    $t("advanced.title"),
-    $t("advanced.chunkSize"),
-    $t("advanced.cacheSize"),
-    $t("advanced.logLevel"),
-    $t("advanced.autoUpdate"),
-    $t("advanced.exportSettings"),
-    $t("advanced.importSettings"),
+    tr("advanced.title"),
+    tr("advanced.chunkSize"),
+    tr("advanced.cacheSize"),
+    tr("advanced.logLevel"),
+    tr("advanced.autoUpdate"),
+    tr("advanced.exportSettings"),
+    tr("advanced.importSettings"),
   ],
 };
 
@@ -783,6 +1180,7 @@ function sectionMatches(section: string, query: string) {
     label.toLowerCase().includes(query.toLowerCase())
   );
 }
+
 </script>
 
 <div class="space-y-6">
@@ -824,8 +1222,8 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="storage-path"
               bind:value={localSettings.storagePath}
-              placeholder="~/ChiralNetwork/Storage"
-              class={`flex-1 ${storagePathError ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
+              placeholder="~/Chiral-Network-Storage"
+              class="flex-1"
             />
             <Button
               variant="outline"
@@ -835,9 +1233,6 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
-          {#if storagePathError}
-            <p class="mt-1 text-sm text-red-500">{storagePathError}</p>
-          {/if}
           
         </div>
 
@@ -968,6 +1363,64 @@ function sectionMatches(section: string, query: string) {
           </div>
         </div>
 
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <Label for="monthly-upload-cap">Monthly Upload Cap (GB)</Label>
+            <Input
+              id="monthly-upload-cap"
+              type="number"
+              bind:value={localSettings.monthlyUploadCapGb}
+              min="0"
+              step="1"
+              class="mt-2"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              Set to 0 to keep uploads uncapped. Caps reset each calendar month.
+            </p>
+            {#if errors.monthlyUploadCapGb}
+              <p class="mt-1 text-sm text-red-500">{errors.monthlyUploadCapGb}</p>
+            {/if}
+          </div>
+
+          <div>
+            <Label for="monthly-download-cap">Monthly Download Cap (GB)</Label>
+            <Input
+              id="monthly-download-cap"
+              type="number"
+              bind:value={localSettings.monthlyDownloadCapGb}
+              min="0"
+              step="1"
+              class="mt-2"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              Set to 0 to keep downloads uncapped. Caps reset each calendar month.
+            </p>
+            {#if errors.monthlyDownloadCapGb}
+              <p class="mt-1 text-sm text-red-500">{errors.monthlyDownloadCapGb}</p>
+            {/if}
+          </div>
+        </div>
+
+        <div>
+          <Label for="cap-thresholds">Usage Warning Thresholds (%)</Label>
+          <Input
+            id="cap-thresholds"
+            type="text"
+            bind:value={capThresholdInput}
+            on:focus={handleCapThresholdFocus}
+            on:input={handleCapThresholdInput}
+            on:blur={handleCapThresholdBlur}
+            placeholder="e.g. 75, 90"
+            class="mt-2"
+          />
+          <p class="mt-1 text-xs text-muted-foreground">
+            Enter comma-separated percentages (1-100). Leave blank to skip warnings.
+          </p>
+          {#if errors.capWarningThresholds}
+            <p class="mt-1 text-sm text-red-500">{errors.capWarningThresholds}</p>
+          {/if}
+        </div>
+
         <!-- User Location -->
         <div>
           <Label for="user-location">{$t("network.userLocation")}</Label>
@@ -1007,77 +1460,90 @@ function sectionMatches(section: string, query: string) {
           <div class="flex items-center gap-2">
             <input
               type="checkbox"
-              id="enable-dht"
-              bind:checked={localSettings.enableDHT}
-            />
-            <Label for="enable-dht" class="cursor-pointer">
-              {$t("network.enableDht")}
-            </Label>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
               id="auto-start-dht"
-              bind:checked={localSettings.autoStartDht}
+              bind:checked={localSettings.autoStartDHT}
             />
             <Label for="auto-start-dht" class="cursor-pointer">
-              Auto-start Network on App Launch
+              Auto-start DHT on launch
             </Label>
           </div>
 
-          {#if localSettings.autoStartDht}
-            <div class="ml-6 p-3 bg-blue-50 rounded-md border border-blue-200">
-              <p class="text-xs text-blue-900">
-                The DHT network will automatically start when you open the application, so you don't have to manually start it each time.
-              </p>
-            </div>
-          {/if}
-
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="enable-relay-server"
-              bind:checked={localSettings.enableRelayServer}
-            />
-            <Label for="enable-relay-server" class="cursor-pointer">
-              Enable Relay Server <span class="text-xs text-green-600 font-semibold">(Recommended - Enabled by Default)</span>
-            </Label>
-          </div>
-
-          {#if localSettings.enableRelayServer}
-            <div class="ml-6 p-4 bg-green-50 rounded-md border border-green-200">
-              <p class="text-sm text-green-900 mb-2">
-                <strong>✅ Relay Server Enabled</strong>
-              </p>
-              <p class="text-xs text-green-700 mb-2">
-                Your node helps peers behind NAT connect. This strengthens the decentralized network without requiring central infrastructure.
-              </p>
-              <ul class="text-xs text-green-600 space-y-1">
-                <li>• Enables cross-network peer connections</li>
-                <li>• Strengthens network decentralization</li>
-                <li>• Minimal resource usage when idle</li>
-                <li>• Only uses bandwidth when actively relaying</li>
-              </ul>
-            </div>
-          {:else}
-            <div class="ml-6 p-4 bg-yellow-50 rounded-md border border-yellow-200">
-              <p class="text-sm text-yellow-900 mb-2">
-                <strong>⚠️ Relay Server Disabled</strong>
-              </p>
-              <p class="text-xs text-yellow-700">
-                Your node cannot help others connect across networks. Enable this to strengthen the network.
-              </p>
-            </div>
-          {/if}
         </div>
+
+        <!-- Custom Bootstrap Nodes -->
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium">Custom Bootstrap Nodes</h4>
+          <p class="text-xs text-muted-foreground">
+            Configure custom bootstrap nodes for the DHT network. Leave empty to use the default hardcoded bootstrap nodes.
+          </p>
+
+          <div>
+            <Label for="new-bootstrap-node">Add Bootstrap Node</Label>
+            <div class="flex gap-2 mt-1">
+              <Input
+                id="new-bootstrap-node"
+                bind:value={newBootstrapNode}
+                on:keydown={(e) => {
+                  const ev = (e as unknown as KeyboardEvent);
+                  if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    addBootstrapNode();
+                  }
+                }}
+                placeholder="/ip4/54.198.145.146/tcp/4001/p2p/12D3KooW..."
+                class="flex-1 font-mono text-sm"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                on:click={addBootstrapNode}
+                disabled={!newBootstrapNode.trim()}
+              >
+                Add
+              </Button>
+            </div>
+            <p class="text-xs text-muted-foreground mt-1">
+              Enter bootstrap node multiaddress and press Enter or click Add
+            </p>
+          </div>
+
+          {#if localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0}
+            <div class="space-y-2">
+              <Label>Configured Bootstrap Nodes ({localSettings.customBootstrapNodes.length})</Label>
+              <div class="space-y-2">
+                {#each localSettings.customBootstrapNodes as node, index}
+                  <div class="flex items-center gap-2 p-2 bg-slate-50 rounded border">
+                    <span class="flex-1 text-xs font-mono break-all">{node}</span>
+                    <Button
+                      size="xs"
+                      variant="destructive"
+                      on:click={() => removeBootstrapNode(index)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          <div class="rounded-md border border-dashed border-slate-200 p-3 text-xs text-muted-foreground space-y-1">
+            <p>Custom bootstrap nodes: {localSettings.customBootstrapNodes?.length || 0}</p>
+            {#if localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0}
+              <p class="text-green-600">✓ Using custom bootstrap nodes</p>
+            {:else}
+              <p class="text-blue-600">Using default hardcoded bootstrap nodes</p>
+            {/if}
+          </div>
+        </div>
+
       </div>
     </Expandable>
   {/if}
 
   <!-- Bandwidth Scheduling -->
   {#if sectionMatches("bandwidthScheduling", search)}
-    <Expandable>
+    <Expandable bind:isOpen={bandwidthSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <RefreshCw class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t('bandwidthScheduling.title')}</h2>
@@ -1263,7 +1729,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Language Settings -->
   {#if sectionMatches("language", search)}
-    <Expandable>
+    <Expandable bind:isOpen={languageSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Languages class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("language.title")}</h2>
@@ -1284,7 +1750,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Privacy Settings -->
   {#if sectionMatches("privacy", search)}
-    <Expandable>
+    <Expandable bind:isOpen={privacySectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Shield class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("privacy.title")}</h2>
@@ -1445,7 +1911,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Notifications -->
   {#if sectionMatches("notifications", search)}
-    <Expandable>
+    <Expandable bind:isOpen={notificationsSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Bell class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("notifications.title")}</h2>
@@ -1486,6 +1952,38 @@ function sectionMatches(section: string, query: string) {
               </Label>
             </div>
 
+            <div>
+              <div class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="notify-cap"
+                  bind:checked={localSettings.notifyOnBandwidthCap}
+                />
+                <Label for="notify-cap" class="cursor-pointer">
+                  Warn when monthly caps reach thresholds (toast)
+                </Label>
+              </div>
+              <p class="ml-7 text-xs text-muted-foreground">
+                Triggers an in-app toast as soon as usage crosses your percentages.
+              </p>
+            </div>
+
+            <div>
+              <div class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="notify-cap-desktop"
+                  bind:checked={localSettings.notifyOnBandwidthCapDesktop}
+                />
+                <Label for="notify-cap-desktop" class="cursor-pointer">
+                  Send desktop notification for cap warnings
+                </Label>
+              </div>
+              <p class="ml-7 text-xs text-muted-foreground">
+                Useful when the app is minimized; respects your OS notification settings.
+              </p>
+            </div>
+
             <div class="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -1496,6 +1994,63 @@ function sectionMatches(section: string, query: string) {
                 {$t("notifications.soundAlerts")}
               </Label>
             </div>
+          </div>
+        {/if}
+      </div>
+    </Expandable>
+  {/if}
+
+  <!-- Logs Settings -->
+  {#if sectionMatches("logs", search)}
+    <Expandable>
+      <div slot="title" class="flex items-center gap-3">
+        <FileText class="h-6 w-6 text-blue-600" />
+        <h2 class="text-xl font-semibold text-black">Logs</h2>
+      </div>
+      <div class="space-y-4">
+        <div class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="enable-file-logging"
+            bind:checked={localSettings.enableFileLogging}
+          />
+          <Label for="enable-file-logging" class="cursor-pointer">
+            Enable File Logging
+          </Label>
+        </div>
+
+        {#if localSettings.enableFileLogging}
+          <div class="ml-6 space-y-4">
+            <div class="p-3 bg-blue-50 rounded-md border border-blue-200">
+              <p class="text-xs text-blue-900">
+                Logs will be stored in:<br/>
+                <code class="bg-blue-100 px-1 rounded break-all">{logsDirectory || 'Loading...'}</code>
+                <br/><br/>
+                Old logs are automatically deleted when storage limits are reached.
+              </p>
+            </div>
+
+            <div>
+              <Label for="max-log-size">Maximum Log File Size (MB)</Label>
+              <Input
+                id="max-log-size"
+                type="number"
+                bind:value={localSettings.maxLogSizeMB}
+                min="1"
+                max="100"
+                class="mt-2"
+              />
+              <p class="text-xs text-muted-foreground mt-1">
+                When a log file reaches this size, a new log file will be created. 
+                The system will keep up to 10x this size in total logs.
+              </p>
+            </div>
+          </div>
+        {:else}
+          <div class="ml-6 p-3 bg-gray-50 rounded-md border border-gray-200">
+            <p class="text-xs text-gray-700">
+              Console logging is always enabled. Enable file logging to also save logs to disk for debugging.
+            </p>
           </div>
         {/if}
       </div>
@@ -1567,6 +2122,7 @@ function sectionMatches(section: string, query: string) {
           </Label>
         </div>
 
+
         <div class="flex flex-wrap gap-2">
           <Button
             variant="outline"
@@ -1583,7 +2139,7 @@ function sectionMatches(section: string, query: string) {
                 ? $t("button.cleared")
                 : $t("button.clearCache")}
           </Button>
-          <Button variant="outline" size="xs" on:click={exportSettings}>
+          <Button variant="outline" size="xs" on:click={exportSettingsOld}>
             {$t("advanced.exportSettings")}
           </Button>
 
@@ -1600,7 +2156,7 @@ function sectionMatches(section: string, query: string) {
               id="import-settings"
               type="file"
               accept=".json"
-              on:change={importSettings}
+              on:change={importSettingsOld}
               class="hidden"
             />
           </label>
@@ -1622,7 +2178,7 @@ function sectionMatches(section: string, query: string) {
 
   <!-- Diagnostics -->
   {#if sectionMatches("diagnostics", search)}
-    <Expandable>
+    <Expandable bind:isOpen={diagnosticsSectionOpen}>
       <div slot="title" class="flex items-center gap-3">
         <Activity class="h-6 w-6 text-blue-600" />
         <h2 class="text-xl font-semibold text-black">{$t("settings.diagnostics.title")}</h2>
@@ -1666,6 +2222,117 @@ function sectionMatches(section: string, query: string) {
             </ul>
           </div>
         {/if}
+      </div>
+    </Expandable>
+  {/if}
+
+  <!-- Backup & Restore -->
+  {#if sectionMatches("backup", search) || sectionMatches("restore", search) || sectionMatches("export", search) || sectionMatches("import", search)}
+    <Expandable bind:isOpen={backupRestoreSectionOpen}>
+      <div slot="title" class="flex items-center gap-3">
+        <Database class="h-6 w-6 text-purple-600" />
+        <h2 class="text-xl font-semibold text-black">{$t("settingsBackup.title")}</h2>
+      </div>
+      <div class="space-y-4">
+        <p class="text-sm text-muted-foreground">{$t("settingsBackup.description")}</p>
+
+        <!-- Export/Import Buttons -->
+        <div class="flex flex-wrap gap-3">
+          <Button 
+            size="sm" 
+            on:click={exportSettings}
+            disabled={isExporting}
+            class="min-w-[140px]"
+          >
+            {#if isExporting}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              {$t("settingsBackup.export")}...
+            {:else}
+              <UploadIcon class="h-4 w-4 mr-2" />
+              {$t("settingsBackup.exportButton")}
+            {/if}
+          </Button>
+
+          <Button 
+            size="sm" 
+            variant="outline"
+            on:click={importSettings}
+            disabled={isImporting}
+            class="min-w-[140px]"
+          >
+            {#if isImporting}
+              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
+              {$t("settingsBackup.import")}...
+            {:else}
+              <DownloadIcon class="h-4 w-4 mr-2" />
+              {$t("settingsBackup.importButton")}
+            {/if}
+          </Button>
+        </div>
+
+        <!-- Feedback Message -->
+        {#if backupMessage}
+          <div 
+            class="p-3 rounded-lg text-sm transition-all"
+            class:bg-green-100={backupMessage.type === 'success'}
+            class:text-green-800={backupMessage.type === 'success'}
+            class:bg-red-100={backupMessage.type === 'error'}
+            class:text-red-800={backupMessage.type === 'error'}
+            class:bg-yellow-100={backupMessage.type === 'warning'}
+            class:text-yellow-800={backupMessage.type === 'warning'}
+          >
+            <div class="flex items-start gap-2">
+              {#if backupMessage.type === 'success'}
+                <CheckCircle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {:else}
+                <AlertTriangle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {/if}
+              <p>{backupMessage.text}</p>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Info Box -->
+        <div class="p-4 bg-muted/50 rounded-lg border border-dashed">
+          <h3 class="font-medium text-sm mb-2">{$t("settingsBackup.autoBackup")}</h3>
+          <p class="text-xs text-muted-foreground mb-3">{$t("settingsBackup.autoBackupDescription")}</p>
+          
+          <!-- Auto-backups list -->
+          {#if settingsBackupService.getAutoBackups().length > 0}
+            <div class="space-y-2">
+              {#each settingsBackupService.getAutoBackups().slice(0, 3) as backup}
+                <div class="flex items-center justify-between p-2 bg-background rounded border text-xs">
+                  <span class="text-muted-foreground">
+                    {backup.date.toLocaleString()}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    on:click={async () => {
+                      const result = await settingsBackupService.restoreAutoBackup(backup.key);
+                      if (result.success) {
+                        showToast($t("settingsBackup.messages.autoBackupRestored"), 'success');
+                        // Reload settings
+                        const stored = localStorage.getItem('chiralSettings');
+                        if (stored) {
+                          localSettings = JSON.parse(stored);
+                          savedSettings = JSON.parse(JSON.stringify(localSettings));
+                        }
+                      } else {
+                        showToast($t("settingsBackup.messages.importError", { values: { error: result.error } }), 'error');
+                      }
+                    }}
+                    class="h-6 text-xs"
+                  >
+                    {$t("settingsBackup.restoreAutoBackup")}
+                  </Button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground italic">No automatic backups available</p>
+          {/if}
+        </div>
       </div>
     </Expandable>
   {/if}
@@ -1739,3 +2406,6 @@ function sectionMatches(section: string, query: string) {
     </div>
   </div>
 {/if}
+
+
+
