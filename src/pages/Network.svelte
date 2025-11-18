@@ -162,7 +162,7 @@
       const addrs = await invoke<string[]>('get_multiaddresses')
       publicMultiaddrs = addrs
     } catch (e) {
-      console.error('Failed to get multiaddresses:', e)
+      errorLogger.networkError(`Failed to get multiaddresses: ${e instanceof Error ? e.message : String(e)}`);
       publicMultiaddrs = []
     }
   }
@@ -241,7 +241,7 @@
       await navigator.clipboard.writeText(addr)
       showToast(tr('network.dht.reachability.copySuccess'), 'success')
     } catch (error) {
-      console.error('Failed to copy observed address', error)
+      errorLogger.networkError(`Failed to copy observed address: ${error instanceof Error ? error.message : String(error)}`);
       showToast(tr('network.dht.reachability.copyError'), 'error')
     }
   }
@@ -292,7 +292,7 @@
         dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
       }
     } catch (error) {
-      console.error('Failed to fetch bootstrap nodes:', error)
+      errorLogger.networkError(`Failed to fetch bootstrap nodes: ${error instanceof Error ? error.message : String(error)}`);
       dhtBootstrapNodes = []
       dhtBootstrapNode = 'Failed to load bootstrap nodes'
     }
@@ -312,11 +312,11 @@
             lastNatConfidence = snapshot.reachabilityConfidence
           }
         } catch (error) {
-          console.error('Failed to refresh NAT status', error)
+          errorLogger.networkError(`Failed to refresh NAT status: ${error instanceof Error ? error.message : String(error)}`);
         }
       })
     } catch (error) {
-      console.error('Failed to subscribe to NAT status updates', error)
+      errorLogger.networkError(`Failed to subscribe to NAT status updates: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   
@@ -434,7 +434,7 @@
             }
           }, 3000)
         } catch (error: any) {
-          console.warn('Cannot connect to bootstrap nodes:', error)
+          diagnosticLogger.warn('Network', 'Cannot connect to bootstrap nodes', { error: error?.message || String(error) });
           
           // Parse and improve error messages
           let errorMessage = error.toString ? error.toString() : String(error)
@@ -483,7 +483,7 @@
       }
       startDhtPolling()
     } catch (error: any) {
-      console.error('Failed to start DHT:', error)
+      errorLogger.dhtInitError(`Failed to start DHT: ${error?.message || String(error)}`);
       dhtStatus = 'disconnected'
       let errorMessage = error.toString ? error.toString() : String(error)
       
@@ -574,11 +574,11 @@
             const connectedPeers = await peerService.getConnectedPeers();
             peers.set(connectedPeers);
           } catch (error) {
-            console.debug('Background peer refresh failed:', error);
+            diagnosticLogger.debug('Network', 'Background peer refresh failed', { error: error instanceof Error ? error.message : String(error) });
           }
         }
       } catch (error) {
-        console.error('Failed to poll DHT status:', error)
+        errorLogger.networkError(`Failed to poll DHT status: ${error instanceof Error ? error.message : String(error)}`);
       }
     }, 2000) as unknown as number
   }
@@ -626,7 +626,7 @@
       // Small delay to ensure port is fully released
       await new Promise(resolve => setTimeout(resolve, 500))
     } catch (error) {
-      console.error('Failed to stop DHT:', error)
+      errorLogger.dhtInitError(`Failed to stop DHT: ${error instanceof Error ? error.message : String(error)}`);
       dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
       // Even if stop failed, clear local state
       dhtStatus = 'disconnected'
@@ -664,7 +664,7 @@
             lastNatConfidence = health.reachabilityConfidence
           }
         } catch (healthError) {
-          console.debug('Could not fetch health snapshot:', healthError)
+          diagnosticLogger.debug('Network', 'Could not fetch health snapshot', { error: healthError instanceof Error ? healthError.message : String(healthError) });
         }
         
         // Set status based on peer count - polling will handle dynamic updates
@@ -680,7 +680,7 @@
         lastNatConfidence = null
       }
     } catch (error) {
-      console.error('Failed to sync DHT status:', error)
+      errorLogger.networkError(`Failed to sync DHT status: ${error instanceof Error ? error.message : String(error)}`);
       dhtStatus = 'disconnected'
       dhtPeerId = null
       dhtPeerCount = 0
@@ -717,9 +717,8 @@
         signaling.peers.subscribe(peers => {
           // Filter out own client ID from discovered peers
           // discoveredPeers = peers.filter(p => p !== myClientId);
-          // console.log('Updated discovered peers (excluding self):', discoveredPeers);
           webDiscoveredPeers = peers.filter(p => p !== myClientId);
-          console.log('Updated discovered peers (excluding self):', webDiscoveredPeers);
+          diagnosticLogger.debug('Network', 'Updated discovered peers', { peerCount: webDiscoveredPeers.length });
         });
 
         // Register signaling message handler for WebRTC
@@ -739,7 +738,7 @@
         // showToast('Connected to signaling server', 'success');
         showToast(tr('toasts.network.signalingConnected'), 'success');
       } catch (error) {
-        console.error('Failed to connect to signaling server:', error);
+        errorLogger.networkError(`Failed to connect to signaling server: ${error instanceof Error ? error.message : String(error)}`);
         // showToast('Failed to connect to signaling server for web mode testing', 'error');
         showToast(
           tr('toasts.network.signalingError'),
@@ -808,7 +807,7 @@
           }
         }, 2000);
       } catch (error) {
-        console.error('Failed to connect to peer:', error);
+        errorLogger.networkError(`Failed to connect to peer: ${error instanceof Error ? error.message : String(error)}`);
         // showToast('Failed to connect to peer: ' + error, 'error');
         showToast(
           tr('toasts.network.connectError', { values: { error: String(error) } }),
@@ -851,7 +850,7 @@
           )
         },
         onConnectionStateChange: (state) => {
-          console.log('[WebRTC] Connection state:', state);
+          networkLogger.statusChanged(state, 1);
 
           // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {
@@ -865,7 +864,7 @@
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           } else if (state === 'disconnected' || state === 'closed') {
-            console.log('[WebRTC] Peer disconnected');
+            diagnosticLogger.debug('Network', 'WebRTC peer disconnected', { peerId });
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           }
@@ -887,7 +886,7 @@
             tr('toasts.network.webrtcError', { values: { error: String(e) } }),
             'error'
           );
-          console.error('WebRTC error:', e);
+          errorLogger.networkError(`WebRTC error: ${e instanceof Error ? e.message : String(e)}`);
         }
       });
       // Optimistically add the peer as 'connecting' so it appears in UI while the handshake occurs
@@ -925,7 +924,7 @@
       newPeerAddress = '';
 
     } catch (error) {
-      console.error('Failed to create WebRTC session:', error);
+      errorLogger.networkError(`Failed to create WebRTC session: ${error instanceof Error ? error.message : String(error)}`);
       // showToast('Failed to create connection: ' + error, 'error');
       showToast(
         tr('toasts.network.webrtcCreateError', { values: { error: String(error) } }),
@@ -968,7 +967,7 @@
       const connectedPeers = await peerService.getConnectedPeers();
       peers.set(connectedPeers);
     } catch (error) {
-      console.debug('Failed to refresh peers:', error);
+      diagnosticLogger.debug('Network', 'Failed to refresh peers', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -986,7 +985,7 @@
       peers.update(p => p.filter(peer => peer.address !== peerId))
       showToast($t('network.connectedPeers.disconnected'), 'success')
     } catch (error) {
-      console.error('Failed to disconnect from peer:', error)
+      errorLogger.networkError(`Failed to disconnect from peer: ${error instanceof Error ? error.message : String(error)}`);
       showToast($t('network.connectedPeers.disconnectError') + ': ' + error, 'error')
     }
   }
@@ -1031,7 +1030,7 @@
       // Preserve the running state - don't stop the node if it's already running
       applyGethStatus(status)
     } catch (error) {
-      console.error('Failed to check geth status:', error)
+      errorLogger.networkError(`Failed to check geth status: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       isCheckingGeth = false
     }
@@ -1056,7 +1055,7 @@
         return
       }
     } catch (error) {
-      console.error('Failed to check geth status before download:', error)
+      errorLogger.networkError(`Failed to check geth status before download: ${error instanceof Error ? error.message : String(error)}`);
       // Continue with download attempt
     }
     isCheckingGeth = false
@@ -1088,7 +1087,7 @@
 
   async function startGethNode() {
     if (!isTauri) {
-      console.log('Cannot start Chiral Node in web mode - desktop app required')
+      diagnosticLogger.info('Network', 'Cannot start Chiral Node in web mode - desktop app required');
       return
     }
 
@@ -1098,7 +1097,7 @@
       isGethRunning = true
       startPolling()
     } catch (error) {
-      console.error('Failed to start Chiral node:', error)
+      errorLogger.networkError(`Failed to start Chiral node: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       isStartingNode = false
     }
@@ -1106,7 +1105,7 @@
 
   async function stopGethNode() {
     if (!isTauri) {
-      console.log('Cannot stop Chiral Node in web mode - desktop app required')
+      diagnosticLogger.info('Network', 'Cannot stop Chiral Node in web mode - desktop app required');
       return
     }
 
@@ -1119,7 +1118,7 @@
       }
       peerCount = 0
     } catch (error) {
-      console.error('Failed to stop Chiral node:', error)
+      errorLogger.networkError(`Failed to stop Chiral node: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   
@@ -1139,7 +1138,7 @@
     try {
       await navigator.clipboard.writeText(text)
     } catch (e) {
-      console.error('Copy failed:', e)
+      errorLogger.networkError(`Copy failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -1154,7 +1153,7 @@
     try {
       peerCount = await invoke('get_network_peer_count') as number
     } catch (error) {
-      console.error('Failed to fetch peer count:', error)
+      errorLogger.networkError(`Failed to fetch peer count: ${error instanceof Error ? error.message : String(error)}`);
       peerCount = 0
     }
   }
@@ -1227,7 +1226,7 @@
           try {
             stopPeerEvents = await startPeerEventStream();
           } catch (error) {
-            console.error('Failed to start peer event stream:', error);
+            errorLogger.networkError(`Failed to start peer event stream: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
         await refreshConnectedPeers();
