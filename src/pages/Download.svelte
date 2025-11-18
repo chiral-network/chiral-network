@@ -22,6 +22,7 @@
   import PeerSelectionService from '$lib/services/peerSelectionService'
   import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
   import { showToast } from '$lib/toast'
+  import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
 
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir } from '@tauri-apps/api/path'
