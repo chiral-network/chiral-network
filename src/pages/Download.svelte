@@ -723,12 +723,34 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           speed: '0 B/s',
           eta: 'N/A'
         }))
-        
-        files.update(f => [...f, ...restoredFiles])
-        
-        // Track which downloads were resumed
-        active.forEach((file: any) => resumedDownloads.add(file.id))
-        resumeCount += active.length
+
+        let addedRestored: typeof restoredFiles = []
+        files.update(existing => {
+          const existingKeys = new Set(
+            existing.map(file => file.id ?? file.hash ?? `${file.name}-${file.size}`)
+          )
+          const deduped = restoredFiles.filter(file => {
+            const key = file.id ?? file.hash ?? `${file.name}-${file.size}`
+            if (existingKeys.has(key)) {
+              return false
+            }
+            existingKeys.add(key)
+            return true
+          })
+          addedRestored = deduped
+          return deduped.length > 0 ? [...existing, ...deduped] : existing
+        })
+
+        if (addedRestored.length > 0) {
+          addedRestored.forEach((file: any) => {
+            if (file.id) {
+              resumedDownloads.add(file.id)
+            } else if (file.hash) {
+              resumedDownloads.add(file.hash)
+            }
+          })
+          resumeCount += addedRestored.length
+        }
       }
 
       if (resumeCount > 0) {
