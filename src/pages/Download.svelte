@@ -648,7 +648,6 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   //       showNotification(`Successfully saved "${fileName}"`, 'success');
   //     }
   //   } catch (error) {
-  //     console.error('Failed to save file:', error);
   //     showNotification(`Error saving "${fileName}"`, 'error');
   //   }
   // }
@@ -1172,7 +1171,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   }
 } 
     else {
-      console.log('  🎬 Simulating download')
+      diagnosticLogger.debug('Download', 'Simulating download', { fileName: downloadingFile.name });
       simulateDownloadProgress(downloadingFile.id)
     }
   }
