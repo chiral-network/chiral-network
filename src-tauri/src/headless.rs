@@ -179,6 +179,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         final_enable_autorelay,
         args.relay.clone(),
         args.is_bootstrap, // enable_relay_server on bootstrap
+        true, // enable_upnp by default
         None,
     )
     .await?;

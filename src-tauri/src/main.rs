@@ -1161,6 +1161,7 @@ async fn start_dht_node(
     enable_autorelay: Option<bool>,
     preferred_relays: Option<Vec<String>>,
     enable_relay_server: Option<bool>,
+    enable_upnp: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -1240,6 +1241,7 @@ async fn start_dht_node(
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
+        enable_upnp.unwrap_or(true), // enable UPnP by default
         Some(&async_blockstore_path),
     )
     .await
