@@ -110,7 +110,15 @@ class SettingsBackupService {
     }
 
     // Validate data types for boolean fields
-    const booleanFields = ['autoCleanup', 'enableUPnP', 'enableNAT', 'enableProxy', 'anonymousMode', 'shareAnalytics'];
+    const booleanFields = [
+      'autoCleanup',
+      'enableUPnP',
+      'enableNAT',
+      'enableProxy',
+      'anonymousMode',
+      'shareAnalytics',
+      'enableWalletAutoLock',
+    ];
     for (const field of booleanFields) {
       if (field in data.settings && typeof data.settings[field] !== 'boolean') {
         return { valid: false, error: `Setting '${field}' must be a boolean` };
