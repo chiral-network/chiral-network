@@ -347,15 +347,28 @@ impl BitTorrentHandler {
             match self.dht_service.search_peers_by_infohash(hash).await {
                 Ok(chiral_peer_ids) => {
                     if !chiral_peer_ids.is_empty() {
-                        info!("Found {} Chiral peers. Prioritizing them.", chiral_peer_ids.len());
-                        for peer_id_str in chiral_peer_ids {
+                        info!("Found {} Chiral peers. Using reputation system to prioritize them.", chiral_peer_ids.len());
+
+                        // Use the PeerSelectionService (via DhtService) to rank the discovered peers.
+                        // We'll use a balanced strategy for general-purpose downloads.
+                        let recommended_peers = self.dht_service.select_peers_with_strategy(
+                            &chiral_peer_ids,
+                            chiral_peer_ids.len(), // Get all peers, but ranked
+                            crate::peer_selection::SelectionStrategy::Balanced,
+                            false, // Encryption not required for public torrents
+                        ).await;
+
+                        info!("Prioritized peer list ({} peers): {:?}", recommended_peers.len(), recommended_peers);
+
+                        // Attempt to connect to the prioritized peers.
+                        for peer_id_str in recommended_peers {
                             // Trigger the DHT to find and connect to the peer.
                             // This will add the peer to the swarm, and librqbit will discover it.
                             match self.dht_service.connect_to_peer_by_id(peer_id_str.clone()).await {
                                 Ok(_) => {
                                     info!("Initiated connection attempt to Chiral peer: {}", peer_id_str);
                                 }
-                                Err(e) => warn!("Failed to get address for Chiral peer {}: {}", peer_id_str, e),
+                                Err(e) => warn!("Failed to initiate connection to Chiral peer {}: {}", peer_id_str, e),
                             }
                         }
                     } else {
