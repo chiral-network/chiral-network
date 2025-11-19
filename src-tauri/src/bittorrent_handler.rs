@@ -226,12 +226,14 @@ impl BitTorrentHandler {
         })?;
 
         let handler = Self {
-            rqbit_session: session,
-            download_directory,
+            rqbit_session: session.clone(),
+            dht_service: dht_service.clone(),
+            download_directory: download_directory.clone(),
             active_torrents: Default::default(),
             peer_states: Default::default(),
             app_handle: None,
         };
+
 
         // Spawn the background task for statistics polling.
         handler.spawn_stats_poller();
@@ -243,7 +245,10 @@ impl BitTorrentHandler {
         Ok(Self {
             rqbit_session: session,
             dht_service,
-            download_directory,
+            download_directory, // This was missing fields
+            active_torrents: Default::default(),
+            peer_states: Default::default(),
+            app_handle: None,
         })
     }
 
