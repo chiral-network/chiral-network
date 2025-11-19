@@ -7,6 +7,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
+  import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import { peers, networkStats, networkStatus, userLocation, settings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Wifi, UserMinus, Square, Play, Download, AlertCircle } from 'lucide-svelte'
@@ -1463,7 +1464,10 @@
     </div>
   </Card>
 
-  
+  <!-- Geth Node Lifecycle & Bootstrap Health -->
+  <GethStatusCard dataDir="./bin/geth-data" logLines={40} refreshIntervalMs={10000} />
+
+
   <!-- DHT Network Status Card -->
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
