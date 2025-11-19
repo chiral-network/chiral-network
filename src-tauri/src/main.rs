@@ -5500,8 +5500,6 @@ fn main() {
         return;
     }
 
-    println!("Starting Chiral Network...");
-
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -5524,15 +5522,10 @@ fn main() {
             eprintln!("Failed to create download directory: {}", e);
         }
 
-        println!("Instance ID: {}", instance_id);
-        println!("Using download directory: {:?}", download_dir);
-
         // Calculate port range based on instance ID to avoid conflicts
         // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
         let base_port = 6881 + ((instance_id - 1) * 11);
         let port_range = base_port..(base_port + 10);
-        
-        println!("Using BitTorrent port range: {}-{}", port_range.start, port_range.end);
 
         let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir,
@@ -5878,11 +5871,8 @@ fn main() {
         })
         .setup(|app| {
             // Load settings from disk
-            println!("Loading settings from app data directory...");
             let settings = load_settings_from_file(&app.handle());
-            println!("Settings loaded: enable_file_logging={}, max_log_size_mb={}", 
-                  settings.enable_file_logging, settings.max_log_size_mb);
-            
+
             // Initialize tracing subscriber with console output and optionally file output
             use tracing_subscriber::{fmt, prelude::*, EnvFilter};
             
@@ -5908,15 +5898,12 @@ fn main() {
             let app_data_dir = app.path().app_data_dir()
                 .expect("Failed to get app data directory");
             let logs_dir = app_data_dir.join("logs");
-            
-            println!("Initializing file logger at: {}", logs_dir.display());
-            
+
             let log_config = logger::LogConfig::new(&logs_dir, settings.max_log_size_mb, settings.enable_file_logging);
             
             let file_logger_writer = match logger::RotatingFileWriter::new(log_config) {
                 Ok(writer) => {
                     let thread_safe_writer = logger::ThreadSafeWriter::new(writer);
-                    println!("File logger initialized successfully (enabled: {})", settings.enable_file_logging);
                     Some(thread_safe_writer)
                 }
                 Err(e) => {
@@ -5939,11 +5926,7 @@ fn main() {
                     .with(env_filter)
                     .init();
             }
-            
-            info!("Chiral Network starting up...");
-            info!("Settings loaded: enable_file_logging={}, max_log_size_mb={}", 
-                  settings.enable_file_logging, settings.max_log_size_mb);
-            
+
             // Store the file logger in app state so it can be updated later
             if let Some(file_writer) = file_logger_writer {
                 if let Some(state) = app.try_state::<AppState>() {
@@ -6133,7 +6116,6 @@ fn main() {
                         ));
                         if let Ok(mut dr_guard) = state.download_restart.try_lock() {
                             *dr_guard = Some(download_restart_service);
-                            tracing::info!("Download restart service initialized");
                         }
                     }
                 });
