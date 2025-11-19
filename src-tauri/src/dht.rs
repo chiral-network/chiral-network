@@ -6756,7 +6756,7 @@ impl DhtService {
 
     /// Save peer cache to disk for faster startup on next run
     pub async fn save_peer_cache(&self) -> Result<(), String> {
-        use crate::peer_cache::{get_peer_cache_path, PeerCache, PeerCacheEntry};
+        use chiral_network::peer_cache::{get_peer_cache_path, PeerCache, PeerCacheEntry};
         
         info!("Saving peer cache...");
         
@@ -6817,8 +6817,8 @@ impl DhtService {
     }
     
     /// Load peer cache from disk and attempt to reconnect to cached peers
-    pub async fn load_peer_cache(&self) -> Result<Vec<crate::peer_cache::PeerCacheEntry>, String> {
-        use crate::peer_cache::{get_peer_cache_path, PeerCache};
+    pub async fn load_peer_cache(&self) -> Result<Vec<chiral_network::peer_cache::PeerCacheEntry>, String> {
+        use chiral_network::peer_cache::{get_peer_cache_path, PeerCache};
         
         info!("Loading peer cache...");
         
@@ -6866,7 +6866,7 @@ impl DhtService {
     }
     
     /// Reconnect to cached peers in parallel
-    pub async fn reconnect_cached_peers(&self, cached_peers: Vec<crate::peer_cache::PeerCacheEntry>) {
+    pub async fn reconnect_cached_peers(&self, cached_peers: Vec<chiral_network::peer_cache::PeerCacheEntry>) {
         use futures::future::join_all;
         
         if cached_peers.is_empty() {
