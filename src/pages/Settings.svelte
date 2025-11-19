@@ -37,6 +37,7 @@
   import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
+  import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
