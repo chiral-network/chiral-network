@@ -535,6 +535,7 @@ export interface AppSettings {
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
   anonymousMode: boolean;
   shareAnalytics: boolean;
+  enableWalletAutoLock: boolean;
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
@@ -587,6 +588,7 @@ export const settings = writable<AppSettings>({
   relayServerAlias: "", // Empty by default - user can set a friendly name
   anonymousMode: false,
   shareAnalytics: true,
+  enableWalletAutoLock: false,
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
