@@ -240,6 +240,47 @@ impl PeerCache {
         }
         Ok(())
     }
+    
+    /// Get statistics about the peer cache
+    pub fn get_stats(&self) -> PeerCacheStats {
+        let relay_count = self.peers.iter().filter(|p| p.supports_relay).count();
+        let bootstrap_count = self.peers.iter().filter(|p| p.is_bootstrap).count();
+        
+        let avg_reliability = if !self.peers.is_empty() {
+            self.peers.iter().map(|p| p.reliability_score).sum::<f64>() / self.peers.len() as f64
+        } else {
+            0.0
+        };
+        
+        let total_transfers = self.peers.iter()
+            .map(|p| p.successful_transfers as u64 + p.failed_transfers as u64)
+            .sum();
+        
+        let total_bytes = self.peers.iter()
+            .map(|p| p.total_bytes_transferred)
+            .sum();
+        
+        PeerCacheStats {
+            total_peers: self.peers.len(),
+            relay_capable_peers: relay_count,
+            bootstrap_peers: bootstrap_count,
+            average_reliability: avg_reliability,
+            total_transfers,
+            total_bytes_transferred: total_bytes,
+        }
+    }
+}
+
+/// Statistics about the peer cache
+#[derive(Debug, Clone)]
+pub struct PeerCacheStats {
+    pub total_peers: usize,
+    pub relay_capable_peers: usize,
+    pub bootstrap_peers: usize,
+    pub average_reliability: f64,
+    pub total_transfers: u64,
+    pub total_bytes_transferred: u64,
+}
 }
 
 impl Default for PeerCache {
@@ -394,5 +435,77 @@ mod tests {
         // Only fresh peer should remain
         assert_eq!(cache.peers.len(), 1);
         assert_eq!(cache.peers[0].peer_id, "fresh_peer");
+    }
+    
+    #[test]
+    fn test_peer_cache_stats() {
+        let mut cache = PeerCache::new();
+        
+        // Add some peers with different characteristics
+        cache.peers.push(PeerCacheEntry {
+            peer_id: "relay1".to_string(),
+            addresses: vec![],
+            last_seen: 1700000000,
+            connection_count: 10,
+            successful_transfers: 8,
+            failed_transfers: 2,
+            total_bytes_transferred: 1024000,
+            average_latency_ms: 50,
+            is_bootstrap: false,
+            supports_relay: true,
+            reliability_score: 0.8,
+        });
+        
+        cache.peers.push(PeerCacheEntry {
+            peer_id: "bootstrap1".to_string(),
+            addresses: vec![],
+            last_seen: 1700000000,
+            connection_count: 20,
+            successful_transfers: 18,
+            failed_transfers: 2,
+            total_bytes_transferred: 2048000,
+            average_latency_ms: 30,
+            is_bootstrap: true,
+            supports_relay: false,
+            reliability_score: 0.9,
+        });
+        
+        cache.peers.push(PeerCacheEntry {
+            peer_id: "regular1".to_string(),
+            addresses: vec![],
+            last_seen: 1700000000,
+            connection_count: 5,
+            successful_transfers: 4,
+            failed_transfers: 1,
+            total_bytes_transferred: 512000,
+            average_latency_ms: 60,
+            is_bootstrap: false,
+            supports_relay: false,
+            reliability_score: 0.7,
+        });
+        
+        let stats = cache.get_stats();
+        
+        assert_eq!(stats.total_peers, 3);
+        assert_eq!(stats.relay_capable_peers, 1);
+        assert_eq!(stats.bootstrap_peers, 1);
+        assert_eq!(stats.total_transfers, 10 + 20 + 5);
+        assert_eq!(stats.total_bytes_transferred, 1024000 + 2048000 + 512000);
+        
+        // Average reliability should be (0.8 + 0.9 + 0.7) / 3 ≈ 0.8
+        assert!((stats.average_reliability - 0.8).abs() < 0.01);
+    }
+    
+    #[test]
+    fn test_peer_cache_stats_empty() {
+        let cache = PeerCache::new();
+        let stats = cache.get_stats();
+        
+        assert_eq!(stats.total_peers, 0);
+        assert_eq!(stats.relay_capable_peers, 0);
+        assert_eq!(stats.bootstrap_peers, 0);
+        assert_eq!(stats.average_reliability, 0.0);
+        assert_eq!(stats.total_transfers, 0);
+        assert_eq!(stats.total_bytes_transferred, 0);
     }
 }

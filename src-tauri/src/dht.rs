@@ -6773,6 +6773,10 @@ impl DhtService {
                 continue;
             }
             
+            // Check if peer supports relay by looking at protocols
+            let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
+            let supports_relay = metrics.protocols.iter().any(|p| p == hop_proto);
+            
             let entry = PeerCacheEntry::from_metrics(
                 metrics.peer_id.clone(),
                 metrics.address.clone(),
@@ -6783,14 +6787,19 @@ impl DhtService {
                 metrics.latency_ms,
                 metrics.reliability_score,
                 metrics.last_seen,
-                false, // TODO: Track bootstrap status
-                false, // TODO: Track relay support
+                false, // Bootstrap status not currently tracked in PeerMetrics
+                supports_relay,
             );
             
             cache_entries.push(entry);
         }
         
         drop(peer_selection); // Release lock
+        
+        if cache_entries.is_empty() {
+            info!("No peers to cache (no active connections)");
+            return Ok(());
+        }
         
         // Create cache and apply filters
         let mut cache = PeerCache::from_peers(cache_entries);
@@ -6803,7 +6812,7 @@ impl DhtService {
         // Save to file
         cache.save_to_file(&cache_path).await?;
         
-        info!("Successfully saved {} peers to cache", cache.peers.len());
+        info!("Successfully saved {} peers to cache at {:?}", cache.peers.len(), cache_path);
         Ok(())
     }
     
@@ -6827,15 +6836,32 @@ impl DhtService {
             }
         };
         
+        // Log cache statistics before filtering
+        let initial_stats = cache.get_stats();
+        info!(
+            "Loaded cache: {} peers, {} relay-capable, avg reliability: {:.2}",
+            initial_stats.total_peers,
+            initial_stats.relay_capable_peers,
+            initial_stats.average_reliability
+        );
+        
         // Filter stale peers
         cache.filter_stale_peers();
         
         if cache.peers.is_empty() {
-            info!("No valid cached peers found");
+            info!("No valid cached peers found after filtering");
             return Ok(Vec::new());
         }
         
-        info!("Loaded {} valid peers from cache", cache.peers.len());
+        // Log final statistics
+        let final_stats = cache.get_stats();
+        info!(
+            "After filtering: {} valid peers, {} relay-capable, avg reliability: {:.2}",
+            final_stats.total_peers,
+            final_stats.relay_capable_peers,
+            final_stats.average_reliability
+        );
+        
         Ok(cache.peers)
     }
     
@@ -6849,9 +6875,21 @@ impl DhtService {
         
         info!("Attempting to reconnect to {} cached peers...", cached_peers.len());
         
+        // Prioritize relay-capable peers and high-reliability peers
+        let mut sorted_peers = cached_peers;
+        sorted_peers.sort_by(|a, b| {
+            // First by relay support (relay-capable first)
+            b.supports_relay.cmp(&a.supports_relay)
+                // Then by reliability score
+                .then_with(|| b.reliability_score.partial_cmp(&a.reliability_score).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        
+        let relay_count = sorted_peers.iter().filter(|p| p.supports_relay).count();
+        info!("Cache contains {} relay-capable peers", relay_count);
+        
         // Collect all addresses to try
         let mut addresses_to_try = Vec::new();
-        for peer in cached_peers.iter() {
+        for peer in sorted_peers.iter() {
             for addr in peer.addresses.iter() {
                 addresses_to_try.push(addr.clone());
             }
@@ -6888,10 +6926,18 @@ impl DhtService {
         let results = join_all(connection_tasks).await;
         
         let successful = results.iter().filter(|&&r| r).count();
+        let total = results.len();
+        let hit_rate = if total > 0 {
+            (successful as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        
         info!(
-            "Reconnected to {}/{} cached peer addresses",
+            "Peer cache reconnection: {}/{} addresses ({:.1}% hit rate)",
             successful,
-            results.len()
+            total,
+            hit_rate
         );
     }
 
