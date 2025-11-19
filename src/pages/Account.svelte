@@ -1351,7 +1351,7 @@
     }
   }
 
-  let sessionTimeout = 600; // seconds (10 minutes)
+  let sessionTimeout = 3600; // seconds (1 hour)
   let sessionTimer: number | null = null;
   let autoLockMessage = '';
 

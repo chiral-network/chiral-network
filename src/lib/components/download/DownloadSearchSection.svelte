@@ -638,7 +638,8 @@
         await invoke('download_file_http', {
           seederUrl,
           merkleRoot,
-          outputPath
+          outputPath,
+          peerId: firstPeer  // Pass peer ID for metrics tracking
         });
 
         console.log(`✅ HTTP download completed: ${outputPath}`);
