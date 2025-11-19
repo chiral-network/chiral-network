@@ -694,7 +694,7 @@
           localSettings = { ...localSettings, storagePath: directoryHandle.name };
         } catch (err: any) {
           if (err.name !== "AbortError") {
-            console.error("Directory picker error:", err);
+            errorLogger.fileOperationError('Directory picker', err instanceof Error ? err.message : String(err));
           }
         }
       } else {
@@ -759,7 +759,7 @@
           type: "success",
         };
       } catch (err) {
-        console.error("Failed to import settings:", err);
+        errorLogger.fileOperationError('Import settings', err instanceof Error ? err.message : String(err));
         importExportFeedback = {
           message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
@@ -884,7 +884,7 @@
       const platformDefaultPath = await invoke<string>("get_default_storage_path");
       defaultSettings.storagePath = platformDefaultPath;
     } catch (e) {
-      console.error("Failed to get default storage path:", e);
+      errorLogger.fileOperationError('Get default storage path', e instanceof Error ? e.message : String(e));
       // Fallback to the hardcoded default if the command fails
       defaultSettings.storagePath = "~/ChiralNetwork/Storage";
     }
@@ -900,7 +900,7 @@
     localSettings = JSON.parse(JSON.stringify(get(settings)));
     savedSettings = JSON.parse(JSON.stringify(localSettings)); 
   } catch (e) {
-    console.error("Failed to load settings:", e);
+    errorLogger.fileOperationError('Load settings', e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -914,7 +914,7 @@ selectedLanguage = initial; // Synchronize dropdown display value
     await getVersion();
     logsDirectory = await invoke("get_logs_directory");
   } catch (error) {
-    console.error("Failed to get logs directory:", error);
+    errorLogger.fileOperationError('Get logs directory', error instanceof Error ? error.message : String(error));
   }
 
 });
