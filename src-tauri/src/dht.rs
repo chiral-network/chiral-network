@@ -4458,6 +4458,13 @@ async fn handle_kademlia_event(
                         }
                     }
                     GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
+                        // Check if this was an infohash search that found no record
+                        if let Some(search) = pending_infohash_searches.lock().await.remove(&id) {
+                            info!("Infohash lookup completed: no record found");
+                            let _ = search.sender.send(None);
+                            return; // End processing for this event here.
+                        }
+
                         // Check if this was a keyword index lookup that found no existing record
                         if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
                             // This is the first time this keyword is being indexed - create new record
