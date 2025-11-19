@@ -5540,7 +5540,7 @@ impl DhtService {
                 noise::Config::new,
                 yamux::Config::default,
             )?
-            .with_quic()
+            // .with_quic() seems to destablize peer connect/download, disabled for now until solution
             .with_relay_client(noise::Config::new, yamux::Config::default)?
             .with_behaviour(move |_, relay_client_behaviour: relay::client::Behaviour| {
                 DhtBehaviour {
@@ -5568,9 +5568,9 @@ impl DhtService {
         let tcp_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         swarm.listen_on(tcp_addr)?;
 
-        // QUIC also bound to the same port (udp)
-        let quic_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", port).parse()?;
-        swarm.listen_on(quic_addr)?;
+        // QUIC also bound to the same port (udp), seems to destablize peer connect/download, disabled for now until solution
+        // let quic_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", port).parse()?;
+        // swarm.listen_on(quic_addr)?;
         // Clean up any unreachable addresses from Kademlia's routing table at startup
         // This removes stale localhost/private addresses that may have been persisted
         {
