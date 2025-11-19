@@ -41,6 +41,7 @@ pub mod multi_source_download;
 mod logger;
 pub mod bittorrent_handler;
 pub mod download_restart;
+pub mod chiral_bittorrent_extension;
 pub mod reputation;
 
 use protocols::{ProtocolManager, ProtocolHandler};
