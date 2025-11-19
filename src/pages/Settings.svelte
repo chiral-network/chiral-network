@@ -233,7 +233,7 @@
         if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
       }
     } catch (error) {
-      console.warn("Failed to restore settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to restore settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     } finally {
       accordionStateInitialized = true;
     }
@@ -254,7 +254,7 @@
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
-      console.warn("Failed to persist settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to persist settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
