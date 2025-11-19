@@ -79,7 +79,23 @@
       "logUnavailable": "Log file not found.",
       "logTruncated": "Showing the last {count} lines.",
       "errorGeneric": "Could not load Geth status.",
-      "lastUpdated": "Updated {time}"
+      "lastUpdated": "Updated {time}",
+      "bootstrap": {
+        "title": "Bootstrap Node Health",
+        "description": "Bootstrap nodes help your Chiral node discover and connect to other peers in the blockchain network. Check their reachability to diagnose connectivity issues.",
+        "checkNow": "Check Bootstrap Health",
+        "checking": "Checking...",
+        "totalNodes": "Total",
+        "reachable": "Reachable",
+        "unreachable": "Unreachable",
+        "nodeDetails": "Node Details",
+        "error": "Error",
+        "allNodesDown": "All bootstrap nodes are unreachable",
+        "cannotConnect": "Your Chiral node may have difficulty connecting to the blockchain network. Check your internet connection or firewall settings.",
+        "someNodesDown": "Some bootstrap nodes are unreachable",
+        "usingAvailable": "Your Chiral node will use the available nodes. Network connectivity should be stable.",
+        "allNodesHealthy": "All bootstrap nodes are healthy and reachable"
+      }
     },
     "dht": {
       "title": "DHT Network",
@@ -584,6 +600,19 @@
     "item": {
       "from": "From",
       "to": "To"
+    },
+    "receipt": {
+      "title": "Transaction Receipt",
+      "from": "From",
+      "to": "To",
+      "hash": "Transaction Hash",
+      "blockNumber": "Block Number",
+      "gasInfo": "Gas Information",
+      "gasUsed": "Gas Used",
+      "gasPrice": "Gas Price",
+      "fee": "Transaction Fee",
+      "timestamp": "Timestamp",
+      "close": "Close Receipt"
     },
     "searchPlaceholder": "Search by address, description, or ID..."
   },
@@ -1484,10 +1513,12 @@
     "remove": "Remove",
     "clearHistory": "Clear History",
     "clearFailed": "Clear Failed",
+    "clearCanceled": "Clear Canceled",
     "exportHistory": "Export History",
     "importHistory": "Import History",
     "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
     "confirmClearFailed": "Clear all failed downloads from history?",
+    "confirmClearCanceled": "Clear all canceled downloads from history?",
     "stats": {
       "total": "Total Downloads",
       "completed": "Completed",
@@ -1499,6 +1530,7 @@
     "messages": {
       "historyCleared": "Download history cleared",
       "failedCleared": "Failed downloads cleared",
+      "canceledCleared": "Canceled downloads cleared",
       "entryRemoved": "Entry removed from history",
       "exportSuccess": "History exported successfully",
       "importSuccess": "Imported {count} history entries",

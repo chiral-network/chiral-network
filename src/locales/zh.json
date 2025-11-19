@@ -465,6 +465,19 @@
       "from": "来自",
       "to": "发送至"
     },
+    "receipt": {
+      "title": "交易收据",
+      "from": "来自",
+      "to": "发送至",
+      "hash": "交易哈希",
+      "blockNumber": "区块号",
+      "gasInfo": "Gas信息",
+      "gasUsed": "已用 Gas",
+      "gasPrice": "Gas价格",
+      "fee": "交易费用",
+      "timestamp": "时间戳",
+      "close": "关闭收据"
+    },
     "searchPlaceholder": "按地址、描述或ID搜索..."
   },
   "fees": {
