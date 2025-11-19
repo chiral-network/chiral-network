@@ -718,6 +718,15 @@ pub enum DhtCommand {
     AnnounceTorrent {
         info_hash: String,
     },
+    PutDhtValue {
+        key: String,
+        value: Vec<u8>,
+        sender: oneshot::Sender<Result<(), String>>,
+    },
+    GetDhtValue {
+        key: String,
+        sender: oneshot::Sender<Result<Option<Vec<u8>>, String>>,
+    },
 }
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
@@ -1741,6 +1750,7 @@ async fn run_dht_node(
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
     pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
+    pending_dht_queries: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -2079,9 +2089,27 @@ async fn run_dht_node(
                                     }
 
                                     // The file_hash is the Merkle Root. The root_cid is for retrieval.
-                                    metadata.merkle_root = hex::encode(merkle_root);
+                                    // ONLY overwrite merkle_root if it's empty (preserves custom keys for verdicts/etc)
+                                    let computed_merkle_root = hex::encode(merkle_root);
+                                    let file_data_len = metadata.file_data.len();
+                                    if metadata.merkle_root.is_empty() {
+                                        metadata.merkle_root = computed_merkle_root.clone();
+                                        println!("💾 Using computed merkle_root: {}", metadata.merkle_root);
+                                    } else {
+                                        println!("💾 Preserving custom merkle_root: {} (computed: {})", 
+                                            metadata.merkle_root, computed_merkle_root);
+                                    }
                                     metadata.cids = Some(vec![root_cid]); // Store root CID for bitswap retrieval
-                                    metadata.file_data.clear(); // Don't store full data in DHT record
+                                    
+                                    // Only clear file_data for large files (>10KB) to save DHT space
+                                    // Keep small files (like reputation verdicts) in cache for fast retrieval
+                                    const MAX_INLINE_SIZE: usize = 10 * 1024; // 10KB
+                                    if file_data_len > MAX_INLINE_SIZE {
+                                        metadata.file_data.clear(); // Don't store large files in DHT record
+                                        println!("💾 Cleared file_data for large file ({} bytes)", file_data_len);
+                                    } else {
+                                        println!("💾 Keeping file_data inline ({} bytes) for fast cache retrieval", file_data_len);
+                                    }
 
                                     println!("Publishing file with root CID: {} (merkle_root: {:?})",
                                         root_cid, metadata.merkle_root);
@@ -2147,14 +2175,11 @@ async fn run_dht_node(
                                 }
 
                                 let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                                {
-                                    let mut pending = pending_heartbeat_updates.lock().await;
-                                    pending.insert(metadata.merkle_root.clone());
-                                }
-                                swarm
-                                    .behaviour_mut()
-                                    .kademlia
-                                    .get_record(record_key.clone());
+                                
+                                // Note: We skip the get_record heartbeat update here during initial publish
+                                // to avoid race conditions. The record doesn't exist yet, so fetching it
+                                // immediately would always fail with NotFound. Heartbeat updates will
+                                // happen on subsequent seeder refresh cycles.
 
                                 let dht_record_data = match serde_json::to_vec(&dht_metadata) {
                                     Ok(data) => data,
@@ -3009,6 +3034,36 @@ async fn run_dht_node(
                                     }
                                 }
                             }
+                            Some(DhtCommand::PutDhtValue { key, value, sender }) => {
+                                info!("🔑 Storing DHT value with key: {} ({} bytes)", key, value.len());
+                                let record_key = kad::RecordKey::new(&key);
+                                let record = kad::Record {
+                                    key: record_key,
+                                    value,
+                                    publisher: None,
+                                    expires: None,
+                                };
+                                
+                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(query_id) => {
+                                        info!("✅ DHT put started: key={}, query_id={:?}", key, query_id);
+                                        let _ = sender.send(Ok(()));
+                                    }
+                                    Err(e) => {
+                                        error!("❌ DHT put failed for key {}: {}", key, e);
+                                        let _ = sender.send(Err(format!("Failed to store in DHT: {}", e)));
+                                    }
+                                }
+                            }
+                            Some(DhtCommand::GetDhtValue { key, sender }) => {
+                                info!("🔍 Fetching DHT value with key: {}", key);
+                                let record_key = kad::RecordKey::new(&key);
+                                let query_id = swarm.behaviour_mut().kademlia.get_record(record_key);
+                                info!("🔍 DHT get started: key={}, query_id={:?}", key, query_id);
+                                
+                                // Store the sender to respond when we get the Kademlia result
+                                pending_dht_queries.lock().await.insert(query_id, sender);
+                            }
                             None => {
                                 info!("DHT command channel closed; shutting down node task");
                                 break 'outer;
@@ -3033,6 +3088,7 @@ async fn run_dht_node(
                                     &pending_keyword_indexes,
                                     &pending_infohash_searches,
                                     &file_metadata_cache,
+                                    &pending_dht_queries,
                                 )
                                 .await;
                             }
@@ -4047,6 +4103,7 @@ async fn handle_kademlia_event(
     pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     pending_infohash_searches: &Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>>,
     file_metadata_cache: &Arc<Mutex<HashMap<String, FileMetadata>>>,
+    pending_dht_queries: &Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>>,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -4074,6 +4131,13 @@ async fn handle_kademlia_event(
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
+                        // Check if this is a response to a generic DHT value query (e.g., reputation verdicts)
+                        if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
+                            info!("✅ DHT get successful: found {} bytes", peer_record.record.value.len());
+                            let _ = sender.send(Ok(Some(peer_record.record.value.clone())));
+                            return; // Don't process further as this was a raw DHT query
+                        }
+                        
                         // Try to parse DHT record as essential metadata JSON
                         if let Ok(metadata_json) =
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
@@ -4386,11 +4450,24 @@ async fn handle_kademlia_event(
                         }
                     }
                     GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
+                        // Check if this was a DHT value query that finished with no results
+                        if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
+                            info!("📭 DHT get finished: no record found");
+                            let _ = sender.send(Ok(None));
+                        }
                         // No additional records; do nothing here
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
                     warn!("GetRecord error: {:?}", err);
+                    
+                    // Check if this was a failed DHT value query
+                    if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
+                        info!("❌ DHT get failed: {:?}", err);
+                        let _ = sender.send(Ok(None)); // Return None on error rather than Err
+                        return;
+                    }
+                    
                     // If the error includes the key, emit FileNotFound
                     if let kad::GetRecordError::NotFound { key, .. } = err {
                         let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
@@ -4441,10 +4518,11 @@ async fn handle_kademlia_event(
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
-                    debug!("PutRecord succeeded for key: {:?}", key);
+                    let key_str = String::from_utf8_lossy(key.as_ref());
+                    info!("✅ PutRecord succeeded for key: {} (DHT metadata stored successfully)", key_str);
                 }
                 QueryResult::PutRecord(Err(err)) => {
-                    warn!("PutRecord error: {:?}", err);
+                    error!("❌ PutRecord failed: {:?}", err);
                     let _ = event_tx
                         .send(DhtEvent::Error(format!("PutRecord failed: {:?}", err)))
                         .await;
@@ -5891,6 +5969,8 @@ impl DhtService {
             Arc::new(Mutex::new(HashMap::new()));
         let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let pending_dht_queries: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -5929,6 +6009,7 @@ impl DhtService {
             pending_heartbeat_updates.clone(),
             pending_keyword_indexes.clone(),
             file_metadata_cache_local.clone(),
+            pending_dht_queries.clone(),
             is_bootstrap,
             final_enable_autorelay,
             relay_candidates,
@@ -7058,6 +7139,26 @@ impl DhtService {
             .await
             .map_err(|e| e.to_string())?;
         receiver.await.map_err(|e| e.to_string())
+    }
+
+    /// Store a value in the DHT with the given key
+    pub async fn put_dht_value(&self, key: String, value: Vec<u8>) -> Result<(), String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::PutDhtValue { key, value, sender })
+            .await
+            .map_err(|e| e.to_string())?;
+        receiver.await.map_err(|e| e.to_string())?
+    }
+
+    /// Retrieve a value from the DHT by key
+    pub async fn get_dht_value(&self, key: String) -> Result<Option<Vec<u8>>, String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::GetDhtValue { key, sender })
+            .await
+            .map_err(|e| e.to_string())?;
+        receiver.await.map_err(|e| e.to_string())?
     }
 }
 
