@@ -494,6 +494,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   let downloadHistory: DownloadHistoryEntry[] = []
   let historySearchQuery = ''
   let historyFilter: 'all' | 'completed' | 'failed' | 'canceled' = 'all'
+  let statistics = downloadHistoryService.getStatistics()
 
   // Load history on mount
   $: downloadHistory = downloadHistoryService.getFilteredHistory(
@@ -501,11 +502,21 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     historySearchQuery
   )
 
+  $: if (downloadHistory) {
+    statistics = downloadHistoryService.getStatistics()
+  }
+
+
   // Track files to add to history when they complete/fail
   $: {
     for (const file of $files) {
       if (['completed', 'failed', 'canceled'].includes(file.status)) {
         downloadHistoryService.addToHistory(file)
+        //Refeshing history to keep it most updated
+        downloadHistory = downloadHistoryService.getFilteredHistory(
+          historyFilter === 'all' ? undefined : historyFilter,
+          historySearchQuery
+      )
       }
     }
   }
@@ -1853,19 +1864,27 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     input.click()
   }
 
-  function clearAllHistory() {
-    if (confirm(tr('downloadHistory.confirmClear'))) {
-      downloadHistoryService.clearHistory()
+  async function clearAllHistory() {
+    if (await confirm(tr('downloadHistory.confirmClear'))) {
+      await downloadHistoryService.clearHistory()
       downloadHistory = []
       showToast(tr('downloadHistory.messages.historyCleared'), 'success')
     }
   }
 
-  function clearFailedHistory() {
-    if (confirm(tr('downloadHistory.confirmClearFailed'))) {
-      downloadHistoryService.clearFailedDownloads()
+  async function clearFailedHistory() {
+    if (await confirm(tr('downloadHistory.confirmClearFailed'))) {
+      await downloadHistoryService.clearFailedDownloads()
       downloadHistory = downloadHistoryService.getFilteredHistory()
       showToast(tr('downloadHistory.messages.failedCleared'), 'success')
+    }
+  }
+
+  async function clearCanceledHistory() {
+    if (await confirm(tr('downloadHistory.confirmClearCanceled'))) {
+      await downloadHistoryService.clearCanceledDownloads()
+      downloadHistory = downloadHistoryService.getFilteredHistory()
+      showToast(tr('downloadHistory.messages.canceledCleared'), 'success')
     }
   }
 
@@ -2452,7 +2471,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       <div class="flex items-center gap-3">
         <History class="h-5 w-5" />
         <h2 class="text-lg font-semibold">{$t('downloadHistory.title')}</h2>
-        <Badge variant="secondary">{downloadHistoryService.getStatistics().total}</Badge>
+        <Badge variant="secondary">{statistics.total}</Badge>
       </div>
       <Button
         size="sm"
@@ -2488,21 +2507,28 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               variant={historyFilter === 'all' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'all'}
             >
-              {$t('downloadHistory.filterAll')} ({downloadHistoryService.getStatistics().total})
+              {$t('downloadHistory.filterAll')} ({statistics.total})
             </Button>
             <Button
               size="sm"
               variant={historyFilter === 'completed' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'completed'}
             >
-              {$t('downloadHistory.filterCompleted')} ({downloadHistoryService.getStatistics().completed})
+              {$t('downloadHistory.filterCompleted')} ({statistics.completed})
             </Button>
             <Button
               size="sm"
               variant={historyFilter === 'failed' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'failed'}
             >
-              {$t('downloadHistory.filterFailed')} ({downloadHistoryService.getStatistics().failed})
+              {$t('downloadHistory.filterFailed')} ({statistics.failed})
+            </Button>
+            <Button
+              size="sm"
+              variant={historyFilter === 'canceled' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'canceled'}
+            >
+              {$t('downloadHistory.filterCanceled')} ({statistics.canceled})
             </Button>
           </div>
         </div>
@@ -2525,7 +2551,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             <DownloadIcon class="h-3 w-3 mr-1" />
             {$t('downloadHistory.importHistory')}
           </Button>
-          {#if downloadHistoryService.getStatistics().failed > 0}
+          {#if statistics.failed > 0}
             <Button
               size="sm"
               variant="outline"
@@ -2534,6 +2560,17 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             >
               <Trash2 class="h-3 w-3 mr-1" />
               {$t('downloadHistory.clearFailed')}
+            </Button>
+          {/if}
+          {#if statistics.canceled > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearCanceledHistory}
+              class="text-orange-600 border-orange-600 hover:bg-orange-50"
+            >
+              <Trash2 class="h-3 w-3 mr-1" />
+              {$t('downloadHistory.clearCanceled')}
             </Button>
           {/if}
           {#if downloadHistory.length > 0}
