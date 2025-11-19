@@ -21,6 +21,7 @@ pub mod transaction_services;
 pub mod bandwidth;
 pub mod blockchain_listener;
 pub mod dht;
+pub mod peer_cache;
 pub mod download_scheduler;
 pub mod download_source;
 pub mod ed2k_client;
