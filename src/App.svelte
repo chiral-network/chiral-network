@@ -25,6 +25,8 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
+    import KeyboardShortcutsPanel from './lib/components/KeyboardShortcutsPanel.svelte';
+    import CommandPalette from './lib/components/CommandPalette.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
     import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { fileService } from '$lib/services/fileService';
@@ -56,6 +58,8 @@ let unsubscribeScheduler: (() => void) | null = null;
 let unsubscribeBandwidth: (() => void) | null = null;
 let lastAppliedBandwidthSignature: string | null = null;
 let showFirstRunWizard = false;
+let showShortcutsPanel = false;
+let showCommandPalette = false;
 
   const syncBandwidthScheduler = (config: AppSettings) => {
     const enabledSchedules =
@@ -349,6 +353,64 @@ function handleFirstRunComplete() {
 
     // keyboard shortcuts
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore shortcuts if user is typing in an input/textarea
+      const target = event.target as HTMLElement;
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      
+      // ? or F1 - Show keyboard shortcuts help
+      if ((event.key === '?' || event.key === 'F1') && !isInputField) {
+        event.preventDefault();
+        showShortcutsPanel = true;
+        return;
+      }
+      
+      // Ctrl/Cmd + K - Open command palette
+      if ((event.ctrlKey || event.metaKey) && event.key === 'k' && !isInputField) {
+        event.preventDefault();
+        showCommandPalette = true;
+        return;
+      }
+      
+      // Ctrl/Cmd + D - Go to Download
+      if ((event.ctrlKey || event.metaKey) && event.key === 'd' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'download';
+        goto('/download');
+        return;
+      }
+      
+      // Ctrl/Cmd + U - Go to Upload
+      if ((event.ctrlKey || event.metaKey) && event.key === 'u' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'upload';
+        goto('/upload');
+        return;
+      }
+      
+      // Ctrl/Cmd + N - Go to Network
+      if ((event.ctrlKey || event.metaKey) && event.key === 'n' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'network';
+        goto('/network');
+        return;
+      }
+      
+      // Ctrl/Cmd + M - Go to Mining
+      if ((event.ctrlKey || event.metaKey) && event.key === 'm' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'mining';
+        goto('/mining');
+        return;
+      }
+      
+      // Ctrl/Cmd + A - Go to Account (only if not in input field)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'a' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'account';
+        goto('/account');
+        return;
+      }
+
       // Ctrl/Cmd + Q - Quit application
       if ((event.ctrlKey || event.metaKey) && event.key === "q") {
         event.preventDefault();
@@ -719,6 +781,18 @@ function handleFirstRunComplete() {
     onComplete={handleFirstRunComplete}
   />
 {/if}
+
+<!-- Keyboard Shortcuts Help Panel -->
+<KeyboardShortcutsPanel 
+  isOpen={showShortcutsPanel}
+  onClose={() => showShortcutsPanel = false}
+/>
+
+<!-- Command Palette -->
+<CommandPalette 
+  isOpen={showCommandPalette}
+  onClose={() => showCommandPalette = false}
+/>
 
   <!-- add Toast  -->
 <SimpleToast />
