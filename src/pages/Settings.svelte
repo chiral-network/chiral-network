@@ -405,7 +405,7 @@
           settingsJson: JSON.stringify(localSettings),
         });
       } catch (error) {
-        console.error("Failed to save settings to app data directory:", error);
+        errorLogger.fileOperationError('Save settings', error instanceof Error ? error.message : String(error));
       }
     }
     
@@ -424,7 +424,7 @@
       // showToast("Settings Updated!");
       showToast(tr('toasts.settings.updated'));
     } catch (error) {
-      console.error("Failed to apply networking settings:", error);
+      errorLogger.networkError(`Failed to apply networking settings: ${error instanceof Error ? error.message : String(error)}`);
       // showToast("Settings saved, but networking update failed", "error");
       showToast(tr('toasts.settings.networkingError'), "error");
     }
@@ -442,7 +442,7 @@
         enabled: localSettings.enableFileLogging,
       });
     } catch (error) {
-      console.warn("Failed to update log configuration:", error);
+      diagnosticLogger.warn('Settings', 'Failed to update log configuration', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -556,7 +556,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while updating privacy settings:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while updating privacy settings', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -565,7 +565,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while turning privacy off:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while turning privacy off', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -584,7 +584,7 @@
     try {
       await invoke("stop_dht_node");
     } catch (error) {
-      console.debug("stop_dht_node failed (probably already stopped):", error);
+      diagnosticLogger.debug('Settings', 'stop_dht_node failed (probably already stopped)', { error: error instanceof Error ? error.message : String(error) });
     }
 
     // Use custom bootstrap nodes if configured, otherwise use defaults
@@ -595,7 +595,7 @@
       try {
         bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
       } catch (error) {
-        console.error("Failed to fetch bootstrap nodes:", error);
+        errorLogger.networkError(`Failed to fetch bootstrap nodes: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
       }
 
