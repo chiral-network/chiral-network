@@ -371,7 +371,6 @@
             </div>
           </div>
         </div>
-
         <!-- Gas Information -->
         <div class="space-y-6">
           <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center">
@@ -493,7 +492,7 @@
               on:click={onClose}
               class="px-6 py-2"
             >
-              {tr('common.close')}
+              {tr('transactions.receipt.close')}
             </Button>
             <Button
               on:click={() => {

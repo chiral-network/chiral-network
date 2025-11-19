@@ -444,18 +444,40 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     disposeDownloadTelemetry()
   })
 
+  // Load saved download page settings
+  const loadDownloadSettings = () => {
+    try {
+      const saved = localStorage.getItem('downloadPageSettings')
+      if (saved) {
+        return JSON.parse(saved)
+      }
+    } catch (error) {
+      console.error('Failed to load download settings:', error)
+    }
+    return {
+      autoStartQueue: true,
+      maxConcurrentDownloads: 3,
+      autoClearCompleted: false,
+      filterStatus: 'all',
+      multiSourceEnabled: true,
+      maxPeersPerDownload: 3
+    }
+  }
+
+  const savedSettings = loadDownloadSettings()
+
   let searchFilter = ''  // For searching existing downloads
-  let maxConcurrentDownloads: string | number = 3
+  let maxConcurrentDownloads: string | number = savedSettings.maxConcurrentDownloads
   let lastValidMaxConcurrent = 3 // Store the last valid value
-  let autoStartQueue = true
-  let autoClearCompleted = false // New setting for auto-clearing
-  let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
+  let autoStartQueue = savedSettings.autoStartQueue
+  let autoClearCompleted = savedSettings.autoClearCompleted
+  let filterStatus = savedSettings.filterStatus
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
   // Multi-source download state
   let multiSourceProgress = new Map<string, MultiSourceProgress>()
-  let multiSourceEnabled = true
-  let maxPeersPerDownload = 3
+  let multiSourceEnabled = savedSettings.multiSourceEnabled
+  let maxPeersPerDownload = savedSettings.maxPeersPerDownload
 
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
@@ -472,6 +494,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   let downloadHistory: DownloadHistoryEntry[] = []
   let historySearchQuery = ''
   let historyFilter: 'all' | 'completed' | 'failed' | 'canceled' = 'all'
+  let statistics = downloadHistoryService.getStatistics()
 
   // Load history on mount
   $: downloadHistory = downloadHistoryService.getFilteredHistory(
@@ -479,11 +502,21 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     historySearchQuery
   )
 
+  $: if (downloadHistory) {
+    statistics = downloadHistoryService.getStatistics()
+  }
+
+
   // Track files to add to history when they complete/fail
   $: {
     for (const file of $files) {
       if (['completed', 'failed', 'canceled'].includes(file.status)) {
         downloadHistoryService.addToHistory(file)
+        //Refeshing history to keep it most updated
+        downloadHistory = downloadHistoryService.getFilteredHistory(
+          historyFilter === 'all' ? undefined : historyFilter,
+          historySearchQuery
+      )
       }
     }
   }
@@ -694,16 +727,26 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   // Smart Resume: Load and resume interrupted downloads
   async function loadAndResumeDownloads() {
     try {
+      // Check if we've already restored in this session
+      if (sessionStorage.getItem('downloadsRestored') === 'true') {
+        console.log('Downloads already restored in this session, skipping')
+        return
+      }
+
       const saved = localStorage.getItem('pendingDownloads')
-      if (!saved) return
+      if (!saved) {
+        sessionStorage.setItem('downloadsRestored', 'true')
+        return
+      }
 
       const { active, queued, timestamp } = JSON.parse(saved)
-      
+
       // Only auto-resume if less than 24 hours old
       const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
       if (hoursSinceLastSave > 24) {
         console.log('Saved downloads are too old (>24h), skipping auto-resume')
         localStorage.removeItem('pendingDownloads')
+        sessionStorage.setItem('downloadsRestored', 'true')
         return
       }
 
@@ -715,34 +758,38 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         resumeCount += queued.length
       }
 
-      // Restore active downloads (mark as paused, user can resume manually)
+      // Restore active downloads - check for duplicates by ID before adding
       if (active && active.length > 0) {
         const restoredFiles = active.map((file: any) => ({
           ...file,
-          status: 'paused' as const, // Don't auto-start, let user resume
+          status: 'paused' as const,
           speed: '0 B/s',
           eta: 'N/A'
         }))
-        
-        files.update(f => [...f, ...restoredFiles])
-        
-        // Track which downloads were resumed
+
+        files.update(f => {
+          const existingIds = new Set(f.map(file => file.id))
+          const newFiles = restoredFiles.filter(file => !existingIds.has(file.id))
+          return [...f, ...newFiles]
+        })
+
         active.forEach((file: any) => resumedDownloads.add(file.id))
         resumeCount += active.length
       }
 
       if (resumeCount > 0) {
-        const message = resumeCount === 1 
+        const message = resumeCount === 1
           ? `Restored 1 interrupted download. Resume it from the Downloads page.`
           : `Restored ${resumeCount} interrupted downloads. Resume them from the Downloads page.`
         showNotification(message, 'info', 6000)
       }
 
-      // Clear saved state after successful restore
       localStorage.removeItem('pendingDownloads')
+      sessionStorage.setItem('downloadsRestored', 'true')
     } catch (error) {
       console.error('Failed to load download state:', error)
       localStorage.removeItem('pendingDownloads')
+      sessionStorage.setItem('downloadsRestored', 'true')
     }
   }
 
@@ -976,6 +1023,19 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   // Auto-clear completed downloads when setting is enabled
   $: if (autoClearCompleted) {
     files.update(f => f.filter(file => file.status !== 'completed'))
+  }
+
+  // Persist download page settings
+  $: {
+    const settings = {
+      autoStartQueue,
+      maxConcurrentDownloads: typeof maxConcurrentDownloads === 'number' ? maxConcurrentDownloads : parseInt(maxConcurrentDownloads as string) || 3,
+      autoClearCompleted,
+      filterStatus,
+      multiSourceEnabled,
+      maxPeersPerDownload
+    }
+    localStorage.setItem('downloadPageSettings', JSON.stringify(settings))
   }
 
   // Smart Resume: Auto-save download state when files or queue changes
@@ -1804,19 +1864,27 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     input.click()
   }
 
-  function clearAllHistory() {
-    if (confirm(tr('downloadHistory.confirmClear'))) {
-      downloadHistoryService.clearHistory()
+  async function clearAllHistory() {
+    if (await confirm(tr('downloadHistory.confirmClear'))) {
+      await downloadHistoryService.clearHistory()
       downloadHistory = []
       showToast(tr('downloadHistory.messages.historyCleared'), 'success')
     }
   }
 
-  function clearFailedHistory() {
-    if (confirm(tr('downloadHistory.confirmClearFailed'))) {
-      downloadHistoryService.clearFailedDownloads()
+  async function clearFailedHistory() {
+    if (await confirm(tr('downloadHistory.confirmClearFailed'))) {
+      await downloadHistoryService.clearFailedDownloads()
       downloadHistory = downloadHistoryService.getFilteredHistory()
       showToast(tr('downloadHistory.messages.failedCleared'), 'success')
+    }
+  }
+
+  async function clearCanceledHistory() {
+    if (await confirm(tr('downloadHistory.confirmClearCanceled'))) {
+      await downloadHistoryService.clearCanceledDownloads()
+      downloadHistory = downloadHistoryService.getFilteredHistory()
+      showToast(tr('downloadHistory.messages.canceledCleared'), 'success')
     }
   }
 
@@ -2403,7 +2471,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       <div class="flex items-center gap-3">
         <History class="h-5 w-5" />
         <h2 class="text-lg font-semibold">{$t('downloadHistory.title')}</h2>
-        <Badge variant="secondary">{downloadHistoryService.getStatistics().total}</Badge>
+        <Badge variant="secondary">{statistics.total}</Badge>
       </div>
       <Button
         size="sm"
@@ -2439,21 +2507,28 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               variant={historyFilter === 'all' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'all'}
             >
-              {$t('downloadHistory.filterAll')} ({downloadHistoryService.getStatistics().total})
+              {$t('downloadHistory.filterAll')} ({statistics.total})
             </Button>
             <Button
               size="sm"
               variant={historyFilter === 'completed' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'completed'}
             >
-              {$t('downloadHistory.filterCompleted')} ({downloadHistoryService.getStatistics().completed})
+              {$t('downloadHistory.filterCompleted')} ({statistics.completed})
             </Button>
             <Button
               size="sm"
               variant={historyFilter === 'failed' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'failed'}
             >
-              {$t('downloadHistory.filterFailed')} ({downloadHistoryService.getStatistics().failed})
+              {$t('downloadHistory.filterFailed')} ({statistics.failed})
+            </Button>
+            <Button
+              size="sm"
+              variant={historyFilter === 'canceled' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'canceled'}
+            >
+              {$t('downloadHistory.filterCanceled')} ({statistics.canceled})
             </Button>
           </div>
         </div>
@@ -2476,7 +2551,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             <DownloadIcon class="h-3 w-3 mr-1" />
             {$t('downloadHistory.importHistory')}
           </Button>
-          {#if downloadHistoryService.getStatistics().failed > 0}
+          {#if statistics.failed > 0}
             <Button
               size="sm"
               variant="outline"
@@ -2485,6 +2560,17 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             >
               <Trash2 class="h-3 w-3 mr-1" />
               {$t('downloadHistory.clearFailed')}
+            </Button>
+          {/if}
+          {#if statistics.canceled > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearCanceledHistory}
+              class="text-orange-600 border-orange-600 hover:bg-orange-50"
+            >
+              <Trash2 class="h-3 w-3 mr-1" />
+              {$t('downloadHistory.clearCanceled')}
             </Button>
           {/if}
           {#if downloadHistory.length > 0}
