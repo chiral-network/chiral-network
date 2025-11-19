@@ -184,6 +184,7 @@ pub struct BitTorrentHandler {
     rqbit_session: Arc<Session>,
     download_directory: std::path::PathBuf,
     // NEW: Manage active torrents and their stats.
+    chiral_extension: Option<Arc<ChiralBitTorrentExtension>>,
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
     app_handle: Option<AppHandle>,
@@ -222,6 +223,7 @@ impl BitTorrentHandler {
         let handler = Self {
             rqbit_session: session,
             download_directory,
+            chiral_extension: None,
             active_torrents: Default::default(),
             peer_states: Default::default(),
             app_handle: None,
