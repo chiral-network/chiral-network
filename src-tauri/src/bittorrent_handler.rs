@@ -10,6 +10,7 @@ use tokio::time::{self, Duration};
 use tracing::{error, info, instrument, warn};
 use crate::dht::DhtService;
 use librqbit::AddTorrentOptions;
+use libp2p::Multiaddr;
 use thiserror::Error;
 
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
@@ -347,21 +348,16 @@ impl BitTorrentHandler {
                 Ok(chiral_peer_ids) => {
                     if !chiral_peer_ids.is_empty() {
                         info!("Found {} Chiral peers. Prioritizing them.", chiral_peer_ids.len());
-                        
-                        // Here you would use PeerSelectionService to rank them and resolve PeerId to SocketAddr.
-                        // For now, we initialize the Vec with the correct type.
-                        let mut peers_to_add: Vec<std::net::SocketAddr> = Vec::new();
                         for peer_id_str in chiral_peer_ids {
-                            // We need to get the address for the peer.
-                            // This is a simplification. A real implementation would query the DHT
-                            // for the peer's addresses.
-                            // For now, we can't resolve PeerId to SocketAddr easily here.
-                            // librqbit's `AddTorrentOptions` takes `Vec<Peer>`, which is `SocketAddr`.
-                            // We will skip adding them directly until we can resolve addresses.
-                            // However, the logic for discovery is here.
-                            warn!("Discovered Chiral peer {}, but cannot resolve address to add to librqbit yet.", peer_id_str);
+                            // Trigger the DHT to find and connect to the peer.
+                            // This will add the peer to the swarm, and librqbit will discover it.
+                            match self.dht_service.connect_to_peer_by_id(peer_id_str.clone()).await {
+                                Ok(_) => {
+                                    info!("Initiated connection attempt to Chiral peer: {}", peer_id_str);
+                                }
+                                Err(e) => warn!("Failed to get address for Chiral peer {}: {}", peer_id_str, e),
+                            }
                         }
-                        // add_opts.peers = Some(peers_to_add);
                     } else {
                         info!("No additional Chiral peers found for this torrent.");
                     }
@@ -517,6 +513,24 @@ impl BitTorrentHandler {
         } else {
             BitTorrentError::Unknown { message: error_msg }
         }
+    }
+
+    
+}
+
+/// Helper to convert a libp2p Multiaddr to a standard SocketAddr.
+/// This is a simplified conversion that only handles TCP/IP.
+fn multiaddr_to_socket_addr(multiaddr: &Multiaddr) -> Result<std::net::SocketAddr, &'static str> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut iter = multiaddr.iter();
+    let proto1 = iter.next().ok_or("Empty Multiaddr")?;
+    let proto2 = iter.next().ok_or("Multiaddr needs at least two protocols")?;
+    
+    match (proto1, proto2) {
+        (Protocol::Ip4(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
+        (Protocol::Ip6(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
+        _ => Err("Multiaddr format not supported (expected IP/TCP)"),
     }
 }
 
@@ -700,5 +714,40 @@ mod tests {
             .category(),
             "filesystem"
         );
+    }
+
+    #[test]
+    fn test_multiaddr_to_socket_addr() {
+        // IPv4 test
+        let multiaddr_ipv4: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
+        let socket_addr_ipv4 = multiaddr_to_socket_addr(&multiaddr_ipv4).unwrap();
+        assert_eq!(
+            socket_addr_ipv4,
+            "127.0.0.1:8080".parse::<std::net::SocketAddr>().unwrap()
+        );
+
+        // IPv6 test
+        let multiaddr_ipv6: Multiaddr = "/ip6/::1/tcp/8080".parse().unwrap();
+        let socket_addr_ipv6 = multiaddr_to_socket_addr(&multiaddr_ipv6).unwrap();
+        assert_eq!(
+            socket_addr_ipv6,
+            "[::1]:8080".parse::<std::net::SocketAddr>().unwrap()
+        );
+
+        // Invalid format (DNS)
+        let multiaddr_dns: Multiaddr = "/dns/localhost/tcp/8080".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_dns).is_err());
+
+        // Invalid format (UDP)
+        let multiaddr_udp: Multiaddr = "/ip4/127.0.0.1/udp/8080".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_udp).is_err());
+
+        // Too short
+        let multiaddr_short: libp2p_core::Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_short).is_err());
+
+        // Empty
+        let multiaddr_empty: Multiaddr = "".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_empty).is_err());
     }
 }
