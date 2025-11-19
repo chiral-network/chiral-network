@@ -281,7 +281,6 @@ pub struct PeerCacheStats {
     pub total_transfers: u64,
     pub total_bytes_transferred: u64,
 }
-}
 
 impl Default for PeerCache {
     fn default() -> Self {
