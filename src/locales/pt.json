@@ -468,6 +468,8 @@
   "privacy.proxyHint": "Digite endereço do proxy SOCKS5 (ex: Tor em 127.0.0.1:9050)",
   "privacy.anonymousMode": "Modo anônimo (ocultar todas as informações de identificação)",
   "privacy.shareAnalytics": "Compartilhar análises de uso anônimas",
+  "privacy.autoLockWallet": "Bloquear carteira automaticamente após inatividade",
+  "privacy.autoLockWalletHint": "Faz logout automaticamente após uma hora sem atividade.",
   "notifications.title": "Notificações",
   "notifications.enable": "Ativar notificações de desktop",
   "notifications.notifyComplete": "Notificar quando downloads forem concluídos",
@@ -579,6 +581,19 @@
     "item": {
       "from": "De",
       "to": "Para"
+    },
+    "receipt": {
+      "title": "Recibo de Transação",
+      "from": "De",
+      "to": "Para",
+      "hash": "Hash da Transação",
+      "blockNumber": "Número do Bloco",
+      "gasInfo": "Informações do Gás",
+      "gasUsed": "Gás Usado",
+      "gasPrice": "Preço do Gás",
+      "fee": "Taxa de Transação",
+      "timestamp": "Carimbo de data/hora",
+      "close": "Fechar Recibo"
     },
     "searchPlaceholder": "Pesquisar por endereço, descrição ou ID..."
   },

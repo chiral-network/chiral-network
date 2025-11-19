@@ -23,6 +23,8 @@
   "privacy.proxyHint": "SOCKS5 프록시 주소를 입력하세요 (예: Tor의 경우 127.0.0.1:9050)",
   "privacy.anonymousMode": "익명 모드 (모든 식별 정보 숨기기)",
   "privacy.shareAnalytics": "익명 사용 분석 공유",
+  "privacy.autoLockWallet": "Auto-lock wallet after inactivity",
+  "privacy.autoLockWalletHint": "Logs you out automatically after one hour without activity.",
   "storage.locationPick": "저장 위치 선택",
   "storage.selectLocationTitle": "저장 위치 선택",
   "storage.enterPathPrompt": "저장 경로를 입력하세요",
@@ -464,6 +466,19 @@
     "item": {
       "from": "보낸 사람",
       "to": "받는 사람"
+    },
+    "receipt": {
+      "title": "트랜잭션 영수증",
+      "from": "보낸 사람",
+      "to": "받는 사람",
+      "hash": "트랜잭션 해시",
+      "blockNumber": "블록 번호",
+      "gasInfo": "가스 정보",
+      "gasUsed": "가스 사용량",
+      "gasPrice": "가스 가격",
+      "fee": "트랜잭션 수수료",
+      "timestamp": "타임스탬프",
+      "close": "영수증 닫기"
     },
     "searchPlaceholder": "주소, 설명 또는 ID로 검색..."
   },

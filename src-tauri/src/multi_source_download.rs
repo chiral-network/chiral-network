@@ -1113,14 +1113,154 @@ impl MultiSourceDownloadService {
     async fn start_http_download(
         &self,
         file_hash: &str,
-        _http_info: crate::download_source::HttpSourceInfo,
+        http_info: crate::download_source::HttpSourceInfo,
         chunk_ids: Vec<u32>,
     ) -> Result<(), String> {
-        info!("HTTP download not yet implemented for {} chunks", chunk_ids.len());
-        
-        // Mark as failed for now
-        self.on_source_failed(file_hash, "http_placeholder", "HTTP download not implemented".to_string()).await;
-        Err("HTTP download not implemented".to_string())
+        info!("Starting HTTP download for {} chunks from {}", chunk_ids.len(), http_info.url);
+
+        // For now, implement basic HTTP download support
+        // In a full implementation, this would use the http_download.rs module
+        // to download chunks with Range requests and verify hashes
+
+        // Get file metadata to access chunk information
+        let downloads = self.active_downloads.read().await;
+        let download = match downloads.get(file_hash) {
+            Some(download) => download,
+            None => {
+                let error = format!("No active download found for file {}", file_hash);
+                error!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error.clone()).await;
+                return Err(error);
+            }
+        };
+
+        // For each requested chunk, attempt HTTP download with hash verification
+        for chunk_id in chunk_ids {
+            // Find chunk info
+            let chunk_info = match download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                Some(chunk) => chunk,
+                None => {
+                    warn!("Chunk {} not found in metadata for file {}", chunk_id, file_hash);
+                    continue;
+                }
+            };
+
+            // Calculate byte range for this chunk
+            let start_byte = chunk_info.offset;
+            let end_byte = start_byte + chunk_info.size as u64 - 1;
+
+            // Create HTTP client for range request
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+            // Make range request
+            let response = match client
+                .get(&http_info.url)
+                .header("Range", format!("bytes={}-{}", start_byte, end_byte))
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let error = format!("HTTP request failed for chunk {}: {}", chunk_id, e);
+                    warn!("{}", error);
+                    self.on_source_failed(file_hash, &http_info.url, error).await;
+                    continue;
+                }
+            };
+
+            // Check for partial content response
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                let error = format!("HTTP server doesn't support range requests for chunk {} (status: {})",
+                    chunk_id, response.status());
+                warn!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error).await;
+                continue;
+            }
+
+            // Read response data
+            let chunk_data = match response.bytes().await {
+                Ok(data) => data.to_vec(),
+                Err(e) => {
+                    let error = format!("Failed to read HTTP response for chunk {}: {}", chunk_id, e);
+                    warn!("{}", error);
+                    self.on_source_failed(file_hash, &http_info.url, error).await;
+                    continue;
+                }
+            };
+
+            // Verify chunk size
+            if chunk_data.len() != chunk_info.size {
+                let error = format!(
+                    "HTTP chunk {} size mismatch: expected {}, got {}",
+                    chunk_id, chunk_info.size, chunk_data.len()
+                );
+                warn!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error).await;
+                continue;
+            }
+
+            // Verify chunk hash
+            if let Err((expected, actual)) = verify_chunk_integrity(chunk_info, &chunk_data) {
+                let error = format!(
+                    "HTTP chunk {} hash verification failed: expected {}, got {}",
+                    chunk_id, expected, actual
+                );
+                warn!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error).await;
+                continue;
+            }
+
+            // Chunk passed verification - store it
+            info!("HTTP chunk {} downloaded and verified successfully", chunk_id);
+            if let Err(e) = self.store_verified_chunk(file_hash, chunk_info, chunk_data).await {
+                let error = format!("Failed to store HTTP chunk {}: {}", chunk_id, e);
+                error!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Store a verified chunk in the active download
+    async fn store_verified_chunk(
+        &self,
+        file_hash: &str,
+        chunk_info: &ChunkInfo,
+        data: Vec<u8>,
+    ) -> Result<(), String> {
+        let mut downloads = self.active_downloads.write().await;
+        let download = downloads.get_mut(file_hash)
+            .ok_or_else(|| format!("Active download not found for file {}", file_hash))?;
+
+        // Store the chunk data
+        let completed_chunk = CompletedChunk {
+            chunk_id: chunk_info.chunk_id,
+            data,
+            source_id: "http".to_string(),
+            completed_at: std::time::Instant::now(),
+        };
+        download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
+
+        // Emit chunk completed event
+        if let Err(e) = self.event_tx.send(MultiSourceEvent::ChunkCompleted {
+            file_hash: file_hash.to_string(),
+            chunk_id: chunk_info.chunk_id,
+            peer_id: "http".to_string(),
+        }) {
+            warn!("Failed to emit chunk completed event: {}", e);
+        }
+
+        // Check if download is complete
+        if download.completed_chunks.len() == download.chunks.len() {
+            drop(downloads); // Release lock before calling finalize
+            Self::finalize_download_static(&self.active_downloads, file_hash).await?;
+        }
+
+        Ok(())
     }
 
     /// Start BitTorrent download

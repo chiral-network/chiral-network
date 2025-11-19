@@ -468,6 +468,8 @@
   "privacy.proxyHint": "Enter SOCKS5 proxy address (e.g., Tor at 127.0.0.1:9050)",
   "privacy.anonymousMode": "Anonymous mode (hide all identifying information)",
   "privacy.shareAnalytics": "Share anonymous usage analytics",
+  "privacy.autoLockWallet": "Auto-lock wallet after inactivity",
+  "privacy.autoLockWalletHint": "Logs you out automatically after one hour without activity.",
   "notifications.title": "Notifications",
   "notifications.enable": "Enable desktop notifications",
   "notifications.notifyComplete": "Notify when downloads complete",
@@ -579,6 +581,19 @@
     "item": {
       "from": "From",
       "to": "To"
+    },
+    "receipt": {
+      "title": "إيصال المعاملة",
+      "from": "من",
+      "to": "إلى",
+      "hash": "해시 المعاملة",
+      "blockNumber": "رقم الكتلة",
+      "gasInfo": "معلومات الغاز",
+      "gasUsed": "الغاز المستخدم",
+      "gasPrice": "سعر الغاز",
+      "fee": "رسوم المعاملة",
+      "timestamp": "الطابع الزمني",
+      "close": "إغلاق الإيصال"
     },
     "searchPlaceholder": "Search by address, description, or ID..."
   },

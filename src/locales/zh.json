@@ -338,6 +338,8 @@
   "privacy.proxyHint": "输入 SOCKS5 代理地址（例如 Tor 的 127.0.0.1:9050）",
   "privacy.anonymousMode": "匿名模式（隐藏所有身份信息）",
   "privacy.shareAnalytics": "共享匿名使用分析",
+  "privacy.autoLockWallet": "在无操作时自动锁定钱包",
+  "privacy.autoLockWalletHint": "在一小时无活动后自动注销。",
   "notifications.title": "通知",
   "notifications.enable": "启用桌面通知",
   "notifications.notifyComplete": "下载完成时通知",
@@ -464,6 +466,19 @@
     "item": {
       "from": "来自",
       "to": "发送至"
+    },
+    "receipt": {
+      "title": "交易收据",
+      "from": "来自",
+      "to": "发送至",
+      "hash": "交易哈希",
+      "blockNumber": "区块号",
+      "gasInfo": "Gas信息",
+      "gasUsed": "已用 Gas",
+      "gasPrice": "Gas价格",
+      "fee": "交易费用",
+      "timestamp": "时间戳",
+      "close": "关闭收据"
     },
     "searchPlaceholder": "按地址、描述或ID搜索..."
   },

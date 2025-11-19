@@ -30,6 +30,7 @@ pub mod file_transfer;
 pub mod ftp_client;
 pub mod ftp_downloader;
 pub mod geth_downloader;
+pub mod geth_bootstrap;
 pub mod headless;
 pub mod http_download;
 pub mod http_server;
@@ -40,6 +41,7 @@ pub mod multi_source_download;
 mod logger;
 pub mod bittorrent_handler;
 pub mod download_restart;
+pub mod reputation;
 
 use protocols::{ProtocolManager, ProtocolHandler};
 
@@ -573,15 +575,18 @@ async fn record_download_payment(
     seeder_wallet_address: String,
     seeder_peer_id: String,
     downloader_address: String,
+    downloader_peer_id: String,
     amount: f64,
     transaction_id: u64,
     transaction_hash: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     println!(
-        "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) tx: {}",
-        amount, seeder_wallet_address, seeder_peer_id, transaction_hash
+        "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) from {} (peer: {}) tx: {}",
+        amount, seeder_wallet_address, seeder_peer_id, downloader_address, downloader_peer_id, transaction_hash
     );
+    println!("🔍 IMPORTANT: downloader_peer_id value: '{}'", downloader_peer_id);
+    println!("🔍 IMPORTANT: seeder_peer_id value: '{}'", seeder_peer_id);
 
     // Send P2P payment notification message to the seeder's peer
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -590,6 +595,7 @@ async fn record_download_payment(
         file_name: String,
         file_size: u64,
         downloader_address: String,
+        downloader_peer_id: String,
         seeder_wallet_address: String,
         amount: f64,
         transaction_id: u64,
@@ -601,6 +607,7 @@ async fn record_download_payment(
         file_name,
         file_size,
         downloader_address,
+        downloader_peer_id,
         seeder_wallet_address: seeder_wallet_address.clone(),
         amount,
         transaction_id,
@@ -864,17 +871,37 @@ async fn upload_file(
         }
 
         // Register file with HTTP server for HTTP downloads
+        // IMPORTANT: Use merkle_root as the key, not file_hash!
+        // The DHT and downloads use merkle_root as the primary identifier
         state.http_server_state.register_file(http_server::HttpFileMetadata {
-            hash: file_hash.clone(),
+            hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
+            file_hash: file_hash.clone(),        // Use file_hash for storage path
             name: file_name.clone(),
             size: file_data.len() as u64,
             encrypted: is_encrypted,
         }).await;
         
-        tracing::info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
+        tracing::info!("Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})", 
+            file_name, metadata.merkle_root, file_hash);
 
-        dht.publish_file(metadata.clone(), None).await?;
-        Ok(metadata)
+        // Add HTTP source information to metadata
+        let mut metadata_with_http = metadata.clone();
+        if let Some(http_addr) = *state.http_server_addr.lock().await {
+            use crate::download_source::HttpSourceInfo;
+            // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
+            let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
+            metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
+                url: url.clone(),
+                auth_header: None,
+                verify_ssl: true,
+                headers: None,
+                timeout_secs: None,
+            }]);
+            tracing::info!("Added HTTP source to metadata: {}", url);
+        }
+
+        dht.publish_file(metadata_with_http.clone(), None).await?;
+        Ok(metadata_with_http)
     } else {
         Err("DHT not running".into())
     }
@@ -1073,6 +1100,28 @@ async fn get_recent_mined_blocks_pub(
 }
 
 #[tauri::command]
+async fn get_mined_blocks_range(
+    address: String,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<MinedBlock>, String> {
+    ethereum::get_mined_blocks_range(&address, from_block, to_block).await
+}
+
+#[tauri::command]
+async fn get_total_mining_rewards(address: String) -> Result<f64, String> {
+    ethereum::get_total_mining_rewards(&address).await
+}
+
+#[tauri::command]
+async fn calculate_accurate_totals(
+    address: String,
+    app: tauri::AppHandle,
+) -> Result<ethereum::AccurateTotals, String> {
+    ethereum::calculate_accurate_totals(&address, app).await
+}
+
+#[tauri::command]
 async fn get_transaction_history(
     address: String,
     lookback: u64,
@@ -1085,6 +1134,15 @@ async fn get_transaction_history(
 
     // Scan transactions
     ethereum::get_transaction_history(&address, from_block, current_block).await
+}
+
+#[tauri::command]
+async fn get_transaction_history_range(
+    address: String,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<ethereum::TransactionHistoryItem>, String> {
+    ethereum::get_transaction_history(&address, from_block, to_block).await
 }
 
 #[tauri::command]
@@ -1382,13 +1440,15 @@ async fn start_dht_node(
                                 "file_name": notification.get("file_name").and_then(|v| v.as_str()).unwrap_or(""),
                                 "file_size": notification.get("file_size").and_then(|v| v.as_u64()).unwrap_or(0),
                                 "downloader_address": notification.get("downloader_address").and_then(|v| v.as_str()).unwrap_or(""),
+                                "downloader_peer_id": notification.get("downloader_peer_id").and_then(|v| v.as_str()).unwrap_or(""),
                                 "seeder_wallet_address": notification.get("seeder_wallet_address").and_then(|v| v.as_str()).unwrap_or(""),
                                 "amount": notification.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                 "transaction_id": notification.get("transaction_id").and_then(|v| v.as_u64()).unwrap_or(0),
+                                "transaction_hash": notification.get("transaction_hash").and_then(|v| v.as_str()).unwrap_or(""),
                             });
                             // Emit the same event that local payments use
                             let _ = app_handle.emit("seeder_payment_received", formatted_payload);
-                            println!("✅ Payment notification forwarded to frontend");
+                            println!("✅ Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
                         }
                     },
                     _ => {}
@@ -1399,8 +1459,11 @@ async fn start_dht_node(
 
     {
         let mut dht_guard = state.dht.lock().await;
-        *dht_guard = Some(dht_arc);
+        *dht_guard = Some(dht_arc.clone());
     }
+
+    // Also attach DHT to HTTP server state for provider-side metrics
+    state.http_server_state.set_dht(dht_arc).await;
 
     Ok(peer_id)
 }
@@ -1487,6 +1550,25 @@ async fn get_dht_peer_id(state: State<'_, AppState>) -> Result<Option<String>, S
         Ok(Some(dht.get_peer_id().await))
     } else {
         Ok(None) // Return None if DHT is not running
+    }
+}
+
+/// Get the peer ID (required for reputation system)
+/// Returns error if DHT is not running
+#[tauri::command]
+async fn get_peer_id(state: State<'_, AppState>) -> Result<String, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht) = dht {
+        let peer_id = dht.get_peer_id().await;
+        println!("🔍 get_peer_id() called -> returning: {}", peer_id);
+        Ok(peer_id)
+    } else {
+        println!("❌ get_peer_id() called but DHT is not running");
+        Err("DHT is not running. Cannot get peer ID.".to_string())
     }
 }
 
@@ -3088,14 +3170,17 @@ async fn upload_file_to_network(
                         .await;
 
                     // Register file with HTTP server for HTTP downloads
+                    // IMPORTANT: Use merkle_root as the key, not file_hash!
                     state.http_server_state.register_file(http_server::HttpFileMetadata {
-                        hash: file_hash.clone(),
+                        hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
+                        file_hash: file_hash.clone(),        // Use file_hash for storage path
                         name: file_name.to_string(),
                         size: file_data.len() as u64,
                         encrypted: false,
                     }).await;
                     
-                    info!("Registered file with HTTP server: {} ({})", file_name, file_hash);
+                    info!("Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})", 
+                        file_name, metadata.merkle_root, file_hash);
 
                     match dht.publish_file(metadata.clone(), None).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
@@ -3796,9 +3881,23 @@ async fn upload_file_chunk(
                 .await;
         }
 
+        // Add HTTP source information to metadata
+        let mut metadata_with_http = metadata.clone();
+        if let Some(http_addr) = *state.http_server_addr.lock().await {
+            use crate::download_source::HttpSourceInfo;
+            metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
+                url: format!("http://{}", http_addr),
+                auth_header: None,
+                verify_ssl: true,
+                headers: None,
+                timeout_secs: None,
+            }]);
+            tracing::info!("Added HTTP source to streaming upload metadata: http://{}", http_addr);
+        }
+
         // Publish to DHT
         if let Some(dht) = dht_opt {
-            dht.publish_file(metadata.clone(), None).await?;
+            dht.publish_file(metadata_with_http.clone(), None).await?;
         } else {
             return Err("DHT not running".into());
         }
@@ -4371,6 +4470,11 @@ fn read_last_lines(path: &Path, max_lines: usize) -> Result<Vec<String>, String>
     }
 
     Ok(buffer.into_iter().collect())
+}
+
+#[tauri::command]
+async fn check_bootstrap_health() -> Result<geth_bootstrap::BootstrapHealthReport, String> {
+    Ok(geth_bootstrap::check_all_bootstrap_nodes().await)
 }
 
 #[tauri::command]
@@ -5244,9 +5348,11 @@ async fn get_http_server_status(
 #[tauri::command]
 async fn download_file_http(
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
     seeder_url: String,
     merkle_root: String,
     output_path: String,
+    peer_id: Option<String>,
 ) -> Result<(), String> {
     tracing::info!(
         "Starting HTTP Range-based download: {} from {}",
@@ -5255,6 +5361,17 @@ async fn download_file_http(
     );
     
     tracing::info!("Output path: {}", output_path);
+
+    // Get our local peer ID to send to provider
+    let downloader_peer_id = if let Some(dht) = state.dht.lock().await.as_ref() {
+        Some(dht.get_peer_id().await)
+    } else {
+        None
+    };
+    
+    if let Some(ref local_id) = downloader_peer_id {
+        tracing::info!("📤 Downloader peer ID: {}", local_id);
+    }
 
     // Create progress channel
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<http_download::HttpDownloadProgress>(100);
@@ -5275,8 +5392,10 @@ async fn download_file_http(
         }
     });
 
-    // Create HTTP download client (Range-based, no chunk storage needed)
-    let client = http_download::HttpDownloadClient::new();
+    // Create HTTP download client with downloader peer ID
+    let client = http_download::HttpDownloadClient::new_with_peer_id(downloader_peer_id);
+
+    let start_time = std::time::Instant::now();
 
     // Start download using Range requests
     let result = client
@@ -5293,11 +5412,38 @@ async fn download_file_http(
     
     match result {
         Ok(()) => {
-            tracing::info!("HTTP download completed successfully: {}", output_path);
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            
+            // Get file size
+            let file_size = tokio::fs::metadata(&output_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
+            
+            tracing::info!("HTTP download completed successfully: {} ({} bytes in {} ms)", 
+                output_path, file_size, duration_ms);
+            
+            // Record successful transfer metrics if peer_id provided
+            if let Some(ref peer_id_str) = peer_id {
+                if let Some(dht) = state.dht.lock().await.as_ref() {
+                    dht.record_transfer_success(peer_id_str, file_size, duration_ms).await;
+                    tracing::info!("📊 Recorded successful transfer for peer: {}", peer_id_str);
+                }
+            }
+            
             Ok(())
         }
         Err(e) => {
             tracing::error!("HTTP download failed: {}", e);
+            
+            // Record failed transfer metrics if peer_id provided
+            if let Some(ref peer_id_str) = peer_id {
+                if let Some(dht) = state.dht.lock().await.as_ref() {
+                    dht.record_transfer_failure(peer_id_str, "http_download_error").await;
+                    tracing::info!("📊 Recorded failed transfer for peer: {}", peer_id_str);
+                }
+            }
+            
             Err(e)
         }
     }
@@ -5406,8 +5552,6 @@ fn main() {
         return;
     }
 
-    println!("Starting Chiral Network...");
-
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -5430,15 +5574,10 @@ fn main() {
             eprintln!("Failed to create download directory: {}", e);
         }
 
-        println!("Instance ID: {}", instance_id);
-        println!("Using download directory: {:?}", download_dir);
-
         // Calculate port range based on instance ID to avoid conflicts
         // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
         let base_port = 6881 + ((instance_id - 1) * 11);
         let port_range = base_port..(base_port + 10);
-        
-        println!("Using BitTorrent port range: {}-{}", port_range.start, port_range.end);
 
         let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir,
@@ -5453,6 +5592,56 @@ fn main() {
         
         (bittorrent_handler_arc, Arc::new(manager))
     });
+
+    // Reputation system Tauri commands
+    #[tauri::command]
+    async fn publish_reputation_verdict(
+        verdict: reputation::TransactionVerdict,
+        state: State<'_, AppState>,
+    ) -> Result<(), String> {
+        println!("📊 RUST: publish_reputation_verdict called");
+        tracing::info!("📊 publish_reputation_verdict: {} -> {} ({:?})", 
+            verdict.issuer_id, verdict.target_id, verdict.outcome);
+        
+        // Get DHT service from AppState
+        let dht_guard = state.dht.lock().await;
+        let dht = dht_guard.as_ref()
+            .ok_or_else(|| "DHT service not initialized".to_string())?;
+        
+        // Create ReputationDhtService and store verdict
+        let mut reputation_dht = reputation::ReputationDhtService::new();
+        reputation_dht.set_dht_service(Arc::clone(dht));
+        println!("📊 RUST: About to store verdict");
+        reputation_dht.store_transaction_verdict(&verdict).await?;
+        
+        println!("✅ RUST: Verdict stored successfully");
+        tracing::info!("✅ Published verdict to DHT for peer: {}", verdict.target_id);
+        Ok(())
+    }
+
+    #[tauri::command]
+    async fn get_reputation_verdicts(
+        peer_id: String,
+        state: State<'_, AppState>,
+    ) -> Result<Vec<reputation::TransactionVerdict>, String> {
+        println!("🔍 RUST: get_reputation_verdicts called for: {}", peer_id);
+        tracing::info!("📊 get_reputation_verdicts for peer: {}", peer_id);
+        
+        // Get DHT service from AppState
+        let dht_guard = state.dht.lock().await;
+        let dht = dht_guard.as_ref()
+            .ok_or_else(|| "DHT service not initialized".to_string())?;
+        
+        // Create ReputationDhtService and retrieve verdicts
+        let mut reputation_dht = reputation::ReputationDhtService::new();
+        reputation_dht.set_dht_service(Arc::clone(dht));
+        println!("🔍 RUST: About to retrieve verdicts");
+        let verdicts = reputation_dht.retrieve_transaction_verdicts(&peer_id).await?;
+        
+        println!("✅ RUST: Retrieved {} verdicts", verdicts.len());
+        tracing::info!("✅ Retrieved {} verdicts for peer: {}", verdicts.len(), peer_id);
+        Ok(verdicts)
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -5569,6 +5758,7 @@ fn main() {
             check_geth_binary,
             get_geth_status,
             download_geth_binary,
+            check_bootstrap_health,
             set_miner_address,
             start_miner,
             stop_miner,
@@ -5579,10 +5769,14 @@ fn main() {
             get_network_stats,
             get_block_details_by_number,
             get_transaction_history,
+            get_transaction_history_range,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
             get_recent_mined_blocks_pub,
+            get_mined_blocks_range,
+            get_total_mining_rewards,
+            calculate_accurate_totals,
             get_cpu_temperature,
             start_dht_node,
             stop_dht_node,
@@ -5598,6 +5792,7 @@ fn main() {
             get_dht_health,
             get_dht_peer_count,
             get_dht_peer_id,
+            get_peer_id,
             is_dht_running,
             get_dht_connected_peers,
             send_dht_message,
@@ -5672,6 +5867,9 @@ fn main() {
             start_http_server,
             stop_http_server,
             get_http_server_status,
+            // Reputation system commands
+            publish_reputation_verdict,
+            get_reputation_verdicts,
             download_file_http,
             save_temp_file_for_upload,
             get_file_size,
@@ -5731,11 +5929,8 @@ fn main() {
         })
         .setup(|app| {
             // Load settings from disk
-            println!("Loading settings from app data directory...");
             let settings = load_settings_from_file(&app.handle());
-            println!("Settings loaded: enable_file_logging={}, max_log_size_mb={}", 
-                  settings.enable_file_logging, settings.max_log_size_mb);
-            
+
             // Initialize tracing subscriber with console output and optionally file output
             use tracing_subscriber::{fmt, prelude::*, EnvFilter};
             
@@ -5761,15 +5956,12 @@ fn main() {
             let app_data_dir = app.path().app_data_dir()
                 .expect("Failed to get app data directory");
             let logs_dir = app_data_dir.join("logs");
-            
-            println!("Initializing file logger at: {}", logs_dir.display());
-            
+
             let log_config = logger::LogConfig::new(&logs_dir, settings.max_log_size_mb, settings.enable_file_logging);
             
             let file_logger_writer = match logger::RotatingFileWriter::new(log_config) {
                 Ok(writer) => {
                     let thread_safe_writer = logger::ThreadSafeWriter::new(writer);
-                    println!("File logger initialized successfully (enabled: {})", settings.enable_file_logging);
                     Some(thread_safe_writer)
                 }
                 Err(e) => {
@@ -5792,11 +5984,7 @@ fn main() {
                     .with(env_filter)
                     .init();
             }
-            
-            info!("Chiral Network starting up...");
-            info!("Settings loaded: enable_file_logging={}, max_log_size_mb={}", 
-                  settings.enable_file_logging, settings.max_log_size_mb);
-            
+
             // Store the file logger in app state so it can be updated later
             if let Some(file_writer) = file_logger_writer {
                 if let Some(state) = app.try_state::<AppState>() {
@@ -5938,28 +6126,46 @@ fn main() {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
                     if let Some(state) = app_handle.try_state::<AppState>() {
-                        let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], 8080).into();
+                        // Try ports 8080-8090 to support multiple instances
+                        let mut server_started = false;
+                        for port in 8080..=8090 {
+                            let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
 
-                        tracing::info!("Auto-starting HTTP server on port 8080...");
+                            tracing::info!("Attempting to start HTTP server on port {}...", port);
 
-                        // Create shutdown channel for auto-started server
-                        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+                            // Create shutdown channel for auto-started server
+                            let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
-                        match http_server::start_server(state.http_server_state.clone(), bind_addr, shutdown_rx).await {
-                            Ok(bound_addr) => {
-                                let mut addr_lock = state.http_server_addr.lock().await;
-                                *addr_lock = Some(bound_addr);
-                                
-                                let mut shutdown_lock = state.http_server_shutdown.lock().await;
-                                *shutdown_lock = Some(shutdown_tx);
-                                
-                                tracing::info!("HTTP server started at http://{}", bound_addr);
-                                println!("✅ HTTP server listening on http://{}", bound_addr);
+                            match http_server::start_server(state.http_server_state.clone(), bind_addr, shutdown_rx).await {
+                                Ok(bound_addr) => {
+                                    let mut addr_lock = state.http_server_addr.lock().await;
+                                    *addr_lock = Some(bound_addr);
+                                    
+                                    let mut shutdown_lock = state.http_server_shutdown.lock().await;
+                                    *shutdown_lock = Some(shutdown_tx);
+                                    
+                                    tracing::info!("HTTP server started at http://{}", bound_addr);
+                                    println!("✅ HTTP server listening on http://{}", bound_addr);
+                                    server_started = true;
+                                    break;
+                                }
+                                Err(e) if e.to_string().contains("address already in use") || 
+                                          e.to_string().contains("Address already in use") || 
+                                          e.to_string().contains("os error 48") => {
+                                    tracing::debug!("Port {} already in use, trying next port...", port);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to start HTTP server on port {}: {}", port, e);
+                                    eprintln!("⚠️  HTTP server failed to start on port {}: {}", port, e);
+                                    break;
+                                }
                             }
-                            Err(e) => {
-                                tracing::error!("Failed to start HTTP server: {}", e);
-                                eprintln!("⚠️  HTTP server failed to start: {}", e);
-                            }
+                        }
+                        
+                        if !server_started {
+                            tracing::warn!("Could not start HTTP server on any port (8080-8090)");
+                            eprintln!("⚠️  HTTP server could not start - all ports 8080-8090 are in use");
                         }
                     }
                 });
@@ -5975,7 +6181,6 @@ fn main() {
                         ));
                         if let Ok(mut dr_guard) = state.download_restart.try_lock() {
                             *dr_guard = Some(download_restart_service);
-                            tracing::info!("Download restart service initialized");
                         }
                     }
                 });

@@ -1,7 +1,7 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tokio::fs::File;
+use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Semaphore};
 
@@ -74,10 +74,13 @@ const CHUNK_SIZE: u64 = 256 * 1024;
 /// - Leaves headroom for WebRTC/Bitswap downloads happening simultaneously
 const MAX_CONCURRENT_CHUNKS: usize = 5;
 
+#[derive(Clone)]
 pub struct HttpDownloadClient {
     http_client: Client,
     /// Semaphore to limit concurrent chunk downloads
     download_semaphore: std::sync::Arc<Semaphore>,
+    /// Downloader's peer ID to send to provider for metrics tracking
+    downloader_peer_id: Option<String>,
 }
 
 impl HttpDownloadClient {
@@ -88,6 +91,19 @@ impl HttpDownloadClient {
                 .build()
                 .expect("Failed to create HTTP client"),
             download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
+            downloader_peer_id: None,
+        }
+    }
+
+    /// Create with downloader peer ID for provider-side metrics tracking
+    pub fn new_with_peer_id(downloader_peer_id: Option<String>) -> Self {
+        Self {
+            http_client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to create HTTP client"),
+            download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
+            downloader_peer_id,
         }
     }
 
@@ -99,6 +115,7 @@ impl HttpDownloadClient {
                 .build()
                 .expect("Failed to create HTTP client"),
             download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
+            downloader_peer_id: None,
         }
     }
 
@@ -223,7 +240,7 @@ impl HttpDownloadClient {
         Ok(())
     }
 
-    /// Fetch file metadata from HTTP seeder
+    /// Fetch file metadata from seeder
     ///
     /// Calls: GET /files/{file_hash}/metadata
     async fn fetch_metadata(
@@ -235,16 +252,19 @@ impl HttpDownloadClient {
 
         tracing::info!("Fetching metadata from: {}", url);
 
-        let response = self
-            .http_client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| {
-                let err_msg = format!("Failed to fetch metadata from {}: {}", url, e);
-                tracing::error!("{}", err_msg);
-                err_msg
-            })?;
+        // Build request with optional peer ID header
+        let mut request = self.http_client.get(&url);
+        
+        if let Some(ref peer_id) = self.downloader_peer_id {
+            request = request.header("X-Downloader-Peer-ID", peer_id);
+            tracing::debug!("📤 Adding downloader peer ID header: {}", peer_id);
+        }
+
+        let response = request.send().await.map_err(|e| {
+            let err_msg = format!("Failed to fetch metadata from {}: {}", url, e);
+            tracing::error!("{}", err_msg);
+            err_msg
+        })?;
 
         if !response.status().is_success() {
             let err_msg = format!(
@@ -256,14 +276,11 @@ impl HttpDownloadClient {
             return Err(err_msg);
         }
 
-        let metadata: HttpFileMetadata = response
-            .json()
-            .await
-            .map_err(|e| {
-                let err_msg = format!("Failed to parse metadata from {}: {}", url, e);
-                tracing::error!("{}", err_msg);
-                err_msg
-            })?;
+        let metadata: HttpFileMetadata = response.json().await.map_err(|e| {
+            let err_msg = format!("Failed to parse metadata from {}: {}", url, e);
+            tracing::error!("{}", err_msg);
+            err_msg
+        })?;
 
         tracing::info!(
             "Successfully fetched metadata: {} (size: {}, encrypted: {})",
@@ -334,6 +351,7 @@ impl HttpDownloadClient {
             let file_hash = file_hash.to_string();
             let total_chunks = ranges.len();
             let semaphore = self.download_semaphore.clone();
+            let downloader_peer_id = self.downloader_peer_id.clone();
 
             // Spawn task for each chunk (but semaphore limits concurrency)
             let task = tokio::spawn(async move {
@@ -351,13 +369,16 @@ impl HttpDownloadClient {
                     url
                 );
 
-                // Make request with Range header
-                let response = client
+                // Make request with Range header and optional peer ID
+                let mut request = client
                     .get(&url)
-                    .header("Range", format!("bytes={}-{}", start, end))
-                    .send()
-                    .await
-                    .map_err(|e| format!("Failed to download chunk {}: {}", index, e))?;
+                    .header("Range", format!("bytes={}-{}", start, end));
+                
+                if let Some(ref peer_id) = downloader_peer_id {
+                    request = request.header("X-Downloader-Peer-ID", peer_id);
+                }
+                
+                let response = request.send().await.map_err(|e| format!("Failed to download chunk {}: {}", index, e))?;
 
                 // Verify 206 Partial Content response
                 if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
@@ -498,6 +519,121 @@ impl HttpDownloadClient {
                 .await;
         }
     }
+
+
+    /// Resume a download from a specific byte offset using Range requests
+    ///
+    /// This method downloads the remaining part of a file starting from `bytes_already_downloaded`
+    /// and appends to an existing file.
+    pub async fn resume_download_from_offset(
+        &self,
+        seeder_url: &str,
+        file_hash: &str,
+        output_path: &Path,
+        bytes_already_downloaded: u64,
+        total_size: u64,
+        progress_tx: Option<mpsc::Sender<HttpDownloadProgress>>,
+    ) -> Result<(), String> {
+        tracing::info!(
+            "Resuming HTTP download: {} from {}, offset: {}/{}",
+            file_hash,
+            seeder_url,
+            bytes_already_downloaded,
+            total_size
+        );
+
+        // Calculate remaining bytes
+        let remaining_bytes = total_size.saturating_sub(bytes_already_downloaded);
+        if remaining_bytes == 0 {
+            // Already complete
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(HttpDownloadProgress {
+                    file_hash: file_hash.to_string(),
+                    chunks_total: (total_size / CHUNK_SIZE) as usize,
+                    chunks_downloaded: (total_size / CHUNK_SIZE) as usize,
+                    bytes_downloaded: total_size,
+                    bytes_total: total_size,
+                    status: DownloadStatus::Completed,
+                }).await;
+            }
+            return Ok(());
+        }
+
+        // Open existing file for appending
+        let mut file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open(output_path)
+            .await
+            .map_err(|e| format!("Failed to open file for resume: {}", e))?;
+
+        // Calculate ranges starting from the resume offset
+        let ranges = self.calculate_ranges_from_offset(bytes_already_downloaded, total_size);
+        let total_chunks = ranges.len();
+
+        // Send initial progress
+        self.send_progress(
+            &progress_tx,
+            file_hash,
+            total_chunks,
+            0, // chunks downloaded so far
+            bytes_already_downloaded,
+            total_size,
+            DownloadStatus::Downloading,
+        ).await;
+
+        // Download remaining chunks
+        let chunks = self
+            .download_chunks_with_ranges(
+                seeder_url,
+                file_hash,
+                &ranges,
+                progress_tx.clone(),
+                total_size,
+            )
+            .await?;
+
+        // Write chunks to file in order
+        for chunk in chunks {
+            file.write_all(&chunk).await
+                .map_err(|e| format!("Failed to write chunk to file: {}", e))?;
+        }
+
+        // Send final progress
+        self.send_progress(
+            &progress_tx,
+            file_hash,
+            total_chunks,
+            total_chunks,
+            total_size,
+            total_size,
+            DownloadStatus::Completed,
+        ).await;
+
+        tracing::info!("Successfully resumed download: {}", file_hash);
+        Ok(())
+    }
+
+    /// Calculate byte ranges starting from a specific offset
+    fn calculate_ranges_from_offset(&self, start_offset: u64, file_size: u64) -> Vec<ByteRange> {
+        let mut ranges = Vec::new();
+        let mut offset = start_offset;
+        let mut index = (start_offset / CHUNK_SIZE) as usize; // Continue chunk numbering
+
+        while offset < file_size {
+            let end = std::cmp::min(offset + CHUNK_SIZE - 1, file_size - 1);
+            ranges.push(ByteRange {
+                start: offset,
+                end,
+                index,
+            });
+            offset = end + 1;
+            index += 1;
+        }
+
+        ranges
+    }
+
 }
 
 #[cfg(test)]

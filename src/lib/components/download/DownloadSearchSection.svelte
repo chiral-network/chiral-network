@@ -15,6 +15,7 @@
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
   import PeerSelectionModal, { type PeerInfo } from './PeerSelectionModal.svelte';
   import PeerSelectionService from '$lib/services/peerSelectionService';
+  import { files, type FileItem } from '$lib/stores';
 
   type ToastType = 'success' | 'error' | 'info' | 'warning';
   type ToastPayload = { message: string; type?: ToastType; duration?: number; };
@@ -638,7 +639,8 @@
         await invoke('download_file_http', {
           seederUrl,
           merkleRoot,
-          outputPath
+          outputPath,
+          peerId: firstPeer  // Pass peer ID for metrics tracking
         });
 
         console.log(`✅ HTTP download completed: ${outputPath}`);
@@ -672,6 +674,44 @@
             pushMessage(`Download completed but payment failed: ${paymentResult.error}`, 'warning', 6000);
           }
         }
+
+        const completedHash = merkleRoot || file.fileHash || `http-${Date.now()}`;
+        const manifestData =
+          typeof file.manifest === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(file.manifest as string);
+                } catch {
+                  return undefined;
+                }
+              })()
+            : file.manifest;
+
+        const completedEntry: FileItem = {
+          id: `http-download-${Date.now()}`,
+          name: file.fileName,
+          hash: completedHash,
+          size: file.fileSize ?? 0,
+          status: 'completed',
+          progress: 100,
+          downloadPath: outputPath,
+          isEncrypted: file.isEncrypted ?? file.encrypted ?? false,
+          manifest: manifestData,
+          cids: file.cids ?? [],
+          seeders: file.seeders?.length ?? 0,
+          seederAddresses: file.seeders ?? [],
+          price: file.price ?? paymentAmount
+        };
+
+        files.update((current) => {
+          const idx = current.findIndex((entry) => entry.hash === completedEntry.hash);
+          if (idx >= 0) {
+            return current.map((entry, entryIndex) =>
+              entryIndex === idx ? { ...entry, ...completedEntry } : entry
+            );
+          }
+          return [...current, completedEntry];
+        });
       } catch (invokeError) {
         // Log the actual error from Rust
         console.error('❌ HTTP download invoke error:', invokeError);

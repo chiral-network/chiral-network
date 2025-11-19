@@ -79,7 +79,23 @@
       "logUnavailable": "Log file not found.",
       "logTruncated": "Showing the last {count} lines.",
       "errorGeneric": "Could not load Geth status.",
-      "lastUpdated": "Updated {time}"
+      "lastUpdated": "Updated {time}",
+      "bootstrap": {
+        "title": "Bootstrap Node Health",
+        "description": "Bootstrap nodes help your Chiral node discover and connect to other peers in the blockchain network. Check their reachability to diagnose connectivity issues.",
+        "checkNow": "Check Bootstrap Health",
+        "checking": "Checking...",
+        "totalNodes": "Total",
+        "reachable": "Reachable",
+        "unreachable": "Unreachable",
+        "nodeDetails": "Node Details",
+        "error": "Error",
+        "allNodesDown": "All bootstrap nodes are unreachable",
+        "cannotConnect": "Your Chiral node may have difficulty connecting to the blockchain network. Check your internet connection or firewall settings.",
+        "someNodesDown": "Some bootstrap nodes are unreachable",
+        "usingAvailable": "Your Chiral node will use the available nodes. Network connectivity should be stable.",
+        "allNodesHealthy": "All bootstrap nodes are healthy and reachable"
+      }
     },
     "dht": {
       "title": "DHT Network",
@@ -471,6 +487,8 @@
   "privacy.proxyHint": "Enter SOCKS5 proxy address (e.g., Tor at 127.0.0.1:9050)",
   "privacy.anonymousMode": "Anonymous mode (hide all identifying information)",
   "privacy.shareAnalytics": "Share anonymous usage analytics",
+  "privacy.autoLockWallet": "Auto-lock wallet after inactivity",
+  "privacy.autoLockWalletHint": "Logs you out automatically after one hour without activity.",
   "notifications.title": "Notifications",
   "notifications.enable": "Enable desktop notifications",
   "notifications.notifyComplete": "Notify when downloads complete",
@@ -584,6 +602,19 @@
     "item": {
       "from": "From",
       "to": "To"
+    },
+    "receipt": {
+      "title": "Transaction Receipt",
+      "from": "From",
+      "to": "To",
+      "hash": "Transaction Hash",
+      "blockNumber": "Block Number",
+      "gasInfo": "Gas Information",
+      "gasUsed": "Gas Used",
+      "gasPrice": "Gas Price",
+      "fee": "Transaction Fee",
+      "timestamp": "Timestamp",
+      "close": "Close Receipt"
     },
     "searchPlaceholder": "Search by address, description, or ID..."
   },
@@ -1484,10 +1515,12 @@
     "remove": "Remove",
     "clearHistory": "Clear History",
     "clearFailed": "Clear Failed",
+    "clearCanceled": "Clear Canceled",
     "exportHistory": "Export History",
     "importHistory": "Import History",
     "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
     "confirmClearFailed": "Clear all failed downloads from history?",
+    "confirmClearCanceled": "Clear all canceled downloads from history?",
     "stats": {
       "total": "Total Downloads",
       "completed": "Completed",
@@ -1499,6 +1532,7 @@
     "messages": {
       "historyCleared": "Download history cleared",
       "failedCleared": "Failed downloads cleared",
+      "canceledCleared": "Canceled downloads cleared",
       "entryRemoved": "Entry removed from history",
       "exportSuccess": "History exported successfully",
       "importSuccess": "Imported {count} history entries",
@@ -1715,6 +1749,56 @@
       "copied": "{label} copied to clipboard",
       "copyError": "Failed to copy {label}",
       "exported": "Transaction exported"
+    }
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "close": "Close",
+    "tip": "Press ? or F1 anytime to view this help",
+    "categories": {
+      "navigation": "Navigation",
+      "application": "Application",
+      "window": "Window"
+    },
+    "navigation": {
+      "download": "Go to Download page",
+      "upload": "Go to Upload page",
+      "network": "Go to Network page",
+      "mining": "Go to Mining page",
+      "account": "Go to Account page",
+      "settings": "Open Settings"
+    },
+    "application": {
+      "commandPalette": "Open Command Palette",
+      "showHelp": "Show keyboard shortcuts",
+      "closeModal": "Close modal/dialog",
+      "refresh": "Refresh current page",
+      "reload": "Reload application"
+    },
+    "window": {
+      "fullscreen": "Toggle fullscreen",
+      "quit": "Quit application"
+    }
+  },
+  "commandPalette": {
+    "searchPlaceholder": "Search for actions or pages...",
+    "searchLabel": "Command palette search",
+    "noResults": "No results found",
+    "tryDifferentQuery": "Try a different search term",
+    "navigate": "Navigate",
+    "select": "Select",
+    "close": "Close",
+    "actions": {
+      "goToDownload": "Go to Download",
+      "goToUpload": "Go to Upload",
+      "goToNetwork": "Go to Network",
+      "goToMining": "Go to Mining",
+      "goToRelay": "Go to Relay",
+      "goToAnalytics": "Go to Analytics",
+      "goToReputation": "Go to Reputation",
+      "goToBlockchain": "Go to Blockchain",
+      "goToAccount": "Go to Account",
+      "goToSettings": "Go to Settings"
     }
   }
 }

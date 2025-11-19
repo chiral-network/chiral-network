@@ -4,6 +4,8 @@ import {
   etcAccount,
   miningState,
   transactions,
+  transactionPagination,
+  miningPagination,
   wallet,
   type ETCAccount,
   type Transaction,
@@ -63,6 +65,8 @@ export class WalletService {
   private readonly isTauri: boolean;
   private readonly seenHashes = new Set<string>();
   private isRestoringAccount = false; // Flag to prevent sync during account restoration
+  private progressiveLoadHandle: ReturnType<typeof setTimeout> | null = null;
+  private isProgressiveLoading = false;
 
   constructor() {
     this.isTauri =
@@ -110,6 +114,7 @@ export class WalletService {
       this.unsubscribeAccount();
       this.unsubscribeAccount = undefined;
     }
+    this.stopProgressiveLoading();
     this.initialized = false;
     this.seenHashes.clear();
   }
@@ -242,7 +247,37 @@ export class WalletService {
       return;
     }
 
+    // Check if account changed - if so, clear everything and reset
+    const currentPaginationState = get(transactionPagination);
+    if (currentPaginationState.accountAddress !== accountAddress && currentPaginationState.accountAddress !== null) {
+      console.log(`[Account Change] Clearing all data for new account: ${accountAddress}`);
+      this.seenHashes.clear();
+      this.stopProgressiveLoading();
+      transactions.set([]); // Clear old account's transactions
+
+      // Reset pagination state for new account
+      transactionPagination.update((state) => ({
+        ...state,
+        accountAddress: null, // Will be set below
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+
+      // Reset mining pagination state for new account
+      miningPagination.update((state) => ({
+        ...state,
+        accountAddress: null, // Will be set below
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+    }
+
     try {
+      // Get current block number to track pagination
+      const currentBlock = await invoke<number>("get_current_block");
+
       // Get data in parallel: mining blocks AND transaction history
       const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
@@ -383,6 +418,50 @@ export class WalletService {
           );
         });
       }
+
+      // Update pagination state - reset if account changed or first load
+      transactionPagination.update((state) => {
+        // Reset if account changed or this is the first load
+        if (state.accountAddress !== accountAddress || state.oldestBlockScanned === null) {
+          const oldestScanned = Math.max(0, currentBlock - 1000);
+          console.log(`[Pagination] Initializing transaction pagination state:`);
+          console.log(`  - Account: ${accountAddress}`);
+          console.log(`  - Current block: ${currentBlock}`);
+          console.log(`  - Starting scan from block: ${oldestScanned}`);
+          console.log(`  - Blocks to scan progressively: ${oldestScanned} (down to block 0)`);
+          return {
+            ...state,
+            accountAddress,
+            oldestBlockScanned: oldestScanned,
+            hasMore: oldestScanned > 0,
+          };
+        }
+        // Otherwise, keep existing state (preserve progress)
+        console.log(`[Pagination] Keeping existing transaction state - already scanned down to block ${state.oldestBlockScanned}`);
+        return state;
+      });
+
+      // Update mining pagination state - reset if account changed or first load
+      miningPagination.update((state) => {
+        // Reset if account changed or this is the first load
+        if (state.accountAddress !== accountAddress || state.oldestBlockScanned === null) {
+          const oldestScanned = Math.max(0, currentBlock - 2000);
+          console.log(`[Mining Pagination] Initializing mining pagination state:`);
+          console.log(`  - Account: ${accountAddress}`);
+          console.log(`  - Current block: ${currentBlock}`);
+          console.log(`  - Starting scan from block: ${oldestScanned}`);
+          console.log(`  - Blocks to scan manually: ${oldestScanned} (down to block 0)`);
+          return {
+            ...state,
+            accountAddress,
+            oldestBlockScanned: oldestScanned,
+            hasMore: oldestScanned > 0,
+          };
+        }
+        // Otherwise, keep existing state (preserve progress)
+        console.log(`[Mining Pagination] Keeping existing mining state - already scanned down to block ${state.oldestBlockScanned}`);
+        return state;
+      });
     } catch (error) {
       // Expected when Geth is not running - silently skip
       console.error("Failed to refresh transactions:", error);
@@ -420,13 +499,6 @@ export class WalletService {
     }
 
     try {
-      // Get actual total blocks mined from miningState (set by refreshTransactions)
-      const currentMiningState = get(miningState);
-      const actualBlocksFound = currentMiningState.blocksFound ?? 0;
-
-      // Calculate total rewards based on ACTUAL blocks found, not recentBlocks length
-      const totalEarned = actualBlocksFound * 2;
-
       // Try to get balance from geth
       let realBalance = 0;
       try {
@@ -478,6 +550,294 @@ export class WalletService {
       }));
     } catch (error) {
       console.error("Failed to refresh balance:", error);
+    }
+  }
+
+  async loadMoreTransactions(): Promise<void> {
+    if (!this.isTauri) {
+      return;
+    }
+
+    // Check if we're already loading or if there are no more transactions
+    const paginationState = get(transactionPagination);
+    if (paginationState.isLoading || !paginationState.hasMore) {
+      return;
+    }
+
+    // Set loading state
+    transactionPagination.update((state) => ({ ...state, isLoading: true }));
+
+    try {
+      // Check if Geth is running
+      const isRunning = await invoke<boolean>("is_geth_running");
+      if (!isRunning) {
+        transactionPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // Get account address
+      const accountAddress = await invoke<string>("get_active_account_address");
+
+      // Check if pagination state matches current account
+      // If not, skip this load and let refreshTransactions() initialize it properly
+      if (paginationState.accountAddress !== accountAddress) {
+        console.log(`[Pagination] Account mismatch - pagination: ${paginationState.accountAddress}, current: ${accountAddress}. Waiting for refreshTransactions to initialize.`);
+        transactionPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // If oldestBlockScanned is null, pagination hasn't been initialized yet
+      if (paginationState.oldestBlockScanned === null) {
+        console.log(`[Pagination] Not initialized yet. Waiting for refreshTransactions.`);
+        transactionPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // Calculate the block range for this batch
+      const toBlock = paginationState.oldestBlockScanned;
+      const fromBlock = Math.max(0, toBlock - paginationState.batchSize);
+
+      console.log(`[Pagination] Loading transactions from block ${fromBlock} to ${toBlock}`);
+
+      // Fetch transactions for this range
+      const txHistory = await invoke("get_transaction_history_range", {
+        address: accountAddress,
+        fromBlock,
+        toBlock,
+      }) as Promise<Array<{
+        hash: string;
+        from: string;
+        to: string | null;
+        value: string;
+        block_number: number;
+        timestamp: number;
+        status: string;
+        tx_type: string;
+        gas_used: string | null;
+        gas_price: string | null;
+      }>>;
+
+      console.log(`[Pagination] Found ${txHistory.length} transactions in range`);
+
+      // Process transactions
+      const newTransactions: Transaction[] = [];
+      for (const tx of txHistory) {
+        if (this.seenHashes.has(tx.hash)) {
+          continue;
+        }
+        this.seenHashes.add(tx.hash);
+
+        const valueInWei = BigInt(tx.value);
+        const valueInChiral = Number(valueInWei) / 1e18;
+
+        if (valueInChiral === 0) {
+          continue;
+        }
+
+        const gasUsed = tx.gas_used
+          ? parseInt(tx.gas_used.replace("0x", ""), 16)
+          : undefined;
+
+        const gasPrice = tx.gas_price
+          ? parseInt(tx.gas_price.replace("0x", ""), 16) / 1e9
+          : undefined;
+
+        const feeInWei = gasUsed && tx.gas_price
+          ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
+          : undefined;
+        const feeInChiral = feeInWei ? feeInWei / 1e18 : undefined;
+
+        const transaction: Transaction = {
+          id: Date.now() + Math.random(),
+          type: tx.tx_type as "sent" | "received",
+          amount: valueInChiral,
+          from: tx.tx_type === "sent" ? accountAddress : tx.from,
+          to: tx.tx_type === "received" ? accountAddress : (tx.to ?? ""),
+          date: new Date(tx.timestamp * 1000),
+          description:
+            tx.tx_type === "sent"
+              ? `Sent to ${tx.to?.slice(0, 10)}...`
+              : `Received from ${tx.from.slice(0, 10)}...`,
+          status: tx.status === "success" ? "success" : "failed",
+          hash: tx.hash,
+          block_number: tx.block_number,
+          timestamp: tx.timestamp,
+          gas_used: gasUsed,
+          gas_price: gasPrice,
+          fee: feeInChiral,
+        };
+
+        newTransactions.push(transaction);
+      }
+
+      // Add new transactions to store
+      if (newTransactions.length > 0) {
+        transactions.update((list) => {
+          const combined = [...list, ...newTransactions];
+          const uniqueMap = new Map();
+          for (const tx of combined) {
+            const key = tx.hash || tx.txHash || `${tx.id}`;
+            if (!uniqueMap.has(key)) {
+              uniqueMap.set(key, tx);
+            } else {
+              const existing = uniqueMap.get(key);
+              if (
+                (tx.status !== "pending" && existing?.status === "pending") ||
+                (tx.block_number && !existing?.block_number)
+              ) {
+                uniqueMap.set(key, tx);
+              }
+            }
+          }
+          return Array.from(uniqueMap.values()).sort(
+            (a, b) => b.date.getTime() - a.date.getTime()
+          );
+        });
+      }
+
+      // Update pagination state
+      transactionPagination.update((state) => ({
+        ...state,
+        oldestBlockScanned: fromBlock,
+        hasMore: fromBlock > 0,
+        isLoading: false,
+      }));
+
+      console.log(`[Pagination] Updated oldestBlockScanned to ${fromBlock}, hasMore: ${fromBlock > 0}`);
+    } catch (error) {
+      console.error("Failed to load more transactions:", error);
+      transactionPagination.update((state) => ({ ...state, isLoading: false }));
+    }
+  }
+
+  async loadMoreMiningRewards(): Promise<void> {
+    if (!this.isTauri) {
+      return;
+    }
+
+    // Check if we're already loading or if there are no more mining rewards
+    const paginationState = get(miningPagination);
+    if (paginationState.isLoading || !paginationState.hasMore) {
+      return;
+    }
+
+    // Set loading state
+    miningPagination.update((state) => ({ ...state, isLoading: true }));
+
+    try {
+      // Check if Geth is running
+      const isRunning = await invoke<boolean>("is_geth_running");
+      if (!isRunning) {
+        miningPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // Get account address
+      const accountAddress = await invoke<string>("get_active_account_address");
+
+      // Check if pagination state matches current account
+      if (paginationState.accountAddress !== accountAddress) {
+        console.log(`[Mining Pagination] Account mismatch - pagination: ${paginationState.accountAddress}, current: ${accountAddress}. Waiting for refreshTransactions to initialize.`);
+        miningPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // If oldestBlockScanned is null, pagination hasn't been initialized yet
+      if (paginationState.oldestBlockScanned === null) {
+        console.log(`[Mining Pagination] Not initialized yet. Waiting for refreshTransactions.`);
+        miningPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // Calculate the block range for this batch
+      const toBlock = paginationState.oldestBlockScanned;
+      const fromBlock = Math.max(0, toBlock - paginationState.batchSize);
+
+      console.log(`[Mining Pagination] Loading mining rewards from block ${fromBlock} to ${toBlock}`);
+
+      // Fetch mining blocks for this range
+      const miningBlocks = await invoke("get_mined_blocks_range", {
+        address: accountAddress,
+        fromBlock,
+        toBlock,
+      }) as Array<{ hash: string; timestamp: number; number: number; reward?: number }>;
+
+      console.log(`[Mining Pagination] Found ${miningBlocks.length} mining blocks in range`);
+
+      // Process mining blocks
+      for (const block of miningBlocks) {
+        if (this.seenHashes.has(block.hash)) {
+          continue;
+        }
+        this.seenHashes.add(block.hash);
+        this.pushRecentBlock({
+          hash: block.hash,
+          timestamp: new Date((block.timestamp || 0) * 1000),
+          reward: block.reward ?? 2,
+          block_number: block.number,
+        });
+      }
+
+      // Update pagination state
+      miningPagination.update((state) => ({
+        ...state,
+        oldestBlockScanned: fromBlock,
+        hasMore: fromBlock > 0,
+        isLoading: false,
+      }));
+
+      console.log(`[Mining Pagination] Updated oldestBlockScanned to ${fromBlock}, hasMore: ${fromBlock > 0}`);
+    } catch (error) {
+      console.error("Failed to load more mining rewards:", error);
+      miningPagination.update((state) => ({ ...state, isLoading: false }));
+    }
+  }
+
+  async startProgressiveLoading(): Promise<void> {
+    if (this.isProgressiveLoading) {
+      console.log("[Progressive Loading] Already running");
+      return;
+    }
+
+    this.isProgressiveLoading = true;
+    console.log("[Progressive Loading] Starting automatic transaction loading...");
+
+    const loadNextBatch = async () => {
+      if (!this.isProgressiveLoading) {
+        console.log("[Progressive Loading] Stopped");
+        return;
+      }
+
+      const paginationState = get(transactionPagination);
+
+      // Stop if no more transactions or if we're manually loading
+      if (!paginationState.hasMore || paginationState.isLoading) {
+        console.log("[Progressive Loading] Completed - reached beginning of blockchain");
+        this.isProgressiveLoading = false;
+        return;
+      }
+
+      // Load next batch
+      await this.loadMoreTransactions();
+
+      // Schedule next batch after a short delay (500ms)
+      if (this.isProgressiveLoading && get(transactionPagination).hasMore) {
+        this.progressiveLoadHandle = setTimeout(loadNextBatch, 500);
+      } else {
+        this.isProgressiveLoading = false;
+      }
+    };
+
+    // Start loading
+    loadNextBatch();
+  }
+
+  stopProgressiveLoading(): void {
+    console.log("[Progressive Loading] Stopping...");
+    this.isProgressiveLoading = false;
+    if (this.progressiveLoadHandle) {
+      clearTimeout(this.progressiveLoadHandle);
+      this.progressiveLoadHandle = null;
     }
   }
 
@@ -817,6 +1177,66 @@ export class WalletService {
     } catch (error) {
       // This is normal for new accounts or accounts without 2FA configured
       return false;
+    }
+  }
+
+  async calculateAccurateTotals(): Promise<void> {
+    if (!this.isTauri) {
+      throw new Error("Accurate totals calculation is only available in the desktop app");
+    }
+
+    // Get account address from backend
+    let accountAddress: string;
+    try {
+      accountAddress = await invoke<string>("get_active_account_address");
+    } catch (error) {
+      throw new Error("No active account");
+    }
+
+    const { isCalculatingAccurateTotals, accurateTotals, accurateTotalsProgress } = await import("$lib/stores");
+
+    // Set loading state
+    isCalculatingAccurateTotals.set(true);
+    accurateTotalsProgress.set(null);
+
+    // Listen for progress events
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<{
+      current_block: number;
+      total_blocks: number;
+      percentage: number;
+    }>("accurate-totals-progress", (event) => {
+      accurateTotalsProgress.set({
+        currentBlock: event.payload.current_block,
+        totalBlocks: event.payload.total_blocks,
+        percentage: event.payload.percentage,
+      });
+    });
+
+    try {
+      const result = await invoke<{
+        blocks_mined: number;
+        total_received: number;
+        total_sent: number;
+      }>("calculate_accurate_totals", {
+        address: accountAddress,
+      });
+
+      // Store the results
+      accurateTotals.set({
+        blocksMined: result.blocks_mined,
+        totalReceived: result.total_received,
+        totalSent: result.total_sent,
+      });
+
+      console.log(`[Accurate Totals] Complete!`, result);
+    } catch (error) {
+      console.error("Failed to calculate accurate totals:", error);
+      throw error;
+    } finally {
+      isCalculatingAccurateTotals.set(false);
+      accurateTotalsProgress.set(null);
+      unlisten();
     }
   }
 

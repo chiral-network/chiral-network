@@ -7,6 +7,7 @@ use crate::download_source::{
     P2pSourceInfo,
 };
 use crate::ftp_client;
+use crate::http_download::HttpDownloadClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -158,7 +159,76 @@ impl DownloadScheduler {
             verify_ssl = info.verify_ssl,
             "Initiating HTTP download"
         );
-        // TODO: Implement actual HTTP download logic
+
+        // Get task to determine output path
+        let task = self
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| format!("Task not found: {}", task_id))?;
+
+        // Construct output path (use file name from task)
+        let file_name = &task.file_name;
+        let output_path = PathBuf::from(format!("./downloads/{}", file_name));
+
+        // Create downloads directory if it doesn't exist
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create download directory: {}", e))?;
+        }
+
+        // Spawn async task to download file
+        let url = info.url.clone();
+        let file_hash_clone = task.file_hash.clone();
+        let output_path_clone = output_path.clone();
+
+        tokio::spawn(async move {
+            let client = HttpDownloadClient::new();
+
+            // Create progress channel for monitoring (optional)
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<crate::http_download::HttpDownloadProgress>(10);
+
+            // Spawn progress monitor
+            let file_hash_for_progress = file_hash_clone.clone();
+            let progress_handle = tokio::spawn(async move {
+                while let Some(progress) = progress_rx.recv().await {
+                    debug!(
+                        file_hash = %file_hash_for_progress,
+                        downloaded = progress.bytes_downloaded,
+                        total = progress.bytes_total,
+                        status = ?progress.status,
+                        "HTTP download progress"
+                    );
+                }
+            });
+
+            // Perform the HTTP download
+            match client.download_file(
+                &url,
+                &file_hash_clone,
+                &output_path_clone,
+                Some(progress_tx),
+            ).await {
+                Ok(_) => {
+                    info!(
+                        file_hash = %file_hash_clone,
+                        output = ?output_path_clone,
+                        "HTTP download completed successfully"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        url = %url,
+                        file_hash = %file_hash_clone,
+                        "HTTP download failed"
+                    );
+                }
+            }
+
+            // Wait for progress monitor to finish
+            let _ = progress_handle.await;
+        });
+
         Ok(())
     }
 

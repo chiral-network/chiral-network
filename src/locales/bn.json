@@ -468,6 +468,8 @@
   "privacy.proxyHint": "Enter SOCKS5 proxy address (e.g., Tor at 127.0.0.1:9050)",
   "privacy.anonymousMode": "Anonymous mode (hide all identifying information)",
   "privacy.shareAnalytics": "Share anonymous usage analytics",
+  "privacy.autoLockWallet": "Auto-lock wallet after inactivity",
+  "privacy.autoLockWalletHint": "Logs you out automatically after one hour without activity.",
   "notifications.title": "Notifications",
   "notifications.enable": "Enable desktop notifications",
   "notifications.notifyComplete": "Notify when downloads complete",
@@ -579,6 +581,19 @@
     "item": {
       "from": "From",
       "to": "To"
+    },
+    "receipt": {
+      "title": "লেনদেনের রসিদ",
+      "from": "সে",
+      "to": "কে",
+      "hash": "লেনদেন হ্যাশ",
+      "blockNumber": "ব্লক নম্বর",
+      "gasInfo": "গ্যাস তথ্য",
+      "gasUsed": "গ্যাস ব্যবহৃত",
+      "gasPrice": "গ্যাসের দাম",
+      "fee": "লেনদেন ফি",
+      "timestamp": "সময়স্ট্যাম্প",
+      "close": "রসিদ বন্ধ করুন"
     },
     "searchPlaceholder": "Search by address, description, or ID..."
   },
