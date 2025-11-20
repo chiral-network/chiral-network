@@ -729,73 +729,96 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   }
 
   // Smart Resume: Load and resume interrupted downloads
-  async function loadAndResumeDownloads() {
-    try {
-      // Check if we've already restored in this session
-      if (sessionStorage.getItem('downloadsRestored') === 'true') {
-        console.log('Downloads already restored in this session, skipping')
-        return
-      }
+async function loadAndResumeDownloads() {
+  try {
+    // Check if we've already restored in this session
+    if (sessionStorage.getItem('downloadsRestored') === 'true') {
+      console.log('Downloads already restored in this session, skipping')
+      return
+    }
 
-      const saved = localStorage.getItem('pendingDownloads')
-      if (!saved) {
-        sessionStorage.setItem('downloadsRestored', 'true')
-        return
-      }
+    const saved = localStorage.getItem('pendingDownloads')
+    if (!saved) {
+      sessionStorage.setItem('downloadsRestored', 'true')
+      return
+    }
 
-      const { active, queued, timestamp } = JSON.parse(saved)
+    const { active, queued, timestamp } = JSON.parse(saved)
 
-      // Only auto-resume if less than 24 hours old
-      const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
-      if (hoursSinceLastSave > 24) {
-        diagnosticLogger.debug('Download', 'Saved downloads are too old, skipping auto-resume', { hoursSinceLastSave });
-        localStorage.removeItem('pendingDownloads')
-        sessionStorage.setItem('downloadsRestored', 'true')
-        return
-      }
+    // Only auto-resume if less than 24 hours old
+    const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
+    if (hoursSinceLastSave > 24) {
+      diagnosticLogger.debug('Download', 'Saved downloads are too old, skipping auto-resume', { hoursSinceLastSave });
+      localStorage.removeItem('pendingDownloads')
+      sessionStorage.setItem('downloadsRestored', 'true')
+      return
+    }
 
-      let resumeCount = 0
+    let resumeCount = 0
 
-      // Restore queued downloads
-      if (queued && queued.length > 0) {
-        downloadQueue.set(queued)
-        resumeCount += queued.length
-      }
+    // Restore queued downloads
+    if (queued && queued.length > 0) {
+      downloadQueue.set(queued)
+      resumeCount += queued.length
+    }
 
-      // Restore active downloads - check for duplicates by ID before adding
-      if (active && active.length > 0) {
-        const restoredFiles = active.map((file: any) => ({
-          ...file,
-          status: 'paused' as const,
-          speed: '0 B/s',
-          eta: 'N/A'
-        }))
+    // Restore active downloads - dedupe by id/hash/name+size before adding
+    if (active && active.length > 0) {
+      const restoredFiles = active.map((file: any) => ({
+        ...file,
+        status: 'paused' as const,
+        speed: '0 B/s',
+        eta: 'N/A'
+      }))
 
-        files.update(f => {
-          const existingIds = new Set(f.map(file => file.id))
-          const newFiles = restoredFiles.filter(file => !existingIds.has(file.id))
-          return [...f, ...newFiles]
+      let addedRestored: typeof restoredFiles = []
+
+      files.update(existing => {
+        const existingKeys = new Set(
+          existing.map(file => file.id ?? file.hash ?? `${file.name}-${file.size}`)
+        )
+
+        const deduped = restoredFiles.filter(file => {
+          const key = file.id ?? file.hash ?? `${file.name}-${file.size}`
+          if (existingKeys.has(key)) {
+            return false
+          }
+          existingKeys.add(key)
+          return true
         })
 
-        active.forEach((file: any) => resumedDownloads.add(file.id))
-        resumeCount += active.length
-      }
+        addedRestored = deduped
+        return deduped.length > 0 ? [...existing, ...deduped] : existing
+      })
 
-      if (resumeCount > 0) {
-        const message = resumeCount === 1
-          ? `Restored 1 interrupted download. Resume it from the Downloads page.`
-          : `Restored ${resumeCount} interrupted downloads. Resume them from the Downloads page.`
-        showNotification(message, 'info', 6000)
+      if (addedRestored.length > 0) {
+        addedRestored.forEach((file: any) => {
+          if (file.id) {
+            resumedDownloads.add(file.id)
+          } else if (file.hash) {
+            resumedDownloads.add(file.hash)
+          }
+        })
+        resumeCount += addedRestored.length
       }
-
-      localStorage.removeItem('pendingDownloads')
-      sessionStorage.setItem('downloadsRestored', 'true')
-    } catch (error) {
-      errorLogger.fileOperationError('Load download state', error instanceof Error ? error.message : String(error));
-      localStorage.removeItem('pendingDownloads')
-      sessionStorage.setItem('downloadsRestored', 'true')
     }
+
+    if (resumeCount > 0) {
+      const message = resumeCount === 1
+        ? `Restored 1 interrupted download. Resume it from the Downloads page.`
+        : `Restored ${resumeCount} interrupted downloads. Resume them from the Downloads page.`
+      showNotification(message, 'info', 6000)
+    }
+
+    localStorage.removeItem('pendingDownloads')
+    sessionStorage.setItem('downloadsRestored', 'true')
+  } catch (error) {
+    errorLogger.fileOperationError('Load download state', error instanceof Error ? error.message : String(error));
+    localStorage.removeItem('pendingDownloads')
+    sessionStorage.setItem('downloadsRestored', 'true')
   }
+}
+
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
