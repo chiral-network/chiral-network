@@ -729,9 +729,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   }
 
   // Smart Resume: Load and resume interrupted downloads
-  async function loadAndResumeDownloads() {
-    try {
-      // Cheasync function loadAndResumeDownloads() {
+async function loadAndResumeDownloads() {
   try {
     // Check if we've already restored in this session
     if (sessionStorage.getItem('downloadsRestored') === 'true') {
@@ -820,6 +818,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     sessionStorage.setItem('downloadsRestored', 'true')
   }
 }
+
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info', duration = 4000 } = event.detail
