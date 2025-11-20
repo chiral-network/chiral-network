@@ -8,6 +8,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 use tracing::{error, info, instrument, warn};
+use crate::dht::DhtService;
+use librqbit::AddTorrentOptions;
+use libp2p::Multiaddr;
 use thiserror::Error;
 
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
@@ -181,6 +184,7 @@ struct PaymentRequiredPayload {
 #[derive(Clone)]
 pub struct BitTorrentHandler {
     rqbit_session: Arc<Session>,
+    dht_service: Arc<DhtService>,
     download_directory: std::path::PathBuf,
     // NEW: Manage active torrents and their stats.
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
@@ -190,13 +194,17 @@ pub struct BitTorrentHandler {
 
 impl BitTorrentHandler {
     /// Creates a new BitTorrentHandler with the specified download directory.
-    pub async fn new(download_directory: std::path::PathBuf) -> Result<Self, BitTorrentError> {
-        Self::new_with_port_range(download_directory, None).await
+    pub async fn new(
+        download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
+    ) -> Result<Self, BitTorrentError> {
+        Self::new_with_port_range(download_directory, dht_service, None).await
     }
 
     /// Creates a new BitTorrentHandler with a specific port range to avoid conflicts.
     pub async fn new_with_port_range(
         download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
     ) -> Result<Self, BitTorrentError> {
         let mut opts = SessionOptions::default();
@@ -211,7 +219,7 @@ impl BitTorrentHandler {
         opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
             folder: Some(download_directory.clone()),
         });
-        
+
         let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
             BitTorrentError::SessionInit {
                 message: format!("Failed to create session: {}", e),
@@ -219,12 +227,14 @@ impl BitTorrentHandler {
         })?;
 
         let handler = Self {
-            rqbit_session: session,
-            download_directory,
+            rqbit_session: session.clone(),
+            dht_service: dht_service.clone(),
+            download_directory: download_directory.clone(),
             active_torrents: Default::default(),
             peer_states: Default::default(),
             app_handle: None,
         };
+
 
         // Spawn the background task for statistics polling.
         handler.spawn_stats_poller();
@@ -233,7 +243,14 @@ impl BitTorrentHandler {
             "Initializing BitTorrentHandler with download directory: {:?}",
             handler.download_directory
         );
-        Ok(handler)
+        Ok(Self {
+            rqbit_session: session,
+            dht_service,
+            download_directory, // This was missing fields
+            active_torrents: Default::default(),
+            peer_states: Default::default(),
+            app_handle: None,
+        })
     }
 
     /// Spawns a background task to periodically poll for and process per-peer statistics.
@@ -298,17 +315,23 @@ impl BitTorrentHandler {
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
+        let info_hash: Option<String>;
+
         let add_torrent = if identifier.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| {
                 error!("Magnet link validation failed: {}", e);
                 e
             })?;
+            info_hash = Some(Self::extract_info_hash(identifier).ok_or(BitTorrentError::InvalidMagnetLink { url: identifier.to_string() })?);
             AddTorrent::from_url(identifier)
         } else {
             Self::validate_torrent_file(identifier).map_err(|e| {
                 error!("Torrent file validation failed: {}", e);
                 e
             })?;
+            // For .torrent files, info_hash will be available after parsing,
+            // which librqbit does internally. For now, we can only prioritize for magnets.
+            info_hash = None;
             AddTorrent::from_local_filename(identifier).map_err(|e| {
                 error!("Failed to load torrent file: {}", e);
                 BitTorrentError::TorrentFileError {
@@ -317,9 +340,37 @@ impl BitTorrentHandler {
             })?
         };
 
+        let mut add_opts = AddTorrentOptions::default();
+
+        if let Some(hash) = info_hash {
+            info!("Searching for Chiral peers for info_hash: {}", hash);
+            match self.dht_service.search_peers_by_infohash(hash).await {
+                Ok(chiral_peer_ids) => {
+                    if !chiral_peer_ids.is_empty() {
+                        info!("Found {} Chiral peers. Prioritizing them.", chiral_peer_ids.len());
+                        for peer_id_str in chiral_peer_ids {
+                            // Trigger the DHT to find and connect to the peer.
+                            // This will add the peer to the swarm, and librqbit will discover it.
+                            match self.dht_service.connect_to_peer_by_id(peer_id_str.clone()).await {
+                                Ok(_) => {
+                                    info!("Initiated connection attempt to Chiral peer: {}", peer_id_str);
+                                }
+                                Err(e) => warn!("Failed to get address for Chiral peer {}: {}", peer_id_str, e),
+                            }
+                        }
+                    } else {
+                        info!("No additional Chiral peers found for this torrent.");
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to search for Chiral peers: {}", e);
+                }
+            }
+        }
+
         let add_torrent_response = self
             .rqbit_session
-            .add_torrent(add_torrent, None)
+            .add_torrent(add_torrent, Some(add_opts))
             .await
             .map_err(|e| {
                 error!("Failed to add torrent to session: {}", e);
@@ -463,6 +514,24 @@ impl BitTorrentHandler {
             BitTorrentError::Unknown { message: error_msg }
         }
     }
+
+    
+}
+
+/// Helper to convert a libp2p Multiaddr to a standard SocketAddr.
+/// This is a simplified conversion that only handles TCP/IP.
+fn multiaddr_to_socket_addr(multiaddr: &Multiaddr) -> Result<std::net::SocketAddr, &'static str> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut iter = multiaddr.iter();
+    let proto1 = iter.next().ok_or("Empty Multiaddr")?;
+    let proto2 = iter.next().ok_or("Multiaddr needs at least two protocols")?;
+    
+    match (proto1, proto2) {
+        (Protocol::Ip4(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
+        (Protocol::Ip6(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
+        _ => Err("Multiaddr format not supported (expected IP/TCP)"),
+    }
 }
 
 #[async_trait]
@@ -545,12 +614,7 @@ impl BitTorrentHandler {
     /// Extract info hash from magnet link
     pub fn extract_info_hash(magnet: &str) -> Option<String> {
         if let Ok(_) = Self::validate_magnet_link(magnet) {
-            if let Some(hash_start) = magnet.find("urn:btih:") {
-                let hash_start = hash_start + 9; // "urn:btih:".len()
-                let hash_end = magnet[hash_start..]
-                    .find('&')
-                    .map(|i| i + hash_start)
-                    .unwrap_or(magnet.len());
+            if let Some(hash_start) = magnet.to_lowercase().find("urn:btih:") {
                 let hash_start = hash_start + 9;
                 let hash_end = magnet[hash_start..]
                     .find('&')
@@ -650,5 +714,40 @@ mod tests {
             .category(),
             "filesystem"
         );
+    }
+
+    #[test]
+    fn test_multiaddr_to_socket_addr() {
+        // IPv4 test
+        let multiaddr_ipv4: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
+        let socket_addr_ipv4 = multiaddr_to_socket_addr(&multiaddr_ipv4).unwrap();
+        assert_eq!(
+            socket_addr_ipv4,
+            "127.0.0.1:8080".parse::<std::net::SocketAddr>().unwrap()
+        );
+
+        // IPv6 test
+        let multiaddr_ipv6: Multiaddr = "/ip6/::1/tcp/8080".parse().unwrap();
+        let socket_addr_ipv6 = multiaddr_to_socket_addr(&multiaddr_ipv6).unwrap();
+        assert_eq!(
+            socket_addr_ipv6,
+            "[::1]:8080".parse::<std::net::SocketAddr>().unwrap()
+        );
+
+        // Invalid format (DNS)
+        let multiaddr_dns: Multiaddr = "/dns/localhost/tcp/8080".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_dns).is_err());
+
+        // Invalid format (UDP)
+        let multiaddr_udp: Multiaddr = "/ip4/127.0.0.1/udp/8080".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_udp).is_err());
+
+        // Too short
+        let multiaddr_short: libp2p_core::Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_short).is_err());
+
+        // Empty
+        let multiaddr_empty: Multiaddr = "".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_empty).is_err());
     }
 }
