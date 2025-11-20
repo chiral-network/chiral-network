@@ -3086,12 +3086,13 @@ async fn run_dht_node(
                         }
                             SwarmEvent::NewListenAddr { address, .. } if !is_bootstrap => {
                                 // Always record in metrics for monitoring/debugging
-                                if let Ok(mut m) = metrics.try_lock() {
-                                    m.record_listen_addr(&address);
-                                }
+
                                   if let Some(Protocol::Ip4(v4)) = address.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
                                     // Reject loopback addresses - they're not reachable from remote peers
                                     if !v4.is_loopback() && !v4.is_private(){
+                                        if let Ok(mut m) = metrics.try_lock() {
+                                            m.record_listen_addr(&address);
+                                        }
                                         swarm.add_external_address(address.clone());
                                         info!("✅ Advertising reachable address: {}", address);
                                     }
