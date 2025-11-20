@@ -4074,7 +4074,7 @@ async fn run_dht_node(
                                     RREvent::ResponseSent { .. } => {}
                                 }
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::KeyRequestRr(ev)) => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::KeyRequest(ev)) => {
                                 use libp2p::request_response::{Event as RREvent, Message};
                                 match ev {
                                     // Incoming key request (we're the seeder)
