@@ -4723,7 +4723,7 @@ async fn handle_identify_event(
                 peer_id,
                 info.listen_addrs.len()
             );
-            record_identify_push_metrics(&metrics, &info).await;
+            // record_identify_push_metrics(&metrics, &info).await;
         }
         IdentifyEvent::Sent { peer_id, .. } => {
             debug!("Sent identify info to {}", peer_id);
