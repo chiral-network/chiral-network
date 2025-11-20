@@ -4074,6 +4074,101 @@ async fn run_dht_node(
                                     RREvent::ResponseSent { .. } => {}
                                 }
                             }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::KeyRequestRr(ev)) => {
+                                use libp2p::request_response::{Event as RREvent, Message};
+                                match ev {
+                                    // Incoming key request (we're the seeder)
+                                    RREvent::Message { peer, message } => match message {
+                                        Message::Request { request, channel, .. } => {
+                                            let KeyRequest { merkle_root, recipient_public_key } = request;
+                                            info!("Received key request from peer {} for file {}", peer, merkle_root);
+                                            
+                                            // Look up file metadata in cache
+                                            let file_metadata_cache_guard = file_metadata_cache.lock().await;
+                                            let result = if let Some(metadata) = file_metadata_cache_guard.get(&merkle_root) {
+                                                // Check if file has encrypted key bundle
+                                                if let Some(key_bundle) = &metadata.encrypted_key_bundle {
+                                                    info!("Found encrypted key bundle for file {} (merkle_root: {})", metadata.file_name, merkle_root);
+                                                    Ok(KeyResponse {
+                                                        encrypted_bundle: Some(key_bundle.clone()),
+                                                        error: None,
+                                                    })
+                                                } else {
+                                                    warn!("File {} found but no encrypted key bundle available", merkle_root);
+                                                    Ok(KeyResponse {
+                                                        encrypted_bundle: None,
+                                                        error: Some("File found but no encrypted key bundle available".to_string()),
+                                                    })
+                                                }
+                                            } else {
+                                                warn!("File not found in cache for merkle_root: {}", merkle_root);
+                                                Ok(KeyResponse {
+                                                    encrypted_bundle: None,
+                                                    error: Some(format!("File not found: {}", merkle_root)),
+                                                })
+                                            };
+                                            
+                                            drop(file_metadata_cache_guard);
+                                            
+                                            // Send response
+                                            match result {
+                                                Ok(response) => {
+                                                    swarm.behaviour_mut().key_request
+                                                        .send_response(channel, response)
+                                                        .unwrap_or_else(|e| error!("Failed to send key response: {e:?}"));
+                                                }
+                                                Err(e) => {
+                                                    error!("Error processing key request: {}", e);
+                                                    let error_response = KeyResponse {
+                                                        encrypted_bundle: None,
+                                                        error: Some(e),
+                                                    };
+                                                    swarm.behaviour_mut().key_request
+                                                        .send_response(channel, error_response)
+                                                        .unwrap_or_else(|e| error!("Failed to send error response: {e:?}"));
+                                                }
+                                            }
+                                        }
+                                        // Key response (we're the requester)
+                                        Message::Response { request_id, response } => {
+                                            let KeyResponse { encrypted_bundle, error } = response;
+                                            
+                                            if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
+                                                match (encrypted_bundle, error) {
+                                                    (Some(bundle), None) => {
+                                                        info!("Received encrypted key bundle for request {:?}", request_id);
+                                                        let _ = tx.send(Ok(bundle));
+                                                    }
+                                                    (None, Some(err)) => {
+                                                        warn!("Key request failed: {}", err);
+                                                        let _ = tx.send(Err(err));
+                                                    }
+                                                    (None, None) => {
+                                                        warn!("Key request returned empty response");
+                                                        let _ = tx.send(Err("Empty response from seeder".to_string()));
+                                                    }
+                                                    (Some(_), Some(err)) => {
+                                                        warn!("Key request returned both bundle and error, using error: {}", err);
+                                                        let _ = tx.send(Err(err));
+                                                    }
+                                                }
+                                            } else {
+                                                warn!("Received key response for unknown request_id {:?}", request_id);
+                                            }
+                                        }
+                                    },
+                                    RREvent::OutboundFailure { request_id, error, .. } => {
+                                        warn!("Key request outbound failure: {error:?}");
+                                        if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
+                                            let _ = tx.send(Err(format!("Outbound failure: {error:?}")));
+                                        }
+                                    }
+                                    RREvent::InboundFailure { error, .. } => {
+                                        warn!("Key request inbound failure: {error:?}");
+                                    }
+                                    RREvent::ResponseSent { .. } => {}
+                                }
+                            }
                             SwarmEvent::IncomingConnectionError { error, .. } => {
                                 if let Ok(mut m) = metrics.try_lock() {
                                     m.last_error = Some(error.to_string());
@@ -5469,6 +5564,7 @@ pub struct DhtService {
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
         >,
     >,
+    pending_key_requests: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>>>,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
     active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
@@ -6159,7 +6255,6 @@ impl DhtService {
             file_transfer_service.clone(),
             chunk_manager,
             pending_webrtc_offers.clone(),
-            pending_key_requests.clone(),
             pending_provider_queries.clone(),
             root_query_mapping.clone(),
             active_downloads.clone(),
