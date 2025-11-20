@@ -1757,6 +1757,7 @@ async fn run_dht_node(
     pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     pending_dht_queries: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>>,
+    pending_key_requests: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -3029,8 +3030,25 @@ async fn run_dht_node(
                                     }
                                 }
                             }
-                            Some(DhtCommand::RequestFileAccess { .. }) => {
-                                todo!();
+                            Some(DhtCommand::RequestFileAccess { seeder, merkle_root, recipient_public_key, sender }) => {
+                                info!("Requesting file access from seeder {} for file {}", seeder, merkle_root);
+                                
+                                // Convert PublicKey to Vec<u8> for the KeyRequest
+                                let recipient_pk_bytes = recipient_public_key.to_bytes().to_vec();
+                                
+                                // Create the key request
+                                let key_request = KeyRequest {
+                                    merkle_root: merkle_root.clone(),
+                                    recipient_public_key: recipient_pk_bytes,
+                                };
+                                
+                                // Send the request using the key_request behavior
+                                let request_id = swarm.behaviour_mut().key_request.send_request(&seeder, key_request);
+                                
+                                // Store the pending request
+                                pending_key_requests.lock().await.insert(request_id, sender);
+                                
+                                info!("Sent key request to seeder {} for file {} (request_id: {:?})", seeder, merkle_root, request_id);
                             }
                             Some(DhtCommand::AnnounceTorrent { info_hash }) => {
                                 let key = kad::RecordKey::new(&info_hash);
@@ -6087,6 +6105,7 @@ impl DhtService {
         let proxy_mgr: ProxyMgr = Arc::new(Mutex::new(ProxyManager::default()));
         let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
         let pending_webrtc_offers = Arc::new(Mutex::new(HashMap::new()));
+        let pending_key_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> =
@@ -6173,6 +6192,7 @@ impl DhtService {
             file_transfer_service,
             // chunk_manager is not stored in DhtService, only passed to the task
             pending_webrtc_offers,
+            pending_key_requests,
             pending_provider_queries,
             root_query_mapping,
             active_downloads,
