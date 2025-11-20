@@ -24,6 +24,19 @@ Chiral Network implements a BitTorrent-like file sharing model with instant seed
     - Identified by cryptographic hashes (SHA-256)
     - Discoverable through the DHT network
 
+### Transfer Protocol Selection
+
+Chiral Network supports multiple transport protocols for moving file data between peers
+(for example: WebRTC, Bitswap, HTTP-based transfers).
+
+- The **active protocol** is configured on the **Settings → Protocol** page.
+- The **Upload** and **Download** views use this selected protocol automatically.
+- The Upload and Download pages show a **read-only indicator** of the current protocol and
+  provide a link back to Settings if the user wants to change it.
+
+In other words, protocol choice is now a **global setting**, not something configured per upload
+or per download
+
 ### Basic File Sharing
 
 1. **Navigate to Upload Page** (Shared Files)
@@ -35,6 +48,10 @@ Chiral Network implements a BitTorrent-like file sharing model with instant seed
    - Content hash generated (SHA-256)
    - Metadata published to DHT
    - File immediately available for download by peers
+
+> **Note:** All uploads use the **currently selected transfer protocol** from the Settings page.
+If you need to switch between protocols (for example, from WebRTC to HTTP-based transfer),
+change it in **Settings → Protocol** before starting new uploads.
 
 ### File Versioning
 
@@ -58,6 +75,10 @@ Chiral Network supports file versioning:
    - Display peer selection modal
 5. **Select peers** to download from
 6. **Monitor progress** in download queue
+
+> **Note:** Downloads also respect the **global protocol selection** from the Settings page.
+The Download view shows the current protocol as a read-only indicator and links back to
+**Settings → Protocol** if you want to change it before starting a new download.
 
 ### Multi-Source Downloads
 
