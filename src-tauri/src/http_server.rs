@@ -421,8 +421,6 @@ pub async fn start_server(
         .map_err(|e| e.to_string())?;
     let bound_addr = listener.local_addr().map_err(|e| e.to_string())?;
 
-    tracing::info!("HTTP server listening on http://{}", bound_addr);
-
     // Spawn server in background
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {

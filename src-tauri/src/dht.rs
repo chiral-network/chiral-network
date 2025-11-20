@@ -152,6 +152,9 @@ pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
 use anyhow::Result;
 
+// Rate limiting for connection error logs (log at most once every 30 seconds)
+static LAST_CONNECTION_ERROR_LOG: AtomicU64 = AtomicU64::new(0);
+
 use libp2p::{
     autonat::v2,
     core::{
@@ -184,7 +187,10 @@ pub const RAW_CODEC: u64 = 0x55;
 const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
 /// File seeder TTL – if no heartbeat lands within this window, drop the entry.
 const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(90); // Longer TTL with grace period
-pub struct PendingKeywordIndex;
+pub struct PendingKeywordIndex {
+    pub keyword: String,
+    pub merkle_root: String,
+}
 
 /// thread-safe, mutable block store
 
@@ -1537,19 +1543,24 @@ async fn run_dht_node(
                                     keywords
                                 );
                                 // Task 2: DHT Indexing
-                                // TODO: implement the "read-modify-write" logic inside this loop.
+                                // Implement the "read-modify-write" logic inside this loop.
                                 for keyword in keywords {
                                     let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
-                                    let _index_key = kad::RecordKey::new(&index_key_str);
+                                    let index_key = kad::RecordKey::new(&index_key_str);
 
-                                    // TODO: Implement the read-modify-write logic to update keyword indexes.
-                                    // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
-                                    // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
-                                    // 3. Add the new metadata.merkle_root to the list.
-                                    // 4. Serialize the updated list.
-                                    // 5. Create a new Record and call swarm.behaviour_mut().kademlia.put_record(...).
+                                    // Initiate read-modify-write: first get the existing record
+                                    let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
 
-                                    info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
+                                    // Track this keyword index operation
+                                    pending_keyword_indexes.lock().await.insert(
+                                        query_id,
+                                        PendingKeywordIndex {
+                                            keyword: keyword.clone(),
+                                            merkle_root: metadata.merkle_root.clone(),
+                                        }
+                                    );
+
+                                    info!("Initiated keyword index update for '{}' with file hash '{}'", keyword, metadata.merkle_root);
                                 }
 
                                 // Cache the published file locally so it can be found in searches
@@ -2952,8 +2963,8 @@ async fn run_dht_node(
                                     .await;
                             }
                             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                                // warn!("❌ DISCONNECTED from peer: {}", peer_id);
-                                // warn!("   Cause: {:?}", cause);
+                                warn!("❌ DISCONNECTED from peer: {}", peer_id);
+                                warn!("   Cause: {:?}", cause);
                                 swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
 
                                 let peers_count = {
@@ -2961,7 +2972,7 @@ async fn run_dht_node(
                                     peers.remove(&peer_id);
                                     peers.len()
                                 };
-
+                                if !is_bootstrap{
                                 // Remove proxy state
                                 proxy_mgr.lock().await.remove_all(&peer_id);
 
@@ -3065,13 +3076,14 @@ async fn run_dht_node(
                                         }
                                     }
                                 }
-                                info!("   Remaining connected peers: {}", peers_count);
                                 let _ = event_tx
                                     .send(DhtEvent::PeerDisconnected {
                                         peer_id: peer_id.to_string(),
                                     })
                                     .await;
                             }
+                                info!("   Remaining connected peers: {}", peers_count);
+                        }
                             SwarmEvent::NewListenAddr { address, .. } if !is_bootstrap => {
                                 // Always record in metrics for monitoring/debugging
                                 if let Ok(mut m) = metrics.try_lock() {
@@ -3085,102 +3097,57 @@ async fn run_dht_node(
                                     }
                                     // Allow public addresses, reject private
                                 }
-                                // For relay circuit addresses, always advertise them
-                                // if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
-
-                                //     info!("✅ Advertising relay address: {}", address);
-                                // } else {
-                                //     // For regular addresses, only advertise if they're plausibly reachable
-                                //     // This prevents advertising localhost/private IPs to the network
-                                //     if ma_plausibly_reachable(&address) {
-                                //         swarm.add_external_address(address.clone());
-                                //         info!("✅ Advertising reachable address: {}", address);
-                                //     } else {
-                                //         debug!("⏭️  Not advertising unreachable address: {}", address);
-                                //     }
-                                // }
                             }
                             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-
-                            if let Ok(mut m) = metrics.try_lock() {
-                                m.last_error = Some(error.to_string());
-                                m.last_error_at = Some(SystemTime::now());
-                                m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
-                            }
-                            if let Some(peer_id) = peer_id {
-                                error!("❌ Outgoing connection error to {}: {}", peer_id, error);
-                                // Check if this is a bootstrap connection error
-                                if error.to_string().contains("rsa") {
-                                    error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
-                                } else if error.to_string().contains("Timeout") {
-                                    warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
-                                } else if error.to_string().contains("Connection refused") {
-                                    warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
-                                } else if error.to_string().contains("Transport") {
-                                    warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                                if let Ok(mut m) = metrics.try_lock() {
+                                    m.last_error = Some(error.to_string());
+                                    m.last_error_at = Some(SystemTime::now());
+                                    m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
                                 }
-                                swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
-                            } else {
-                                error!("❌ Outgoing connection error to unknown peer: {}", error);
-                            }
-                                // Check if this error is for an unreachable address before recording it
-                                // let is_unreachable_addr = if let Some(pid) = peer_id {
-                                //     if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
-                                //         if !ma_plausibly_reachable(&bad_ma) {
-                                //             swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
-                                //             true
-                                //         } else {
-                                //             false
-                                //         }
-                                //     } else {
-                                //         false
-                                //     }
-                                // } else {
-                                //     false
-                                // };
+                                if let Some(pid) = peer_id {
+                                    swarm.behaviour_mut().kademlia.remove_peer(&pid);
+                                    // Only log error for addresses that should be reachable
+                                        // Rate limit connection errors to once every 30 seconds
+                                        let now = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as u64;
+                                        let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
+                                        if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
+                                            LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
+                                            error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                        }
 
-                                // // Only record errors for reachable addresses
-                                // if !is_unreachable_addr {
-                                //     if let Ok(mut m) = metrics.try_lock() {
-                                //         m.last_error = Some(error.to_string());
-                                //         m.last_error_at = Some(SystemTime::now());
-                                //         if let Some(pid) = peer_id {
-                                //             if bootstrap_peer_ids.contains(&pid) {
-                                //                 m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
-                                //             }
-                                //         }
-                                //     }
-                                // }
-
-                                // if let Some(pid) = peer_id {
-                                //     // Only log error for addresses that should be reachable
-                                //     if !is_unreachable_addr {
-                                //         error!("❌ Outgoing connection error to {}: {}", pid, error);
-
-                                //         let is_bootstrap = bootstrap_peer_ids.contains(&pid);
-                                //         if error.to_string().contains("rsa") {
-                                //             error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
-                                //         } else if error.to_string().contains("Timeout") {
-                                //             if is_bootstrap {
-                                //                 warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
-                                //             } else {
-                                //                 warn!("   ℹ Hint: Peer may be unreachable (timeout).");
-                                //             }
-                                //         } else if error.to_string().contains("Connection refused") {
-                                //             if is_bootstrap {
-                                //                 warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
-                                //             } else {
-                                //                 warn!("   ℹ Hint: Peer is not accepting connections.");
-                                //             }
-                                //         } else if error.to_string().contains("Transport") {
-                                //             warn!("   ℹ Hint: Transport protocol negotiation failed.");
-                                //         }
-                                //     } else {
-                                //         debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
-                                //     }
-                                // } else {
-                                //     error!("❌ Outgoing connection error to unknown peer: {}", error);
-                                // }
+                                        let is_bootstrap = bootstrap_peer_ids.contains(&pid);
+                                        if error.to_string().contains("rsa") {
+                                            error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                                        } else if error.to_string().contains("Timeout") {
+                                            if is_bootstrap {
+                                                warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
+                                            } else {
+                                                warn!("   ℹ Hint: Peer may be unreachable (timeout).");
+                                            }
+                                        } else if error.to_string().contains("Connection refused") {
+                                            if is_bootstrap {
+                                                warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
+                                            } else {
+                                                warn!("   ℹ Hint: Peer is not accepting connections.");
+                                            }
+                                        } else if error.to_string().contains("Transport") {
+                                            warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                                        }
+                                } else {
+                                    // Rate limit connection errors to once every 30 seconds
+                                    let now = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                    let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
+                                    if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
+                                        LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
+                                        error!("❌ Outgoing connection error to unknown peer: {}", error);
+                                    }
+                                }
                                 let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
                             }
                             SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) if !is_bootstrap => {
@@ -3813,6 +3780,63 @@ async fn handle_kademlia_event(
                                 return; // End processing for this event here.
                             }
 
+                            // Check if this is a response to a keyword index lookup (read-modify-write)
+                            if let Some(pending_index) =
+                                pending_keyword_indexes.lock().await.remove(&id)
+                            {
+                                // Deserialize the existing keyword index (list of merkle roots)
+                                let mut merkle_roots: Vec<String> = if let Ok(roots) =
+                                    serde_json::from_slice::<Vec<String>>(&peer_record.record.value)
+                                {
+                                    roots
+                                } else {
+                                    // If deserialization fails, start with empty list
+                                    warn!("Failed to deserialize keyword index for '{}', starting fresh", pending_index.keyword);
+                                    Vec::new()
+                                };
+
+                                // Add the new merkle root if not already present
+                                if !merkle_roots.contains(&pending_index.merkle_root) {
+                                    merkle_roots.push(pending_index.merkle_root.clone());
+                                }
+
+                                // Serialize the updated list
+                                if let Ok(updated_value) = serde_json::to_vec(&merkle_roots) {
+                                    // Create and put the updated record
+                                    let record = Record {
+                                        key: peer_record.record.key.clone(),
+                                        value: updated_value,
+                                        publisher: None,
+                                        expires: None,
+                                    };
+
+                                    let _put_query_id = match swarm
+                                        .behaviour_mut()
+                                        .kademlia
+                                        .put_record(record, kad::Quorum::One)
+                                    {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            error!("Failed to put keyword index record: {}", e);
+                                            return; // Exit the function instead of continue
+                                        }
+                                    };
+
+                                    info!(
+                                        "Updated keyword index '{}' with {} files",
+                                        pending_index.keyword,
+                                        merkle_roots.len()
+                                    );
+                                } else {
+                                    error!(
+                                        "Failed to serialize updated keyword index for '{}'",
+                                        pending_index.keyword
+                                    );
+                                }
+
+                                return; // End processing for this event here.
+                            }
+
                             // Construct FileMetadata from the JSON
                             if let (
                                 Some(file_hash),
@@ -4092,15 +4116,103 @@ async fn handle_kademlia_event(
                         }
                     }
                     GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
-                        // Check if this was a DHT value query that finished with no results
-                        if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
-                            info!("📭 DHT get finished: no record found");
-                            let _ = sender.send(Ok(None));
+                        // Check if this was an infohash search that found no record
+                        if let Some(search) = pending_infohash_searches.lock().await.remove(&id) {
+                            info!("Infohash lookup completed: no record found");
+                            let _ = search.sender.send(None);
+                            return; // End processing for this event here.
                         }
-                        // No additional records; do nothing here
+
+                        // Check if this was a keyword index lookup that found no existing record
+                        if let Some(pending_index) =
+                            pending_keyword_indexes.lock().await.remove(&id)
+                        {
+                            // This is the first time this keyword is being indexed - create new record
+                            let merkle_roots = vec![pending_index.merkle_root.clone()];
+
+                            if let Ok(value) = serde_json::to_vec(&merkle_roots) {
+                                // Create the record key from the keyword
+                                let index_key_str =
+                                    format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
+                                let record_key = kad::RecordKey::new(&index_key_str);
+
+                                let record = Record {
+                                    key: record_key,
+                                    value,
+                                    publisher: None,
+                                    expires: None,
+                                };
+
+                                let _put_query_id = match swarm
+                                    .behaviour_mut()
+                                    .kademlia
+                                    .put_record(record, kad::Quorum::One)
+                                {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        error!("Failed to put keyword index record: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                info!(
+                                    "Created new keyword index '{}' with first file '{}'",
+                                    pending_index.keyword, pending_index.merkle_root
+                                );
+                            } else {
+                                error!(
+                                    "Failed to serialize new keyword index for '{}'",
+                                    pending_index.keyword
+                                );
+                            }
+
+                            return; // End processing for this event here.
+                        }
+
+                        // No additional records; do nothing here for other queries
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
+                    // Check if this was a failed keyword index lookup
+                    if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
+                        // Treat GetRecord errors as "not found" - create new keyword index
+                        let merkle_roots = vec![pending_index.merkle_root.clone()];
+
+                        if let Ok(value) = serde_json::to_vec(&merkle_roots) {
+                            let index_key_str =
+                                format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
+                            let record_key = kad::RecordKey::new(&index_key_str);
+
+                            let record = Record {
+                                key: record_key,
+                                value,
+                                publisher: None,
+                                expires: None,
+                            };
+
+                            let _put_query_id = match swarm
+                                .behaviour_mut()
+                                .kademlia
+                                .put_record(record, kad::Quorum::One)
+                            {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    error!("Failed to put keyword index record: {}", e);
+                                    return;
+                                }
+                            };
+
+                            info!("Created new keyword index '{}' after GetRecord error for file '{}'", pending_index.keyword, pending_index.merkle_root);
+                        } else {
+                            error!(
+                                "Failed to serialize new keyword index for '{}' after error",
+                                pending_index.keyword
+                            );
+                        }
+
+                        return; // End processing for this event here.
+                    }
+
                     warn!("GetRecord error: {:?}", err);
 
                     // Check if this was a failed DHT value query

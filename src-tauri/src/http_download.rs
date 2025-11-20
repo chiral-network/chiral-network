@@ -1,7 +1,7 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tokio::fs::File;
+use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Semaphore};
 
@@ -74,6 +74,7 @@ const CHUNK_SIZE: u64 = 256 * 1024;
 /// - Leaves headroom for WebRTC/Bitswap downloads happening simultaneously
 const MAX_CONCURRENT_CHUNKS: usize = 5;
 
+#[derive(Clone)]
 pub struct HttpDownloadClient {
     http_client: Client,
     /// Semaphore to limit concurrent chunk downloads
@@ -518,6 +519,121 @@ impl HttpDownloadClient {
                 .await;
         }
     }
+
+
+    /// Resume a download from a specific byte offset using Range requests
+    ///
+    /// This method downloads the remaining part of a file starting from `bytes_already_downloaded`
+    /// and appends to an existing file.
+    pub async fn resume_download_from_offset(
+        &self,
+        seeder_url: &str,
+        file_hash: &str,
+        output_path: &Path,
+        bytes_already_downloaded: u64,
+        total_size: u64,
+        progress_tx: Option<mpsc::Sender<HttpDownloadProgress>>,
+    ) -> Result<(), String> {
+        tracing::info!(
+            "Resuming HTTP download: {} from {}, offset: {}/{}",
+            file_hash,
+            seeder_url,
+            bytes_already_downloaded,
+            total_size
+        );
+
+        // Calculate remaining bytes
+        let remaining_bytes = total_size.saturating_sub(bytes_already_downloaded);
+        if remaining_bytes == 0 {
+            // Already complete
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(HttpDownloadProgress {
+                    file_hash: file_hash.to_string(),
+                    chunks_total: (total_size / CHUNK_SIZE) as usize,
+                    chunks_downloaded: (total_size / CHUNK_SIZE) as usize,
+                    bytes_downloaded: total_size,
+                    bytes_total: total_size,
+                    status: DownloadStatus::Completed,
+                }).await;
+            }
+            return Ok(());
+        }
+
+        // Open existing file for appending
+        let mut file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open(output_path)
+            .await
+            .map_err(|e| format!("Failed to open file for resume: {}", e))?;
+
+        // Calculate ranges starting from the resume offset
+        let ranges = self.calculate_ranges_from_offset(bytes_already_downloaded, total_size);
+        let total_chunks = ranges.len();
+
+        // Send initial progress
+        self.send_progress(
+            &progress_tx,
+            file_hash,
+            total_chunks,
+            0, // chunks downloaded so far
+            bytes_already_downloaded,
+            total_size,
+            DownloadStatus::Downloading,
+        ).await;
+
+        // Download remaining chunks
+        let chunks = self
+            .download_chunks_with_ranges(
+                seeder_url,
+                file_hash,
+                &ranges,
+                progress_tx.clone(),
+                total_size,
+            )
+            .await?;
+
+        // Write chunks to file in order
+        for chunk in chunks {
+            file.write_all(&chunk).await
+                .map_err(|e| format!("Failed to write chunk to file: {}", e))?;
+        }
+
+        // Send final progress
+        self.send_progress(
+            &progress_tx,
+            file_hash,
+            total_chunks,
+            total_chunks,
+            total_size,
+            total_size,
+            DownloadStatus::Completed,
+        ).await;
+
+        tracing::info!("Successfully resumed download: {}", file_hash);
+        Ok(())
+    }
+
+    /// Calculate byte ranges starting from a specific offset
+    fn calculate_ranges_from_offset(&self, start_offset: u64, file_size: u64) -> Vec<ByteRange> {
+        let mut ranges = Vec::new();
+        let mut offset = start_offset;
+        let mut index = (start_offset / CHUNK_SIZE) as usize; // Continue chunk numbering
+
+        while offset < file_size {
+            let end = std::cmp::min(offset + CHUNK_SIZE - 1, file_size - 1);
+            ranges.push(ByteRange {
+                start: offset,
+                end,
+                index,
+            });
+            offset = end + 1;
+            index += 1;
+        }
+
+        ranges
+    }
+
 }
 
 #[cfg(test)]

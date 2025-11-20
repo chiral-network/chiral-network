@@ -20,6 +20,7 @@ pub mod file_transfer;
 pub mod ftp_client;
 pub mod ftp_downloader;
 pub mod geth_downloader;
+pub mod geth_bootstrap;
 pub mod headless;
 pub mod http_download;
 pub mod http_server;
@@ -1142,6 +1143,28 @@ async fn get_recent_mined_blocks_pub(
 }
 
 #[tauri::command]
+async fn get_mined_blocks_range(
+    address: String,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<MinedBlock>, String> {
+    ethereum::get_mined_blocks_range(&address, from_block, to_block).await
+}
+
+#[tauri::command]
+async fn get_total_mining_rewards(address: String) -> Result<f64, String> {
+    ethereum::get_total_mining_rewards(&address).await
+}
+
+#[tauri::command]
+async fn calculate_accurate_totals(
+    address: String,
+    app: tauri::AppHandle,
+) -> Result<ethereum::AccurateTotals, String> {
+    ethereum::calculate_accurate_totals(&address, app).await
+}
+
+#[tauri::command]
 async fn get_transaction_history(
     address: String,
     lookback: u64,
@@ -1154,6 +1177,15 @@ async fn get_transaction_history(
 
     // Scan transactions
     ethereum::get_transaction_history(&address, from_block, current_block).await
+}
+
+#[tauri::command]
+async fn get_transaction_history_range(
+    address: String,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<ethereum::TransactionHistoryItem>, String> {
+    ethereum::get_transaction_history(&address, from_block, to_block).await
 }
 
 #[tauri::command]
@@ -4523,6 +4555,11 @@ fn read_last_lines(path: &Path, max_lines: usize) -> Result<Vec<String>, String>
 }
 
 #[tauri::command]
+async fn check_bootstrap_health() -> Result<geth_bootstrap::BootstrapHealthReport, String> {
+    Ok(geth_bootstrap::check_all_bootstrap_nodes().await)
+}
+
+#[tauri::command]
 async fn get_geth_status(
     state: State<'_, AppState>,
     data_dir: Option<String>,
@@ -5598,8 +5635,6 @@ fn main() {
         return;
     }
 
-    println!("Starting Chiral Network...");
-
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -5630,18 +5665,10 @@ fn main() {
             eprintln!("Failed to create download directory: {}", e);
         }
 
-        println!("Instance ID: {}", instance_id);
-        println!("Using download directory: {:?}", download_dir);
-
         // Calculate port range based on instance ID to avoid conflicts
-        // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
+      // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
         let base_port = 6881 + ((instance_id - 1) * 11);
         let port_range = base_port..(base_port + 10);
-
-        println!(
-            "Using BitTorrent port range: {}-{}",
-            port_range.start, port_range.end
-        );
 
         let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir,
@@ -5836,6 +5863,7 @@ fn main() {
             check_geth_binary,
             get_geth_status,
             download_geth_binary,
+            check_bootstrap_health,
             set_miner_address,
             start_miner,
             stop_miner,
@@ -5846,10 +5874,14 @@ fn main() {
             get_network_stats,
             get_block_details_by_number,
             get_transaction_history,
+            get_transaction_history_range,
             get_miner_logs,
             get_miner_performance,
             get_blocks_mined,
             get_recent_mined_blocks_pub,
+            get_mined_blocks_range,
+            get_total_mining_rewards,
+            calculate_accurate_totals,
             get_cpu_temperature,
             start_dht_node,
             stop_dht_node,
@@ -6002,12 +6034,7 @@ fn main() {
         })
         .setup(|app| {
             // Load settings from disk
-            println!("Loading settings from app data directory...");
             let settings = load_settings_from_file(&app.handle());
-            println!(
-                "Settings loaded: enable_file_logging={}, max_log_size_mb={}",
-                settings.enable_file_logging, settings.max_log_size_mb
-            );
 
             // Initialize tracing subscriber with console output and optionally file output
             use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -6037,21 +6064,11 @@ fn main() {
                 .expect("Failed to get app data directory");
             let logs_dir = app_data_dir.join("logs");
 
-            println!("Initializing file logger at: {}", logs_dir.display());
-
-            let log_config = logger::LogConfig::new(
-                &logs_dir,
-                settings.max_log_size_mb,
-                settings.enable_file_logging,
-            );
-
+            let log_config = logger::LogConfig::new(&logs_dir, settings.max_log_size_mb, settings.enable_file_logging);
+            
             let file_logger_writer = match logger::RotatingFileWriter::new(log_config) {
                 Ok(writer) => {
                     let thread_safe_writer = logger::ThreadSafeWriter::new(writer);
-                    println!(
-                        "File logger initialized successfully (enabled: {})",
-                        settings.enable_file_logging
-                    );
                     Some(thread_safe_writer)
                 }
                 Err(e) => {
@@ -6074,12 +6091,6 @@ fn main() {
                     .with(env_filter)
                     .init();
             }
-
-            info!("Chiral Network starting up...");
-            info!(
-                "Settings loaded: enable_file_logging={}, max_log_size_mb={}",
-                settings.enable_file_logging, settings.max_log_size_mb
-            );
 
             // Store the file logger in app state so it can be updated later
             if let Some(file_writer) = file_logger_writer {
@@ -6290,7 +6301,6 @@ fn main() {
                         );
                         if let Ok(mut dr_guard) = state.download_restart.try_lock() {
                             *dr_guard = Some(download_restart_service);
-                            tracing::info!("Download restart service initialized");
                         }
                     }
                 });
