@@ -31,7 +31,6 @@
     "jsdom": "^27.2.0",
     "lucide-svelte": "^0.468.0",
     "mode-watcher": "^0.4.1",
-    "node": "^25.2.1",
     "qrcode": "^1.5.4",
     "svelte-i18n": "^4.0.1",
     "svelte-sonner": "^0.3.19",
