@@ -496,15 +496,22 @@ impl FileTransferService {
 
             // Store the encryption key in keystore if we have an active account
             if let (Some(account), Some(private_key)) = (active_account, active_private_key) {
-                let mut keystore_guard = keystore.lock().await;
-                keystore_guard
-                    .store_file_encryption_key_with_private_key(
-                        account,
-                        original_file_hash.clone(),
-                        &encryption_key,
-                        private_key,
-                    )
-                    .map_err(|e| format!("Failed to store encryption key: {}", e))?;
+                match keystore.lock().await.store_file_encryption_key_with_private_key(
+                    account,
+                    original_file_hash.clone(),
+                    &encryption_key,
+                    private_key,
+                ) {
+                    Ok(_) => {
+                        info!("✅ Stored encryption key for file: {}", original_file_hash);
+                    }
+                    Err(e) => {
+                        warn!("⚠️  Failed to store encryption key (continuing anyway): {}", e);
+                        // Don't fail the upload - encryption key storage is optional for testing
+                    }
+                }
+            } else {
+                warn!("⚠️  No active account - skipping encryption key storage");
             }
 
             // Create temporary encrypted file path

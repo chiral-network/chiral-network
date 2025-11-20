@@ -7,6 +7,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
+  import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import { peers, networkStats, networkStatus, userLocation, settings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Wifi, UserMinus, Square, Play, Download, AlertCircle } from 'lucide-svelte'
@@ -42,8 +43,17 @@
   let newPeerAddress = ''
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
+  let currentPage = 1
+  let peersPerPage = 5
+  let discoveryCurrentPage = 1
+  let discoveryPerPage = 5
 
   const UNKNOWN_DISTANCE = 1_000_000;
+
+  $: if (sortBy || sortDirection) {
+    // Reset to page 1 when sorting changes
+    currentPage = 1
+  }
 
   let currentUserRegion: GeoRegionConfig = normalizeRegion(undefined);
   $: currentUserRegion = normalizeRegion($userLocation);
@@ -1463,7 +1473,10 @@
     </div>
   </Card>
 
-  
+  <!-- Geth Node Lifecycle & Bootstrap Health -->
+  <GethStatusCard dataDir="./bin/geth-data" logLines={40} refreshIntervalMs={10000} />
+
+
   <!-- DHT Network Status Card -->
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
@@ -1940,11 +1953,84 @@
         </div>
         <!-- {#if discoveredPeers && discoveredPeers.length > 0} -->
          {#if isTauri}
+          {@const discoveryTotalPages = Math.ceil(discoveredPeerEntries.length / discoveryPerPage)}
+          {@const discoveryStartIndex = (discoveryCurrentPage - 1) * discoveryPerPage}
+          {@const discoveryEndIndex = Math.min(discoveryStartIndex + discoveryPerPage, discoveredPeerEntries.length)}
+          {@const paginatedDiscoveryPeers = discoveredPeerEntries.slice(discoveryStartIndex, discoveryEndIndex)}
+
           <div class="mt-4 space-y-3">
-            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeerEntries.length } })}</p>
-            {#if discoveredPeerEntries.length > 0}
+            <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+            <div class="flex items-center justify-between gap-4">
+              <!-- Left: Showing peers counter -->
+              <div class="text-sm text-muted-foreground flex-shrink-0">
+                {#if discoveredPeerEntries.length > 0}
+                  Showing {discoveryStartIndex + 1}-{discoveryEndIndex} of {discoveredPeerEntries.length} discovered peers
+                {:else}
+                  No discovered peers
+                {/if}
+              </div>
+
+              <!-- Center: Pagination Controls -->
+              <div class="flex items-center justify-center flex-1">
+                {#if discoveredPeerEntries.length > discoveryPerPage}
+                  <div class="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage > 1) discoveryCurrentPage--
+                      }}
+                      disabled={discoveryCurrentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <div class="flex items-center gap-1">
+                      {#each Array.from({ length: discoveryTotalPages }, (_, i) => i + 1) as page}
+                        {#if page === 1 || page === discoveryTotalPages || (page >= discoveryCurrentPage - 1 && page <= discoveryCurrentPage + 1)}
+                          <Button
+                            size="sm"
+                            variant={page === discoveryCurrentPage ? 'default' : 'outline'}
+                            class="w-10"
+                            on:click={() => discoveryCurrentPage = page}
+                          >
+                            {page}
+                          </Button>
+                        {:else if page === discoveryCurrentPage - 2 || page === discoveryCurrentPage + 2}
+                          <span class="px-2 text-muted-foreground">...</span>
+                        {/if}
+                      {/each}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage < discoveryTotalPages) discoveryCurrentPage++
+                      }}
+                      disabled={discoveryCurrentPage === discoveryTotalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Right: Run Discovery button -->
+              <div class="flex-shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  on:click={runDiscovery}
+                  disabled={discoveryRunning}
+                >
+                  <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
+                  {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
+                </Button>
+              </div>
+            </div>
+
+            {#if paginatedDiscoveryPeers.length > 0}
               <ul class="space-y-3">
-                {#each discoveredPeerEntries as peer}
+                {#each paginatedDiscoveryPeers as peer}
                   <li class="border rounded p-3 space-y-2 bg-background/50">
                     <div class="flex items-start justify-between gap-2">
                       <div class="text-sm font-mono break-all">{peer.peerId}</div>
@@ -1991,12 +2077,83 @@
             {/if}
           </div>
         {:else if webDiscoveredPeers.length > 0}
-          <div class="mt-4">
-            <!-- <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p> -->
-             <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: webDiscoveredPeers.length } })}</p>
-            <ul class="mt-2 space-y-2">
-              <!-- {#each discoveredPeers as p} -->
-               {#each webDiscoveredPeers as p}
+          {@const webDiscoveryTotalPages = Math.ceil(webDiscoveredPeers.length / discoveryPerPage)}
+          {@const webDiscoveryStartIndex = (discoveryCurrentPage - 1) * discoveryPerPage}
+          {@const webDiscoveryEndIndex = Math.min(webDiscoveryStartIndex + discoveryPerPage, webDiscoveredPeers.length)}
+          {@const paginatedWebDiscoveryPeers = webDiscoveredPeers.slice(webDiscoveryStartIndex, webDiscoveryEndIndex)}
+
+          <div class="mt-4 space-y-3">
+            <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+            <div class="flex items-center justify-between gap-4">
+              <!-- Left: Showing peers counter -->
+              <div class="text-sm text-muted-foreground flex-shrink-0">
+                {#if webDiscoveredPeers.length > 0}
+                  Showing {webDiscoveryStartIndex + 1}-{webDiscoveryEndIndex} of {webDiscoveredPeers.length} discovered peers
+                {:else}
+                  No discovered peers
+                {/if}
+              </div>
+
+              <!-- Center: Pagination Controls -->
+              <div class="flex items-center justify-center flex-1">
+                {#if webDiscoveredPeers.length > discoveryPerPage}
+                  <div class="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage > 1) discoveryCurrentPage--
+                      }}
+                      disabled={discoveryCurrentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <div class="flex items-center gap-1">
+                      {#each Array.from({ length: webDiscoveryTotalPages }, (_, i) => i + 1) as page}
+                        {#if page === 1 || page === webDiscoveryTotalPages || (page >= discoveryCurrentPage - 1 && page <= discoveryCurrentPage + 1)}
+                          <Button
+                            size="sm"
+                            variant={page === discoveryCurrentPage ? 'default' : 'outline'}
+                            class="w-10"
+                            on:click={() => discoveryCurrentPage = page}
+                          >
+                            {page}
+                          </Button>
+                        {:else if page === discoveryCurrentPage - 2 || page === discoveryCurrentPage + 2}
+                          <span class="px-2 text-muted-foreground">...</span>
+                        {/if}
+                      {/each}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage < webDiscoveryTotalPages) discoveryCurrentPage++
+                      }}
+                      disabled={discoveryCurrentPage === webDiscoveryTotalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Right: Run Discovery button -->
+              <div class="flex-shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  on:click={runDiscovery}
+                  disabled={discoveryRunning}
+                >
+                  <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
+                  {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
+                </Button>
+              </div>
+            </div>
+
+            <ul class="space-y-2">
+              {#each paginatedWebDiscoveryPeers as p}
                 <li class="flex items-center justify-between p-2 border rounded">
                   <div class="truncate mr-4">{p}</div>
                       <!-- <div class="flex items-center gap-2">
@@ -2069,8 +2226,7 @@
         </div>
           </div>
       </div>
-    <div class="space-y-3">
-        {#each [...$peers].sort((a, b) => {
+    {@const sortedPeers = [...$peers].sort((a, b) => {
             let aVal: any, bVal: any
 
             switch (sortBy) {
@@ -2149,7 +2305,84 @@
             }
 
             return 0
-        }) as peer}
+        })}
+    {@const totalPages = Math.ceil(sortedPeers.length / peersPerPage)}
+    {@const startIndex = (currentPage - 1) * peersPerPage}
+    {@const endIndex = Math.min(startIndex + peersPerPage, sortedPeers.length)}
+    {@const paginatedPeers = sortedPeers.slice(startIndex, endIndex)}
+
+    <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+    <div class="flex items-center justify-between mb-4 gap-4">
+      <!-- Left: Showing peers counter -->
+      <div class="text-sm text-muted-foreground flex-shrink-0">
+        {#if sortedPeers.length > 0}
+          Showing {startIndex + 1}-{endIndex} of {sortedPeers.length} peers
+        {:else}
+          No peers
+        {/if}
+      </div>
+
+      <!-- Center: Pagination Controls -->
+      <div class="flex items-center justify-center flex-1">
+        {#if sortedPeers.length > peersPerPage}
+          <div class="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={() => {
+                if (currentPage > 1) currentPage--
+              }}
+              disabled={currentPage === 1}
+            >
+              Previous
+            </Button>
+            <div class="flex items-center gap-1">
+              {#each Array.from({ length: totalPages }, (_, i) => i + 1) as page}
+                {#if page === 1 || page === totalPages || (page >= currentPage - 1 && page <= currentPage + 1)}
+                  <Button
+                    size="sm"
+                    variant={page === currentPage ? 'default' : 'outline'}
+                    class="w-10"
+                    on:click={() => currentPage = page}
+                  >
+                    {page}
+                  </Button>
+                {:else if page === currentPage - 2 || page === currentPage + 2}
+                  <span class="px-2 text-muted-foreground">...</span>
+                {/if}
+              {/each}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={() => {
+                if (currentPage < totalPages) currentPage++
+              }}
+              disabled={currentPage === totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Right: Refresh button -->
+      <div class="flex-shrink-0">
+        <Button
+          size="sm"
+          variant="outline"
+          on:click={refreshConnectedPeers}
+          disabled={!isTauri || dhtStatus !== 'connected'}
+        >
+          <RefreshCw class="h-4 w-4 mr-2" />
+          Refresh Peers
+        </Button>
+      </div>
+    </div>
+
+    <!-- Peer list -->
+    <div class="space-y-3">
+        {#each paginatedPeers as peer}
         <div class="p-4 bg-secondary rounded-lg">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2 gap-2">
             <div class="flex items-start gap-3 min-w-0">
@@ -2223,19 +2456,6 @@
       {#if $peers.length === 0}
         <p class="text-center text-muted-foreground py-8">{$t('network.connectedPeers.noPeers')}</p>
       {/if}
-    </div>
-
-    <!-- Refresh button at bottom right -->
-    <div class="flex justify-end mt-4">
-      <Button
-        size="sm"
-        variant="outline"
-        on:click={refreshConnectedPeers}
-        disabled={!isTauri || dhtStatus !== 'connected'}
-      >
-        <RefreshCw class="h-4 w-4 mr-2" />
-        Refresh Peers
-      </Button>
     </div>
   </Card>
 </div>

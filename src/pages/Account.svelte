@@ -3,12 +3,13 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle } from 'lucide-svelte'
+  import Progress from '$lib/components/ui/progress.svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist } from '$lib/stores'
-  import { gethStatus } from '$lib/services/gethService' 
+  import { wallet, etcAccount, blacklist, settings } from '$lib/stores'
+  import { gethStatus, gethSyncStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
-  import { transactions } from '$lib/stores';
+  import { transactions, transactionPagination, miningPagination } from '$lib/stores';
   import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import QRCode from 'qrcode'
@@ -19,7 +20,7 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  import { totalEarned, totalSpent, miningState } from '$lib/stores';
+  import { totalSpent, totalReceived, miningState, accurateTotals, isCalculatingAccurateTotals, accurateTotalsProgress } from '$lib/stores';
   import { goto } from '@mateothegreat/svelte5-router';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
@@ -59,7 +60,7 @@
   let importPrivateKey = ''
   let isCreatingAccount = false
   let isImportingAccount = false
-  let isGethRunning = false
+  let isGethRunning: boolean;
   let showQrCodeModal = false;
   let qrCodeDataUrl = ''
   let showScannerModal = false;
@@ -124,7 +125,7 @@
   let exportMessage = '';
   
   // Filtering state
-  let filterType: 'all' | 'sent' | 'received' | 'mining' = 'all';
+  let filterType: 'transactions' | 'sent' | 'received' | 'mining' = 'transactions';
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
@@ -139,6 +140,23 @@
   let isConfirming = false
   let countdown = 0
   let intervalId: number | null = null
+
+  // Derive Geth running status from store
+  $: isGethRunning = $gethStatus === 'running';
+
+  // Start progressive loading when Geth becomes running or account changes
+  // Only start if pagination has been initialized (oldestBlockScanned is not null)
+  $: if (
+    $etcAccount &&
+    isGethRunning &&
+    $transactionPagination.hasMore &&
+    !$transactionPagination.isLoading &&
+    $transactionPagination.oldestBlockScanned !== null &&
+    $transactionPagination.accountAddress === $etcAccount.address
+  ) {
+    // Account address is part of the reactive dependency, so this triggers on account change
+    walletService.startProgressiveLoading();
+  }
 
   // Fetch balance when account changes
   $: if ($etcAccount && isGethRunning) {
@@ -170,7 +188,10 @@
         .filter(tx => {
           if (!tx) return false;
 
-          const matchesType = filterType === 'all' || tx.type === filterType;
+          // 'transactions' shows sent + received (excludes mining)
+          const matchesType = filterType === 'transactions'
+            ? (tx.type === 'sent' || tx.type === 'received')
+            : tx.type === filterType;
 
           let txDate: Date;
           try {
@@ -552,7 +573,15 @@
       // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
       await walletService.refreshTransactions();
       await walletService.refreshBalance();
+
+      // Start progressive loading of all transactions in background
+      walletService.startProgressiveLoading();
     }
+
+    // Cleanup on unmount
+    return () => {
+      walletService.stopProgressiveLoading();
+    };
   })
 
   async function fetchBalance() {
@@ -564,7 +593,21 @@
     }
   }
 
-  
+  async function calculateAccurateTotals() {
+    try {
+      await walletService.calculateAccurateTotals();
+      console.log('Accurate totals calculated successfully');
+    } catch (error) {
+      console.error('Failed to calculate accurate totals:', error);
+    }
+  }
+
+  // Automatically calculate accurate totals when account is loaded
+  $: if ($etcAccount && isGethRunning && !$accurateTotals && !$isCalculatingAccurateTotals) {
+    calculateAccurateTotals();
+  }
+
+
   async function createChiralAccount() {
   isCreatingAccount = true
   try {
@@ -1282,7 +1325,7 @@
       
       // Clear the account store
       etcAccount.set(null);
-      
+
       // Clear wallet data - reset to 0 balance, not a default value
       wallet.update((w: any) => ({
         ...w,
@@ -1290,9 +1333,10 @@
         balance: 0, // Reset to 0 for logout
         totalEarned: 0,
         totalSpent: 0,
+        totalReceived: 0,
         pendingTransactions: 0
       }));
-      
+
       // Clear mining state completely
       miningState.update((state: any) => ({
         ...state,
@@ -1304,7 +1348,29 @@
         recentBlocks: [],
         sessionStartTime: undefined
       }));
-      
+
+      // Clear accurate totals (will recalculate on next login)
+      accurateTotals.set(null);
+
+      // Clear transaction history
+      transactions.set([]);
+
+      // Reset pagination states
+      transactionPagination.set({
+        accountAddress: null,
+        oldestBlockScanned: null,
+        isLoading: false,
+        hasMore: true,
+        batchSize: 5000,
+      });
+      miningPagination.set({
+        accountAddress: null,
+        oldestBlockScanned: null,
+        isLoading: false,
+        hasMore: true,
+        batchSize: 5000,
+      });
+
       // Clear any stored session data from both localStorage and sessionStorage
       if (typeof localStorage !== 'undefined') {
         localStorage.removeItem('lastAccount');
@@ -1351,18 +1417,31 @@
     }
   }
 
-  let sessionTimeout = 600; // seconds (10 minutes)
-  let sessionTimer: number | null = null;
+  let sessionTimeout = 3600; // seconds (1 hour)
+  let sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  let sessionCleanup: (() => void) | null = null;
   let autoLockMessage = '';
 
+  function clearSessionTimer() {
+    if (sessionTimer) {
+      clearTimeout(sessionTimer);
+      sessionTimer = null;
+    }
+  }
+
   function resetSessionTimer() {
-    if (sessionTimer) clearTimeout(sessionTimer);
+    if (typeof window === 'undefined' || !$settings.enableWalletAutoLock) {
+      clearSessionTimer();
+      return;
+    }
+    clearSessionTimer();
     sessionTimer = window.setTimeout(() => {
       autoLockWallet();
     }, sessionTimeout * 1000);
   }
 
   function autoLockWallet() {
+    if (!$settings.enableWalletAutoLock) return;
     handleLogout();
     autoLockMessage = 'Wallet auto-locked due to inactivity.';
     showToast(autoLockMessage, 'warning');
@@ -1371,23 +1450,50 @@
 
   // Listen for user activity to reset timer
   function setupSessionTimeout() {
+    if (typeof window === 'undefined') {
+      return () => {};
+    }
     const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    const handler = () => resetSessionTimer();
     for (const ev of events) {
-      window.addEventListener(ev, resetSessionTimer);
+      window.addEventListener(ev, handler);
     }
     resetSessionTimer();
     return () => {
       for (const ev of events) {
-        window.removeEventListener(ev, resetSessionTimer);
+        window.removeEventListener(ev, handler);
       }
-      if (sessionTimer) clearTimeout(sessionTimer);
+      clearSessionTimer();
     };
   }
 
+  function teardownSessionTimeout() {
+    if (sessionCleanup) {
+      sessionCleanup();
+      sessionCleanup = null;
+    } else {
+      clearSessionTimer();
+    }
+  }
+
+  $: if (typeof window !== 'undefined') {
+    if ($settings.enableWalletAutoLock) {
+      if (!sessionCleanup) {
+        sessionCleanup = setupSessionTimeout();
+      } else {
+        resetSessionTimer();
+      }
+    } else {
+      teardownSessionTimeout();
+    }
+  }
+
   onMount(() => {
-    const cleanup = setupSessionTimeout();
-    return cleanup;
-  })
+    if ($settings.enableWalletAutoLock && !sessionCleanup) {
+      sessionCleanup = setupSessionTimeout();
+    }
+    return () => teardownSessionTimeout();
+  });
 
 </script>
 
@@ -1551,17 +1657,62 @@
           <p class="text-2xl font-bold">{$wallet.balance.toFixed(8)} Chiral</p>
         </div>
         
-            <div class="grid grid-cols-2 gap-4 mt-4">
-          <div>
-            <p class="text-xs text-muted-foreground">{$t('wallet.totalEarned')}</p>
-            <p class="text-sm font-medium text-green-600">+{$totalEarned.toFixed(8)} Chiral</p>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
+          <div class="min-w-0">
+            <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            {#if $accurateTotals}
+              <p class="text-sm font-medium text-green-600 break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
+            {:else}
+              <p class="text-sm font-medium text-green-600 opacity-60 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
+            {/if}
           </div>
-          <div>
-            <p class="text-xs text-muted-foreground">{$t('wallet.totalSpent')}</p>
-            <p class="text-sm font-medium text-red-600">-{$totalSpent.toFixed(8)} Chiral</p>
+          <div class="min-w-0">
+            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            {#if $accurateTotals}
+              <p class="text-sm font-medium text-blue-600 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
+            {:else}
+              <p class="text-sm font-medium text-blue-600 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
+            {/if}
+          </div>
+          <div class="min-w-0">
+            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            {#if $accurateTotals}
+              <p class="text-sm font-medium text-red-600 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
+            {:else}
+              <p class="text-sm font-medium text-red-600 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
+            {/if}
           </div>
         </div>
-        
+
+        <!-- Accurate Totals Progress -->
+        {#if $isCalculatingAccurateTotals}
+          <div class="mt-4 space-y-2">
+            <div class="flex items-center justify-between text-sm">
+              <span class="text-muted-foreground">Calculating accurate totals...</span>
+              {#if $accurateTotalsProgress}
+                <span class="font-medium">{$accurateTotalsProgress.percentage}%</span>
+              {/if}
+            </div>
+            {#if $accurateTotalsProgress}
+              <Progress value={$accurateTotalsProgress.percentage} />
+              <p class="text-xs text-muted-foreground">
+                Block {$accurateTotalsProgress.currentBlock.toLocaleString()} / {$accurateTotalsProgress.totalBlocks.toLocaleString()}
+              </p>
+            {/if}
+          </div>
+        {:else if $accurateTotals}
+          <div class="mt-2 flex items-center justify-end">
+            <button
+              on:click={calculateAccurateTotals}
+              class="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+              title="Recalculate accurate totals"
+            >
+              <RefreshCw class="h-3 w-3" />
+              Refresh
+            </button>
+          </div>
+        {/if}
+
             <div class="mt-6">
               <p class="text-sm text-muted-foreground">{$t('wallet.address')}</p>
               <div class="flex items-center gap-2 mt-1">
@@ -1857,7 +2008,7 @@
         bind:value={filterType}
         class="appearance-none border rounded pl-3 pr-10 py-2 text-sm h-9 bg-white cursor-pointer hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
       >
-        <option value="all">{$t('filters.typeAll')}</option>
+        <option value="transactions">{$t('filters.typeTransactions')}</option>
         <option value="sent">{$t('filters.typeSent')}</option>
         <option value="received">{$t('filters.typeReceived')}</option>
         <option value="mining">{$t('filters.typeMining')}</option>
@@ -1913,12 +2064,12 @@
     <button
       type="button"
       class="border rounded px-3 py-2 text-sm h-9 bg-gray-100 hover:bg-gray-200 transition-colors"
-      on:click={() => { 
-        filterType = 'all'; 
-        filterDateFrom = ''; 
-        filterDateTo = ''; 
-        sortDescending = true; 
-        searchQuery = ''; 
+      on:click={() => {
+        filterType = 'transactions';
+        filterDateFrom = '';
+        filterDateTo = '';
+        sortDescending = true;
+        searchQuery = '';
       }}
     >
       {$t('filters.reset')}
@@ -1963,6 +2114,68 @@
           </div>
         </div>
       {/each}
+
+      <!-- Loading Progress Indicators -->
+      {#if filteredTransactions.length > 0}
+        <div class="border-t">
+          <!-- Transaction Auto-Loading Progress -->
+          {#if $transactionPagination.isLoading}
+            <div class="text-center py-3">
+              <div class="flex items-center justify-center gap-2">
+                <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                <p class="text-sm text-muted-foreground">{$t('transactions.loadingHistory')}</p>
+              </div>
+              {#if $transactionPagination.oldestBlockScanned !== null}
+                <p class="text-xs text-muted-foreground mt-1">
+                  {$t('transactions.scannedUpTo', { values: { block: $transactionPagination.oldestBlockScanned } })}
+                </p>
+              {/if}
+            </div>
+          {:else if !$transactionPagination.hasMore}
+            <div class="text-center py-3">
+              <p class="text-sm text-green-600">✓ All transactions loaded</p>
+              {#if $transactionPagination.oldestBlockScanned !== null}
+                <p class="text-xs text-muted-foreground mt-1">
+                  Scanned all blocks from #{$transactionPagination.oldestBlockScanned.toLocaleString()} to current
+                </p>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- Mining Rewards Manual Loading - Only show when filterType is 'mining' -->
+          {#if filterType === 'mining'}
+            {#if $miningPagination.hasMore && $miningPagination.oldestBlockScanned !== null}
+              <div class="text-center py-3 border-t">
+                <Button
+                  on:click={() => walletService.loadMoreMiningRewards()}
+                  disabled={$miningPagination.isLoading}
+                  variant="outline"
+                  class="gap-2"
+                >
+                  {#if $miningPagination.isLoading}
+                    <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                    Loading Mining Rewards...
+                  {:else}
+                    <Coins class="w-4 h-4" />
+                    Load More Mining Rewards
+                  {/if}
+                </Button>
+                <p class="text-xs text-muted-foreground mt-2">
+                  Mining rewards scanned up to block #{$miningPagination.oldestBlockScanned.toLocaleString()}
+                </p>
+              </div>
+            {:else if !$miningPagination.hasMore && $miningPagination.oldestBlockScanned !== null}
+              <div class="text-center py-3 border-t">
+                <p class="text-sm text-green-600">✓ All mining rewards loaded</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Scanned all blocks from #0 to current
+                </p>
+              </div>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+
       {#if filteredTransactions.length === 0}
         <div class="text-center py-8 text-muted-foreground">
           <History class="h-12 w-12 mx-auto mb-2 opacity-20" />

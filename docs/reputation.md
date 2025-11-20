@@ -1,10 +1,14 @@
 # Reputation System
 
-> **Status:** MVP design for transaction-backed reputation. Uptime, storage, and relay metrics will ship later as extensions once out-of-band evidence is available.
+> **Status:** MVP design for transaction-backed reputation with signed transaction message proofs.
+
+> **📘 For detailed information about signed transaction messages and non-payment complaint workflow, see [SIGNED_TRANSACTION_MESSAGES.md](./SIGNED_TRANSACTION_MESSAGES.md)**
 
 ## Overview
 
-Chiral Network tracks peer reputation through verifiable, transaction-centric evidence. Confirmed on-chain transaction history is the authoritative ledger: every payment or settlement that finalizes on-chain becomes durable ground truth. To keep costs low and latency acceptable, clients publish signed **Transaction Verdicts** into the DHT as an index of recent interactions. Consumers fetch those verdicts for fast heuristics, but they always re-validate against the chain (or cached receipts) before acting; if a verdict cannot be bridged back to finalized chain history, it is ignored. This hybrid model lets us iterate inside today's infrastructure while reserving long-term accuracy to the blockchain. Later releases may reuse the same storage model to incorporate additional metrics (uptime, relay quality, etc.) once the supporting evidence flow exists.
+Chiral Network tracks peer reputation through verifiable, transaction-centric evidence with an innovative off-chain payment promise mechanism. **Signed Transaction Messages** allow downloaders to create cryptographically signed payment promises before file transfer, serving as unforgeable proof for non-payment complaints even without blockchain records. This solves the key challenge: if a downloader receives a file but doesn't pay, the seeder still has cryptographic evidence to file a complaint.
+
+Confirmed on-chain transaction history remains the authoritative ledger: every payment or settlement that finalizes on-chain becomes durable ground truth. To keep costs low and latency acceptable, clients publish signed **Transaction Verdicts** into the DHT as an index of recent interactions. Consumers fetch those verdicts for fast heuristics, but they always re-validate against the chain (or cached receipts) before acting; if a verdict cannot be bridged back to finalized chain history (except for non-payment complaints with signed message proof), it is ignored. This hybrid model lets us iterate inside today's infrastructure while reserving long-term accuracy to the blockchain.
 
 ### Core Principles
 
