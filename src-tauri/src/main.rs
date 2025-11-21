@@ -307,6 +307,20 @@ pub struct StreamingUploadSession {
     pub file_data: Vec<u8>,
 }
 
+/// Session for streaming WebRTC downloads - writes chunks directly to disk
+#[derive(Debug)]
+pub struct StreamingDownloadSession {
+    pub file_hash: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub temp_path: std::path::PathBuf,
+    pub output_path: String,
+    pub received_chunks: std::collections::HashSet<u32>,
+    pub total_chunks: u32,
+    pub chunk_size: u32,
+    pub created_at: std::time::SystemTime,
+}
+
 struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
@@ -337,6 +351,9 @@ struct AppState {
 
     // New field for streaming upload sessions
     upload_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingUploadSession>>>,
+
+    // New field for streaming download sessions (WebRTC chunk streaming to disk)
+    download_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingDownloadSession>>>,
 
     // Proxy authentication tokens storage
     proxy_auth_tokens: Arc<Mutex<std::collections::HashMap<String, ProxyAuthToken>>>,
@@ -3925,6 +3942,158 @@ async fn write_file(path: String, contents: Vec<u8>) -> Result<(), String> {
     Ok(())
 }
 
+/// Initialize a streaming download session - creates temp file and returns session ID
+#[tauri::command]
+async fn init_streaming_download(
+    state: State<'_, AppState>,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    output_path: String,
+    total_chunks: u32,
+    chunk_size: u32,
+) -> Result<String, String> {
+    use std::time::SystemTime;
+
+    // Generate unique session ID
+    let session_id = format!("dl-{}-{}", file_hash.chars().take(8).collect::<String>(),
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis());
+
+    // Create temp file path
+    let temp_path = std::path::PathBuf::from(&output_path)
+        .with_extension("chiral_partial");
+
+    // Pre-allocate file with zeros for efficient random writes
+    let file = tokio::fs::File::create(&temp_path)
+        .await
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    file.set_len(file_size)
+        .await
+        .map_err(|e| format!("Failed to pre-allocate file: {}", e))?;
+    drop(file);
+
+    let session = StreamingDownloadSession {
+        file_hash: file_hash.clone(),
+        file_name,
+        file_size,
+        temp_path,
+        output_path,
+        received_chunks: std::collections::HashSet::new(),
+        total_chunks,
+        chunk_size,
+        created_at: SystemTime::now(),
+    };
+
+    let mut sessions = state.download_sessions.lock().await;
+    sessions.insert(session_id.clone(), session);
+
+    info!("Initialized streaming download session: {} for file {}", session_id, file_hash);
+    Ok(session_id)
+}
+
+/// Write a chunk directly to the temp file at the correct offset
+#[tauri::command]
+async fn write_download_chunk(
+    state: State<'_, AppState>,
+    session_id: String,
+    chunk_index: u32,
+    chunk_data: Vec<u8>,
+) -> Result<bool, String> {
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+    let mut sessions = state.download_sessions.lock().await;
+    let session = sessions.get_mut(&session_id)
+        .ok_or_else(|| format!("Download session not found: {}", session_id))?;
+
+    // Check if chunk already received
+    if session.received_chunks.contains(&chunk_index) {
+        return Ok(false); // Already have this chunk
+    }
+
+    // Calculate offset
+    let offset = (chunk_index as u64) * (session.chunk_size as u64);
+
+    // Write chunk to file at correct offset
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(&session.temp_path)
+        .await
+        .map_err(|e| format!("Failed to open temp file: {}", e))?;
+
+    file.seek(std::io::SeekFrom::Start(offset))
+        .await
+        .map_err(|e| format!("Failed to seek in file: {}", e))?;
+
+    file.write_all(&chunk_data)
+        .await
+        .map_err(|e| format!("Failed to write chunk: {}", e))?;
+
+    file.flush()
+        .await
+        .map_err(|e| format!("Failed to flush chunk: {}", e))?;
+
+    session.received_chunks.insert(chunk_index);
+
+    // Return true if all chunks received
+    Ok(session.received_chunks.len() as u32 >= session.total_chunks)
+}
+
+/// Get download session progress
+#[tauri::command]
+async fn get_streaming_download_progress(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(u32, u32), String> {
+    let sessions = state.download_sessions.lock().await;
+    let session = sessions.get(&session_id)
+        .ok_or_else(|| format!("Download session not found: {}", session_id))?;
+
+    Ok((session.received_chunks.len() as u32, session.total_chunks))
+}
+
+/// Finalize the download - rename temp file to final destination
+#[tauri::command]
+async fn finalize_streaming_download(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<String, String> {
+    let mut sessions = state.download_sessions.lock().await;
+    let session = sessions.remove(&session_id)
+        .ok_or_else(|| format!("Download session not found: {}", session_id))?;
+
+    // Verify all chunks received
+    if session.received_chunks.len() as u32 != session.total_chunks {
+        return Err(format!(
+            "Download incomplete: received {}/{} chunks",
+            session.received_chunks.len(),
+            session.total_chunks
+        ));
+    }
+
+    // Rename temp file to final destination
+    tokio::fs::rename(&session.temp_path, &session.output_path)
+        .await
+        .map_err(|e| format!("Failed to finalize download: {}", e))?;
+
+    info!("Finalized streaming download: {} -> {}", session_id, session.output_path);
+    Ok(session.output_path)
+}
+
+/// Cancel and cleanup a streaming download
+#[tauri::command]
+async fn cancel_streaming_download(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let mut sessions = state.download_sessions.lock().await;
+    if let Some(session) = sessions.remove(&session_id) {
+        // Delete temp file if it exists
+        let _ = tokio::fs::remove_file(&session.temp_path).await;
+        info!("Cancelled streaming download: {}", session_id);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let ft = {
@@ -5660,6 +5829,9 @@ fn main() {
             // Initialize upload sessions
             upload_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
+            // Initialize download sessions (for streaming WebRTC downloads)
+            download_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
             // Initialize proxy authentication tokens
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
@@ -5793,6 +5965,11 @@ fn main() {
             download_file_multi_source,
             get_file_transfer_events,
             write_file,
+            init_streaming_download,
+            write_download_chunk,
+            get_streaming_download_progress,
+            finalize_streaming_download,
+            cancel_streaming_download,
             get_download_metrics,
             encrypt_file_with_password,
             decrypt_file_with_password,

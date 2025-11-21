@@ -25,13 +25,17 @@ export interface P2PTransfer {
   webrtcSession?: any;
   startTime: number;
   outputPath?: string;
-  receivedChunks?: Map<number, Uint8Array>;
+  receivedChunks?: Map<number, Uint8Array>; // Legacy: only used for small files
   requestedChunks?: Set<number>;
   currentSeederIndex?: number;
   retryCount?: number;
   lastError?: string;
   totalChunks?: number;
   corruptedChunks?: Set<number>;
+  // Streaming download session (for large files - writes directly to disk)
+  streamingSessionId?: string;
+  receivedChunkIndices?: Set<number>; // Track which chunks received (not the data)
+  chunkSize: number;
 }
 
 export class P2PFileTransferService {
@@ -53,6 +57,10 @@ export class P2PFileTransferService {
     return await invoke("get_file_metadata", { fileHash });
   }
 
+  // Constants for streaming vs in-memory threshold
+  private static readonly CHUNK_SIZE = 16 * 1024; // 16KB chunks
+  private static readonly STREAMING_THRESHOLD = 1024 * 1024; // 1MB - use streaming for files larger than this
+
   async initiateDownload(
     metadata: FileMetadata,
     seeders: string[],
@@ -71,6 +79,7 @@ export class P2PFileTransferService {
       bytesTransferred: 0,
       speed: 0,
       startTime: Date.now(),
+      chunkSize: P2PFileTransferService.CHUNK_SIZE,
     };
 
     this.transfers.set(transferId, transfer);
@@ -122,9 +131,35 @@ export class P2PFileTransferService {
     // Initialize transfer state
     transfer.currentSeederIndex = 0;
     transfer.retryCount = 0;
-    transfer.totalChunks = Math.ceil(metadata.fileSize / (16 * 1024)); // Assume 16KB chunks
+    transfer.totalChunks = Math.ceil(metadata.fileSize / P2PFileTransferService.CHUNK_SIZE);
     transfer.corruptedChunks = new Set();
     transfer.requestedChunks = new Set();
+    transfer.receivedChunkIndices = new Set();
+
+    // Initialize streaming session for large files
+    if (transfer.outputPath && transfer.fileSize > P2PFileTransferService.STREAMING_THRESHOLD) {
+      try {
+        const sessionId = await invoke<string>("init_streaming_download", {
+          fileHash: transfer.fileHash,
+          fileName: transfer.fileName,
+          fileSize: transfer.fileSize,
+          outputPath: transfer.outputPath,
+          totalChunks: transfer.totalChunks,
+          chunkSize: P2PFileTransferService.CHUNK_SIZE,
+        });
+        transfer.streamingSessionId = sessionId;
+        console.log(`Initialized streaming download session: ${sessionId}`);
+      } catch (error) {
+        console.error("Failed to initialize streaming download:", error);
+        transfer.status = "failed";
+        transfer.error = `Failed to initialize streaming download: ${error}`;
+        this.notifyProgress(transfer);
+        return;
+      }
+    } else {
+      // Use in-memory buffering for small files
+      transfer.receivedChunks = new Map();
+    }
 
     // Connect to signaling service if not connected
     try {
@@ -441,12 +476,6 @@ export class P2PFileTransferService {
       const message = typeof data === "string" ? JSON.parse(data) : data;
 
       if (message.type === "file_chunk") {
-        // Handle incoming file chunk
-        // Initialize chunks map if not exists
-        if (!transfer.receivedChunks) {
-          transfer.receivedChunks = new Map();
-        }
-
         // Validate chunk data
         if (!(await this.validateChunk(message))) {
           console.warn("Received corrupted chunk:", message.chunk_index);
@@ -459,34 +488,77 @@ export class P2PFileTransferService {
           return;
         }
 
-        // Store the chunk data
         const chunkData = new Uint8Array(message.data);
-        transfer.receivedChunks.set(message.chunk_index, chunkData);
+        const chunkIndex = message.chunk_index;
 
-        // Remove from requested chunks since it's now received
-        transfer.requestedChunks?.delete(message.chunk_index);
+        // Check if using streaming mode (large files)
+        if (transfer.streamingSessionId) {
+          // Write chunk directly to disk via Tauri
+          try {
+            const isComplete = await invoke<boolean>("write_download_chunk", {
+              sessionId: transfer.streamingSessionId,
+              chunkIndex: chunkIndex,
+              chunkData: Array.from(chunkData), // Convert to array for Tauri
+            });
 
-        // Remove from corrupted chunks if it was previously corrupted
-        transfer.corruptedChunks?.delete(message.chunk_index);
+            transfer.receivedChunkIndices?.add(chunkIndex);
 
-        // Update progress
-        transfer.bytesTransferred += chunkData.length;
-        const progress = (transfer.bytesTransferred / transfer.fileSize) * 100;
-        transfer.progress = Math.min(100, progress);
+            // Update progress
+            transfer.bytesTransferred += chunkData.length;
+            const progress = (transfer.bytesTransferred / transfer.fileSize) * 100;
+            transfer.progress = Math.min(100, progress);
 
-        // Calculate speed
-        const elapsed = (Date.now() - transfer.startTime) / 1000;
-        transfer.speed = transfer.bytesTransferred / elapsed;
+            // Calculate speed
+            const elapsed = (Date.now() - transfer.startTime) / 1000;
+            transfer.speed = transfer.bytesTransferred / elapsed;
 
-        // Check if transfer is complete
-        if (this.isTransferComplete(transfer, message.total_chunks)) {
-          transfer.status = "completed";
+            // Check if transfer is complete
+            if (isComplete) {
+              await this.finalizeStreamingDownload(transfer);
+            }
+          } catch (error) {
+            console.error("Failed to write chunk to disk:", error);
+            transfer.corruptedChunks?.add(chunkIndex);
+            // Re-request the chunk
+            if (transfer.webrtcSession) {
+              this.requestChunkAgain(transfer, chunkIndex);
+            }
+            return;
+          }
+        } else {
+          // In-memory mode for small files
+          if (!transfer.receivedChunks) {
+            transfer.receivedChunks = new Map();
+          }
 
-          // Save file if output path is specified
-          if (transfer.outputPath) {
-            this.saveCompletedFile(transfer);
+          transfer.receivedChunks.set(chunkIndex, chunkData);
+          transfer.receivedChunkIndices?.add(chunkIndex);
+
+          // Update progress
+          transfer.bytesTransferred += chunkData.length;
+          const progress = (transfer.bytesTransferred / transfer.fileSize) * 100;
+          transfer.progress = Math.min(100, progress);
+
+          // Calculate speed
+          const elapsed = (Date.now() - transfer.startTime) / 1000;
+          transfer.speed = transfer.bytesTransferred / elapsed;
+
+          // Check if transfer is complete
+          if (this.isTransferComplete(transfer, message.total_chunks)) {
+            transfer.status = "completed";
+
+            // Save file if output path is specified
+            if (transfer.outputPath) {
+              this.saveCompletedFile(transfer);
+            }
           }
         }
+
+        // Remove from requested chunks since it's now received
+        transfer.requestedChunks?.delete(chunkIndex);
+
+        // Remove from corrupted chunks if it was previously corrupted
+        transfer.corruptedChunks?.delete(chunkIndex);
 
         this.notifyProgress(transfer);
       } else if (message.type === "dht_message") {
@@ -496,6 +568,27 @@ export class P2PFileTransferService {
     } catch (error) {
       console.error("Error handling incoming chunk:", error);
     }
+  }
+
+  private async finalizeStreamingDownload(transfer: P2PTransfer): Promise<void> {
+    if (!transfer.streamingSessionId) return;
+
+    try {
+      const outputPath = await invoke<string>("finalize_streaming_download", {
+        sessionId: transfer.streamingSessionId,
+      });
+
+      transfer.status = "completed";
+      transfer.outputPath = outputPath;
+      console.log(`Streaming download completed: ${outputPath}`);
+    } catch (error) {
+      console.error("Failed to finalize streaming download:", error);
+      transfer.status = "failed";
+      transfer.error = `Failed to finalize download: ${error}`;
+    }
+
+    transfer.streamingSessionId = undefined;
+    this.notifyProgress(transfer);
   }
 
   private async validateChunk(chunkMessage: any): Promise<boolean> {
@@ -816,6 +909,14 @@ export class P2PFileTransferService {
         if (transfer.webrtcSession.peerId) {
           this.webrtcSessions.delete(transfer.webrtcSession.peerId);
         }
+      }
+
+      // Cancel streaming download session if active
+      if (transfer.streamingSessionId) {
+        invoke("cancel_streaming_download", {
+          sessionId: transfer.streamingSessionId,
+        }).catch((err) => console.error("Failed to cancel streaming download:", err));
+        transfer.streamingSessionId = undefined;
       }
 
       this.notifyProgress(transfer);
