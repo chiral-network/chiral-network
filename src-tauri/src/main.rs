@@ -4089,9 +4089,99 @@ async fn cancel_streaming_download(
     if let Some(session) = sessions.remove(&session_id) {
         // Delete temp file if it exists
         let _ = tokio::fs::remove_file(&session.temp_path).await;
+        // Delete checkpoint file if exists
+        let checkpoint_path = session.temp_path.with_extension("checkpoint");
+        let _ = tokio::fs::remove_file(&checkpoint_path).await;
         info!("Cancelled streaming download: {}", session_id);
     }
     Ok(())
+}
+
+/// Save checkpoint for resume support
+#[tauri::command]
+async fn save_download_checkpoint(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let sessions = state.download_sessions.lock().await;
+    let session = sessions.get(&session_id)
+        .ok_or_else(|| format!("Download session not found: {}", session_id))?;
+
+    let checkpoint = serde_json::json!({
+        "file_hash": session.file_hash,
+        "file_name": session.file_name,
+        "file_size": session.file_size,
+        "output_path": session.output_path,
+        "total_chunks": session.total_chunks,
+        "chunk_size": session.chunk_size,
+        "received_chunks": session.received_chunks.iter().collect::<Vec<_>>(),
+        "temp_path": session.temp_path.to_string_lossy(),
+    });
+
+    let checkpoint_path = session.temp_path.with_extension("checkpoint");
+    tokio::fs::write(&checkpoint_path, serde_json::to_string_pretty(&checkpoint).unwrap())
+        .await
+        .map_err(|e| format!("Failed to save checkpoint: {}", e))?;
+
+    info!("Saved checkpoint: {} chunks received", session.received_chunks.len());
+    Ok(())
+}
+
+/// Load checkpoint and resume download
+#[tauri::command]
+async fn resume_download_from_checkpoint(
+    state: State<'_, AppState>,
+    checkpoint_path: String,
+) -> Result<(String, Vec<u32>), String> {
+    let checkpoint_data = tokio::fs::read_to_string(&checkpoint_path)
+        .await
+        .map_err(|e| format!("Failed to read checkpoint: {}", e))?;
+
+    let checkpoint: serde_json::Value = serde_json::from_str(&checkpoint_data)
+        .map_err(|e| format!("Failed to parse checkpoint: {}", e))?;
+
+    let file_hash = checkpoint["file_hash"].as_str().unwrap_or("").to_string();
+    let file_name = checkpoint["file_name"].as_str().unwrap_or("").to_string();
+    let file_size = checkpoint["file_size"].as_u64().unwrap_or(0);
+    let output_path = checkpoint["output_path"].as_str().unwrap_or("").to_string();
+    let total_chunks = checkpoint["total_chunks"].as_u64().unwrap_or(0) as u32;
+    let chunk_size = checkpoint["chunk_size"].as_u64().unwrap_or(16384) as u32;
+    let temp_path_str = checkpoint["temp_path"].as_str().unwrap_or("");
+    let received_chunks: Vec<u32> = checkpoint["received_chunks"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+        .unwrap_or_default();
+
+    let session_id = format!("dl-resume-{}", std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis());
+
+    let temp_path = std::path::PathBuf::from(temp_path_str);
+
+    if !temp_path.exists() {
+        return Err("Temp file not found, cannot resume".to_string());
+    }
+
+    let session = StreamingDownloadSession {
+        file_hash: file_hash.clone(),
+        file_name,
+        file_size,
+        temp_path,
+        output_path,
+        received_chunks: received_chunks.iter().cloned().collect(),
+        total_chunks,
+        chunk_size,
+        created_at: std::time::SystemTime::now(),
+    };
+
+    let mut sessions = state.download_sessions.lock().await;
+    sessions.insert(session_id.clone(), session);
+
+    let missing_chunks: Vec<u32> = (0..total_chunks)
+        .filter(|i| !received_chunks.contains(i))
+        .collect();
+
+    info!("Resumed download: {}/{} chunks missing", missing_chunks.len(), total_chunks);
+    Ok((session_id, missing_chunks))
 }
 
 #[tauri::command]
@@ -5970,6 +6060,8 @@ fn main() {
             get_streaming_download_progress,
             finalize_streaming_download,
             cancel_streaming_download,
+            save_download_checkpoint,
+            resume_download_from_checkpoint,
             get_download_metrics,
             encrypt_file_with_password,
             decrypt_file_with_password,

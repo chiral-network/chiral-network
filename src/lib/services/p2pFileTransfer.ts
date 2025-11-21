@@ -619,6 +619,12 @@ export class P2PFileTransferService {
             const elapsed = (Date.now() - transfer.startTime) / 1000;
             transfer.speed = transfer.bytesTransferred / elapsed;
 
+            // Save checkpoint periodically (every 50 chunks)
+            const receivedCount = transfer.receivedChunkIndices?.size || 0;
+            if (receivedCount > 0 && receivedCount % 50 === 0) {
+              this.saveCheckpoint(transfer);
+            }
+
             // Check if transfer is complete
             if (isComplete) {
               await this.finalizeStreamingDownload(transfer);
@@ -699,6 +705,17 @@ export class P2PFileTransferService {
 
     transfer.streamingSessionId = undefined;
     this.notifyProgress(transfer);
+  }
+
+  /**
+   * Save checkpoint for resume support
+   */
+  private saveCheckpoint(transfer: P2PTransfer): void {
+    if (!transfer.streamingSessionId) return;
+
+    invoke("save_download_checkpoint", {
+      sessionId: transfer.streamingSessionId,
+    }).catch((err) => console.warn("Failed to save checkpoint:", err));
   }
 
   /**
