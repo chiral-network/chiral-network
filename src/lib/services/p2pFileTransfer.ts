@@ -231,23 +231,22 @@ export class P2PFileTransferService {
         });
 
         transfer.webrtcSession = webrtcSession;
+        this.webrtcSessions.set(seederId, webrtcSession);
 
-        // Create offer and establish connection with timeout
+        // Create offer - signaling service will automatically send it to the peer
         try {
-          const offer = await Promise.race([
+          // createOffer() both creates and sends the offer via signaling
+          await Promise.race([
             webrtcSession.createOffer(),
             this.createTimeoutPromise(10000, "WebRTC offer creation timeout"),
           ]);
 
-          console.log("Created WebRTC offer for seeder:", seederId);
+          console.log("Created and sent WebRTC offer to seeder:", seederId);
+          console.log("Waiting for answer via signaling...");
 
-          // Use backend coordination with enhanced DHT signaling support
+          // Wait for connection to establish via signaling (answer will come back automatically)
           await Promise.race([
-            invoke("establish_webrtc_connection", {
-              peerId: seederId,
-              offer: JSON.stringify(offer),
-              useDhtSignaling: true, // Enable DHT signaling as fallback
-            }),
+            this.waitForConnection(webrtcSession, 15000),
             this.createTimeoutPromise(
               15000,
               "WebRTC connection establishment timeout"
@@ -257,10 +256,11 @@ export class P2PFileTransferService {
           console.log("WebRTC connection established with peer:", seederId);
         } catch (error) {
           console.error(
-            `Failed to create WebRTC offer for ${seederId}:`,
+            `Failed to establish WebRTC connection with ${seederId}:`,
             error
           );
           webrtcSession.close();
+          this.webrtcSessions.delete(seederId);
 
           if (
             error === "WebRTC offer creation timeout" ||
@@ -326,6 +326,34 @@ export class P2PFileTransferService {
   ): Promise<T> {
     return new Promise((_, reject) => {
       setTimeout(() => reject(errorMessage), ms);
+    });
+  }
+
+  /**
+   * Wait for WebRTC connection to establish (via signaling)
+   */
+  private waitForConnection(session: any, timeoutMs: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+
+      const checkConnection = () => {
+        if (session.pc.connectionState === "connected") {
+          resolve();
+          return;
+        }
+        if (session.pc.connectionState === "failed" || session.pc.connectionState === "closed") {
+          reject(new Error(`Connection ${session.pc.connectionState}`));
+          return;
+        }
+        if (Date.now() - startTime > timeoutMs) {
+          reject(new Error("Connection timeout"));
+          return;
+        }
+        // Check again in 100ms
+        setTimeout(checkConnection, 100);
+      };
+
+      checkConnection();
     });
   }
 
