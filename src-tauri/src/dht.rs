@@ -1082,9 +1082,8 @@ async fn run_dht_node(
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
     pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
-    pending_dht_queries: Arc<
-        Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
-    >,
+    pending_dht_queries: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>>,
+    pending_key_requests: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -2314,8 +2313,25 @@ async fn run_dht_node(
                                     }
                                 }
                             }
-                            Some(DhtCommand::RequestFileAccess { .. }) => {
-                                todo!();
+                            Some(DhtCommand::RequestFileAccess { seeder, merkle_root, recipient_public_key, sender }) => {
+                                info!("Requesting file access from seeder {} for file {}", seeder, merkle_root);
+                                
+                                // Convert PublicKey to Vec<u8> for the KeyRequest
+                                let recipient_pk_bytes = recipient_public_key.to_bytes().to_vec();
+                                
+                                // Create the key request
+                                let key_request = KeyRequest {
+                                    merkle_root: merkle_root.clone(),
+                                    recipient_public_key: recipient_pk_bytes,
+                                };
+                                
+                                // Send the request using the key_request behavior
+                                let request_id = swarm.behaviour_mut().key_request.send_request(&seeder, key_request);
+                                
+                                // Store the pending request
+                                pending_key_requests.lock().await.insert(request_id, sender);
+                                
+                                info!("Sent key request to seeder {} for file {} (request_id: {:?})", seeder, merkle_root, request_id);
                             }
                             Some(DhtCommand::AnnounceTorrent { info_hash }) => {
                                 let key = kad::RecordKey::new(&info_hash);
@@ -3311,14 +3327,107 @@ async fn run_dht_node(
                                 }
                             }
                             SwarmEvent::IncomingConnectionError { error, .. } if !is_bootstrap => {
-                                if !is_bootstrap{
+                
                                     if let Ok(mut m) = metrics.try_lock() {
                                         m.last_error = Some(error.to_string());
                                         m.last_error_at = Some(SystemTime::now());
                                         m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
                                     }
+                          }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::KeyRequest(ev)) => {
+                                use libp2p::request_response::{Event as RREvent, Message};
+                                match ev {
+                                    // Incoming key request (we're the seeder)
+                                    RREvent::Message { peer, message } => match message {
+                                        Message::Request { request, channel, .. } => {
+                                            let KeyRequest { merkle_root, recipient_public_key } = request;
+                                            info!("Received key request from peer {} for file {}", peer, merkle_root);
+                                            
+                                            // Look up file metadata in cache
+                                            let file_metadata_cache_guard = file_metadata_cache.lock().await;
+                                            let result = if let Some(metadata) = file_metadata_cache_guard.get(&merkle_root) {
+                                                // Check if file has encrypted key bundle
+                                                if let Some(key_bundle) = &metadata.encrypted_key_bundle {
+                                                    info!("Found encrypted key bundle for file {} (merkle_root: {})", metadata.file_name, merkle_root);
+                                                    Ok(KeyResponse {
+                                                        encrypted_bundle: Some(key_bundle.clone()),
+                                                        error: None,
+                                                    })
+                                                } else {
+                                                    warn!("File {} found but no encrypted key bundle available", merkle_root);
+                                                    Ok(KeyResponse {
+                                                        encrypted_bundle: None,
+                                                        error: Some("File found but no encrypted key bundle available".to_string()),
+                                                    })
+                                                }
+                                            } else {
+                                                warn!("File not found in cache for merkle_root: {}", merkle_root);
+                                                Ok(KeyResponse {
+                                                    encrypted_bundle: None,
+                                                    error: Some(format!("File not found: {}", merkle_root)),
+                                                })
+                                            };
+                                            
+                                            drop(file_metadata_cache_guard);
+                                            
+                                            // Send response
+                                            match result {
+                                                Ok(response) => {
+                                                    swarm.behaviour_mut().key_request
+                                                        .send_response(channel, response)
+                                                        .unwrap_or_else(|e| error!("Failed to send key response: {e:?}"));
+                                                }
+                                                Err(e) => {
+                                                    error!("Error processing key request: {}", e);
+                                                    let error_response = KeyResponse {
+                                                        encrypted_bundle: None,
+                                                        error: Some(e),
+                                                    };
+                                                    swarm.behaviour_mut().key_request
+                                                        .send_response(channel, error_response)
+                                                        .unwrap_or_else(|e| error!("Failed to send error response: {e:?}"));
+                                                }
+                                            }
+                                        }
+                                        // Key response (we're the requester)
+                                        Message::Response { request_id, response } => {
+                                            let KeyResponse { encrypted_bundle, error } = response;
+                                            
+                                            if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
+                                                match (encrypted_bundle, error) {
+                                                    (Some(bundle), None) => {
+                                                        info!("Received encrypted key bundle for request {:?}", request_id);
+                                                        let _ = tx.send(Ok(bundle));
+                                                    }
+                                                    (None, Some(err)) => {
+                                                        warn!("Key request failed: {}", err);
+                                                        let _ = tx.send(Err(err));
+                                                    }
+                                                    (None, None) => {
+                                                        warn!("Key request returned empty response");
+                                                        let _ = tx.send(Err("Empty response from seeder".to_string()));
+                                                    }
+                                                    (Some(_), Some(err)) => {
+                                                        warn!("Key request returned both bundle and error, using error: {}", err);
+                                                        let _ = tx.send(Err(err));
+                                                    }
+                                                }
+                                            } else {
+                                                warn!("Received key response for unknown request_id {:?}", request_id);
+                                            }
+                                        }
+                                    },
+                                    RREvent::OutboundFailure { request_id, error, .. } => {
+                                        warn!("Key request outbound failure: {error:?}");
+                                        if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
+                                            let _ = tx.send(Err(format!("Outbound failure: {error:?}")));
+                                        }
+                                    }
+                                    RREvent::InboundFailure { error, .. } => {
+                                        warn!("Key request inbound failure: {error:?}");
+                                    }
+                                    RREvent::ResponseSent { .. } => {}
                                 }
-                                error!("❌ Incoming connection error: {}", error);
                             }
                             SwarmEvent::ListenerClosed { reason, .. } if !is_bootstrap => {
                                 if !is_bootstrap{
@@ -5173,6 +5282,7 @@ pub struct DhtService {
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
         >,
     >,
+    pending_key_requests: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>>>,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
     active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
@@ -5814,6 +5924,7 @@ impl DhtService {
         let proxy_mgr: ProxyMgr = Arc::new(Mutex::new(ProxyManager::default()));
         let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
         let pending_webrtc_offers = Arc::new(Mutex::new(HashMap::new()));
+        let pending_key_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> =
@@ -5877,6 +5988,7 @@ impl DhtService {
             pending_keyword_indexes.clone(),
             file_metadata_cache_local.clone(),
             pending_dht_queries.clone(),
+            pending_key_requests.clone(),
             is_bootstrap,
             final_enable_autorelay,
             relay_candidates,
@@ -5901,6 +6013,7 @@ impl DhtService {
             file_transfer_service,
             // chunk_manager is not stored in DhtService, only passed to the task
             pending_webrtc_offers,
+            pending_key_requests,
             pending_provider_queries,
             root_query_mapping,
             active_downloads,
