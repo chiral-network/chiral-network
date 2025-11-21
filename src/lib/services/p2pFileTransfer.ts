@@ -560,6 +560,9 @@ export class P2PFileTransferService {
         // Remove from corrupted chunks if it was previously corrupted
         transfer.corruptedChunks?.delete(chunkIndex);
 
+        // Send ACK to seeder for flow control
+        this.sendChunkAck(transfer, chunkIndex);
+
         this.notifyProgress(transfer);
       } else if (message.type === "dht_message") {
         // Handle DHT signaling messages
@@ -589,6 +592,27 @@ export class P2PFileTransferService {
 
     transfer.streamingSessionId = undefined;
     this.notifyProgress(transfer);
+  }
+
+  /**
+   * Send ACK message to seeder for flow control
+   */
+  private sendChunkAck(transfer: P2PTransfer, chunkIndex: number): void {
+    if (!transfer.webrtcSession) return;
+
+    try {
+      const ackMessage = {
+        type: "ChunkAck",
+        file_hash: transfer.fileHash,
+        chunk_index: chunkIndex,
+        ready_for_more: true,
+      };
+
+      transfer.webrtcSession.send(JSON.stringify(ackMessage));
+    } catch (error) {
+      // ACK sending failure is non-critical, just log it
+      console.warn(`Failed to send ACK for chunk ${chunkIndex}:`, error);
+    }
   }
 
   private async validateChunk(chunkMessage: any): Promise<boolean> {

@@ -79,6 +79,8 @@ pub struct PeerConnection {
     pub data_channel: Option<Arc<RTCDataChannel>>,
     pub pending_chunks: HashMap<String, Vec<FileChunk>>, // file_hash -> chunks
     pub received_chunks: HashMap<String, HashMap<u32, FileChunk>>, // file_hash -> chunk_index -> chunk
+    pub acked_chunks: HashMap<String, std::collections::HashSet<u32>>, // file_hash -> acked chunk indices
+    pub pending_acks: HashMap<String, u32>, // file_hash -> number of unacked chunks
 }
 
 #[derive(Debug)]
@@ -173,6 +175,14 @@ pub enum WebRTCEvent {
     },
 }
 
+/// ACK message sent by downloader to confirm chunk receipt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkAck {
+    pub file_hash: String,
+    pub chunk_index: u32,
+    pub ready_for_more: bool, // Signal to send more chunks
+}
+
 /// A new enum to wrap different message types for clarity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -181,6 +191,7 @@ pub enum WebRTCMessage {
     ManifestRequest(WebRTCManifestRequest),
     ManifestResponse(WebRTCManifestResponse),
     FileChunk(FileChunk),
+    ChunkAck(ChunkAck),
 }
 
 pub struct WebRTCService {
@@ -530,6 +541,8 @@ impl WebRTCService {
             data_channel: Some(data_channel),
             pending_chunks: HashMap::new(),
             received_chunks: HashMap::new(),
+            acked_chunks: HashMap::new(),
+            pending_acks: HashMap::new(),
         };
         conns.insert(peer_id.to_string(), connection);
     }
@@ -898,6 +911,27 @@ impl WebRTCService {
                         )
                         .await;
                     }
+                    WebRTCMessage::ChunkAck(ack) => {
+                        // Handle ACK from downloader
+                        let mut conns = connections.lock().await;
+                        if let Some(connection) = conns.get_mut(peer_id) {
+                            // Record this chunk as ACKed
+                            let acked = connection.acked_chunks
+                                .entry(ack.file_hash.clone())
+                                .or_insert_with(std::collections::HashSet::new);
+                            acked.insert(ack.chunk_index);
+
+                            // Decrement pending ACK count
+                            if let Some(pending) = connection.pending_acks.get_mut(&ack.file_hash) {
+                                if *pending > 0 {
+                                    *pending -= 1;
+                                }
+                            }
+
+                            info!("Received ACK for chunk {} of file {} from peer {}",
+                                  ack.chunk_index, ack.file_hash, peer_id);
+                        }
+                    }
                 }
             }
         }
@@ -983,8 +1017,46 @@ impl WebRTCService {
             }
         }
 
-        // Send file chunks over WebRTC data channel
+        // Flow control constants
+        const BATCH_SIZE: u32 = 10; // Send 10 chunks before waiting for ACKs
+        const MAX_PENDING_ACKS: u32 = 20; // Maximum unacked chunks before pausing
+        const ACK_WAIT_TIMEOUT_MS: u64 = 5000; // Timeout waiting for ACKs
+
+        // Initialize pending ACK counter
+        {
+            let mut conns = connections.lock().await;
+            if let Some(connection) = conns.get_mut(peer_id) {
+                connection.pending_acks.insert(request.file_hash.clone(), 0);
+                connection.acked_chunks.insert(request.file_hash.clone(), std::collections::HashSet::new());
+            }
+        }
+
+        // Send file chunks over WebRTC data channel with flow control
         for chunk_index in 0..total_chunks {
+            // Flow control: wait if too many pending ACKs
+            let wait_start = Instant::now();
+            loop {
+                let pending_count = {
+                    let conns = connections.lock().await;
+                    conns.get(peer_id)
+                        .and_then(|c| c.pending_acks.get(&request.file_hash).copied())
+                        .unwrap_or(0)
+                };
+
+                if pending_count < MAX_PENDING_ACKS {
+                    break;
+                }
+
+                // Timeout check
+                if wait_start.elapsed().as_millis() > ACK_WAIT_TIMEOUT_MS as u128 {
+                    warn!("ACK timeout waiting for peer {}, continuing anyway", peer_id);
+                    break;
+                }
+
+                // Wait a bit before checking again
+                sleep(Duration::from_millis(50)).await;
+            }
+
             let start = (chunk_index as usize) * CHUNK_SIZE;
             let end = (start + CHUNK_SIZE).min(file_data.len());
             let chunk_data: Vec<u8> = file_data[start..end].to_vec();
@@ -1044,10 +1116,12 @@ impl WebRTCService {
             // Send chunk via WebRTC data channel
             Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await;
 
-            // Update progress
+            // Increment pending ACK count
             {
                 let mut conns = connections.lock().await;
                 if let Some(connection) = conns.get_mut(peer_id) {
+                    *connection.pending_acks.entry(request.file_hash.clone()).or_insert(0) += 1;
+
                     if let Some(transfer) = connection.active_transfers.get_mut(&request.file_hash)
                     {
                         transfer.chunks_sent += 1;
@@ -1075,8 +1149,13 @@ impl WebRTCService {
                 }
             }
 
-            // Small delay to avoid overwhelming
-            sleep(Duration::from_millis(10)).await;
+            // Small delay between chunks in a batch
+            if (chunk_index + 1) % BATCH_SIZE == 0 {
+                // After a batch, give more time for ACKs
+                sleep(Duration::from_millis(50)).await;
+            } else {
+                sleep(Duration::from_millis(5)).await;
+            }
         }
 
         // Mark transfer as completed
@@ -1393,6 +1472,8 @@ impl WebRTCService {
             data_channel: Some(data_channel),
             pending_chunks: HashMap::new(),
             received_chunks: HashMap::new(),
+            acked_chunks: HashMap::new(),
+            pending_acks: HashMap::new(),
         };
         conns.insert(peer_id, connection);
 
@@ -1578,6 +1659,8 @@ impl WebRTCService {
             data_channel: Some(data_channel),
             pending_chunks: HashMap::new(),
             received_chunks: HashMap::new(),
+            acked_chunks: HashMap::new(),
+            pending_acks: HashMap::new(),
         };
         conns.insert(peer_id, connection);
 
