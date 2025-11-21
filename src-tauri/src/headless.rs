@@ -1,6 +1,6 @@
 // Headless mode for running as a bootstrap node on servers
 use crate::commands::bootstrap::get_bootstrap_nodes;
-use crate::dht::{DhtMetricsSnapshot, DhtService, FileMetadata};
+use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtService};
 use crate::ethereum::GethProcess;
 use crate::file_transfer::FileTransferService;
 use clap::Parser;
@@ -56,6 +56,9 @@ pub struct CliArgs {
     /// Disable AutoNAT reachability probes
     #[arg(long)]
     pub disable_autonat: bool,
+
+    #[arg(long)]
+    pub enable_relay: bool,
 
     /// Interval in seconds between AutoNAT probes
     #[arg(long, default_value = "30")]
@@ -178,7 +181,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         None, // cache_size_mb: use default
         final_enable_autorelay,
         args.relay.clone(),
-        args.is_bootstrap, // enable_relay_server on bootstrap
+        args.enable_relay,
         None,
     )
     .await?;

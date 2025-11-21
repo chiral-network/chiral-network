@@ -57,13 +57,13 @@ pub enum VerdictOutcome {
 /// This serves as cryptographic proof of payment obligation before file transfer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignedTransactionMessage {
-    pub from: String,  // downloader's address
-    pub to: String,    // seeder's address
-    pub amount: u64,   // payment amount in smallest currency unit
-    pub file_hash: String,  // target file identifier (merkle_root)
-    pub nonce: String,  // unique identifier to prevent replay attacks
-    pub deadline: u64,  // unix timestamp - maximum time for transfer completion
-    pub downloader_signature: String,  // hex-encoded ed25519 signature
+    pub from: String,                 // downloader's address
+    pub to: String,                   // seeder's address
+    pub amount: u64,                  // payment amount in smallest currency unit
+    pub file_hash: String,            // target file identifier (merkle_root)
+    pub nonce: String,                // unique identifier to prevent replay attacks
+    pub deadline: u64,                // unix timestamp - maximum time for transfer completion
+    pub downloader_signature: String, // hex-encoded ed25519 signature
 }
 
 impl SignedTransactionMessage {
@@ -77,9 +77,9 @@ impl SignedTransactionMessage {
         signing_key: &SigningKey,
     ) -> Result<Self, String> {
         use uuid::Uuid;
-        
+
         let nonce = Uuid::new_v4().to_string();
-        
+
         let mut message = Self {
             from,
             to,
@@ -89,11 +89,11 @@ impl SignedTransactionMessage {
             deadline,
             downloader_signature: String::new(),
         };
-        
+
         message.sign(signing_key)?;
         Ok(message)
     }
-    
+
     /// Sign this message using the provided signing key
     pub fn sign(&mut self, signing_key: &SigningKey) -> Result<(), String> {
         let signable = serde_json::json!({
@@ -104,13 +104,13 @@ impl SignedTransactionMessage {
             "nonce": self.nonce,
             "deadline": self.deadline,
         });
-        
+
         let serialized = serde_json::to_vec(&signable).map_err(|e| e.to_string())?;
         let signature = signing_key.sign(&serialized);
         self.downloader_signature = hex::encode(signature.to_bytes());
         Ok(())
     }
-    
+
     /// Verify the signature on this message
     pub fn verify_signature(&self, verifying_key: &VerifyingKey) -> Result<bool, String> {
         let signable = serde_json::json!({
@@ -121,20 +121,20 @@ impl SignedTransactionMessage {
             "nonce": self.nonce,
             "deadline": self.deadline,
         });
-        
+
         let serialized = serde_json::to_vec(&signable).map_err(|e| e.to_string())?;
-        
+
         let signature_bytes = hex::decode(&self.downloader_signature).map_err(|e| e.to_string())?;
         if signature_bytes.len() != 64 {
             return Err("invalid signature length".into());
         }
         let mut signature_bytes_array: [u8; 64] = [0u8; 64];
         signature_bytes_array.copy_from_slice(&signature_bytes[..64]);
-        
+
         let signature = Signature::from_bytes(&signature_bytes_array);
         Ok(verifying_key.verify(&serialized, &signature).is_ok())
     }
-    
+
     /// Check if deadline has passed
     pub fn is_expired(&self) -> bool {
         let now = SystemTime::now()
@@ -143,7 +143,7 @@ impl SignedTransactionMessage {
             .as_secs();
         now > self.deadline
     }
-    
+
     /// Validate message fields
     pub fn validate(&self) -> Result<(), String> {
         if self.from.is_empty() {
@@ -222,7 +222,11 @@ impl TransactionVerdict {
     /// Legacy method - kept for backwards compatibility but now generates issuer-specific key
     /// If called without issuer context, falls back to target-only key
     pub fn dht_key_for_target(target_id: &str) -> String {
-        println!("🔑 Computing DHT key for target: '{}' (len={} bytes)", target_id, target_id.len());
+        println!(
+            "🔑 Computing DHT key for target: '{}' (len={} bytes)",
+            target_id,
+            target_id.len()
+        );
         let mut hasher = Sha256::new();
         hasher.update(target_id.as_bytes());
         hasher.update(b"tx-rep");
@@ -616,7 +620,7 @@ impl ReputationDhtService {
             serde_json::to_vec(event).map_err(|e| format!("Serialization error: {}", e))?;
 
         // Store in DHT (using existing file metadata structure as template)
-        let metadata = crate::dht::FileMetadata {
+        let metadata = crate::dht::models::FileMetadata {
             merkle_root: key.clone(),
             file_name: format!("reputation_{}.json", event.id),
             file_size: serialized.len() as u64,
@@ -683,20 +687,34 @@ impl ReputationDhtService {
         let serialized =
             serde_json::to_vec(verdict).map_err(|e| format!("Serialization error: {}", e))?;
 
-        let tx_hash_str = verdict.tx_hash.as_ref().map(|h| h.as_str()).unwrap_or("no_tx");
+        let tx_hash_str = verdict
+            .tx_hash
+            .as_ref()
+            .map(|h| h.as_str())
+            .unwrap_or("no_tx");
 
         println!("📊 STORING VERDICT:");
         println!("   Issuer (who wrote this): {}", verdict.issuer_id);
         println!("   Target (who this is about): {}", verdict.target_id);
         println!("   Outcome: {:?}", verdict.outcome);
-        
+
         // Store under issuer+target key (for "verdicts I issued")
-        let issuer_target_key = TransactionVerdict::dht_key_for_verdict(&verdict.issuer_id, &verdict.target_id);
-        println!("📊 Storing verdict in DHT with issuer+target key: {}", issuer_target_key);
-        println!("📊 Verdict: issuer={}, target={}, outcome={:?}", verdict.issuer_id, verdict.target_id, verdict.outcome);
-        tracing::info!("📊 Storing verdict in DHT with issuer+target key: {}", issuer_target_key);
-        
-        let metadata1 = crate::dht::FileMetadata {
+        let issuer_target_key =
+            TransactionVerdict::dht_key_for_verdict(&verdict.issuer_id, &verdict.target_id);
+        println!(
+            "📊 Storing verdict in DHT with issuer+target key: {}",
+            issuer_target_key
+        );
+        println!(
+            "📊 Verdict: issuer={}, target={}, outcome={:?}",
+            verdict.issuer_id, verdict.target_id, verdict.outcome
+        );
+        tracing::info!(
+            "📊 Storing verdict in DHT with issuer+target key: {}",
+            issuer_target_key
+        );
+
+        let metadata1 = crate::dht::models::FileMetadata {
             merkle_root: issuer_target_key.clone(),
             file_name: format!("tx_verdict_{}_{}.json", verdict.issuer_id, tx_hash_str),
             file_size: serialized.len() as u64,
@@ -725,12 +743,21 @@ impl ReputationDhtService {
 
         // ALSO store under target-only key (for "verdicts about this peer")
         let target_only_key = TransactionVerdict::dht_key_for_target(&verdict.target_id);
-        println!("📊 ALSO storing verdict with target-only key: {}", target_only_key);
-        tracing::info!("📊 ALSO storing verdict with target-only key: {}", target_only_key);
-        
-        let metadata2 = crate::dht::FileMetadata {
+        println!(
+            "📊 ALSO storing verdict with target-only key: {}",
+            target_only_key
+        );
+        tracing::info!(
+            "📊 ALSO storing verdict with target-only key: {}",
+            target_only_key
+        );
+
+        let metadata2 = crate::dht::models::FileMetadata {
             merkle_root: target_only_key.clone(),
-            file_name: format!("tx_verdict_about_{}_{}.json", verdict.target_id, tx_hash_str),
+            file_name: format!(
+                "tx_verdict_about_{}_{}.json",
+                verdict.target_id, tx_hash_str
+            ),
             file_size: serialized.len() as u64,
             file_data: serialized,
             seeders: vec![verdict.issuer_id.clone()],
@@ -770,27 +797,47 @@ impl ReputationDhtService {
             .dht_service
             .as_ref()
             .ok_or("DHT service not initialized")?;
-        
+
         println!("🔍 RETRIEVING VERDICTS ABOUT: '{}'", target_id);
-        
+
         // Use target-only key to find verdicts ABOUT this peer
         let search_key = TransactionVerdict::dht_key_for_target(target_id);
-        
+
         println!("🔍 Searching for verdicts ABOUT target: {}", target_id);
         println!("🔍 Using DHT key: {}", search_key);
-        tracing::info!("🔍 Searching for verdicts ABOUT target: {}, key: {}", target_id, search_key);
-        
+        tracing::info!(
+            "🔍 Searching for verdicts ABOUT target: {}, key: {}",
+            target_id,
+            search_key
+        );
+
         // synchronous_search_metadata already checks local cache first
         println!("🔍 Calling synchronous_search_metadata with 5000ms timeout");
-        match dht_service.synchronous_search_metadata(search_key.clone(), 5000).await {
+        match dht_service
+            .synchronous_search_metadata(search_key.clone(), 5000)
+            .await
+        {
             Ok(Some(metadata)) => {
-                println!("✅ Found verdict metadata, size={} bytes", metadata.file_data.len());
-                tracing::info!("✅ Found verdict metadata, size={} bytes", metadata.file_data.len());
+                println!(
+                    "✅ Found verdict metadata, size={} bytes",
+                    metadata.file_data.len()
+                );
+                tracing::info!(
+                    "✅ Found verdict metadata, size={} bytes",
+                    metadata.file_data.len()
+                );
                 // Try to deserialize the file data as a TransactionVerdict
                 match serde_json::from_slice::<TransactionVerdict>(&metadata.file_data) {
                     Ok(verdict) => {
-                        println!("✅ Deserialized verdict: issuer={}, outcome={:?}", verdict.issuer_id, verdict.outcome);
-                        tracing::info!("✅ Found verdict: issuer={}, outcome={:?}", verdict.issuer_id, verdict.outcome);
+                        println!(
+                            "✅ Deserialized verdict: issuer={}, outcome={:?}",
+                            verdict.issuer_id, verdict.outcome
+                        );
+                        tracing::info!(
+                            "✅ Found verdict: issuer={}, outcome={:?}",
+                            verdict.issuer_id,
+                            verdict.outcome
+                        );
                         Ok(vec![verdict])
                     }
                     Err(e) => {
@@ -824,7 +871,7 @@ impl ReputationDhtService {
         let serialized =
             serde_json::to_vec(epoch).map_err(|e| format!("Serialization error: {}", e))?;
 
-        let metadata = crate::dht::FileMetadata {
+        let metadata = crate::dht::models::FileMetadata {
             merkle_root: epoch.merkle_root.clone(),
             file_name: format!("merkle_root_{}.json", epoch.epoch_id),
             file_size: serialized.len() as u64,
