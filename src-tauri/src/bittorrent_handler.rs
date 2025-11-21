@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 use tracing::{error, info, instrument, warn};
 use thiserror::Error;
+use crate::chiral_bittorrent_extension::{ChiralBitTorrentExtension, ChiralExtensionEvent};
 
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
 
@@ -183,6 +184,7 @@ pub struct BitTorrentHandler {
     rqbit_session: Arc<Session>,
     download_directory: std::path::PathBuf,
     // NEW: Manage active torrents and their stats.
+    chiral_extension: Option<Arc<ChiralBitTorrentExtension>>,
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
     app_handle: Option<AppHandle>,
@@ -221,6 +223,7 @@ impl BitTorrentHandler {
         let handler = Self {
             rqbit_session: session,
             download_directory,
+            chiral_extension: None,
             active_torrents: Default::default(),
             peer_states: Default::default(),
             app_handle: None,
@@ -290,6 +293,50 @@ impl BitTorrentHandler {
         });
     }
 
+    /// Creates a new BitTorrentHandler with Chiral extension support
+    pub async fn new_with_chiral_extension(
+        download_directory: std::path::PathBuf,
+        wallet_address: Option<String>,
+    ) -> Result<Self, BitTorrentError> {
+        let mut handler = Self::new(download_directory).await?;
+        
+        // Initialize Chiral extension
+        let chiral_extension = ChiralBitTorrentExtension::new(
+            handler.rqbit_session.clone(),
+            wallet_address,
+        );
+
+        handler.chiral_extension = Some(Arc::new(chiral_extension));
+        
+        info!("BitTorrentHandler initialized with Chiral extension support");
+        Ok(handler)
+    }
+
+    /// Subscribe to Chiral extension events
+    pub fn subscribe_chiral_events(&self) -> Option<tokio::sync::broadcast::Receiver<ChiralExtensionEvent>> {
+        self.chiral_extension.as_ref().map(|ext| ext.subscribe_events())
+    }
+
+    /// Get Chiral peers for prioritized connections
+    pub async fn get_chiral_peers(&self, info_hash: &str) -> Vec<String> {
+        if let Some(extension) = &self.chiral_extension {
+            extension.get_prioritized_peers(info_hash).await
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Register a torrent with the Chiral extension
+    async fn register_torrent_with_chiral_extension(&self, info_hash: &str) -> Result<(), BitTorrentError> {
+        if let Some(extension) = &self.chiral_extension {
+            extension.register_with_torrent(info_hash).await
+                .map_err(|e| BitTorrentError::Unknown { 
+                    message: format!("Failed to register torrent with Chiral extension: {}", e)
+                })?;
+        }
+        Ok(())
+    }
+
     /// Starts a download and returns a handle to the torrent.
     /// This method is non-blocking.
     pub async fn start_download(
@@ -329,6 +376,14 @@ impl BitTorrentHandler {
         let handle = add_torrent_response
             .into_handle()
             .ok_or(BitTorrentError::HandleUnavailable)?;
+
+        // Register with Chiral extension if available
+        if let Some(info_hash) = Self::extract_info_hash(identifier) {
+            if let Err(e) = self.register_torrent_with_chiral_extension(&info_hash).await {
+                warn!("Failed to register torrent with Chiral extension: {}", e);
+                // Continue without Chiral extension rather than failing the download
+            }
+        }
 
         Ok(handle)
     }
@@ -521,6 +576,7 @@ impl ProtocolHandler for BitTorrentHandler {
         // 1. Creating a .torrent file with proper metadata
         // 2. Adding the torrent to the session for seeding
         // 3. Returning the actual magnet link
+        // 4. Registering with Chiral extension for enhanced peer discovery
 
         warn!("Seeding functionality not yet implemented");
         Err(BitTorrentError::SeedingError {
@@ -650,5 +706,16 @@ mod tests {
             .category(),
             "filesystem"
         );
+    }
+
+    #[test]
+    fn test_extract_info_hash() {
+        let magnet = "magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678&dn=test";
+        let hash = BitTorrentHandler::extract_info_hash(magnet);
+        assert_eq!(hash, Some("1234567890abcdef1234567890abcdef12345678".to_string()));
+
+        let invalid_magnet = "not_a_magnet_link";
+        let hash = BitTorrentHandler::extract_info_hash(invalid_magnet);
+        assert_eq!(hash, None);
     }
 }
