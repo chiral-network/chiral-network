@@ -1,6 +1,8 @@
 # Reputation System
 
-> **Status:** MVP design for transaction-backed reputation. Uptime, storage, and relay metrics will ship later as extensions once out-of-band evidence is available.
+> **Status:** MVP design for transaction-backed reputation with signed transaction message proofs.
+
+> **📘 For detailed information about signed transaction messages and non-payment complaint workflow, see [SIGNED_TRANSACTION_MESSAGES.md](./SIGNED_TRANSACTION_MESSAGES.md)**
 
 ## Overview
 

@@ -63,6 +63,7 @@ export interface WalletInfo {
   reputation?: number;
   totalEarned?: number;
   totalSpent?: number;
+  totalReceived?: number;
 }
 
 export interface ETCAccount {
@@ -138,6 +139,22 @@ export interface Transaction {
   fee?: number; // Total fee in Wei
   timestamp?: number;
   error_message?: string;
+}
+
+export interface TransactionPaginationState {
+  accountAddress: string | null; // The account this pagination state belongs to
+  oldestBlockScanned: number | null; // The oldest block we've scanned so far
+  isLoading: boolean; // Whether we're currently loading more transactions
+  hasMore: boolean; // Whether there are more transactions to load
+  batchSize: number; // Number of blocks to scan per batch (default: 5000)
+}
+
+export interface MiningPaginationState {
+  accountAddress: string | null; // The account this pagination state belongs to
+  oldestBlockScanned: number | null; // The oldest block we've scanned for mining rewards
+  isLoading: boolean; // Whether we're currently loading more mining rewards
+  hasMore: boolean; // Whether there are more mining rewards to load
+  batchSize: number; // Number of blocks to scan per batch (default: 5000)
 }
 
 export interface BlacklistEntry {
@@ -239,6 +256,66 @@ export const files = writable<FileItem[]>(dummyFiles);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);
+
+// Load pagination state from localStorage
+const storedPagination = typeof window !== 'undefined'
+  ? localStorage.getItem('transactionPagination')
+  : null;
+
+const initialPaginationState: TransactionPaginationState = storedPagination
+  ? JSON.parse(storedPagination)
+  : {
+      accountAddress: null,
+      oldestBlockScanned: null,
+      isLoading: false,
+      hasMore: true,
+      batchSize: 5000,
+    };
+
+export const transactionPagination = writable<TransactionPaginationState>(initialPaginationState);
+
+// Persist pagination state to localStorage
+if (typeof window !== 'undefined') {
+  transactionPagination.subscribe((state) => {
+    localStorage.setItem('transactionPagination', JSON.stringify({
+      accountAddress: state.accountAddress,
+      oldestBlockScanned: state.oldestBlockScanned,
+      hasMore: state.hasMore,
+      batchSize: state.batchSize,
+      // Don't persist isLoading state
+    }));
+  });
+}
+
+// Load mining pagination state from localStorage
+const storedMiningPagination = typeof window !== 'undefined'
+  ? localStorage.getItem('miningPagination')
+  : null;
+
+const initialMiningPaginationState: MiningPaginationState = storedMiningPagination
+  ? JSON.parse(storedMiningPagination)
+  : {
+      accountAddress: null,
+      oldestBlockScanned: null,
+      isLoading: false,
+      hasMore: true,
+      batchSize: 5000,
+    };
+
+export const miningPagination = writable<MiningPaginationState>(initialMiningPaginationState);
+
+// Persist mining pagination state to localStorage
+if (typeof window !== 'undefined') {
+  miningPagination.subscribe((state) => {
+    localStorage.setItem('miningPagination', JSON.stringify({
+      accountAddress: state.accountAddress,
+      oldestBlockScanned: state.oldestBlockScanned,
+      hasMore: state.hasMore,
+      batchSize: state.batchSize,
+      // Don't persist isLoading state
+    }));
+  });
+}
 
 // Import real network status
 import { networkStatus } from "./services/networkService";
@@ -356,14 +433,39 @@ export const miningState = writable<MiningState>({
 
 export const miningProgress = writable({ cumulative: 0, lastBlock: 0 });
 
-export const totalEarned = derived(
-  miningState,
-  ($miningState) => $miningState.totalRewards
+// Accurate totals from full blockchain scan
+export interface AccurateTotals {
+  blocksMined: number;
+  totalReceived: number;
+  totalSent: number;
+}
+
+export interface AccurateTotalsProgress {
+  currentBlock: number;
+  totalBlocks: number;
+  percentage: number;
+}
+
+export const accurateTotals = writable<AccurateTotals | null>(null);
+export const isCalculatingAccurateTotals = writable<boolean>(false);
+export const accurateTotalsProgress = writable<AccurateTotalsProgress | null>(null);
+
+// Calculate total mined from loaded mining reward transactions (partial - based on loaded data)
+export const totalEarned = derived(transactions, ($txs) =>
+  $txs
+    .filter((tx) => tx.type === "mining")
+    .reduce((sum, tx) => sum + tx.amount, 0)
 );
 
 export const totalSpent = derived(transactions, ($txs) =>
   $txs
     .filter((tx) => tx.type === "sent")
+    .reduce((sum, tx) => sum + tx.amount, 0)
+);
+
+export const totalReceived = derived(transactions, ($txs) =>
+  $txs
+    .filter((tx) => tx.type === "received")
     .reduce((sum, tx) => sum + tx.amount, 0)
 );
 
@@ -433,6 +535,7 @@ export interface AppSettings {
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
   anonymousMode: boolean;
   shareAnalytics: boolean;
+  enableWalletAutoLock: boolean;
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
@@ -454,6 +557,7 @@ export interface AppSettings {
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
   autoStartDHT: boolean; // Whether to automatically start DHT on app launch
+  selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | null; // Protocol selected for file uploads
 }
 
 // Export the settings store
@@ -484,6 +588,7 @@ export const settings = writable<AppSettings>({
   relayServerAlias: "", // Empty by default - user can set a friendly name
   anonymousMode: false,
   shareAnalytics: true,
+  enableWalletAutoLock: false,
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
@@ -505,6 +610,7 @@ export const settings = writable<AppSettings>({
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
   autoStartDHT: false, // Don't auto-start DHT by default
+  selectedProtocol: "Bitswap" as "WebRTC" | "Bitswap" | "BitTorrent", // Default to Bitswap
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
