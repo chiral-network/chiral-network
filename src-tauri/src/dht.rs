@@ -1082,8 +1082,14 @@ async fn run_dht_node(
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
     pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
-    pending_dht_queries: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>>,
-    pending_key_requests: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>>>,
+    pending_dht_queries: Arc<
+        Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
+    >,
+    pending_key_requests: Arc<
+        Mutex<
+            HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>,
+        >,
+    >,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -2315,22 +2321,22 @@ async fn run_dht_node(
                             }
                             Some(DhtCommand::RequestFileAccess { seeder, merkle_root, recipient_public_key, sender }) => {
                                 info!("Requesting file access from seeder {} for file {}", seeder, merkle_root);
-                                
+
                                 // Convert PublicKey to Vec<u8> for the KeyRequest
                                 let recipient_pk_bytes = recipient_public_key.to_bytes().to_vec();
-                                
+
                                 // Create the key request
                                 let key_request = KeyRequest {
                                     merkle_root: merkle_root.clone(),
                                     recipient_public_key: recipient_pk_bytes,
                                 };
-                                
+
                                 // Send the request using the key_request behavior
                                 let request_id = swarm.behaviour_mut().key_request.send_request(&seeder, key_request);
-                                
+
                                 // Store the pending request
                                 pending_key_requests.lock().await.insert(request_id, sender);
-                                
+
                                 info!("Sent key request to seeder {} for file {} (request_id: {:?})", seeder, merkle_root, request_id);
                             }
                             Some(DhtCommand::AnnounceTorrent { info_hash }) => {
@@ -3327,7 +3333,7 @@ async fn run_dht_node(
                                 }
                             }
                             SwarmEvent::IncomingConnectionError { error, .. } if !is_bootstrap => {
-                
+
                                     if let Ok(mut m) = metrics.try_lock() {
                                         m.last_error = Some(error.to_string());
                                         m.last_error_at = Some(SystemTime::now());
@@ -3342,7 +3348,7 @@ async fn run_dht_node(
                                         Message::Request { request, channel, .. } => {
                                             let KeyRequest { merkle_root, recipient_public_key } = request;
                                             info!("Received key request from peer {} for file {}", peer, merkle_root);
-                                            
+
                                             // Look up file metadata in cache
                                             let file_metadata_cache_guard = file_metadata_cache.lock().await;
                                             let result = if let Some(metadata) = file_metadata_cache_guard.get(&merkle_root) {
@@ -3367,9 +3373,9 @@ async fn run_dht_node(
                                                     error: Some(format!("File not found: {}", merkle_root)),
                                                 })
                                             };
-                                            
+
                                             drop(file_metadata_cache_guard);
-                                            
+
                                             // Send response
                                             match result {
                                                 Ok(response) => {
@@ -3392,7 +3398,7 @@ async fn run_dht_node(
                                         // Key response (we're the requester)
                                         Message::Response { request_id, response } => {
                                             let KeyResponse { encrypted_bundle, error } = response;
-                                            
+
                                             if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
                                                 match (encrypted_bundle, error) {
                                                     (Some(bundle), None) => {
@@ -4860,21 +4866,18 @@ async fn handle_mdns_event(
             let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
-
                 // Skip self-discoveries to prevent self-connection attempts
                 if peer_id == *local_peer_id {
                     continue;
                 }
-                if not_loopback(&multiaddr) {
-                    swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, multiaddr.clone());
-
-                    discovered
-                        .entry(peer_id)
-                        .or_default()
-                        .push(multiaddr.to_string());
+                match swarm.dial(multiaddr.clone()) {
+                    Ok(_) => {
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, multiaddr.clone());
+                    }
+                    Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", multiaddr, e),
                 }
             }
             for (peer_id, addresses) in discovered {
@@ -5282,7 +5285,11 @@ pub struct DhtService {
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
         >,
     >,
-    pending_key_requests: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>>>,
+    pending_key_requests: Arc<
+        Mutex<
+            HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>,
+        >,
+    >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
     active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
