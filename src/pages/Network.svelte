@@ -329,6 +329,16 @@
     }
   }
   
+  // Connection timeout wrapper to prevent infinite hangs
+  async function connectWithTimeout(peerAddr: string, timeoutMs = 10000): Promise<void> {
+    return Promise.race([
+      dhtService.connectPeer(peerAddr),
+      new Promise<void>((_, reject) => 
+        setTimeout(() => reject(new Error('Connection timeout')), timeoutMs)
+      )
+    ])
+  }
+  
   async function startDht() {
     if (!isTauri) {
       // Mock DHT connection for web
@@ -374,19 +384,27 @@
           dhtStatus = dhtPeerCount > 0 ? 'connected' : 'connecting'
           if (dhtPeerCount > 0) {
             dhtEvents = [...dhtEvents, `✓ Connected to ${dhtPeerCount} peer(s)`]
+            startDhtPolling()
+            return
+          } else {
+            // No peers connected - try reconnecting to bootstrap
+            dhtEvents = [...dhtEvents, `⚠ No peers connected, retrying bootstrap connection...`]
+            // Fall through to bootstrap connection logic below
           }
-          startDhtPolling()
-          return
+        } else {
+          // DHT running but no peer ID - continue to start fresh
         }
       }
       
-      // DHT not running, start it
-      dhtStatus = 'connecting'
-      connectionAttempts++
-      
-      // Add a small delay to show the connecting state
-      await new Promise(resolve => setTimeout(resolve, 500))
-      
+      // If we reach here, either DHT is not running or needs bootstrap reconnection
+      if (!isRunning) {
+        // DHT not running, start it
+        dhtStatus = 'connecting'
+        connectionAttempts++
+        
+        // Add a small delay to show the connecting state
+        await new Promise(resolve => setTimeout(resolve, 500))
+        
       // Check if user cancelled during the delay
       if (cancelConnection) {
         dhtStatus = 'disconnected'
@@ -394,25 +412,27 @@
         return
       }
       
-      const peerId = await dhtService.start({
-        port: dhtPort,
-        bootstrapNodes: dhtBootstrapNodes,
-        enableAutonat: $settings.enableAutonat,
-        autonatProbeIntervalSeconds: $settings.autonatProbeInterval,
-        autonatServers: $settings.autonatServers,
-        enableAutorelay: $settings.enableAutorelay,
-        preferredRelays: $settings.preferredRelays || [],
-        enableRelayServer: $settings.enableRelayServer,
-        relayServerAlias: $settings.relayServerAlias || '',
-        chunkSizeKb: $settings.chunkSize,
-        cacheSizeMb: $settings.cacheSize,
-      })
-      dhtPeerId = peerId
-      dhtService.setPeerId(peerId)
-      dhtEvents = [...dhtEvents, `✓ DHT started with peer ID: ${peerId.slice(0, 16)}...`]
+        const peerId = await dhtService.start({
+          port: dhtPort,
+          bootstrapNodes: dhtBootstrapNodes,
+          enableAutonat: $settings.enableAutonat,
+          autonatProbeIntervalSeconds: $settings.autonatProbeInterval,
+          autonatServers: $settings.autonatServers,
+          enableAutorelay: $settings.enableAutorelay,
+          preferredRelays: $settings.preferredRelays || [],
+          enableRelayServer: $settings.enableRelayServer,
+          relayServerAlias: $settings.relayServerAlias || '',
+          chunkSizeKb: $settings.chunkSize,
+          cacheSizeMb: $settings.cacheSize,
+        })
+        dhtPeerId = peerId
+        dhtService.setPeerId(peerId)
+        dhtEvents = [...dhtEvents, `✓ DHT started with peer ID: ${peerId.slice(0, 16)}...`]
+      }
       
-      // Try to connect to bootstrap nodes
+      // Try to connect to bootstrap nodes (works for both new DHT and retry)
       let connectionSuccessful = false
+      connectionAttempts++
 
       if (dhtBootstrapNodes.length > 0) {
         dhtEvents = [...dhtEvents, `[Attempt ${connectionAttempts}] Connecting to ${dhtBootstrapNodes.length} bootstrap node(s)...`]
@@ -427,9 +447,16 @@
           return
         }
         
+        // Check if user cancelled during connection attempt
+        if (cancelConnection) {
+          await stopDht()
+          dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+          return
+        }
+        
         try {
-          // Try connecting to the first available bootstrap node
-          await dhtService.connectPeer(dhtBootstrapNodes[0])
+          // Try connecting to the first available bootstrap node with 10s timeout
+          await connectWithTimeout(dhtBootstrapNodes[0], 10000)
           connectionSuccessful = true
           dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
           
@@ -448,7 +475,13 @@
           // Parse and improve error messages
           let errorMessage = error.toString ? error.toString() : String(error)
           
-          if (errorMessage.includes('DHT not started')) {
+          // Check for our explicit timeout first (before generic "timeout" check)
+          if (errorMessage.includes('Connection timeout') || errorMessage.includes('Connection failed')) {
+            errorMessage = 'Bootstrap connection timeout after 10s - nodes may be down'
+            connectionSuccessful = false
+            dhtEvents = [...dhtEvents, `✗ ${errorMessage}`]
+            dhtEvents = [...dhtEvents, `💡 Try: 1) Retry connection, 2) Check network, 3) Use backup bootstrap`]
+          } else if (errorMessage.includes('DHT not started')) {
             errorMessage = 'DHT service not initialized properly. Try stopping and restarting.'
             connectionSuccessful = false
           } else if (errorMessage.includes('DHT networking not implemented')) {
@@ -457,7 +490,7 @@
           } else if (errorMessage.includes('already running')) {
             errorMessage = 'DHT already running on this port'
             connectionSuccessful = true
-          } else if (errorMessage.includes('Connection refused') || errorMessage.includes('timeout') || errorMessage.includes('rsa') || errorMessage.includes('Transport')) {
+          } else if (errorMessage.includes('Connection refused') || errorMessage.toLowerCase().includes('timeout') || errorMessage.includes('rsa') || errorMessage.includes('Transport')) {
             // These are expected bootstrap connection failures - DHT can still work
             errorMessage = 'Bootstrap nodes unreachable - running in standalone mode'
             connectionSuccessful = true

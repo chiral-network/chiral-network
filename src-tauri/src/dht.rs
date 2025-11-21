@@ -676,7 +676,7 @@ pub enum DhtCommand {
     },
     SearchFile(String),
     DownloadFile(FileMetadata, String),
-    ConnectPeer(String),
+    ConnectPeer(String, oneshot::Sender<Result<(), String>>),
     ConnectToPeerById(PeerId),
     DisconnectPeer(PeerId),
     SetPrivacyProxies {
@@ -1737,6 +1737,7 @@ async fn run_dht_node(
     metrics: Arc<Mutex<DhtMetrics>>,
     pending_echo: Arc<Mutex<HashMap<rr::OutboundRequestId, PendingEcho>>>,
     pending_searches: Arc<Mutex<HashMap<String, Vec<PendingSearch>>>>,
+    pending_connections: Arc<Mutex<HashMap<PeerId, oneshot::Sender<Result<(), String>>>>>,
     proxy_mgr: ProxyMgr,
     pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>>,
     peer_selection: Arc<Mutex<PeerSelectionService>>,
@@ -1767,6 +1768,9 @@ async fn run_dht_node(
     // Track peers that support relay (discovered via identify protocol)
     let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    
+    // Track pending connection attempts to send responses
+    let pending_conn_local = pending_connections.clone();
     let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60));
     dht_maintenance_interval.tick().await;
     // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
@@ -2719,7 +2723,7 @@ async fn run_dht_node(
                                     }
                                 }
                             }
-                            Some(DhtCommand::ConnectPeer(addr)) => {
+                            Some(DhtCommand::ConnectPeer(addr, response_tx)) => {
                                 info!("Attempting to connect to: {}", addr);
                                 if let Ok(multiaddr) = addr.parse::<Multiaddr>() {
                                     let maybe_peer_id = multiaddr.iter().find_map(|p| {
@@ -2925,12 +2929,17 @@ async fn run_dht_node(
                                                 info!("Requested direct connection to: {}", addr);
                                                 info!("  Multiaddr: {}", multiaddr);
                                                 info!("  Waiting for ConnectionEstablished event...");
+                                                
+                                                // Store the response channel for this peer
+                                                pending_conn_local.lock().await.insert(peer_id.clone(), response_tx);
                                             }
                                             Err(e) => {
                                                 error!("Failed to dial {}: {}", addr, e);
                                                 let _ = event_tx
                                                     .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
                                                     .await;
+                                                // Send error response immediately
+                                                let _ = response_tx.send(Err(format!("Failed to dial: {}", e)));
                                             }
                                         }
                                     } else {
@@ -2938,12 +2947,16 @@ async fn run_dht_node(
                                         let _ = event_tx
                                             .send(DhtEvent::Error(format!("Invalid address format: {}", addr)))
                                             .await;
+                                        // Send error response
+                                        let _ = response_tx.send(Err("No peer ID in address".to_string()));
                                     }
                                 } else {
                                     error!("Invalid multiaddr format: {}", addr);
                                     let _ = event_tx
                                         .send(DhtEvent::Error(format!("Invalid address: {}", addr)))
                                         .await;
+                                    // Send error response
+                                    let _ = response_tx.send(Err(format!("Invalid multiaddr: {}", addr)));
                                 }
                             }
                             Some(DhtCommand::ConnectToPeerById(peer_id)) => {
@@ -3688,6 +3701,12 @@ async fn run_dht_node(
                                 // info!("✅ Connected to {} via {}", peer_id, endpoint.get_remote_address());
                                 info!("✅ Connected to {} via {}", peer_id, remote_addr);
                                 info!("   Total connected peers: {}", peers_count);
+                                
+                                // Send success response if this was a pending connect_peer call
+                                if let Some(response_tx) = pending_conn_local.lock().await.remove(&peer_id) {
+                                    let _ = response_tx.send(Ok(()));
+                                }
+                                
                                 let _ = event_tx
                                     .send(DhtEvent::PeerConnected {
                                         peer_id: peer_id.to_string(),
@@ -3837,6 +3856,13 @@ async fn run_dht_node(
                                 }
                             }
                             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                                // Send failure response if this was a pending connect_peer call
+                                if let Some(pid) = peer_id {
+                                    if let Some(response_tx) = pending_conn_local.lock().await.remove(&pid) {
+                                        let _ = response_tx.send(Err(format!("Connection failed: {}", error)));
+                                    }
+                                }
+                                
                                 // Check if this error is for an unreachable address before recording it
                                 let is_unreachable_addr = if let Some(pid) = peer_id {
                                     if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
@@ -6238,6 +6264,7 @@ impl DhtService {
         let bootstrap_peer_ids = extract_bootstrap_peer_ids(&bootstrap_nodes);
         let file_metadata_cache_local: Arc<Mutex<HashMap<String, FileMetadata>>> = 
             Arc::new(Mutex::new(HashMap::new()));
+        let pending_connections = Arc::new(Mutex::new(HashMap::new()));
 
         tokio::spawn(run_dht_node(
             swarm,
@@ -6248,6 +6275,7 @@ impl DhtService {
             metrics.clone(),
             pending_echo.clone(),
             pending_searches.clone(),
+            pending_connections.clone(),
             proxy_mgr.clone(),
             pending_infohash_searches.clone(),
             peer_selection.clone(),
@@ -6610,10 +6638,18 @@ impl DhtService {
     }
 
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(DhtCommand::ConnectPeer(addr))
+            .send(DhtCommand::ConnectPeer(addr, tx))
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        
+        // Wait for response from event loop with 10 second timeout
+        match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("Connection response channel closed".to_string()),
+            Err(_) => Err("Connection timeout".to_string()),
+        }
     }
 
     pub async fn connect_to_peer_by_id(&self, peer_id: String) -> Result<(), String> {
