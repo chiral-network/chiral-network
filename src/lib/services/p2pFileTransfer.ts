@@ -275,23 +275,53 @@ export class P2PFileTransferService {
     transfer.lastError = error;
     transfer.retryCount = (transfer.retryCount || 0) + 1;
 
+    // Save checkpoint before retry so progress isn't lost
+    if (transfer.streamingSessionId) {
+      this.saveCheckpoint(transfer);
+    }
+
+    // Clean up current session
+    if (transfer.webrtcSession) {
+      try {
+        transfer.webrtcSession.close();
+      } catch (e) { /* ignore */ }
+      if (transfer.webrtcSession.peerId) {
+        this.webrtcSessions.delete(transfer.webrtcSession.peerId);
+      }
+      transfer.webrtcSession = undefined;
+    }
+
     // Try next seeder
     transfer.currentSeederIndex = (transfer.currentSeederIndex || 0) + 1;
 
-    if (transfer.currentSeederIndex! < transfer.seeders.length) {
+    const maxRetries = 5; // Increased from 3
+    const maxSeeders = transfer.seeders.length;
+
+    if (transfer.currentSeederIndex! < maxSeeders) {
       // Continue trying other seeders
-    } else if (transfer.retryCount! < 3) {
+      console.log(`Trying next seeder (${transfer.currentSeederIndex}/${maxSeeders})`);
+      transfer.status = "retrying";
+      this.notifyProgress(transfer);
+      this.tryConnectToSeeder(transfer, metadata);
+    } else if (transfer.retryCount! < maxRetries) {
+      // Reset to first seeder and retry
       transfer.currentSeederIndex = 0;
       transfer.status = "retrying";
       this.notifyProgress(transfer);
 
-      // Wait before retrying
+      const backoffMs = Math.min(2000 * Math.pow(2, transfer.retryCount! - 1), 30000);
+      console.log(`Retry ${transfer.retryCount}/${maxRetries} in ${backoffMs}ms`);
+
       setTimeout(() => {
         this.tryConnectToSeeder(transfer, metadata);
-      }, 2000 * transfer.retryCount!); // Exponential backoff
+      }, backoffMs);
     } else {
       transfer.status = "failed";
       transfer.error = `Failed after ${transfer.retryCount} retries. Last error: ${error}`;
+      // Save final checkpoint so user can manually resume later
+      if (transfer.streamingSessionId) {
+        this.saveCheckpoint(transfer);
+      }
       this.notifyProgress(transfer);
     }
   }
