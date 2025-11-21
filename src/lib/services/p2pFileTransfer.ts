@@ -135,31 +135,7 @@ export class P2PFileTransferService {
     transfer.corruptedChunks = new Set();
     transfer.requestedChunks = new Set();
     transfer.receivedChunkIndices = new Set();
-
-    // Initialize streaming session for large files
-    if (transfer.outputPath && transfer.fileSize > P2PFileTransferService.STREAMING_THRESHOLD) {
-      try {
-        const sessionId = await invoke<string>("init_streaming_download", {
-          fileHash: transfer.fileHash,
-          fileName: transfer.fileName,
-          fileSize: transfer.fileSize,
-          outputPath: transfer.outputPath,
-          totalChunks: transfer.totalChunks,
-          chunkSize: P2PFileTransferService.CHUNK_SIZE,
-        });
-        transfer.streamingSessionId = sessionId;
-        console.log(`Initialized streaming download session: ${sessionId}`);
-      } catch (error) {
-        console.error("Failed to initialize streaming download:", error);
-        transfer.status = "failed";
-        transfer.error = `Failed to initialize streaming download: ${error}`;
-        this.notifyProgress(transfer);
-        return;
-      }
-    } else {
-      // Use in-memory buffering for small files
-      transfer.receivedChunks = new Map();
-    }
+    // Note: Streaming session is initialized after manifest response for accurate chunk count
 
     // Connect to signaling service if not connected
     try {
@@ -368,18 +344,44 @@ export class P2PFileTransferService {
       return;
     }
 
+    // First request manifest to get accurate file info
+    const manifestRequest = {
+      type: "ManifestRequest",
+      file_hash: metadata.fileHash,
+    };
+
+    try {
+      console.log("Requesting manifest for file:", metadata.fileHash);
+      transfer.webrtcSession.send(JSON.stringify(manifestRequest));
+
+      // Store metadata for when manifest response arrives
+      (transfer as any).pendingMetadata = metadata;
+
+      // Manifest response will trigger chunk downloading via handleIncomingChunk
+    } catch (error) {
+      console.error("Failed to send manifest request:", error);
+      // Fallback to direct file request
+      this.sendFileRequestAndStartDownload(transfer, metadata);
+    }
+  }
+
+  private sendFileRequestAndStartDownload(
+    transfer: P2PTransfer,
+    metadata: FileMetadata
+  ): void {
+    if (!transfer.webrtcSession) return;
+
     // Send file request through the WebRTC data channel
     const fileRequest = {
       type: "file_request",
       fileHash: metadata.fileHash,
       fileName: metadata.fileName,
       fileSize: metadata.fileSize,
-      requesterPeerId: "local_peer", // This should be the actual local peer ID
+      requesterPeerId: "local_peer",
     };
 
     try {
       transfer.webrtcSession.send(JSON.stringify(fileRequest));
-
       // Start parallel chunk downloading
       this.startParallelChunkDownload(transfer, metadata);
     } catch (error) {
@@ -387,6 +389,76 @@ export class P2PFileTransferService {
       transfer.status = "failed";
       transfer.error = "Failed to send file request";
       this.notifyProgress(transfer);
+    }
+  }
+
+  /**
+   * Handle manifest response from seeder - use to initialize streaming download
+   */
+  private async handleManifestResponse(
+    transfer: P2PTransfer,
+    message: any
+  ): Promise<void> {
+    try {
+      const manifest = JSON.parse(message.manifest_json);
+      const totalChunks = manifest.chunks?.length || 0;
+      const pendingMetadata = (transfer as any).pendingMetadata;
+
+      if (!pendingMetadata) {
+        console.warn("No pending metadata for manifest response");
+        return;
+      }
+
+      // Update transfer with accurate info from manifest
+      transfer.totalChunks = totalChunks;
+
+      // Calculate actual file size from chunks
+      let actualFileSize = 0;
+      for (const chunk of manifest.chunks || []) {
+        actualFileSize += chunk.size || P2PFileTransferService.CHUNK_SIZE;
+      }
+      if (actualFileSize > 0) {
+        transfer.fileSize = actualFileSize;
+      }
+
+      console.log(`Manifest received: ${totalChunks} chunks, ${transfer.fileSize} bytes`);
+
+      // Initialize streaming session if file is large enough and output path is set
+      if (transfer.outputPath && transfer.fileSize > P2PFileTransferService.STREAMING_THRESHOLD) {
+        try {
+          const sessionId = await invoke<string>("init_streaming_download", {
+            fileHash: transfer.fileHash,
+            fileName: transfer.fileName,
+            fileSize: transfer.fileSize,
+            outputPath: transfer.outputPath,
+            totalChunks: totalChunks,
+            chunkSize: P2PFileTransferService.CHUNK_SIZE,
+          });
+          transfer.streamingSessionId = sessionId;
+          console.log(`Initialized streaming download session: ${sessionId}`);
+        } catch (error) {
+          console.error("Failed to init streaming download:", error);
+          // Fall back to in-memory mode
+          transfer.receivedChunks = new Map();
+        }
+      } else {
+        // Use in-memory for small files
+        transfer.receivedChunks = new Map();
+      }
+
+      // Clear pending metadata
+      delete (transfer as any).pendingMetadata;
+
+      // Now send file request to start receiving chunks
+      this.sendFileRequestAndStartDownload(transfer, pendingMetadata);
+    } catch (error) {
+      console.error("Failed to parse manifest response:", error);
+      // Fallback to direct file request
+      const pendingMetadata = (transfer as any).pendingMetadata;
+      if (pendingMetadata) {
+        delete (transfer as any).pendingMetadata;
+        this.sendFileRequestAndStartDownload(transfer, pendingMetadata);
+      }
     }
   }
 
@@ -502,6 +574,13 @@ export class P2PFileTransferService {
   ): Promise<void> {
     try {
       const message = typeof data === "string" ? JSON.parse(data) : data;
+
+      // Handle manifest response
+      if (message.type === "ManifestResponse") {
+        console.log("Received manifest response for file:", message.file_hash);
+        await this.handleManifestResponse(transfer, message);
+        return;
+      }
 
       if (message.type === "file_chunk") {
         // Validate chunk data
