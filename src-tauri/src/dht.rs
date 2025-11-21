@@ -4750,28 +4750,23 @@ async fn handle_mdns_event(
         MdnsEvent::Discovered(list) => {
             let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
-                debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
+                info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
 
                 // Skip self-discoveries to prevent self-connection attempts
                 if peer_id == *local_peer_id {
                     continue;
                 }
-
-                if ma_plausibly_reachable(&multiaddr) {
+                if not_loopback(&multiaddr) {
                     swarm
                         .behaviour_mut()
                         .kademlia
                         .add_address(&peer_id, multiaddr.clone());
-                } else {
-                    debug!(
-                        "⏭️  mDNS discovered (ignored unreachable): {} @ {}",
-                        peer_id, multiaddr
-                    );
+
+                    discovered
+                        .entry(peer_id)
+                        .or_default()
+                        .push(multiaddr.to_string());
                 }
-                discovered
-                    .entry(peer_id)
-                    .or_default()
-                    .push(multiaddr.to_string());
             }
             for (peer_id, addresses) in discovered {
                 let _ = event_tx
@@ -4784,7 +4779,7 @@ async fn handle_mdns_event(
         }
         MdnsEvent::Expired(list) => {
             for (peer_id, multiaddr) in list {
-                debug!("mDNS expired peer {} at {}", peer_id, multiaddr);
+                info!("mDNS expired peer {} at {}", peer_id, multiaddr);
                 swarm
                     .behaviour_mut()
                     .kademlia

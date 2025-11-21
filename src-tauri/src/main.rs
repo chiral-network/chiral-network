@@ -19,8 +19,8 @@ pub mod ethereum;
 pub mod file_transfer;
 pub mod ftp_client;
 pub mod ftp_downloader;
-pub mod geth_downloader;
 pub mod geth_bootstrap;
+pub mod geth_downloader;
 pub mod headless;
 pub mod http_download;
 pub mod http_server;
@@ -116,11 +116,13 @@ use crate::dht::models::Ed2kDownloadStatus;
 use crate::dht::models::Ed2kSourceInfo;
 use crate::ed2k_client::{Ed2kClient, Ed2kSearchResult, Ed2kServerInfo};
 use blockstore::block::Block;
+use rand::Rng;
 use std::io::Write;
+use std::ops::Range;
+use std::ops::RangeInclusive;
 use suppaftp::FtpStream;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
-
-// Settings structure for backend use
+                                             // Settings structure for backend use
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BackendSettings {
     #[serde(rename = "storagePath")]
@@ -5586,7 +5588,7 @@ async fn get_download_status_restart(
     }
 }
 
-#[cfg(not(test))]
+// #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
     // so we can configure file logging properly
@@ -5666,16 +5668,12 @@ fn main() {
         }
 
         // Calculate port range based on instance ID to avoid conflicts
-      // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
+        // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
+
         let base_port = 6881 + ((instance_id - 1) * 11);
         let port_range = base_port..(base_port + 10);
-
-        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
-            download_dir,
-            Some(port_range),
-        )
-        .await
-        .expect("Failed to create BitTorrent handler");
+        // random port fallback, npm run tauri dev seems to not work with environment var solution
+        let bittorrent_handler = create_bt_handler_with_fallback(download_dir, port_range).await;
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
         let mut manager = ProtocolManager::new();
@@ -6064,8 +6062,12 @@ fn main() {
                 .expect("Failed to get app data directory");
             let logs_dir = app_data_dir.join("logs");
 
-            let log_config = logger::LogConfig::new(&logs_dir, settings.max_log_size_mb, settings.enable_file_logging);
-            
+            let log_config = logger::LogConfig::new(
+                &logs_dir,
+                settings.max_log_size_mb,
+                settings.enable_file_logging,
+            );
+
             let file_logger_writer = match logger::RotatingFileWriter::new(log_config) {
                 Ok(writer) => {
                     let thread_safe_writer = logger::ThreadSafeWriter::new(writer);
@@ -6327,6 +6329,38 @@ fn main() {
             }
             _ => {}
         });
+}
+
+async fn create_bt_handler_with_fallback(
+    download_dir: PathBuf,
+    port_range: Range<u16>,
+) -> bittorrent_handler::BitTorrentHandler {
+    // Try the requested range first
+    if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+        download_dir.clone(),
+        Some(port_range.clone()),
+    )
+    .await
+    {
+        return h;
+    }
+
+    // Fallback: random range
+    let mut rng = rand::thread_rng();
+
+    loop {
+        let start = rng.gen_range(30000..60000);
+        let fallback = start..(start + 10);
+
+        if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+            download_dir.clone(),
+            Some(fallback),
+        )
+        .await
+        {
+            return h;
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
