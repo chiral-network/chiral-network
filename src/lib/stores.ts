@@ -39,6 +39,7 @@ export interface FileItem {
   totalChunks?: number;
   downloadStartTime?: number;
   price?: number; // Price in Chiral for this file
+  version?: number;
   isDownload?: boolean;
   isSeedingDownload?: boolean;
 }
