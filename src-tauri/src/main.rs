@@ -43,7 +43,7 @@ pub mod bittorrent_handler;
 pub mod download_restart;
 pub mod reputation;
 
-use protocols::{ProtocolManager, ProtocolHandler};
+use protocols::{ProtocolManager, SimpleProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -433,7 +433,8 @@ async fn start_geth_node(
 #[tauri::command]
 async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), String> {
     println!("Received download command for: {}", identifier);
-    state.protocol_manager.download(&identifier).await
+    #[allow(deprecated)]
+    state.protocol_manager.download_simple(&identifier).await
 }
 
 /// Tauri command to seed a file.
@@ -442,7 +443,8 @@ async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), 
 async fn seed(file_path: String, state: State<'_, AppState>) -> Result<String, String> {
     println!("Received seed command for: {}", file_path);
     // Delegate the seed operation to the protocol manager.
-    state.protocol_manager.seed(&file_path).await
+    #[allow(deprecated)]
+    state.protocol_manager.seed_simple(&file_path).await
 }
 
 /// Tauri command to create and seed a BitTorrent file.
@@ -5573,7 +5575,7 @@ fn main() {
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
         
         let mut manager = ProtocolManager::new();
-        manager.register(bittorrent_handler_arc.clone());
+        manager.register_simple(bittorrent_handler_arc.clone());
         
         (bittorrent_handler_arc, Arc::new(manager))
     });

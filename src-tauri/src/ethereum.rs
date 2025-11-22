@@ -103,26 +103,15 @@ impl GethProcess {
 
         // Also check if geth is actually running on port 8545
         // This handles cases where the app restarted but geth is still running
-        if let Ok(response) = std::process::Command::new("curl")
-            .arg("-s")
-            .arg("-X")
-            .arg("POST")
-            .arg("-H")
-            .arg("Content-Type: application/json")
-            .arg("--data")
-            .arg(r#"{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}"#)
-            .arg("http://127.0.0.1:8545")
-            .output()
-        {
-            if response.status.success() && !response.stdout.is_empty() {
-                // Try to parse as JSON and check if it's a valid response
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&response.stdout) {
-                    return json.get("result").is_some();
-                }
-            }
-        }
+        // Use TCP socket check - cross-platform and works in both sync/async contexts
+        use std::net::TcpStream;
+        use std::time::Duration;
 
-        false
+        // Try to connect to the Geth RPC port
+        TcpStream::connect_timeout(
+            &"127.0.0.1:8545".parse().unwrap(),
+            Duration::from_secs(1)
+        ).is_ok()
     }
 
     fn resolve_data_dir(&self, data_dir: &str) -> Result<PathBuf, String> {
