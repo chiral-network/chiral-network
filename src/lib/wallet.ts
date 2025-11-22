@@ -7,6 +7,7 @@ import {
   transactionPagination,
   miningPagination,
   wallet,
+  totalEarned,
   type ETCAccount,
   type Transaction,
   type WalletInfo,
@@ -545,7 +546,7 @@ export class WalletService {
       // Update mining state totalRewards (don't override blocksFound - it's set by refreshTransactions)
       miningState.update((state) => ({
         ...state,
-        totalRewards: totalEarned,
+        totalRewards: get(totalEarned),
         // blocksFound is already correctly set by refreshTransactions
       }));
     } catch (error) {
