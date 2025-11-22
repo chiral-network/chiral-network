@@ -1220,8 +1220,18 @@ async fn start_dht_node(
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
         .ok_or("Failed to get project directories")?;
-    // Create the async_std::path::Path here so we can pass a reference to it.
-    let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
+    
+    let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
+        .ok()
+        .and_then(|id| id.parse::<u16>().ok())
+        .unwrap_or(1);
+    let blockstore_suffix = if instance_id == 1 {
+        String::new()
+    } else {
+        format!("-{}", instance_id)
+    };
+    
+    let blockstore_db_path = proj_dirs.data_dir().join(format!("blockstore_db{}", blockstore_suffix));
     let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
 
     let dht_service = DhtService::new(
@@ -5539,43 +5549,75 @@ fn main() {
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
-        // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
-        let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
+        let manual_instance_id = std::env::var("CHIRAL_INSTANCE_ID")
             .ok()
-            .and_then(|id| id.parse::<u16>().ok())
-            .unwrap_or(1);
+            .and_then(|id| id.parse::<u16>().ok());
         
-        let instance_suffix = if instance_id == 1 {
-            String::new()
-        } else {
-            format!("-{}", instance_id)
-        };
+        let max_attempts = 10;
+        let mut last_error = None;
         
-        let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-            .map(|dirs| dirs.data_dir().join(format!("downloads{}", instance_suffix)))
-            .unwrap_or_else(|| std::env::current_dir().unwrap().join(format!("downloads{}", instance_suffix)));
-        
-        if let Err(e) = std::fs::create_dir_all(&download_dir) {
-            eprintln!("Failed to create download directory: {}", e);
+        for attempt in 0..max_attempts {
+            let instance_id = manual_instance_id.unwrap_or(attempt + 1);
+            
+            let instance_suffix = if instance_id == 1 {
+                String::new()
+            } else {
+                format!("-{}", instance_id)
+            };
+            
+            let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .map(|dirs| dirs.data_dir().join(format!("downloads{}", instance_suffix)))
+                .unwrap_or_else(|| std::env::current_dir().unwrap().join(format!("downloads{}", instance_suffix)));
+            
+            if let Err(e) = std::fs::create_dir_all(&download_dir) {
+                eprintln!("Failed to create download directory: {}", e);
+            }
+
+            let base_port = 6881 + ((instance_id - 1) * 11);
+            let port_range = base_port..(base_port + 10);
+
+            match bittorrent_handler::BitTorrentHandler::new_with_port_range(
+                download_dir.clone(),
+                Some(port_range.clone())
+            ).await {
+                Ok(handler) => {
+                    if manual_instance_id.is_none() && instance_id > 1 {
+                        eprintln!("Running as instance {} (ports {}-{})", instance_id, port_range.start, port_range.end);
+                    }
+                    let bittorrent_handler_arc = Arc::new(handler);
+                    let mut manager = ProtocolManager::new();
+                    manager.register(bittorrent_handler_arc.clone());
+                    return (bittorrent_handler_arc, Arc::new(manager));
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    // Check if this is a resource conflict error (port, DHT state, etc.)
+                    let is_resource_conflict = error_msg.contains("address already in use") || 
+                       error_msg.contains("Address already in use") ||
+                       error_msg.contains("os error 48") ||
+                       error_msg.contains("os error 98") ||
+                       error_msg.contains("DHT") ||
+                       error_msg.contains("dht") ||
+                       error_msg.contains("persistence") ||
+                       error_msg.contains("lock") ||
+                       error_msg.contains("resource");
+                    
+                    if is_resource_conflict {
+                        if manual_instance_id.is_some() {
+                            panic!("Failed to initialize instance {}: {}", instance_id, e);
+                        }
+                        eprintln!("Instance {} initialization failed ({}), trying next...", instance_id, error_msg);
+                        last_error = Some(e);
+                        continue;
+                    } else {
+                        panic!("Failed to create BitTorrent handler: {}", e);
+                    }
+                }
+            }
         }
-
-        // Calculate port range based on instance ID to avoid conflicts
-        // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
-        let base_port = 6881 + ((instance_id - 1) * 11);
-        let port_range = base_port..(base_port + 10);
-
-        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
-            download_dir,
-            Some(port_range)
-        )
-            .await
-            .expect("Failed to create BitTorrent handler");
-        let bittorrent_handler_arc = Arc::new(bittorrent_handler);
         
-        let mut manager = ProtocolManager::new();
-        manager.register(bittorrent_handler_arc.clone());
-        
-        (bittorrent_handler_arc, Arc::new(manager))
+        panic!("Failed to find available ports after {} attempts. Last error: {:?}", 
+               max_attempts, last_error);
     });
 
     // Reputation system Tauri commands
