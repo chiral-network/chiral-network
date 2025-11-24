@@ -5680,13 +5680,8 @@ fn main() {
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
         let mut manager = ProtocolManager::new();
-<<<<<<< HEAD
-        manager.register_simple(bittorrent_handler_arc.clone());
-        
-=======
-        manager.register(bittorrent_handler_arc.clone());
 
->>>>>>> upstream/main
+        manager.register(bittorrent_handler_arc.clone());
         (bittorrent_handler_arc, Arc::new(manager))
     });
 
