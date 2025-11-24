@@ -5635,7 +5635,7 @@ fn main() {
             eprintln!("Error in headless mode: {}", e);
             std::process::exit(1);
         }
-        return Ok(());
+        return;
     }
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -5688,7 +5688,7 @@ fn main() {
     let dht_clone_for_pump = dht_service_arc.clone();
     let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
     let relay_reputation_arc_for_pump = Arc::new(Mutex::new(std::collections::HashMap::new()));
-
+    let dht_service_for_bt = dht_service_arc.clone();
      runtime.spawn(async move {
         pump_dht_events(
             app_handle_for_pump,
@@ -5698,7 +5698,7 @@ fn main() {
         ).await;
     });
 
-    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
         let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
             .ok()
@@ -5737,8 +5737,8 @@ fn main() {
         
         // Pass the initialized DHT service to the BitTorrent handler
         let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
-            download_dir,
-            dht_service_arc.clone(),
+            download_dir.clone(),
+            dht_service_for_bt,
             Some(port_range)
         )
             .await
@@ -6398,17 +6398,17 @@ fn main() {
             }
             _ => {}
         });
-
-    Ok(())
 }
 
 async fn create_bt_handler_with_fallback(
     download_dir: PathBuf,
+    dht_service: Arc<DhtService>,
     port_range: Range<u16>,
 ) -> bittorrent_handler::BitTorrentHandler {
     // Try the requested range first
     if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
         download_dir.clone(),
+        dht_service.clone(),
         Some(port_range.clone()),
     )
     .await
@@ -6425,6 +6425,7 @@ async fn create_bt_handler_with_fallback(
 
         if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir.clone(),
+            dht_service.clone(),
             Some(fallback),
         )
         .await
