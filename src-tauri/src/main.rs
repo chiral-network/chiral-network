@@ -42,7 +42,7 @@ pub mod download_restart;
 mod logger;
 pub mod reputation;
 
-use protocols::{ProtocolManager, SimpleProtocolHandler};
+use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -5681,7 +5681,10 @@ fn main() {
 
         let mut manager = ProtocolManager::new();
 
-        manager.register_simple(bittorrent_handler_arc.clone());
+        // Wrap the simple handler in the enhanced protocol handler
+        let bittorrent_protocol_handler = BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
+        manager.register(Box::new(bittorrent_protocol_handler));
+        
         (bittorrent_handler_arc, Arc::new(manager))
     });
 

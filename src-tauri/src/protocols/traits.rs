@@ -341,11 +341,6 @@ impl ProtocolManager {
         self.handlers.push(handler);
     }
 
-    /// Registers a simple/legacy protocol handler (for backward compatibility)
-    pub fn register_simple<T: SimpleProtocolHandler + 'static>(&mut self, handler: std::sync::Arc<T>) {
-        self.simple_handlers.push(handler);
-    }
-
     /// Finds a handler that supports the given identifier
     pub fn find_handler(&self, identifier: &str) -> Option<&dyn ProtocolHandler> {
         self.handlers
