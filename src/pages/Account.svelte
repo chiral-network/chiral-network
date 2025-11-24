@@ -6,7 +6,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist } from '$lib/stores'
+  import { wallet, etcAccount, blacklist, settings } from '$lib/stores'
   import { gethStatus, gethSyncStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
   import { transactions, transactionPagination, miningPagination } from '$lib/stores';
@@ -1418,17 +1418,30 @@
   }
 
   let sessionTimeout = 3600; // seconds (1 hour)
-  let sessionTimer: number | null = null;
+  let sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  let sessionCleanup: (() => void) | null = null;
   let autoLockMessage = '';
 
+  function clearSessionTimer() {
+    if (sessionTimer) {
+      clearTimeout(sessionTimer);
+      sessionTimer = null;
+    }
+  }
+
   function resetSessionTimer() {
-    if (sessionTimer) clearTimeout(sessionTimer);
+    if (typeof window === 'undefined' || !$settings.enableWalletAutoLock) {
+      clearSessionTimer();
+      return;
+    }
+    clearSessionTimer();
     sessionTimer = window.setTimeout(() => {
       autoLockWallet();
     }, sessionTimeout * 1000);
   }
 
   function autoLockWallet() {
+    if (!$settings.enableWalletAutoLock) return;
     handleLogout();
     autoLockMessage = 'Wallet auto-locked due to inactivity.';
     showToast(autoLockMessage, 'warning');
@@ -1437,23 +1450,50 @@
 
   // Listen for user activity to reset timer
   function setupSessionTimeout() {
+    if (typeof window === 'undefined') {
+      return () => {};
+    }
     const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    const handler = () => resetSessionTimer();
     for (const ev of events) {
-      window.addEventListener(ev, resetSessionTimer);
+      window.addEventListener(ev, handler);
     }
     resetSessionTimer();
     return () => {
       for (const ev of events) {
-        window.removeEventListener(ev, resetSessionTimer);
+        window.removeEventListener(ev, handler);
       }
-      if (sessionTimer) clearTimeout(sessionTimer);
+      clearSessionTimer();
     };
   }
 
+  function teardownSessionTimeout() {
+    if (sessionCleanup) {
+      sessionCleanup();
+      sessionCleanup = null;
+    } else {
+      clearSessionTimer();
+    }
+  }
+
+  $: if (typeof window !== 'undefined') {
+    if ($settings.enableWalletAutoLock) {
+      if (!sessionCleanup) {
+        sessionCleanup = setupSessionTimeout();
+      } else {
+        resetSessionTimer();
+      }
+    } else {
+      teardownSessionTimeout();
+    }
+  }
+
   onMount(() => {
-    const cleanup = setupSessionTimeout();
-    return cleanup;
-  })
+    if ($settings.enableWalletAutoLock && !sessionCleanup) {
+      sessionCleanup = setupSessionTimeout();
+    }
+    return () => teardownSessionTimeout();
+  });
 
 </script>
 

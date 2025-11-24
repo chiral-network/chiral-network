@@ -460,6 +460,8 @@
   "privacy.proxyHint": "Введите адрес прокси SOCKS5 (например, Tor на 127.0.0.1:9050)",
   "privacy.anonymousMode": "Анонимный режим (скрыть всю идентифицирующую информацию)",
   "privacy.shareAnalytics": "Делиться анонимной статистикой использования",
+  "privacy.autoLockWallet": "Автоблокировка кошелька при бездействии",
+  "privacy.autoLockWalletHint": "Автоматически завершает сеанс после часа без активности.",
   "notifications.title": "Уведомления",
   "notifications.enable": "Включить уведомления на рабочем столе",
   "notifications.notifyComplete": "Уведомлять о завершении скачиваний",

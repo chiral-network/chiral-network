@@ -252,7 +252,7 @@ const dummyTransactions: Transaction[] = [
 ];
 
 // Stores
-export const files = writable<FileItem[]>(dummyFiles);
+export const files = writable<FileItem[]>([]);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);
@@ -535,6 +535,7 @@ export interface AppSettings {
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
   anonymousMode: boolean;
   shareAnalytics: boolean;
+  enableWalletAutoLock: boolean;
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
@@ -578,7 +579,7 @@ export const settings = writable<AppSettings>({
   ipPrivacyMode: "off",
   trustedProxyRelays: [],
   disableDirectNatTraversal: false,
-  enableAutonat: false, // Disabled by default - enable if you need NAT detection
+  enableAutonat: true, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
   enableAutorelay: false, // Disabled by default - enable if you need relay connections
@@ -587,6 +588,7 @@ export const settings = writable<AppSettings>({
   relayServerAlias: "", // Empty by default - user can set a friendly name
   anonymousMode: false,
   shareAnalytics: true,
+  enableWalletAutoLock: false,
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
