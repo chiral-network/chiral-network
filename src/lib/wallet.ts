@@ -7,6 +7,7 @@ import {
   transactionPagination,
   miningPagination,
   wallet,
+  totalEarned as totalEarnedStore,
   type ETCAccount,
   type Transaction,
   type WalletInfo,
@@ -543,10 +544,11 @@ export class WalletService {
       }
 
       // Update mining state totalRewards (don't override blocksFound - it's set by refreshTransactions)
+      const minedTotal = get(totalEarnedStore) ?? 0;
       miningState.update((state) => ({
         ...state,
-        totalRewards: totalEarned,
-        // blocksFound is already correctly set by refreshTransactions
+        totalRewards: minedTotal,
+        // blocksFound is already set by refreshTransactions
       }));
     } catch (error) {
       console.error("Failed to refresh balance:", error);
@@ -600,11 +602,7 @@ export class WalletService {
       console.log(`[Pagination] Loading transactions from block ${fromBlock} to ${toBlock}`);
 
       // Fetch transactions for this range
-      const txHistory = await invoke("get_transaction_history_range", {
-        address: accountAddress,
-        fromBlock,
-        toBlock,
-      }) as Promise<Array<{
+      const txHistory = await invoke<Array<{
         hash: string;
         from: string;
         to: string | null;
@@ -615,7 +613,11 @@ export class WalletService {
         tx_type: string;
         gas_used: string | null;
         gas_price: string | null;
-      }>>;
+      }>>("get_transaction_history_range", {
+        address: accountAddress,
+        fromBlock,
+        toBlock,
+      });
 
       console.log(`[Pagination] Found ${txHistory.length} transactions in range`);
 

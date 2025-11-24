@@ -163,7 +163,6 @@ export interface BlacklistEntry {
   timestamp: Date;
 }
 
-// Sample dummy data
 const dummyFiles: FileItem[] = [
   {
     id: "0",
@@ -252,7 +251,7 @@ const dummyTransactions: Transaction[] = [
 ];
 
 // Stores
-export const files = writable<FileItem[]>([]);
+export const files = writable<FileItem[]>(dummyFiles);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);
