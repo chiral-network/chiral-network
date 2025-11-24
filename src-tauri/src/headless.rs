@@ -7,7 +7,7 @@ use clap::Parser;
 use std::{sync::Arc, time::Duration};
 use tokio::signal;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(name = "chiral-network")]
