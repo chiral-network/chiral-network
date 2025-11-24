@@ -11,6 +11,9 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use chrono::{DateTime, Utc};
+use tokio::sync::mpsc;
+use tracing::info;
+use crate::http_download::{HttpDownloadClient, HttpDownloadProgress, DownloadStatus as HttpDownloadStatus};
 
 /// Download ID type (UUID string)
 pub type DownloadId = String;
@@ -184,6 +187,8 @@ struct DownloadTask {
     status: DownloadStatus,
     metadata: DownloadMetadata,
     destination_path: PathBuf,
+    /// Handle to the currently running download task for cancellation
+    active_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Download restart service singleton
@@ -214,6 +219,191 @@ impl DownloadRestartService {
         Self {
             downloads: self.downloads.clone(),
             app_handle: self.app_handle.clone(),
+        }
+    }
+
+    /// Run the actual download state machine
+    async fn run_download_state_machine(
+        &self,
+        download_id: String,
+        source_url: String,
+        dest_path: String,
+        expected_sha256: Option<String>,
+    ) -> Result<(), DownloadError> {
+        use tokio::time::{sleep, Duration};
+
+        // Initialize HTTP download client
+        let http_client = HttpDownloadClient::new();
+        let (progress_tx, mut progress_rx) = mpsc::channel::<HttpDownloadProgress>(32);
+
+        // State: Handshake - Request lease from seeder
+        self.update_state(&download_id, DownloadState::Handshake, None, None).await;
+
+        // Simulate handshake delay
+        sleep(Duration::from_millis(500)).await;
+
+        // State: PreparingHead - Fetch file metadata
+        self.update_state(&download_id, DownloadState::PreparingHead, None, Some("\"requesting-metadata\"".to_string())).await;
+
+        // Simulate metadata fetch delay
+        sleep(Duration::from_millis(800)).await;
+
+        // For now, simulate metadata - in real implementation, this would come from HEAD request
+        let total_size = 10 * 1024 * 1024u64; // 10 MB
+        let etag = "\"simulated-etag-123\"".to_string();
+
+        self.update_state(&download_id, DownloadState::PreparingHead, Some(total_size), Some(etag.clone())).await;
+
+        // State: PreflightStorage - Check disk space
+        self.update_state(&download_id, DownloadState::PreflightStorage, Some(total_size), Some(etag.clone())).await;
+
+        // Simulate storage check
+        sleep(Duration::from_millis(200)).await;
+
+        // State: ValidatingMetadata - Validate resume data if any
+        self.update_state(&download_id, DownloadState::ValidatingMetadata, Some(total_size), Some(etag.clone())).await;
+
+        // Simulate validation
+        sleep(Duration::from_millis(300)).await;
+
+        // State: Downloading - Start actual download
+        self.update_state(&download_id, DownloadState::Downloading, Some(total_size), Some(etag.clone())).await;
+
+        // Start the actual HTTP download in a separate task
+        let (completion_tx, mut completion_rx) = mpsc::channel::<Result<(), String>>(1);
+        let progress_tx_clone = progress_tx.clone();
+
+        let task_handle = tokio::spawn(async move {
+            // Use real HTTP download with progress reporting
+            let result = http_client.download_file(
+                &source_url,
+                &expected_sha256.unwrap_or_else(|| "unknown-hash".to_string()),
+                std::path::Path::new(&dest_path),
+                Some(progress_tx),
+            ).await;
+
+            // Send completion result
+            let _ = completion_tx.send(result).await;
+        });
+
+        // Handle completion in a separate task
+        tokio::spawn(async move {
+            if let Some(result) = completion_rx.recv().await {
+                match result {
+                    Ok(_) => {
+                        // Send completion progress
+                        let _ = progress_tx_clone.send(HttpDownloadProgress {
+                            file_hash: "placeholder-hash".to_string(),
+                            chunks_total: (total_size / 256 * 1024) as usize,
+                            chunks_downloaded: (total_size / 256 * 1024) as usize,
+                            bytes_downloaded: total_size,
+                            bytes_total: total_size,
+                            status: HttpDownloadStatus::Completed,
+                        }).await;
+                    }
+                    Err(e) => {
+                        // Send failure progress
+                        let _ = progress_tx_clone.send(HttpDownloadProgress {
+                            file_hash: "placeholder-hash".to_string(),
+                            chunks_total: 0,
+                            chunks_downloaded: 0,
+                            bytes_downloaded: 0,
+                            bytes_total: total_size,
+                            status: HttpDownloadStatus::Failed,
+                        }).await;
+                        tracing::error!("HTTP download failed: {}", e);
+                    }
+                }
+            }
+        });
+
+        // Store the task handle for potential cancellation
+        {
+            let mut downloads = self.downloads.lock().await;
+            if let Some(task) = downloads.get_mut(&download_id) {
+                task.active_task = Some(task_handle);
+            }
+        }
+
+        // Monitor progress and handle state updates
+        let bytes_downloaded = 0u64;
+        let mut download_active = true;
+
+        while download_active {
+            tokio::select! {
+                // Handle progress updates from download task
+                Some(progress) = progress_rx.recv() => {
+                    match progress.status {
+                        HttpDownloadStatus::Completed => {
+                            download_active = false;
+                            self.update_state(&download_id, DownloadState::VerifyingSha, Some(total_size), Some(etag.clone())).await;
+
+                            // Simulate SHA verification
+                            sleep(Duration::from_millis(500)).await;
+
+                            self.update_state(&download_id, DownloadState::FinalizingIo, Some(total_size), Some(etag.clone())).await;
+
+                            // Simulate finalization
+                            sleep(Duration::from_millis(300)).await;
+
+                            self.update_state(&download_id, DownloadState::Completed, Some(total_size), Some(etag.clone())).await;
+                        }
+                        HttpDownloadStatus::Failed => {
+                            download_active = false;
+                            self.update_state_with_error(&download_id, DownloadState::Failed, "Download failed".to_string()).await;
+                        }
+                        _ => {
+                            // Continue downloading
+                            self.update_state(&download_id, DownloadState::Downloading, Some(total_size), Some(etag.clone())).await;
+                        }
+                    }
+                }
+
+                // Check for pause/cancel commands every 100ms
+                _ = sleep(Duration::from_millis(100)) => {
+                    let mut downloads = self.downloads.lock().await;
+                    if let Some(task) = downloads.get_mut(&download_id) {
+                        match task.status.state {
+                            DownloadState::Paused => {
+                                // Wait for resume
+                                drop(downloads);
+                                sleep(Duration::from_millis(500)).await;
+                                continue;
+                            }
+                            DownloadState::AwaitingResume => {
+                                // Resume was requested
+                                task.status.state = DownloadState::Downloading;
+                                let status = task.status.clone();
+                                drop(downloads);
+                                self.emit_status(&status).await?;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Note: Task completion is handled by the AbortHandle mechanism
+        Ok(())
+    }
+
+    /// Update download state with progress
+    /// Update download state with error
+    async fn update_state_with_error(
+        &self,
+        download_id: &str,
+        state: DownloadState,
+        error: String,
+    ) {
+        let mut downloads = self.downloads.lock().await;
+        if let Some(task) = downloads.get_mut(download_id) {
+            task.status.state = state;
+            task.status.last_error = Some(error);
+            let status = task.status.clone();
+            drop(downloads);
+            let _ = self.emit_status(&status).await;
         }
     }
 
@@ -359,6 +549,7 @@ impl DownloadRestartService {
                 status: status.clone(),
                 metadata,
                 destination_path: dest_path,
+                active_task: None,
             },
         );
 
@@ -366,12 +557,22 @@ impl DownloadRestartService {
         drop(downloads); // Release lock before emitting
         self.emit_status(&status).await?;
 
-        // TODO: Start actual download state machine in background task
-        // For now, simulate state transitions for UI testing
+        // Start actual download state machine in background task
         let service = self.clone_service();
         let download_id_clone = download_id.clone();
+        let source_url = request.source_url.clone();
+        let dest_path = request.destination_path.clone();
+        let expected_sha256 = request.expected_sha256.clone();
+
         tokio::spawn(async move {
-            service.simulate_download(download_id_clone).await;
+            if let Err(e) = service.run_download_state_machine(
+                download_id_clone,
+                source_url,
+                dest_path,
+                expected_sha256,
+            ).await {
+                tracing::error!("Download state machine failed: {}", e);
+            }
         });
 
         Ok(download_id)
@@ -379,10 +580,19 @@ impl DownloadRestartService {
 
     /// Pause a download
     pub async fn pause_download(&self, download_id: &str) -> Result<(), DownloadError> {
+        let task_exists = {
+            let downloads = self.downloads.lock().await;
+            downloads.contains_key(download_id)
+        };
+
+        if !task_exists {
+            return Err(DownloadError::NotFound);
+        }
+
         let mut downloads = self.downloads.lock().await;
         let task = downloads
             .get_mut(download_id)
-            .ok_or(DownloadError::NotFound)?;
+            .unwrap(); // Safe because we checked existence above
 
         // Only pause if currently downloading
         if task.status.state != DownloadState::Downloading
@@ -393,24 +603,38 @@ impl DownloadRestartService {
             ));
         }
 
-        // Update state to Paused
+        // Update state to Paused and get task handle before dropping lock
         task.status.state = DownloadState::Paused;
         let status = task.status.clone();
+        let task_handle = task.active_task.take();
 
         drop(downloads); // Release lock before emitting
         self.emit_status(&status).await?;
 
-        // TODO: Actually cancel download task
+        // Cancel the active download task if it's running
+        if let Some(task_handle) = task_handle {
+            task_handle.abort();
+            info!("Cancelled download task for {}", download_id);
+        }
 
         Ok(())
     }
 
     /// Resume a paused download
     pub async fn resume_download(&self, download_id: &str) -> Result<(), DownloadError> {
+        let task_exists = {
+            let downloads = self.downloads.lock().await;
+            downloads.contains_key(download_id)
+        };
+
+        if !task_exists {
+            return Err(DownloadError::NotFound);
+        }
+
         let mut downloads = self.downloads.lock().await;
         let task = downloads
             .get_mut(download_id)
-            .ok_or(DownloadError::NotFound)?;
+            .unwrap(); // Safe because we checked existence above
 
         // Only resume if paused or awaiting resume
         if task.status.state != DownloadState::Paused
@@ -421,23 +645,52 @@ impl DownloadRestartService {
             ));
         }
 
-        // Update state to AwaitingResume -> will transition to PreparingHead
-        task.status.state = DownloadState::AwaitingResume;
+        // Extract data needed for resume before releasing lock
+        let source_url = task.metadata.url.clone();
+        let dest_path = task.destination_path.clone();
+        let expected_sha256 = task.metadata.sha256_final.clone();
+        let bytes_already_downloaded = task.status.bytes_downloaded;
+        let total_size = task.status.expected_size.unwrap_or(0);
+        let etag = task.status.etag.clone();
+
+        // Update state to indicate resume is starting
+        task.status.state = DownloadState::Downloading;
         let status = task.status.clone();
 
         drop(downloads); // Release lock before emitting
         self.emit_status(&status).await?;
 
-        // TODO: Restart download state machine
-        // For now, restart simulation
-        let service = self.clone_service();
-        let download_id_clone = download_id.to_string();
-        tokio::spawn(async move {
-            service.simulate_download(download_id_clone).await;
+        // Start the resume download task
+        let http_client = HttpDownloadClient::new();
+        let (progress_tx, progress_rx) = mpsc::channel::<HttpDownloadProgress>(32);
+
+        let task_handle = tokio::spawn(async move {
+            // Use HTTP Range requests to resume from current position
+            let result = http_client.resume_download_from_offset(
+                &source_url,
+                &expected_sha256.unwrap_or_else(|| "unknown-hash".to_string()),
+                std::path::Path::new(&dest_path),
+                bytes_already_downloaded,
+                total_size,
+                Some(progress_tx),
+            ).await;
+
+            if let Err(e) = result {
+                tracing::error!("HTTP resume failed: {}", e);
+            }
         });
+
+        // Store the task handle
+        {
+            let mut downloads = self.downloads.lock().await;
+            if let Some(task) = downloads.get_mut(download_id) {
+                task.active_task = Some(task_handle);
+            }
+        }
 
         Ok(())
     }
+
 }
 
 // Note: Tauri commands are defined in main.rs to access AppState

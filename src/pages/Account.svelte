@@ -3,25 +3,29 @@
   import Card from '$lib/components/ui/card.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText } from 'lucide-svelte'
+  import Progress from '$lib/components/ui/progress.svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist} from '$lib/stores' 
+  import { wallet, etcAccount, blacklist, settings } from '$lib/stores'
+  import { gethStatus, gethSyncStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
-  import { transactions } from '$lib/stores';
+  import { transactions, transactionPagination, miningPagination } from '$lib/stores';
   import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import QRCode from 'qrcode'
   import { Html5QrcodeScanner as Html5QrcodeScannerClass } from 'html5-qrcode'
   import { tick } from 'svelte'
-  import { onMount } from 'svelte'
+  import { onMount, getContext } from 'svelte'
   import { fade, fly } from 'svelte/transition'
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  import { totalEarned, totalSpent, miningState } from '$lib/stores';
+  import { totalSpent, totalReceived, miningState, accurateTotals, isCalculatingAccurateTotals, accurateTotalsProgress } from '$lib/stores';
+  import { goto } from '@mateothegreat/svelte5-router';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
-  
+  const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
+
   // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
   // Use proper secure storage mechanisms in the backend instead.
 
@@ -56,7 +60,7 @@
   let importPrivateKey = ''
   let isCreatingAccount = false
   let isImportingAccount = false
-  let isGethRunning = false
+  let isGethRunning: boolean;
   let showQrCodeModal = false;
   let qrCodeDataUrl = ''
   let showScannerModal = false;
@@ -121,7 +125,7 @@
   let exportMessage = '';
   
   // Filtering state
-  let filterType: 'all' | 'sent' | 'received' = 'all';
+  let filterType: 'transactions' | 'sent' | 'received' | 'mining' = 'transactions';
   let filterDateFrom: string = '';
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
@@ -136,6 +140,23 @@
   let isConfirming = false
   let countdown = 0
   let intervalId: number | null = null
+
+  // Derive Geth running status from store
+  $: isGethRunning = $gethStatus === 'running';
+
+  // Start progressive loading when Geth becomes running or account changes
+  // Only start if pagination has been initialized (oldestBlockScanned is not null)
+  $: if (
+    $etcAccount &&
+    isGethRunning &&
+    $transactionPagination.hasMore &&
+    !$transactionPagination.isLoading &&
+    $transactionPagination.oldestBlockScanned !== null &&
+    $transactionPagination.accountAddress === $etcAccount.address
+  ) {
+    // Account address is part of the reactive dependency, so this triggers on account change
+    walletService.startProgressiveLoading();
+  }
 
   // Fetch balance when account changes
   $: if ($etcAccount && isGethRunning) {
@@ -167,7 +188,10 @@
         .filter(tx => {
           if (!tx) return false;
 
-          const matchesType = filterType === 'all' || tx.type === filterType;
+          // 'transactions' shows sent + received (excludes mining)
+          const matchesType = filterType === 'transactions'
+            ? (tx.type === 'sent' || tx.type === 'received')
+            : tx.type === filterType;
 
           let txDate: Date;
           try {
@@ -367,7 +391,8 @@
     navigator.clipboard.writeText(addressToCopy);
     
     
-    showToast('Address copied to clipboard!', 'success')
+    // showToast('Address copied to clipboard!', 'success')
+    showToast(tr('toasts.account.addressCopied'), 'success')
   }
 
   function copyPrivateKey() {
@@ -380,17 +405,20 @@
           privateKeyToCopy = await invoke<string>('get_active_account_private_key');
         } catch (error) {
           console.error('Failed to get private key from backend:', error);
-          showToast('Failed to retrieve private key', 'error');
+          // showToast('Failed to retrieve private key', 'error');
+          showToast(tr('toasts.account.privateKey.fetchError'), 'error');
           return;
         }
       }
       
       if (privateKeyToCopy) {
         navigator.clipboard.writeText(privateKeyToCopy);
-        showToast('Private key copied to clipboard!', 'success');
+        // showToast('Private key copied to clipboard!', 'success');
+        showToast(tr('toasts.account.privateKey.copied'), 'success');
       }
       else {
-        showToast('No private key available', 'error');
+        // showToast('No private key available', 'error');
+        showToast(tr('toasts.account.privateKey.missing'), 'error');
       }
     });
   }
@@ -485,15 +513,14 @@
     isConfirming = false
     countdown = 0
     // User intentionally cancelled during countdown
-    showToast('Transaction cancelled', 'warning')
+    // showToast('Transaction cancelled', 'warning')
+    showToast(tr('toasts.account.transaction.cancelled'), 'warning')
   }
 
   async function sendTransaction() {
     if (!isAddressValid || !isAmountValid || sendAmount <= 0) return
     
     try {
-      showToast('Sending transaction...', 'info')
-      
       await walletService.sendTransaction(recipientAddress, sendAmount)
       
       // Clear form
@@ -501,13 +528,16 @@
       sendAmount = 0
       rawAmountInput = ''
       
-      showToast('Transaction submitted!', 'success')
-      
-      
+      // showToast('Transaction submitted!', 'success')
+      showToast(tr('toasts.account.transaction.submitted'), 'success')
       
     } catch (error) {
       console.error('Transaction failed:', error)
-      showToast('Transaction failed: ' + String(error), 'error')
+      // showToast('Transaction failed: ' + String(error), 'error')
+      showToast(
+        tr('toasts.account.transaction.error', { values: { error: String(error) } }),
+        'error'
+      )
       
       // Refresh balance to get accurate state
       await fetchBalance()
@@ -543,7 +573,15 @@
       // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
       await walletService.refreshTransactions();
       await walletService.refreshBalance();
+
+      // Start progressive loading of all transactions in background
+      walletService.startProgressiveLoading();
     }
+
+    // Cleanup on unmount
+    return () => {
+      walletService.stopProgressiveLoading();
+    };
   })
 
   async function fetchBalance() {
@@ -555,7 +593,21 @@
     }
   }
 
-  
+  async function calculateAccurateTotals() {
+    try {
+      await walletService.calculateAccurateTotals();
+      console.log('Accurate totals calculated successfully');
+    } catch (error) {
+      console.error('Failed to calculate accurate totals:', error);
+    }
+  }
+
+  // Automatically calculate accurate totals when account is loaded
+  $: if ($etcAccount && isGethRunning && !$accurateTotals && !$isCalculatingAccurateTotals) {
+    calculateAccurateTotals();
+  }
+
+
   async function createChiralAccount() {
   isCreatingAccount = true
   try {
@@ -571,14 +623,19 @@
     transactions.set([])
     blacklist.set([])   
 
-    showToast('Account Created Successfully!', 'success')
+    // showToast('Account Created Successfully!', 'success')
+    showToast(tr('toasts.account.created'), 'success')
     
     if (isGethRunning) {
       await walletService.refreshBalance()
     }
   } catch (error) {
     console.error('Failed to create Chiral account:', error)
-    showToast('Failed to create account: ' + String(error), 'error')
+    // showToast('Failed to create account: ' + String(error), 'error')
+    showToast(
+      tr('toasts.account.createError', { values: { error: String(error) } }),
+      'error'
+    )
     alert(tr('errors.createAccount', { error: String(error) }))
   } finally {
     isCreatingAccount = false
@@ -658,7 +715,8 @@
     // Validate private key format before attempting import
     const validation = validatePrivateKeyFormat(importPrivateKey)
     if (!validation.isValid) {
-      showToast(validation.error || 'Invalid private key format', 'error')
+      // showToast(validation.error || 'Invalid private key format', 'error')
+      showToast(validation.error || tr('toasts.account.import.invalidFormat'), 'error')
       return
     }
 
@@ -674,7 +732,8 @@
       importPrivateKey = ''
 
 
-      showToast('Account imported successfully!', 'success')
+      // showToast('Account imported successfully!', 'success')
+      showToast(tr('toasts.account.import.success'), 'success')
 
       if (isGethRunning) {
         await walletService.refreshBalance()
@@ -683,7 +742,11 @@
       console.error('Failed to import Chiral account:', error)
 
 
-      showToast('Failed to import account: ' + String(error), 'error')
+      // showToast('Failed to import account: ' + String(error), 'error')
+      showToast(
+        tr('toasts.account.import.error', { values: { error: String(error) } }),
+        'error'
+      )
 
       alert('Failed to import account: ' + error)
     } finally {
@@ -710,17 +773,23 @@
           
           // Validate the JSON structure
           if (!accountData.privateKey) {
-            showToast('Invalid file format: privateKey field not found', 'error');
+            // showToast('Invalid file format: privateKey field not found', 'error');
+            showToast(tr('toasts.account.import.fileInvalid'), 'error');
             return;
           }
           
           // Extract and set the private key
           importPrivateKey = accountData.privateKey;
-          showToast('Private key loaded from file successfully!', 'success');
+          // showToast('Private key loaded from file successfully!', 'success');
+          showToast(tr('toasts.account.import.fileSuccess'), 'success');
           
         } catch (error) {
           console.error('Error reading file:', error);
-          showToast('Error reading file: ' + String(error), 'error');
+          // showToast('Error reading file: ' + String(error), 'error');
+          showToast(
+            tr('toasts.account.import.fileReadError', { values: { error: String(error) } }),
+            'error'
+          );
         }
       };
       
@@ -731,7 +800,11 @@
       
     } catch (error) {
       console.error('Error loading file:', error);
-      showToast('Error loading file: ' + String(error), 'error');
+      // showToast('Error loading file: ' + String(error), 'error');
+      showToast(
+        tr('toasts.account.import.fileLoadError', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
 
@@ -912,7 +985,8 @@
   // This would be called by the "Enable 2FA" button
   async function setup2FA() {
     if (!isTauri) {
-      showToast('2FA is only available in the desktop app.', 'warning');
+      // showToast('2FA is only available in the desktop app.', 'warning');
+      showToast(tr('toasts.account.2fa.desktopOnly'), 'warning');
       return;
     }
 
@@ -926,7 +1000,11 @@
       twoFaErrorMessage = '';
     } catch (err) {
       console.error('Failed to setup 2FA:', err);
-      showToast('Failed to start 2FA setup: ' + String(err), 'error');
+      // showToast('Failed to start 2FA setup: ' + String(err), 'error');
+      showToast(
+        tr('toasts.account.2fa.setupError', { values: { error: String(err) } }),
+        'error'
+      );
     }
   }
 
@@ -946,7 +1024,8 @@
       if (success) {
         is2faEnabled = true; 
         show2faSetupModal = false;
-        showToast('Two-Factor Authentication has been enabled!', 'success');
+        // showToast('Two-Factor Authentication has been enabled!', 'success');
+        showToast(tr('toasts.account.2fa.enabled'), 'success');
       } else {
         // Don't clear password, but clear code
         twoFaErrorMessage = 'Invalid code. Please try again.';
@@ -1006,10 +1085,15 @@
       try { // The password is provided in the with2FA prompt
         await walletService.disableTwoFactor(twoFaPassword);
         is2faEnabled = false;
-        showToast('Two-Factor Authentication has been disabled.', 'warning');
+        // showToast('Two-Factor Authentication has been disabled.', 'warning');
+        showToast(tr('toasts.account.2fa.disabled'), 'warning');
       } catch (error) {
         console.error('Failed to disable 2FA:', error);
-        showToast('Failed to disable 2FA: ' + String(error), 'error');
+        // showToast('Failed to disable 2FA: ' + String(error), 'error');
+        showToast(
+          tr('toasts.account.2fa.disableError', { values: { error: String(error) } }),
+          'error'
+        );
       }
     });
   }
@@ -1241,7 +1325,7 @@
       
       // Clear the account store
       etcAccount.set(null);
-      
+
       // Clear wallet data - reset to 0 balance, not a default value
       wallet.update((w: any) => ({
         ...w,
@@ -1249,9 +1333,10 @@
         balance: 0, // Reset to 0 for logout
         totalEarned: 0,
         totalSpent: 0,
+        totalReceived: 0,
         pendingTransactions: 0
       }));
-      
+
       // Clear mining state completely
       miningState.update((state: any) => ({
         ...state,
@@ -1263,7 +1348,29 @@
         recentBlocks: [],
         sessionStartTime: undefined
       }));
-      
+
+      // Clear accurate totals (will recalculate on next login)
+      accurateTotals.set(null);
+
+      // Clear transaction history
+      transactions.set([]);
+
+      // Reset pagination states
+      transactionPagination.set({
+        accountAddress: null,
+        oldestBlockScanned: null,
+        isLoading: false,
+        hasMore: true,
+        batchSize: 5000,
+      });
+      miningPagination.set({
+        accountAddress: null,
+        oldestBlockScanned: null,
+        isLoading: false,
+        hasMore: true,
+        batchSize: 5000,
+      });
+
       // Clear any stored session data from both localStorage and sessionStorage
       if (typeof localStorage !== 'undefined') {
         localStorage.removeItem('lastAccount');
@@ -1275,11 +1382,16 @@
       privateKeyVisible = false;
       
       // Show success message
-      showToast('Wallet locked and session cleared', 'success');
+      // showToast('Wallet locked and session cleared', 'success');
+      showToast(tr('toasts.account.logout.locked'), 'success');
       
     } catch (error) {
       console.error('Error during logout:', error);
-      showToast('Error during logout: ' + String(error), 'error');
+      // showToast('Error during logout: ' + String(error), 'error');
+      showToast(
+        tr('toasts.account.logout.error', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
 
@@ -1305,18 +1417,31 @@
     }
   }
 
-  let sessionTimeout = 600; // seconds (10 minutes)
-  let sessionTimer: number | null = null;
+  let sessionTimeout = 3600; // seconds (1 hour)
+  let sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  let sessionCleanup: (() => void) | null = null;
   let autoLockMessage = '';
 
+  function clearSessionTimer() {
+    if (sessionTimer) {
+      clearTimeout(sessionTimer);
+      sessionTimer = null;
+    }
+  }
+
   function resetSessionTimer() {
-    if (sessionTimer) clearTimeout(sessionTimer);
+    if (typeof window === 'undefined' || !$settings.enableWalletAutoLock) {
+      clearSessionTimer();
+      return;
+    }
+    clearSessionTimer();
     sessionTimer = window.setTimeout(() => {
       autoLockWallet();
     }, sessionTimeout * 1000);
   }
 
   function autoLockWallet() {
+    if (!$settings.enableWalletAutoLock) return;
     handleLogout();
     autoLockMessage = 'Wallet auto-locked due to inactivity.';
     showToast(autoLockMessage, 'warning');
@@ -1325,23 +1450,50 @@
 
   // Listen for user activity to reset timer
   function setupSessionTimeout() {
+    if (typeof window === 'undefined') {
+      return () => {};
+    }
     const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    const handler = () => resetSessionTimer();
     for (const ev of events) {
-      window.addEventListener(ev, resetSessionTimer);
+      window.addEventListener(ev, handler);
     }
     resetSessionTimer();
     return () => {
       for (const ev of events) {
-        window.removeEventListener(ev, resetSessionTimer);
+        window.removeEventListener(ev, handler);
       }
-      if (sessionTimer) clearTimeout(sessionTimer);
+      clearSessionTimer();
     };
   }
 
+  function teardownSessionTimeout() {
+    if (sessionCleanup) {
+      sessionCleanup();
+      sessionCleanup = null;
+    } else {
+      clearSessionTimer();
+    }
+  }
+
+  $: if (typeof window !== 'undefined') {
+    if ($settings.enableWalletAutoLock) {
+      if (!sessionCleanup) {
+        sessionCleanup = setupSessionTimeout();
+      } else {
+        resetSessionTimer();
+      }
+    } else {
+      teardownSessionTimeout();
+    }
+  }
+
   onMount(() => {
-    const cleanup = setupSessionTimeout();
-    return cleanup;
-  })
+    if ($settings.enableWalletAutoLock && !sessionCleanup) {
+      sessionCleanup = setupSessionTimeout();
+    }
+    return () => teardownSessionTimeout();
+  });
 
 </script>
 
@@ -1351,7 +1503,17 @@
     <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
   </div>
 
-
+  <!-- Warning Banner: Geth Not Running -->
+  {#if $gethStatus !== 'running'}
+    <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
+      <div class="flex items-center gap-3">
+        <AlertCircle class="h-5 w-5 text-yellow-500 flex-shrink-0" />
+        <p class="text-sm text-yellow-600">
+          {$t('nav.blockchainUnavailable')} <button on:click={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium">{$t('nav.networkPageLink')}</button>. {$t('account.balanceWarning')}
+        </p>
+      </div>
+    </div>
+  {/if}
 
 {#if showMnemonicWizard}
   <MnemonicWizard
@@ -1495,17 +1657,62 @@
           <p class="text-2xl font-bold">{$wallet.balance.toFixed(8)} Chiral</p>
         </div>
         
-            <div class="grid grid-cols-2 gap-4 mt-4">
-          <div>
-            <p class="text-xs text-muted-foreground">{$t('wallet.totalEarned')}</p>
-            <p class="text-sm font-medium text-green-600">+{$totalEarned.toFixed(8)} Chiral</p>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
+          <div class="min-w-0">
+            <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            {#if $accurateTotals}
+              <p class="text-sm font-medium text-green-600 break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
+            {:else}
+              <p class="text-sm font-medium text-green-600 opacity-60 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
+            {/if}
           </div>
-          <div>
-            <p class="text-xs text-muted-foreground">{$t('wallet.totalSpent')}</p>
-            <p class="text-sm font-medium text-red-600">-{$totalSpent.toFixed(8)} Chiral</p>
+          <div class="min-w-0">
+            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            {#if $accurateTotals}
+              <p class="text-sm font-medium text-blue-600 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
+            {:else}
+              <p class="text-sm font-medium text-blue-600 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
+            {/if}
+          </div>
+          <div class="min-w-0">
+            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            {#if $accurateTotals}
+              <p class="text-sm font-medium text-red-600 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
+            {:else}
+              <p class="text-sm font-medium text-red-600 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
+            {/if}
           </div>
         </div>
-        
+
+        <!-- Accurate Totals Progress -->
+        {#if $isCalculatingAccurateTotals}
+          <div class="mt-4 space-y-2">
+            <div class="flex items-center justify-between text-sm">
+              <span class="text-muted-foreground">Calculating accurate totals...</span>
+              {#if $accurateTotalsProgress}
+                <span class="font-medium">{$accurateTotalsProgress.percentage}%</span>
+              {/if}
+            </div>
+            {#if $accurateTotalsProgress}
+              <Progress value={$accurateTotalsProgress.percentage} />
+              <p class="text-xs text-muted-foreground">
+                Block {$accurateTotalsProgress.currentBlock.toLocaleString()} / {$accurateTotalsProgress.totalBlocks.toLocaleString()}
+              </p>
+            {/if}
+          </div>
+        {:else if $accurateTotals}
+          <div class="mt-2 flex items-center justify-end">
+            <button
+              on:click={calculateAccurateTotals}
+              class="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+              title="Recalculate accurate totals"
+            >
+              <RefreshCw class="h-3 w-3" />
+              Refresh
+            </button>
+          </div>
+        {/if}
+
             <div class="mt-6">
               <p class="text-sm text-muted-foreground">{$t('wallet.address')}</p>
               <div class="flex items-center gap-2 mt-1">
@@ -1764,11 +1971,16 @@
     {/if}
   <!-- Transaction History Section - Full Width -->
   <Card class="p-6 mt-4">
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center justify-between mb-2">
       <h2 class="text-lg font-semibold">{$t('transactions.title')}</h2>
       <History class="h-5 w-5 text-muted-foreground" />
     </div>
-    
+
+    <!-- Scan Range Info -->
+    <p class="text-xs text-muted-foreground mb-4">
+      {$t('transactions.scanInfo')}
+    </p>
+
     <!-- Search Bar -->
     <div class="mb-4">
       <div class="relative">
@@ -1796,9 +2008,10 @@
         bind:value={filterType}
         class="appearance-none border rounded pl-3 pr-10 py-2 text-sm h-9 bg-white cursor-pointer hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
       >
-        <option value="all">{$t('filters.typeAll')}</option>
+        <option value="transactions">{$t('filters.typeTransactions')}</option>
         <option value="sent">{$t('filters.typeSent')}</option>
         <option value="received">{$t('filters.typeReceived')}</option>
+        <option value="mining">{$t('filters.typeMining')}</option>
       </select>
       <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4-4m0 6l-4 4-4-4"></path></svg>
@@ -1851,12 +2064,12 @@
     <button
       type="button"
       class="border rounded px-3 py-2 text-sm h-9 bg-gray-100 hover:bg-gray-200 transition-colors"
-      on:click={() => { 
-        filterType = 'all'; 
-        filterDateFrom = ''; 
-        filterDateTo = ''; 
-        sortDescending = true; 
-        searchQuery = ''; 
+      on:click={() => {
+        filterType = 'transactions';
+        filterDateFrom = '';
+        filterDateTo = '';
+        sortDescending = true;
+        searchQuery = '';
       }}
     >
       {$t('filters.reset')}
@@ -1881,7 +2094,7 @@
           out:fade={{ duration: 200 }}
         >
           <div class="flex items-center gap-3">
-            {#if tx.type === 'received'}
+            {#if tx.type === 'received' || tx.type === 'mining'}
               <ArrowDownLeft class="h-4 w-4 text-green-500" />
             {:else}
               <ArrowUpRight class="h-4 w-4 text-red-500" />
@@ -1894,13 +2107,75 @@
             </div>
           </div>
           <div class="text-right">
-            <p class="text-sm font-medium {tx.type === 'received' ? 'text-green-600' : 'text-red-600'}">
-              {tx.type === 'received' ? '+' : '-'}{tx.amount} Chiral
+            <p class="text-sm font-medium {tx.type === 'received' || tx.type === 'mining' ? 'text-green-600' : 'text-red-600'}">
+              {tx.type === 'received' || tx.type === 'mining' ? '+' : '-'}{tx.amount} Chiral
             </p>
             <p class="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
           </div>
         </div>
       {/each}
+
+      <!-- Loading Progress Indicators -->
+      {#if filteredTransactions.length > 0}
+        <div class="border-t">
+          <!-- Transaction Auto-Loading Progress -->
+          {#if $transactionPagination.isLoading}
+            <div class="text-center py-3">
+              <div class="flex items-center justify-center gap-2">
+                <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                <p class="text-sm text-muted-foreground">{$t('transactions.loadingHistory')}</p>
+              </div>
+              {#if $transactionPagination.oldestBlockScanned !== null}
+                <p class="text-xs text-muted-foreground mt-1">
+                  {$t('transactions.scannedUpTo', { values: { block: $transactionPagination.oldestBlockScanned } })}
+                </p>
+              {/if}
+            </div>
+          {:else if !$transactionPagination.hasMore}
+            <div class="text-center py-3">
+              <p class="text-sm text-green-600">✓ All transactions loaded</p>
+              {#if $transactionPagination.oldestBlockScanned !== null}
+                <p class="text-xs text-muted-foreground mt-1">
+                  Scanned all blocks from #{$transactionPagination.oldestBlockScanned.toLocaleString()} to current
+                </p>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- Mining Rewards Manual Loading - Only show when filterType is 'mining' -->
+          {#if filterType === 'mining'}
+            {#if $miningPagination.hasMore && $miningPagination.oldestBlockScanned !== null}
+              <div class="text-center py-3 border-t">
+                <Button
+                  on:click={() => walletService.loadMoreMiningRewards()}
+                  disabled={$miningPagination.isLoading}
+                  variant="outline"
+                  class="gap-2"
+                >
+                  {#if $miningPagination.isLoading}
+                    <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                    Loading Mining Rewards...
+                  {:else}
+                    <Coins class="w-4 h-4" />
+                    Load More Mining Rewards
+                  {/if}
+                </Button>
+                <p class="text-xs text-muted-foreground mt-2">
+                  Mining rewards scanned up to block #{$miningPagination.oldestBlockScanned.toLocaleString()}
+                </p>
+              </div>
+            {:else if !$miningPagination.hasMore && $miningPagination.oldestBlockScanned !== null}
+              <div class="text-center py-3 border-t">
+                <p class="text-sm text-green-600">✓ All mining rewards loaded</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Scanned all blocks from #0 to current
+                </p>
+              </div>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+
       {#if filteredTransactions.length === 0}
         <div class="text-center py-8 text-muted-foreground">
           <History class="h-12 w-12 mx-auto mb-2 opacity-20" />
@@ -2294,7 +2569,8 @@
             <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.step2_manual')}</p>
             <div class="flex items-center gap-2 bg-secondary p-2 rounded">
               <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
-              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast('Copied!', 'success'); }}>
+              <!-- <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast('Copied!', 'success'); }}> -->
+              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast(tr('toasts.common.copied'), 'success'); }}>
                 <Copy class="h-4 w-4" />
               </Button>
             </div>

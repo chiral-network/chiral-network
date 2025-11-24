@@ -7,6 +7,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
+  import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import { peers, networkStats, networkStatus, userLocation, settings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Wifi, UserMinus, Square, Play, Download, AlertCircle } from 'lucide-svelte'
@@ -42,8 +43,17 @@
   let newPeerAddress = ''
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
+  let currentPage = 1
+  let peersPerPage = 5
+  let discoveryCurrentPage = 1
+  let discoveryPerPage = 5
 
   const UNKNOWN_DISTANCE = 1_000_000;
+
+  $: if (sortBy || sortDirection) {
+    // Reset to page 1 when sorting changes
+    currentPage = 1
+  }
 
   let currentUserRegion: GeoRegionConfig = normalizeRegion(undefined);
   $: currentUserRegion = normalizeRegion($userLocation);
@@ -735,10 +745,15 @@
             }
           }
         });
-        showToast('Connected to signaling server', 'success');
+        // showToast('Connected to signaling server', 'success');
+        showToast(tr('toasts.network.signalingConnected'), 'success');
       } catch (error) {
         console.error('Failed to connect to signaling server:', error);
-        showToast('Failed to connect to signaling server for web mode testing', 'error');
+        // showToast('Failed to connect to signaling server for web mode testing', 'error');
+        showToast(
+          tr('toasts.network.signalingError'),
+          'error'
+        );
         return;
       }
     }
@@ -751,7 +766,8 @@
   
   async function connectToPeer() {
     if (!newPeerAddress.trim()) {
-      showToast('Please enter a peer address', 'error');
+      // showToast('Please enter a peer address', 'error');
+      showToast(tr('toasts.network.peerAddressRequired'), 'error');
       return;
     }
 
@@ -760,7 +776,8 @@
     // In Tauri mode, use DHT backend for P2P connections
     if (isTauri) {
       if (dhtStatus !== 'connected') {
-        showToast('DHT not connected. Please start DHT first.', 'error');
+        // showToast('DHT not connected. Please start DHT first.', 'error');
+        showToast(tr('toasts.network.dhtRequired'), 'error');
         return;
       }
 
@@ -773,13 +790,15 @@
       );
 
       if (isAlreadyConnected) {
-        showToast('Peer is already connected', 'info');
+        // showToast('Peer is already connected', 'info');
+        showToast(tr('toasts.network.alreadyConnected'), 'info');
         newPeerAddress = '';
         return;
       }
 
       try {
-        showToast('Connecting to peer via DHT...', 'info');
+        // showToast('Connecting to peer via DHT...', 'info');
+        showToast(tr('toasts.network.connecting'), 'info');
         const currentPeerCount = $peers.length;
         await invoke('connect_to_peer', { peerAddress });
 
@@ -790,21 +809,28 @@
         setTimeout(async () => {
           await refreshConnectedPeers();
           if ($peers.length > currentPeerCount) {
-            showToast('Connection Success!', 'success');
+            // showToast('Connection Success!', 'success');
+            showToast(tr('toasts.network.connectionSuccess'), 'success')
           } else {
-            showToast('Connection failed. Peer may be unreachable or address invalid.', 'error');
+            // showToast('Connection failed. Peer may be unreachable or address invalid.', 'error');
+            showToast(tr('toasts.network.connectionFailed'), 'error');
           }
         }, 2000);
       } catch (error) {
         console.error('Failed to connect to peer:', error);
-        showToast('Failed to connect to peer: ' + error, 'error');
+        // showToast('Failed to connect to peer: ' + error, 'error');
+        showToast(
+          tr('toasts.network.connectError', { values: { error: String(error) } }),
+          'error'
+        );
       }
       return;
     }
 
     // In web mode, use WebRTC for testing
     if (!signalingConnected) {
-      showToast('Signaling server not connected. Please start DHT first.', 'error');
+      // showToast('Signaling server not connected. Please start DHT first.', 'error');
+      showToast(tr('toasts.network.signalingMissing'), 'error');
       return;
     }
 
@@ -813,7 +839,11 @@
     // Check if peer exists in discovered peers
     // if (!discoveredPeers.includes(peerId)) {
     if (!webDiscoveredPeers.includes(peerId)) {
-      showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
+      // showToast(`Peer ${peerId} not found in discovered peers`, 'warning');
+      showToast(
+        tr('toasts.network.peerNotFound', { values: { peer: peerId } }),
+        'warning'
+      );
       // Still attempt connection in case peer was discovered recently
     }
 
@@ -823,18 +853,24 @@
         signaling,
         isInitiator: true,
         onMessage: (data) => {
-          showToast('Received from peer: ' + data, 'info');
+          // showToast('Received from peer: ' + data, 'info');
+          showToast(
+            tr('toasts.network.messageReceived', { values: { message: String(data) } }),
+            'info'
+          )
         },
         onConnectionStateChange: (state) => {
           console.log('[WebRTC] Connection state:', state);
 
           // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {
-            showToast('Successfully connected to peer!', 'success');
+            // showToast('Successfully connected to peer!', 'success');
+            showToast(tr('toasts.network.webrtcConnected'), 'success');
             // Add minimal PeerInfo to peers store if not present
             addConnectedPeer(peerId);
           } else if (state === 'failed') {
-            showToast('Connection to peer failed', 'error');
+            // showToast('Connection to peer failed', 'error');
+            showToast(tr('toasts.network.webrtcFailed'), 'error');
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           } else if (state === 'disconnected' || state === 'closed') {
@@ -844,16 +880,22 @@
           }
         },
         onDataChannelOpen: () => {
-          showToast('Data channel open - you can now send messages!', 'success');
+          // showToast('Data channel open - you can now send messages!', 'success');
+          showToast(tr('toasts.network.dataChannelOpen'), 'success');
           // Ensure peer is listed as connected when data channel opens
           addConnectedPeer(peerId);
         },
         onDataChannelClose: () => {
-          showToast('Data channel closed', 'warning');
+          // showToast('Data channel closed', 'warning');
+          showToast(tr('toasts.network.dataChannelClosed'), 'warning');
           markPeerDisconnected(peerId);
         },
         onError: (e) => {
-          showToast('WebRTC error: ' + e, 'error');
+          // showToast('WebRTC error: ' + e, 'error');
+          showToast(
+            tr('toasts.network.webrtcError', { values: { error: String(e) } }),
+            'error'
+          );
           console.error('WebRTC error:', e);
         }
       });
@@ -882,29 +924,46 @@
 
       // Create offer asynchronously (don't await to avoid freezing UI)
       webrtcSession.createOffer();
-      showToast('Connecting to peer: ' + peerId, 'success');
+      // showToast('Connecting to peer: ' + peerId, 'success');
+      showToast(
+        tr('toasts.network.webrtcConnecting', { values: { peer: peerId } }),
+        'success'
+      );
 
       // Clear input on successful connection attempt
       newPeerAddress = '';
 
     } catch (error) {
       console.error('Failed to create WebRTC session:', error);
-      showToast('Failed to create connection: ' + error, 'error');
+      // showToast('Failed to create connection: ' + error, 'error');
+      showToast(
+        tr('toasts.network.webrtcCreateError', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
   
   function sendTestMessage() {
     if (!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open') {
-      showToast('No active WebRTC connection', 'error');
+      // showToast('No active WebRTC connection', 'error');
+      showToast(tr('toasts.network.noConnection'), 'error');
       return;
     }
     
     const testMessage = `Hello from ${signaling.getClientId()} at ${new Date().toLocaleTimeString()}`;
     try {
       webrtcSession.send(testMessage);
-      showToast('Test message sent: ' + testMessage, 'success');
+      // showToast('Test message sent: ' + testMessage, 'success');
+      showToast(
+        tr('toasts.network.messageSent', { values: { message: testMessage } }),
+        'success'
+      );
     } catch (error) {
-      showToast('Failed to send message: ' + error, 'error');
+      // showToast('Failed to send message: ' + error, 'error');
+      showToast(
+        tr('toasts.network.sendError', { values: { error: String(error) } }),
+        'error'
+      );
     }
   }
   
@@ -1001,7 +1060,8 @@
         // Geth is already installed, update state and return
         applyGethStatus(status)
         isCheckingGeth = false
-        showToast('Geth is already installed', 'info')
+        // showToast('Geth is already installed', 'info')
+        showToast(tr('toasts.network.gethInstalled'), 'info')
         return
       }
     } catch (error) {
@@ -1027,7 +1087,11 @@
     } catch (e) {
       downloadError = String(e)
       isDownloading = false
-      showToast('Failed to download Geth: ' + e, 'error')
+      // showToast('Failed to download Geth: ' + e, 'error')
+      showToast(
+        tr('toasts.network.gethDownloadError', { values: { error: String(e) } }),
+        'error'
+      )
     }
   }
 
@@ -1409,7 +1473,10 @@
     </div>
   </Card>
 
-  
+  <!-- Geth Node Lifecycle & Bootstrap Health -->
+  <GethStatusCard dataDir="./bin/geth-data" logLines={40} refreshIntervalMs={10000} />
+
+
   <!-- DHT Network Status Card -->
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
@@ -1886,11 +1953,84 @@
         </div>
         <!-- {#if discoveredPeers && discoveredPeers.length > 0} -->
          {#if isTauri}
+          {@const discoveryTotalPages = Math.ceil(discoveredPeerEntries.length / discoveryPerPage)}
+          {@const discoveryStartIndex = (discoveryCurrentPage - 1) * discoveryPerPage}
+          {@const discoveryEndIndex = Math.min(discoveryStartIndex + discoveryPerPage, discoveredPeerEntries.length)}
+          {@const paginatedDiscoveryPeers = discoveredPeerEntries.slice(discoveryStartIndex, discoveryEndIndex)}
+
           <div class="mt-4 space-y-3">
-            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeerEntries.length } })}</p>
-            {#if discoveredPeerEntries.length > 0}
+            <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+            <div class="flex items-center justify-between gap-4">
+              <!-- Left: Showing peers counter -->
+              <div class="text-sm text-muted-foreground flex-shrink-0">
+                {#if discoveredPeerEntries.length > 0}
+                  Showing {discoveryStartIndex + 1}-{discoveryEndIndex} of {discoveredPeerEntries.length} discovered peers
+                {:else}
+                  No discovered peers
+                {/if}
+              </div>
+
+              <!-- Center: Pagination Controls -->
+              <div class="flex items-center justify-center flex-1">
+                {#if discoveredPeerEntries.length > discoveryPerPage}
+                  <div class="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage > 1) discoveryCurrentPage--
+                      }}
+                      disabled={discoveryCurrentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <div class="flex items-center gap-1">
+                      {#each Array.from({ length: discoveryTotalPages }, (_, i) => i + 1) as page}
+                        {#if page === 1 || page === discoveryTotalPages || (page >= discoveryCurrentPage - 1 && page <= discoveryCurrentPage + 1)}
+                          <Button
+                            size="sm"
+                            variant={page === discoveryCurrentPage ? 'default' : 'outline'}
+                            class="w-10"
+                            on:click={() => discoveryCurrentPage = page}
+                          >
+                            {page}
+                          </Button>
+                        {:else if page === discoveryCurrentPage - 2 || page === discoveryCurrentPage + 2}
+                          <span class="px-2 text-muted-foreground">...</span>
+                        {/if}
+                      {/each}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage < discoveryTotalPages) discoveryCurrentPage++
+                      }}
+                      disabled={discoveryCurrentPage === discoveryTotalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Right: Run Discovery button -->
+              <div class="flex-shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  on:click={runDiscovery}
+                  disabled={discoveryRunning}
+                >
+                  <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
+                  {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
+                </Button>
+              </div>
+            </div>
+
+            {#if paginatedDiscoveryPeers.length > 0}
               <ul class="space-y-3">
-                {#each discoveredPeerEntries as peer}
+                {#each paginatedDiscoveryPeers as peer}
                   <li class="border rounded p-3 space-y-2 bg-background/50">
                     <div class="flex items-start justify-between gap-2">
                       <div class="text-sm font-mono break-all">{peer.peerId}</div>
@@ -1937,12 +2077,83 @@
             {/if}
           </div>
         {:else if webDiscoveredPeers.length > 0}
-          <div class="mt-4">
-            <!-- <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p> -->
-             <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: webDiscoveredPeers.length } })}</p>
-            <ul class="mt-2 space-y-2">
-              <!-- {#each discoveredPeers as p} -->
-               {#each webDiscoveredPeers as p}
+          {@const webDiscoveryTotalPages = Math.ceil(webDiscoveredPeers.length / discoveryPerPage)}
+          {@const webDiscoveryStartIndex = (discoveryCurrentPage - 1) * discoveryPerPage}
+          {@const webDiscoveryEndIndex = Math.min(webDiscoveryStartIndex + discoveryPerPage, webDiscoveredPeers.length)}
+          {@const paginatedWebDiscoveryPeers = webDiscoveredPeers.slice(webDiscoveryStartIndex, webDiscoveryEndIndex)}
+
+          <div class="mt-4 space-y-3">
+            <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+            <div class="flex items-center justify-between gap-4">
+              <!-- Left: Showing peers counter -->
+              <div class="text-sm text-muted-foreground flex-shrink-0">
+                {#if webDiscoveredPeers.length > 0}
+                  Showing {webDiscoveryStartIndex + 1}-{webDiscoveryEndIndex} of {webDiscoveredPeers.length} discovered peers
+                {:else}
+                  No discovered peers
+                {/if}
+              </div>
+
+              <!-- Center: Pagination Controls -->
+              <div class="flex items-center justify-center flex-1">
+                {#if webDiscoveredPeers.length > discoveryPerPage}
+                  <div class="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage > 1) discoveryCurrentPage--
+                      }}
+                      disabled={discoveryCurrentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <div class="flex items-center gap-1">
+                      {#each Array.from({ length: webDiscoveryTotalPages }, (_, i) => i + 1) as page}
+                        {#if page === 1 || page === webDiscoveryTotalPages || (page >= discoveryCurrentPage - 1 && page <= discoveryCurrentPage + 1)}
+                          <Button
+                            size="sm"
+                            variant={page === discoveryCurrentPage ? 'default' : 'outline'}
+                            class="w-10"
+                            on:click={() => discoveryCurrentPage = page}
+                          >
+                            {page}
+                          </Button>
+                        {:else if page === discoveryCurrentPage - 2 || page === discoveryCurrentPage + 2}
+                          <span class="px-2 text-muted-foreground">...</span>
+                        {/if}
+                      {/each}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage < webDiscoveryTotalPages) discoveryCurrentPage++
+                      }}
+                      disabled={discoveryCurrentPage === webDiscoveryTotalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Right: Run Discovery button -->
+              <div class="flex-shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  on:click={runDiscovery}
+                  disabled={discoveryRunning}
+                >
+                  <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
+                  {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
+                </Button>
+              </div>
+            </div>
+
+            <ul class="space-y-2">
+              {#each paginatedWebDiscoveryPeers as p}
                 <li class="flex items-center justify-between p-2 border rounded">
                   <div class="truncate mr-4">{p}</div>
                       <!-- <div class="flex items-center gap-2">
@@ -2015,8 +2226,7 @@
         </div>
           </div>
       </div>
-    <div class="space-y-3">
-        {#each [...$peers].sort((a, b) => {
+    {@const sortedPeers = [...$peers].sort((a, b) => {
             let aVal: any, bVal: any
 
             switch (sortBy) {
@@ -2095,7 +2305,84 @@
             }
 
             return 0
-        }) as peer}
+        })}
+    {@const totalPages = Math.ceil(sortedPeers.length / peersPerPage)}
+    {@const startIndex = (currentPage - 1) * peersPerPage}
+    {@const endIndex = Math.min(startIndex + peersPerPage, sortedPeers.length)}
+    {@const paginatedPeers = sortedPeers.slice(startIndex, endIndex)}
+
+    <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+    <div class="flex items-center justify-between mb-4 gap-4">
+      <!-- Left: Showing peers counter -->
+      <div class="text-sm text-muted-foreground flex-shrink-0">
+        {#if sortedPeers.length > 0}
+          Showing {startIndex + 1}-{endIndex} of {sortedPeers.length} peers
+        {:else}
+          No peers
+        {/if}
+      </div>
+
+      <!-- Center: Pagination Controls -->
+      <div class="flex items-center justify-center flex-1">
+        {#if sortedPeers.length > peersPerPage}
+          <div class="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={() => {
+                if (currentPage > 1) currentPage--
+              }}
+              disabled={currentPage === 1}
+            >
+              Previous
+            </Button>
+            <div class="flex items-center gap-1">
+              {#each Array.from({ length: totalPages }, (_, i) => i + 1) as page}
+                {#if page === 1 || page === totalPages || (page >= currentPage - 1 && page <= currentPage + 1)}
+                  <Button
+                    size="sm"
+                    variant={page === currentPage ? 'default' : 'outline'}
+                    class="w-10"
+                    on:click={() => currentPage = page}
+                  >
+                    {page}
+                  </Button>
+                {:else if page === currentPage - 2 || page === currentPage + 2}
+                  <span class="px-2 text-muted-foreground">...</span>
+                {/if}
+              {/each}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={() => {
+                if (currentPage < totalPages) currentPage++
+              }}
+              disabled={currentPage === totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Right: Refresh button -->
+      <div class="flex-shrink-0">
+        <Button
+          size="sm"
+          variant="outline"
+          on:click={refreshConnectedPeers}
+          disabled={!isTauri || dhtStatus !== 'connected'}
+        >
+          <RefreshCw class="h-4 w-4 mr-2" />
+          Refresh Peers
+        </Button>
+      </div>
+    </div>
+
+    <!-- Peer list -->
+    <div class="space-y-3">
+        {#each paginatedPeers as peer}
         <div class="p-4 bg-secondary rounded-lg">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2 gap-2">
             <div class="flex items-start gap-3 min-w-0">
@@ -2169,19 +2456,6 @@
       {#if $peers.length === 0}
         <p class="text-center text-muted-foreground py-8">{$t('network.connectedPeers.noPeers')}</p>
       {/if}
-    </div>
-
-    <!-- Refresh button at bottom right -->
-    <div class="flex justify-end mt-4">
-      <Button
-        size="sm"
-        variant="outline"
-        on:click={refreshConnectedPeers}
-        disabled={!isTauri || dhtStatus !== 'connected'}
-      >
-        <RefreshCw class="h-4 w-4 mr-2" />
-        Refresh Peers
-      </Button>
     </div>
   </Card>
 </div>

@@ -160,6 +160,9 @@ pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
 use anyhow::Result;
 
+// Rate limiting for connection error logs (log at most once every 30 seconds)
+static LAST_CONNECTION_ERROR_LOG: AtomicU64 = AtomicU64::new(0);
+
 use libp2p::{
     autonat::v2,
     core::{
@@ -192,7 +195,10 @@ pub const RAW_CODEC: u64 = 0x55;
 const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
 /// File seeder TTL – if no heartbeat lands within this window, drop the entry.
 const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(90); // Longer TTL with grace period
-pub struct PendingKeywordIndex;
+pub struct PendingKeywordIndex {
+    pub keyword: String,
+    pub merkle_root: String,
+}
 
 /// Extracts a set of unique, searchable keywords from a filename.
 fn extract_keywords(file_name: &str) -> Vec<String> {
@@ -411,6 +417,15 @@ impl Ed2kSourceInfo {
         }
     }
 }
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Ed2kDownloadStatus {
+    pub progress: f32,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub state: String,
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -655,6 +670,10 @@ pub enum DhtCommand {
         info_hash: String,
         sender: oneshot::Sender<Option<FileMetadata>>,
     },
+    SearchPeersByInfohash {
+        info_hash: String,
+        sender: oneshot::Sender<Result<Vec<String>, String>>,
+    },
     SearchFile(String),
     DownloadFile(FileMetadata, String),
     ConnectPeer(String),
@@ -704,6 +723,15 @@ pub enum DhtCommand {
     },
     AnnounceTorrent {
         info_hash: String,
+    },
+    PutDhtValue {
+        key: String,
+        value: Vec<u8>,
+        sender: oneshot::Sender<Result<(), String>>,
+    },
+    GetDhtValue {
+        key: String,
+        sender: oneshot::Sender<Result<Option<Vec<u8>>, String>>,
     },
 }
 #[derive(Debug, Clone, Serialize)]
@@ -1728,6 +1756,8 @@ async fn run_dht_node(
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
     pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
+    pending_dht_queries: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>>,
+    pending_key_requests: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -2066,9 +2096,27 @@ async fn run_dht_node(
                                     }
 
                                     // The file_hash is the Merkle Root. The root_cid is for retrieval.
-                                    metadata.merkle_root = hex::encode(merkle_root);
+                                    // ONLY overwrite merkle_root if it's empty (preserves custom keys for verdicts/etc)
+                                    let computed_merkle_root = hex::encode(merkle_root);
+                                    let file_data_len = metadata.file_data.len();
+                                    if metadata.merkle_root.is_empty() {
+                                        metadata.merkle_root = computed_merkle_root.clone();
+                                        println!("💾 Using computed merkle_root: {}", metadata.merkle_root);
+                                    } else {
+                                        println!("💾 Preserving custom merkle_root: {} (computed: {})", 
+                                            metadata.merkle_root, computed_merkle_root);
+                                    }
                                     metadata.cids = Some(vec![root_cid]); // Store root CID for bitswap retrieval
-                                    metadata.file_data.clear(); // Don't store full data in DHT record
+                                    
+                                    // Only clear file_data for large files (>10KB) to save DHT space
+                                    // Keep small files (like reputation verdicts) in cache for fast retrieval
+                                    const MAX_INLINE_SIZE: usize = 10 * 1024; // 10KB
+                                    if file_data_len > MAX_INLINE_SIZE {
+                                        metadata.file_data.clear(); // Don't store large files in DHT record
+                                        println!("💾 Cleared file_data for large file ({} bytes)", file_data_len);
+                                    } else {
+                                        println!("💾 Keeping file_data inline ({} bytes) for fast cache retrieval", file_data_len);
+                                    }
 
                                     println!("Publishing file with root CID: {} (merkle_root: {:?})",
                                         root_cid, metadata.merkle_root);
@@ -2134,14 +2182,11 @@ async fn run_dht_node(
                                 }
 
                                 let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                                {
-                                    let mut pending = pending_heartbeat_updates.lock().await;
-                                    pending.insert(metadata.merkle_root.clone());
-                                }
-                                swarm
-                                    .behaviour_mut()
-                                    .kademlia
-                                    .get_record(record_key.clone());
+                                
+                                // Note: We skip the get_record heartbeat update here during initial publish
+                                // to avoid race conditions. The record doesn't exist yet, so fetching it
+                                // immediately would always fail with NotFound. Heartbeat updates will
+                                // happen on subsequent seeder refresh cycles.
 
                                 let dht_record_data = match serde_json::to_vec(&dht_metadata) {
                                     Ok(data) => data,
@@ -2211,19 +2256,24 @@ async fn run_dht_node(
                                     keywords
                                 );
                                 // Task 2: DHT Indexing
-                                // TODO: implement the "read-modify-write" logic inside this loop.
+                                // Implement the "read-modify-write" logic inside this loop.
                                 for keyword in keywords {
                                     let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
-                                    let _index_key = kad::RecordKey::new(&index_key_str);
+                                    let index_key = kad::RecordKey::new(&index_key_str);
 
-                                    // TODO: Implement the read-modify-write logic to update keyword indexes.
-                                    // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
-                                    // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
-                                    // 3. Add the new metadata.merkle_root to the list.
-                                    // 4. Serialize the updated list.
-                                    // 5. Create a new Record and call swarm.behaviour_mut().kademlia.put_record(...).
+                                    // Initiate read-modify-write: first get the existing record
+                                    let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
 
-                                    info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
+                                    // Track this keyword index operation
+                                    pending_keyword_indexes.lock().await.insert(
+                                        query_id,
+                                        PendingKeywordIndex {
+                                            keyword: keyword.clone(),
+                                            merkle_root: metadata.merkle_root.clone(),
+                                        }
+                                    );
+
+                                    info!("Initiated keyword index update for '{}' with file hash '{}'", keyword, metadata.merkle_root);
                                 }
                                 
                                 // Cache the published file locally so it can be found in searches
@@ -2585,6 +2635,18 @@ async fn run_dht_node(
                                 // This is the first step of the two-step lookup.
                                 let search = PendingInfohashSearch { id: 0, sender };
                                 pending_infohash_searches.lock().await.insert(query_id, search);
+                            }
+                            Some(DhtCommand::SearchPeersByInfohash { info_hash, sender }) => {
+                                let key = kad::RecordKey::new(&info_hash.as_bytes());
+                                let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
+                                info!("Searching for torrent providers (info_hash): {} (query: {:?})", info_hash, query_id);
+
+                                get_providers_queries.lock().await.insert(query_id, (info_hash.clone(), std::time::Instant::now()));
+                                let pending_query = PendingProviderQuery {
+                                    id: 0,
+                                    sender,
+                                };
+                                pending_provider_queries.lock().await.insert(info_hash, pending_query);
                             }
                             Some(DhtCommand::SetPrivacyProxies { addresses }) => {
                                 info!("Updating privacy proxy targets ({} addresses)", addresses.len());
@@ -2968,8 +3030,25 @@ async fn run_dht_node(
                                     }
                                 }
                             }
-                            Some(DhtCommand::RequestFileAccess { .. }) => {
-                                todo!();
+                            Some(DhtCommand::RequestFileAccess { seeder, merkle_root, recipient_public_key, sender }) => {
+                                info!("Requesting file access from seeder {} for file {}", seeder, merkle_root);
+                                
+                                // Convert PublicKey to Vec<u8> for the KeyRequest
+                                let recipient_pk_bytes = recipient_public_key.to_bytes().to_vec();
+                                
+                                // Create the key request
+                                let key_request = KeyRequest {
+                                    merkle_root: merkle_root.clone(),
+                                    recipient_public_key: recipient_pk_bytes,
+                                };
+                                
+                                // Send the request using the key_request behavior
+                                let request_id = swarm.behaviour_mut().key_request.send_request(&seeder, key_request);
+                                
+                                // Store the pending request
+                                pending_key_requests.lock().await.insert(request_id, sender);
+                                
+                                info!("Sent key request to seeder {} for file {} (request_id: {:?})", seeder, merkle_root, request_id);
                             }
                             Some(DhtCommand::AnnounceTorrent { info_hash }) => {
                                 let key = kad::RecordKey::new(&info_hash);
@@ -2983,6 +3062,36 @@ async fn run_dht_node(
                                         let _ = event_tx.send(DhtEvent::Error(format!("Failed to announce torrent: {}", e))).await;
                                     }
                                 }
+                            }
+                            Some(DhtCommand::PutDhtValue { key, value, sender }) => {
+                                info!("🔑 Storing DHT value with key: {} ({} bytes)", key, value.len());
+                                let record_key = kad::RecordKey::new(&key);
+                                let record = kad::Record {
+                                    key: record_key,
+                                    value,
+                                    publisher: None,
+                                    expires: None,
+                                };
+                                
+                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(query_id) => {
+                                        info!("✅ DHT put started: key={}, query_id={:?}", key, query_id);
+                                        let _ = sender.send(Ok(()));
+                                    }
+                                    Err(e) => {
+                                        error!("❌ DHT put failed for key {}: {}", key, e);
+                                        let _ = sender.send(Err(format!("Failed to store in DHT: {}", e)));
+                                    }
+                                }
+                            }
+                            Some(DhtCommand::GetDhtValue { key, sender }) => {
+                                info!("🔍 Fetching DHT value with key: {}", key);
+                                let record_key = kad::RecordKey::new(&key);
+                                let query_id = swarm.behaviour_mut().kademlia.get_record(record_key);
+                                info!("🔍 DHT get started: key={}, query_id={:?}", key, query_id);
+                                
+                                // Store the sender to respond when we get the Kademlia result
+                                pending_dht_queries.lock().await.insert(query_id, sender);
                             }
                             None => {
                                 info!("DHT command channel closed; shutting down node task");
@@ -3008,6 +3117,7 @@ async fn run_dht_node(
                                     &pending_keyword_indexes,
                                     &pending_infohash_searches,
                                     &file_metadata_cache,
+                                    &pending_dht_queries,
                                 )
                                 .await;
                             }
@@ -3759,7 +3869,16 @@ async fn run_dht_node(
                                 if let Some(pid) = peer_id {
                                     // Only log error for addresses that should be reachable
                                     if !is_unreachable_addr {
-                                        error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                        // Rate limit connection errors to once every 30 seconds
+                                        let now = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as u64;
+                                        let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
+                                        if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
+                                            LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
+                                            error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                        }
 
                                         let is_bootstrap = bootstrap_peer_ids.contains(&pid);
                                         if error.to_string().contains("rsa") {
@@ -3783,7 +3902,16 @@ async fn run_dht_node(
                                         debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
                                     }
                                 } else {
-                                    error!("❌ Outgoing connection error to unknown peer: {}", error);
+                                    // Rate limit connection errors to once every 30 seconds
+                                    let now = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                    let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
+                                    if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
+                                        LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
+                                        error!("❌ Outgoing connection error to unknown peer: {}", error);
+                                    }
                                 }
                                 let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
                             }
@@ -3946,6 +4074,101 @@ async fn run_dht_node(
                                     RREvent::ResponseSent { .. } => {}
                                 }
                             }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::KeyRequest(ev)) => {
+                                use libp2p::request_response::{Event as RREvent, Message};
+                                match ev {
+                                    // Incoming key request (we're the seeder)
+                                    RREvent::Message { peer, message } => match message {
+                                        Message::Request { request, channel, .. } => {
+                                            let KeyRequest { merkle_root, recipient_public_key } = request;
+                                            info!("Received key request from peer {} for file {}", peer, merkle_root);
+                                            
+                                            // Look up file metadata in cache
+                                            let file_metadata_cache_guard = file_metadata_cache.lock().await;
+                                            let result = if let Some(metadata) = file_metadata_cache_guard.get(&merkle_root) {
+                                                // Check if file has encrypted key bundle
+                                                if let Some(key_bundle) = &metadata.encrypted_key_bundle {
+                                                    info!("Found encrypted key bundle for file {} (merkle_root: {})", metadata.file_name, merkle_root);
+                                                    Ok(KeyResponse {
+                                                        encrypted_bundle: Some(key_bundle.clone()),
+                                                        error: None,
+                                                    })
+                                                } else {
+                                                    warn!("File {} found but no encrypted key bundle available", merkle_root);
+                                                    Ok(KeyResponse {
+                                                        encrypted_bundle: None,
+                                                        error: Some("File found but no encrypted key bundle available".to_string()),
+                                                    })
+                                                }
+                                            } else {
+                                                warn!("File not found in cache for merkle_root: {}", merkle_root);
+                                                Ok(KeyResponse {
+                                                    encrypted_bundle: None,
+                                                    error: Some(format!("File not found: {}", merkle_root)),
+                                                })
+                                            };
+                                            
+                                            drop(file_metadata_cache_guard);
+                                            
+                                            // Send response
+                                            match result {
+                                                Ok(response) => {
+                                                    swarm.behaviour_mut().key_request
+                                                        .send_response(channel, response)
+                                                        .unwrap_or_else(|e| error!("Failed to send key response: {e:?}"));
+                                                }
+                                                Err(e) => {
+                                                    error!("Error processing key request: {}", e);
+                                                    let error_response = KeyResponse {
+                                                        encrypted_bundle: None,
+                                                        error: Some(e),
+                                                    };
+                                                    swarm.behaviour_mut().key_request
+                                                        .send_response(channel, error_response)
+                                                        .unwrap_or_else(|e| error!("Failed to send error response: {e:?}"));
+                                                }
+                                            }
+                                        }
+                                        // Key response (we're the requester)
+                                        Message::Response { request_id, response } => {
+                                            let KeyResponse { encrypted_bundle, error } = response;
+                                            
+                                            if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
+                                                match (encrypted_bundle, error) {
+                                                    (Some(bundle), None) => {
+                                                        info!("Received encrypted key bundle for request {:?}", request_id);
+                                                        let _ = tx.send(Ok(bundle));
+                                                    }
+                                                    (None, Some(err)) => {
+                                                        warn!("Key request failed: {}", err);
+                                                        let _ = tx.send(Err(err));
+                                                    }
+                                                    (None, None) => {
+                                                        warn!("Key request returned empty response");
+                                                        let _ = tx.send(Err("Empty response from seeder".to_string()));
+                                                    }
+                                                    (Some(_), Some(err)) => {
+                                                        warn!("Key request returned both bundle and error, using error: {}", err);
+                                                        let _ = tx.send(Err(err));
+                                                    }
+                                                }
+                                            } else {
+                                                warn!("Received key response for unknown request_id {:?}", request_id);
+                                            }
+                                        }
+                                    },
+                                    RREvent::OutboundFailure { request_id, error, .. } => {
+                                        warn!("Key request outbound failure: {error:?}");
+                                        if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
+                                            let _ = tx.send(Err(format!("Outbound failure: {error:?}")));
+                                        }
+                                    }
+                                    RREvent::InboundFailure { error, .. } => {
+                                        warn!("Key request inbound failure: {error:?}");
+                                    }
+                                    RREvent::ResponseSent { .. } => {}
+                                }
+                            }
                             SwarmEvent::IncomingConnectionError { error, .. } => {
                                 if let Ok(mut m) = metrics.try_lock() {
                                     m.last_error = Some(error.to_string());
@@ -4022,6 +4245,7 @@ async fn handle_kademlia_event(
     pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     pending_infohash_searches: &Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>>,
     file_metadata_cache: &Arc<Mutex<HashMap<String, FileMetadata>>>,
+    pending_dht_queries: &Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>>,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -4049,6 +4273,13 @@ async fn handle_kademlia_event(
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
+                        // Check if this is a response to a generic DHT value query (e.g., reputation verdicts)
+                        if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
+                            info!("✅ DHT get successful: found {} bytes", peer_record.record.value.len());
+                            let _ = sender.send(Ok(Some(peer_record.record.value.clone())));
+                            return; // Don't process further as this was a raw DHT query
+                        }
+                        
                         // Try to parse DHT record as essential metadata JSON
                         if let Ok(metadata_json) =
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
@@ -4079,6 +4310,49 @@ async fn handle_kademlia_event(
                                     warn!("Failed to decode info_hash index value as string.");
                                     let _ = search.sender.send(None);
                                 }
+                                return; // End processing for this event here.
+                            }
+
+                            // Check if this is a response to a keyword index lookup (read-modify-write)
+                            if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
+                                // Deserialize the existing keyword index (list of merkle roots)
+                                let mut merkle_roots: Vec<String> = if let Ok(roots) =
+                                    serde_json::from_slice::<Vec<String>>(&peer_record.record.value) {
+                                    roots
+                                } else {
+                                    // If deserialization fails, start with empty list
+                                    warn!("Failed to deserialize keyword index for '{}', starting fresh", pending_index.keyword);
+                                    Vec::new()
+                                };
+
+                                // Add the new merkle root if not already present
+                                if !merkle_roots.contains(&pending_index.merkle_root) {
+                                    merkle_roots.push(pending_index.merkle_root.clone());
+                                }
+
+                                // Serialize the updated list
+                                if let Ok(updated_value) = serde_json::to_vec(&merkle_roots) {
+                                    // Create and put the updated record
+                                    let record = Record {
+                                        key: peer_record.record.key.clone(),
+                                        value: updated_value,
+                                        publisher: None,
+                                        expires: None,
+                                    };
+
+                                    let _put_query_id = match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            error!("Failed to put keyword index record: {}", e);
+                                            return; // Exit the function instead of continue
+                                        }
+                                    };
+
+                                    info!("Updated keyword index '{}' with {} files", pending_index.keyword, merkle_roots.len());
+                                } else {
+                                    error!("Failed to serialize updated keyword index for '{}'", pending_index.keyword);
+                                }
+
                                 return; // End processing for this event here.
                             }
 
@@ -4361,11 +4635,91 @@ async fn handle_kademlia_event(
                         }
                     }
                     GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
-                        // No additional records; do nothing here
+                        // Check if this was an infohash search that found no record
+                        if let Some(search) = pending_infohash_searches.lock().await.remove(&id) {
+                            info!("Infohash lookup completed: no record found");
+                            let _ = search.sender.send(None);
+                            return; // End processing for this event here.
+                        }
+
+                        // Check if this was a keyword index lookup that found no existing record
+                        if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
+                            // This is the first time this keyword is being indexed - create new record
+                            let merkle_roots = vec![pending_index.merkle_root.clone()];
+
+                            if let Ok(value) = serde_json::to_vec(&merkle_roots) {
+                                // Create the record key from the keyword
+                                let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
+                                let record_key = kad::RecordKey::new(&index_key_str);
+
+                                let record = Record {
+                                    key: record_key,
+                                    value,
+                                    publisher: None,
+                                    expires: None,
+                                };
+
+                                let _put_query_id =                     match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            error!("Failed to put keyword index record: {}", e);
+                            return;
+                        }
+                    };
+
+                                info!("Created new keyword index '{}' with first file '{}'", pending_index.keyword, pending_index.merkle_root);
+                            } else {
+                                error!("Failed to serialize new keyword index for '{}'", pending_index.keyword);
+                            }
+
+                            return; // End processing for this event here.
+                        }
+
+                        // No additional records; do nothing here for other queries
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
+                    // Check if this was a failed keyword index lookup
+                    if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
+                        // Treat GetRecord errors as "not found" - create new keyword index
+                        let merkle_roots = vec![pending_index.merkle_root.clone()];
+
+                        if let Ok(value) = serde_json::to_vec(&merkle_roots) {
+                            let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
+                            let record_key = kad::RecordKey::new(&index_key_str);
+
+                            let record = Record {
+                                key: record_key,
+                                value,
+                                publisher: None,
+                                expires: None,
+                            };
+
+                                let _put_query_id = match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        error!("Failed to put keyword index record: {}", e);
+                                        return;
+                                    }
+                                };
+
+                            info!("Created new keyword index '{}' after GetRecord error for file '{}'", pending_index.keyword, pending_index.merkle_root);
+                        } else {
+                            error!("Failed to serialize new keyword index for '{}' after error", pending_index.keyword);
+                        }
+
+                        return; // End processing for this event here.
+                    }
+
                     warn!("GetRecord error: {:?}", err);
+                    
+                    // Check if this was a failed DHT value query
+                    if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
+                        info!("❌ DHT get failed: {:?}", err);
+                        let _ = sender.send(Ok(None)); // Return None on error rather than Err
+                        return;
+                    }
+                    
                     // If the error includes the key, emit FileNotFound
                     if let kad::GetRecordError::NotFound { key, .. } = err {
                         let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
@@ -4416,10 +4770,11 @@ async fn handle_kademlia_event(
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
-                    debug!("PutRecord succeeded for key: {:?}", key);
+                    let key_str = String::from_utf8_lossy(key.as_ref());
+                    info!("✅ PutRecord succeeded for key: {} (DHT metadata stored successfully)", key_str);
                 }
                 QueryResult::PutRecord(Err(err)) => {
-                    warn!("PutRecord error: {:?}", err);
+                    error!("❌ PutRecord failed: {:?}", err);
                     let _ = event_tx
                         .send(DhtEvent::Error(format!("PutRecord failed: {:?}", err)))
                         .await;
@@ -5209,6 +5564,7 @@ pub struct DhtService {
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
         >,
     >,
+    pending_key_requests: Arc<Mutex<HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>>>,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
     root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
     active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
@@ -5845,6 +6201,7 @@ impl DhtService {
         let proxy_mgr: ProxyMgr = Arc::new(Mutex::new(ProxyManager::default()));
         let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
         let pending_webrtc_offers = Arc::new(Mutex::new(HashMap::new()));
+        let pending_key_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> =
@@ -5865,6 +6222,8 @@ impl DhtService {
         let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let pending_dht_queries: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
         {
@@ -5904,6 +6263,8 @@ impl DhtService {
             pending_heartbeat_updates.clone(),
             pending_keyword_indexes.clone(),
             file_metadata_cache_local.clone(),
+            pending_dht_queries.clone(),
+            pending_key_requests.clone(),
             is_bootstrap,
             final_enable_autorelay,
             relay_candidates,
@@ -5928,6 +6289,7 @@ impl DhtService {
             file_transfer_service,
             // chunk_manager is not stored in DhtService, only passed to the task
             pending_webrtc_offers,
+            pending_key_requests,
             pending_provider_queries,
             root_query_mapping,
             active_downloads,
@@ -6200,7 +6562,7 @@ impl DhtService {
             return Ok(None);
         }
 
-        let timeout_duration = Duration::from_millis(timeout_ms);
+        let tzimeout_duration = Duration::from_millis(timeout_ms);
         let waiter_id = self.search_counter.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
 
@@ -6230,7 +6592,7 @@ impl DhtService {
             return Err(err.to_string());
         }
 
-        match tokio::time::timeout(timeout_duration, rx).await {
+        match tokio::time::timeout(tzimeout_duration, rx).await {
             Ok(Ok(SearchResponse::Found(metadata))) => Ok(Some(metadata)),
             Ok(Ok(SearchResponse::NotFound)) => Ok(None),
             Ok(Err(_)) => Err("Search channel closed".into()),
@@ -7033,6 +7395,40 @@ impl DhtService {
             .await
             .map_err(|e| e.to_string())?;
         receiver.await.map_err(|e| e.to_string())
+    }
+
+    /// Store a value in the DHT with the given key
+    pub async fn put_dht_value(&self, key: String, value: Vec<u8>) -> Result<(), String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::PutDhtValue { key, value, sender })
+            .await
+            .map_err(|e| e.to_string())?;
+        receiver.await.map_err(|e| e.to_string())?
+    }
+
+    /// Retrieve a value from the DHT by key
+    pub async fn get_dht_value(&self, key: String) -> Result<Option<Vec<u8>>, String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::GetDhtValue { key, sender })
+            .await
+            .map_err(|e| e.to_string())?;
+        receiver.await.map_err(|e| e.to_string())?
+    }
+}
+
+impl DhtService {
+    /// Finds Chiral peers in the DHT that are seeding a torrent with the given info_hash.
+    pub async fn search_peers_by_infohash(&self, info_hash: String) -> Result<Vec<String>, String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::SearchPeersByInfohash { info_hash, sender })
+            .await
+            .map_err(|e| e.to_string())?;
+        
+        // Wait for the DHT query to complete
+        receiver.await.map_err(|e| e.to_string())?
     }
 }
 

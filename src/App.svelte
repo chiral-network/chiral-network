@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server, Database } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     // import ProxyPage from './pages/Proxy.svelte' // DISABLED
@@ -12,6 +12,7 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
+    import BlockchainDashboard from './pages/BlockchainDashboard.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
@@ -24,7 +25,10 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
+    import KeyboardShortcutsPanel from './lib/components/KeyboardShortcutsPanel.svelte';
+    import CommandPalette from './lib/components/CommandPalette.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
+    import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
@@ -54,6 +58,8 @@ let unsubscribeScheduler: (() => void) | null = null;
 let unsubscribeBandwidth: (() => void) | null = null;
 let lastAppliedBandwidthSignature: string | null = null;
 let showFirstRunWizard = false;
+let showShortcutsPanel = false;
+let showCommandPalette = false;
 
   const syncBandwidthScheduler = (config: AppSettings) => {
     const enabledSchedules =
@@ -112,7 +118,9 @@ function handleFirstRunComplete() {
 
   onMount(() => {
     let stopNetworkMonitoring: () => void = () => {};
+    let stopGethMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
+    let unlistenTorrentPayment: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
     syncBandwidthScheduler(get(settings));
@@ -126,6 +134,51 @@ function handleFirstRunComplete() {
       // Listen for payment notifications from backend
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
+          // Listener for BitTorrent protocol payments
+          const torrentUnlisten = await listen(
+            "torrent_seeder_payment_received",
+            async (event: any) => {
+              const payload = event.payload;
+              console.log(
+                "💰 Torrent seeder payment notification received:",
+                payload,
+              );
+
+              const currentWalletAddress = get(wallet).address;
+              const seederAddress = payload.seeder_wallet_address;
+
+              if (
+                !seederAddress ||
+                !currentWalletAddress ||
+                currentWalletAddress.toLowerCase() !==
+                  seederAddress.toLowerCase()
+              ) {
+                console.log("⏭️ Skipping torrent payment credit - not for us.");
+                return;
+              }
+
+              console.log(
+                "✅ This torrent payment is for us! Crediting...",
+              );
+
+              const result = await paymentService.creditSeederPayment(
+                payload.info_hash, // For torrents, this would be the info_hash
+                payload.file_name,
+                payload.file_size,
+                payload.downloader_address,
+                payload.transaction_hash,
+              );
+
+              if (!result.success) {
+                console.error(
+                  "❌ Failed to credit torrent seeder payment:",
+                  result.error,
+                );
+              }
+            },
+          );
+          unlistenTorrentPayment = torrentUnlisten;
+
           const unlisten = await listen(
             "seeder_payment_received",
             async (event: any) => {
@@ -162,6 +215,7 @@ function handleFirstRunComplete() {
                 payload.file_name,
                 payload.file_size,
                 payload.downloader_address,
+                payload.downloader_peer_id || payload.downloader_address, // Use peer ID or fallback to address
                 payload.transaction_hash,
               );
 
@@ -332,6 +386,9 @@ function handleFirstRunComplete() {
 
       // Start network monitoring
       stopNetworkMonitoring = startNetworkMonitoring();
+
+      // Start Geth monitoring
+      stopGethMonitoring = startGethMonitoring();
     })();
 
       // popstate - event that tracks history of current tab
@@ -342,6 +399,64 @@ function handleFirstRunComplete() {
 
     // keyboard shortcuts
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore shortcuts if user is typing in an input/textarea
+      const target = event.target as HTMLElement;
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      
+      // ? or F1 - Show keyboard shortcuts help
+      if ((event.key === '?' || event.key === 'F1') && !isInputField) {
+        event.preventDefault();
+        showShortcutsPanel = true;
+        return;
+      }
+      
+      // Ctrl/Cmd + K - Open command palette
+      if ((event.ctrlKey || event.metaKey) && event.key === 'k' && !isInputField) {
+        event.preventDefault();
+        showCommandPalette = true;
+        return;
+      }
+      
+      // Ctrl/Cmd + D - Go to Download
+      if ((event.ctrlKey || event.metaKey) && event.key === 'd' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'download';
+        goto('/download');
+        return;
+      }
+      
+      // Ctrl/Cmd + U - Go to Upload
+      if ((event.ctrlKey || event.metaKey) && event.key === 'u' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'upload';
+        goto('/upload');
+        return;
+      }
+      
+      // Ctrl/Cmd + N - Go to Network
+      if ((event.ctrlKey || event.metaKey) && event.key === 'n' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'network';
+        goto('/network');
+        return;
+      }
+      
+      // Ctrl/Cmd + M - Go to Mining
+      if ((event.ctrlKey || event.metaKey) && event.key === 'm' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'mining';
+        goto('/mining');
+        return;
+      }
+      
+      // Ctrl/Cmd + A - Go to Account (only if not in input field)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'a' && !isInputField) {
+        event.preventDefault();
+        currentPage = 'account';
+        goto('/account');
+        return;
+      }
+
       // Ctrl/Cmd + Q - Quit application
       if ((event.ctrlKey || event.metaKey) && event.key === "q") {
         event.preventDefault();
@@ -390,6 +505,7 @@ function handleFirstRunComplete() {
       window.removeEventListener("popstate", onPop);
       window.removeEventListener("keydown", handleKeyDown);
       stopNetworkMonitoring();
+      stopGethMonitoring();
       if (schedulerRunning) {
         bandwidthScheduler.stop();
         schedulerRunning = false;
@@ -398,6 +514,9 @@ function handleFirstRunComplete() {
       }
       if (unlistenSeederPayment) {
         unlistenSeederPayment();
+      }
+      if (unlistenTorrentPayment) {
+        unlistenTorrentPayment();
       }
       if (unsubscribeScheduler) {
         unsubscribeScheduler();
@@ -447,6 +566,7 @@ function handleFirstRunComplete() {
       // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
       { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
       { id: "reputation", label: $t("nav.reputation"), icon: Star },
+      { id: "blockchain", label: $t("nav.blockchain"), icon: Database },
       { id: "account", label: $t("nav.account"), icon: Wallet },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
 
@@ -492,6 +612,10 @@ function handleFirstRunComplete() {
     {
       path: "reputation",
       component: ReputationPage,
+    },
+    {
+      path: "blockchain",
+      component: BlockchainDashboard,
     },
     {
       path: "account",
@@ -560,20 +684,24 @@ function handleFirstRunComplete() {
 
         <!-- Sidebar Nav Items -->
         {#each menuItems as item}
+          {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
           <button
             on:click={() => {
+              if (isBlockchainDisabled) return;
               currentPage = item.id;
               goto(`/${item.id}`);
             }}
-            class="w-full group"
+            class="w-full group {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : ''}"
             aria-current={currentPage === item.id ? "page" : undefined}
+            disabled={isBlockchainDisabled}
+            title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
           >
             <div
               class="flex items-center {sidebarCollapsed
                 ? 'justify-center'
                 : ''} rounded {currentPage === item.id
                 ? 'bg-gray-200'
-                : 'group-hover:bg-gray-100'}"
+                : isBlockchainDisabled ? '' : 'group-hover:bg-gray-100'}"
             >
               <span
                 class="flex items-center justify-center rounded w-10 h-10 relative"
@@ -653,14 +781,18 @@ function handleFirstRunComplete() {
         <!-- Sidebar Nav Items -->
         <nav class="flex-1 p-4 space-y-2">
           {#each menuItems as item}
+            {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
             <button
               on:click={() => {
+                if (isBlockchainDisabled) return;
                 currentPage = item.id;
                 goto(`/${item.id}`);
                 sidebarMenuOpen = false;
               }}
-              class="w-full flex items-center rounded px-4 py-3 text-lg hover:bg-gray-100"
+              class="w-full flex items-center rounded px-4 py-3 text-lg {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-gray-100'}"
               aria-current={currentPage === item.id ? "page" : undefined}
+              disabled={isBlockchainDisabled}
+              title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
             >
               <svelte:component this={item.icon} class="h-5 w-5 mr-3" />
               {item.label}
@@ -698,6 +830,18 @@ function handleFirstRunComplete() {
     onComplete={handleFirstRunComplete}
   />
 {/if}
+
+<!-- Keyboard Shortcuts Help Panel -->
+<KeyboardShortcutsPanel 
+  isOpen={showShortcutsPanel}
+  onClose={() => showShortcutsPanel = false}
+/>
+
+<!-- Command Palette -->
+<CommandPalette 
+  isOpen={showCommandPalette}
+  onClose={() => showCommandPalette = false}
+/>
 
   <!-- add Toast  -->
 <SimpleToast />

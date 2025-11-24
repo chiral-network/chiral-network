@@ -170,6 +170,14 @@ class DownloadHistoryService {
   }
 
   /**
+   * Clear only canceled downloads
+   */
+  clearCanceledDownloads(): void {
+    this.history = this.history.filter((entry) => entry.status !== "canceled");
+    this.saveHistory();
+  }
+
+  /**
    * Get history statistics
    */
   getStatistics(): {
@@ -208,47 +216,62 @@ class DownloadHistoryService {
   /**
    * Import history from JSON
    */
-  importHistory(jsonData: string): {
-    success: boolean;
-    imported: number;
-    error?: string;
-  } {
+  importHistory(jsonData: string): { success: boolean; imported: number; error?: string } {
     try {
       const data = JSON.parse(jsonData);
-
+      
       if (!data.entries || !Array.isArray(data.entries)) {
-        return {
-          success: false,
-          imported: 0,
-          error: "Invalid format: missing entries array",
+        return { success: false, imported: 0, error: "Invalid format: missing entries array" };
+      }
+
+      let importedCount = 0;
+      let skippedCount = 0;
+      let duplicateCount = 0;
+      
+      for (const entry of data.entries) {
+        // Validate required fields
+        if (!entry.hash || !entry.name || entry.size === undefined || !entry.status) {
+          console.warn("Skipping entry with missing required fields:", entry);
+          skippedCount++;
+          continue;
+        }
+        
+        // Validate status is one of allowed values
+        if (!["completed", "failed", "canceled"].includes(entry.status)) {
+          console.warn("Skipping entry with invalid status:", entry.status);
+          skippedCount++;
+          continue;
+        }
+        
+        const existingIndex = this.history.findIndex((e) => e.hash === entry.hash);
+        if (existingIndex === -1) {
+          this.history.push(entry);
+          importedCount++;
+        } else {
+          duplicateCount++;
+        }
+      }
+      
+      // Only fail if we had entries but ALL of them were invalid (not duplicates)
+      if (importedCount === 0 && skippedCount > 0 && duplicateCount === 0) {
+        return { 
+          success: false, 
+          imported: 0, 
+          error: "Missing required fields: all entries were invalid" 
         };
       }
 
-      // Merge with existing history (avoid duplicates)
-      let importedCount = 0;
-      for (const entry of data.entries) {
-        if (
-          !this.history.find(
-            (e) =>
-              e.hash === entry.hash && e.downloadDate === entry.downloadDate
-          )
-        ) {
-          this.history.push(entry);
-          importedCount++;
-        }
-      }
-
-      // Sort by date (newest first)
       this.history.sort((a, b) => b.downloadDate - a.downloadDate);
-
+      this.history = this.history.slice(0, MAX_HISTORY_ENTRIES);
       this.saveHistory();
 
       return { success: true, imported: importedCount };
     } catch (error) {
-      return {
-        success: false,
-        imported: 0,
-        error: error instanceof Error ? error.message : "Unknown error",
+      console.error("Failed to import history:", error);
+      return { 
+        success: false, 
+        imported: 0, 
+        error: error instanceof Error ? error.message : "Unknown error" 
       };
     }
   }

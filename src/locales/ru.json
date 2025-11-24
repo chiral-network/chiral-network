@@ -429,6 +429,11 @@
   "language.chinese": "中文",
   "language.korean": "한국어",
   "language.russian": "Русский",
+  "language.portuguese": "Português",
+  "language.hindi": "हिन्दी",
+  "language.french": "Français",
+  "language.bengali": "বাংলা",
+  "language.arabic": "العربية",
   "nav": {
     "menu": "Меню",
     "download": "Скачать",
@@ -455,6 +460,8 @@
   "privacy.proxyHint": "Введите адрес прокси SOCKS5 (например, Tor на 127.0.0.1:9050)",
   "privacy.anonymousMode": "Анонимный режим (скрыть всю идентифицирующую информацию)",
   "privacy.shareAnalytics": "Делиться анонимной статистикой использования",
+  "privacy.autoLockWallet": "Автоблокировка кошелька при бездействии",
+  "privacy.autoLockWalletHint": "Автоматически завершает сеанс после часа без активности.",
   "notifications.title": "Уведомления",
   "notifications.enable": "Включить уведомления на рабочем столе",
   "notifications.notifyComplete": "Уведомлять о завершении скачиваний",
@@ -554,6 +561,19 @@
     "item": {
       "from": "От",
       "to": "Кому"
+    },
+    "receipt": {
+      "title": "квитанция о транзакции",
+      "from": "От",
+      "to": "Кому",
+      "hash": "Хэш транзакции",
+      "blockNumber": "Номер блока",
+      "gasInfo": "Информация о газе",
+      "gasUsed": "использованный газ",
+      "gasPrice": "Цена газа",
+      "fee": "Комиссия за транзакцию",
+      "timestamp": "Временная метка",
+      "close": "Закрыть квитанцию"
     },
     "searchPlaceholder": "Поиск по адресу, описанию или ID..."
   },
@@ -1396,6 +1416,191 @@
       "thu": "Чт",
       "fri": "Пт",
       "sat": "Сб"
+    }
+  },
+  "blockchain": {
+    "title": "Обозреватель блокчейна",
+    "subtitle": "Просматривайте блоки, транзакции и балансы счетов в сети Chiral",
+    "refresh": "Обновить",
+    "refreshed": "Данные обновлены",
+    "copied": "Скопировано в буфер обмена",
+    "stats": {
+      "totalBlocks": "Всего блоков",
+      "hashrate": "Хешрейт сети",
+      "difficulty": "Сложность",
+      "peers": "Узлы сети"
+    },
+    "tabs": {
+      "blocks": "Последние блоки",
+      "search": "Поиск",
+      "stats": "Проверка баланса"
+    },
+    "blocks": {
+      "latest": "Последние блоки",
+      "noBlocks": "Блоки не найдены"
+    },
+    "search": {
+      "title": "Поиск по блокчейну",
+      "address": "Адрес",
+      "transaction": "Транзакция",
+      "block": "Блок",
+      "emptyQuery": "Введите поисковый запрос",
+      "error": "Ошибка поиска: {error}",
+      "unknownError": "Неизвестная ошибка",
+      "invalidBlock": "Недопустимый номер блока",
+      "notFound": "Не найдено",
+      "addressDetails": "Данные об адресе",
+      "addressLabel": "Адрес",
+      "balance": "Баланс",
+      "txDetails": "Данные о транзакции",
+      "status": "Статус",
+      "blockNumber": "Номер блока",
+      "from": "От",
+      "to": "Кому",
+      "value": "Сумма",
+      "blockDetails": "Данные о блоке",
+      "hash": "Хеш",
+      "timestamp": "Временная метка"
+    },
+    "balance": {
+      "checker": "Проверка баланса",
+      "address": "Адрес",
+      "check": "Проверить баланс",
+      "result": "Баланс",
+      "emptyAddress": "Введите адрес",
+      "error": "Не удалось проверить баланс: {error}",
+      "errorLabel": "Ошибка"
+    },
+    "error": {
+      "fetchBlocks": "Не удалось получить блоки"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "Скопировано!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "Блоки не найдены. Начните майнинг, чтобы создавать блоки.",
+      "fetchError": "Не удалось получить блоки: {error}"
+    },
+    "settings": {
+      "updated": "Настройки обновлены!",
+      "networkingError": "Настройки сохранены, но обновление сети не удалось",
+      "proxyRelayWarning": "Добавьте как минимум один доверенный прокси-ретранслятор перед включением «Скрыть мой IP»."
+    },
+    "analytics": {
+      "direction": {
+        "upload": "Отправка",
+        "download": "Скачивание"
+      },
+      "bandwidthWarning": "Предупреждение о лимите для {direction}: использовано {used} ГБ ({percent}% из {cap} ГБ).",
+      "bandwidthTitle": "Предупреждение о лимите для {direction}"
+    },
+    "upload": {
+      "loginRequired": "Войдите в аккаунт перед загрузкой файлов",
+      "verifyAccountFailed": "Не удалось проверить статус аккаунта. Пожалуйста, войдите снова.",
+      "dhtDisconnected": "Сеть DHT не подключена. Запустите сеть DHT перед загрузкой файлов.",
+      "fileSuccess": "{name} успешно загружен",
+      "torrentSeeding": "{name} теперь раздаётся как торрент"
+    },
+    "network": {
+      "signalingConnected": "Подключено к сигналинговому серверу",
+      "signalingError": "Не удалось подключиться к сигналинговому серверу для тестирования веб-режима",
+      "peerAddressRequired": "Введите адрес пира",
+      "dhtRequired": "DHT не подключён. Сначала запустите DHT.",
+      "alreadyConnected": "Пир уже подключён",
+      "connecting": "Подключение к пиру через DHT...",
+      "connectionSuccess": "Подключение выполнено!",
+      "connectionFailed": "Не удалось подключиться. Пир может быть недоступен или адрес неверен.",
+      "connectError": "Не удалось подключиться к пиру: {error}",
+      "signalingMissing": "Сигналинговый сервер не подключён. Сначала запустите DHT.",
+      "peerNotFound": "Пир {peer} не найден среди обнаруженных",
+      "messageReceived": "Получено от пира: {message}",
+      "webrtcConnected": "Успешно подключено к пиру!",
+      "webrtcFailed": "Не удалось подключиться к пиру",
+      "dataChannelOpen": "Канал данных открыт — теперь можно отправлять сообщения!",
+      "dataChannelClosed": "Канал данных закрыт",
+      "webrtcError": "Ошибка WebRTC: {error}",
+      "webrtcConnecting": "Подключение к пиру: {peer}",
+      "webrtcCreateError": "Не удалось создать соединение: {error}",
+      "noConnection": "Нет активного соединения WebRTC",
+      "messageSent": "Тестовое сообщение отправлено: {message}",
+      "sendError": "Не удалось отправить сообщение: {error}",
+      "gethInstalled": "Geth уже установлен",
+      "gethDownloadError": "Не удалось загрузить Geth: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "Невозможно обработать платеж: адрес кошелька загрузчика отсутствует или недействителен",
+        "failed": "Платёж не выполнен: {error}",
+        "successWithHash": "Платёж выполнен! Транзакция: {hash}...",
+        "success": "Платёж выполнен!"
+      }
+    },
+    "transactions": {
+      "copied": "{label} скопировано в буфер обмена",
+      "copyError": "Не удалось скопировать {label}",
+      "exported": "Транзакция экспортирована"
     }
   }
 }

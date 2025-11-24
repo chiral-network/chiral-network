@@ -18,11 +18,9 @@
     RefreshCw,
     Lock,
     Key,
-    Blocks,
-    Globe,
     DollarSign,
     Copy,
-    Share2
+    Share2,
   } from "lucide-svelte";
   import { files, type FileItem } from "$lib/stores";
   import {
@@ -37,15 +35,14 @@
   import { showToast } from "$lib/toast";
   import { getStorageStatus } from "$lib/uploadHelpers";
   import { fileService } from "$lib/services/fileService";
+  import { toHumanReadableSize } from "$lib/utils";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from "$lib/dht";
   import Label from "$lib/components/ui/label.svelte";
   import Input from "$lib/components/ui/input.svelte";
-  import { selectedProtocol as protocolStore } from "$lib/stores/protocolStore";
+  import { settings } from "$lib/stores";
   import { paymentService } from '$lib/services/paymentService';
-
-
   const tr = (k: string, params?: Record<string, any>): string =>
     $t(k, params);
 
@@ -138,7 +135,7 @@
   // Helper function to check if DHT is connected (consistent with Network.svelte)
   async function isDhtConnected(): Promise<boolean> {
     if (!isTauri) return false;
-    
+
     try {
       const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
       return isRunning;
@@ -156,17 +153,8 @@
   let lastChecked: Date | null = null;
   let isUploading = false;
 
-  // Protocol selection state
-  $: selectedProtocol = $protocolStore;
-  $: hasSelectedProtocol = selectedProtocol !== null;
-
-  function handleProtocolSelect(protocol: "WebRTC" | "Bitswap" | "BitTorrent") {
-    protocolStore.set(protocol);
-  }
-
-  function changeProtocol() {
-    protocolStore.reset();
-  }
+  // Protocol selection state - read from settings
+  $: selectedProtocol = $settings.selectedProtocol;
 
   // Encrypted sharing state
   let useEncryptedSharing = false;
@@ -379,7 +367,8 @@
             const hasAccount = await invoke<boolean>("has_active_account");
             if (!hasAccount) {
               showToast(
-                "Please log in to your account before uploading files",
+                // "Please log in to your account before uploading files",
+                tr('toasts.upload.loginRequired'),
                 "error",
               );
               return;
@@ -387,7 +376,8 @@
           } catch (error) {
             console.error("Failed to verify account status:", error);
             showToast(
-              "Failed to verify account status. Please try logging in again.",
+              // "Failed to verify account status. Please try logging in again.",
+              tr('toasts.upload.verifyAccountFailed'),
               "error",
             );
             return;
@@ -406,7 +396,8 @@
         const dhtConnected = await isDhtConnected();
         if (!dhtConnected) {
           showToast(
-            "DHT network is not connected. Please start the DHT network before uploading files.",
+            // "DHT network is not connected. Please start the DHT network before uploading files.",
+            tr('toasts.upload.dhtDisconnected'),
             "error",
           );
           return;
@@ -490,7 +481,11 @@
 
                 files.update((currentFiles) => [...currentFiles, newFile]);
                 addedCount++;
-                showToast(`${file.name} uploaded successfully`, "success");
+                // showToast(`${file.name} uploaded successfully`, "success");
+                showToast(
+                  tr('toasts.upload.fileSuccess', { values: { name: file.name } }),
+                  "success"
+                );
               } catch (error) {
                 console.error("Error uploading dropped file:", file.name, error);
                 showToast(
@@ -599,7 +594,8 @@
         const hasAccount = await invoke<boolean>("has_active_account");
         if (!hasAccount) {
           showToast(
-            "Please log in to your account before uploading files",
+            // "Please log in to your account before uploading files",
+            tr('toasts.upload.loginRequired'),
             "error",
           );
           return;
@@ -607,7 +603,8 @@
       } catch (error) {
         console.error("Failed to verify account status:", error);
         showToast(
-          "Failed to verify account status. Please try logging in again.",
+          // "Failed to verify account status. Please try logging in again.",
+          tr('toasts.upload.verifyAccountFailed'),
           "error",
         );
         return;
@@ -668,7 +665,8 @@
         const hasAccount = await invoke<boolean>("has_active_account");
         if (!hasAccount) {
           showToast(
-            "Please log in to your account before uploading files",
+            // "Please log in to your account before uploading files",
+            tr('toasts.upload.loginRequired'),
             "error",
           );
           return;
@@ -676,7 +674,8 @@
       } catch (error) {
         console.error("Failed to verify account status:", error);
         showToast(
-          "Failed to verify account status. Please try logging in again.",
+          // "Failed to verify account status. Please try logging in again.",
+          tr('toasts.upload.verifyAccountFailed'),
           "error",
         );
         return;
@@ -687,7 +686,8 @@
     const dhtConnected = await isDhtConnected();
     if (!dhtConnected) {
       showToast(
-        "DHT network is not connected. Please start the DHT network before uploading files.",
+        // "DHT network is not connected. Please start the DHT network before uploading files.",
+        tr('toasts.upload.dhtDisconnected'),
         "error",
       );
       return;
@@ -707,8 +707,8 @@
 
         // Handle BitTorrent differently - create and seed torrent
         if (selectedProtocol === "BitTorrent") {
-          const magnetLink = await invoke<string>('create_and_seed_torrent', { filePath });
-          
+          const magnetLink = await invoke<string>('torrent_seed', { filePath, announceUrls: null });
+
           const torrentFile = {
             id: `torrent-${Date.now()}-${Math.random()}`,
             name: fileName,
@@ -717,12 +717,17 @@
             path: filePath,
             seederAddresses: [],
             uploadDate: new Date(),
+            seeders: 1,
             status: "seeding" as const,
             price: 0, // BitTorrent is free
           };
 
           files.update(f => [...f, torrentFile]);
-          showToast(`${fileName} is now seeding as a torrent`, "success");
+          // showToast(`${fileName} is now seeding as a torrent`, "success");
+          showToast(
+            tr('toasts.upload.torrentSeeding', { values: { name: fileName } }),
+            "success"
+          );
           continue; // Skip the normal Chiral upload flow
         }
 
@@ -787,7 +792,11 @@
           );
         } else {
           addedCount++;
-          showToast(`${fileName} uploaded successfully`, "success");
+          // showToast(`${fileName} uploaded successfully`, "success");
+          showToast(
+            tr('toasts.upload.fileSuccess', { values: { name: fileName } }),
+            "success"
+          );
         }
       } catch (error) {
         console.error(error);
@@ -815,11 +824,8 @@
     }
   }
 
-  function formatFileSize(bytes: number): string {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1048576) return (bytes / 1024).toFixed(2) + " KB";
-    return (bytes / 1048576).toFixed(2) + " MB";
-  }
+  // Use centralized file size formatting for consistency
+  const formatFileSize = toHumanReadableSize;
 
   async function handleCopy(hash: string) {
     await navigator.clipboard.writeText(hash);
@@ -968,48 +974,6 @@
     </Card>
   {/if}
 
-  <!-- Protocol Selection/Indicator Card -->
-  {#if hasSelectedProtocol}
-    <Card>
-      <div class="p-4">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <div
-              class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20"
-            >
-              {#if selectedProtocol === "WebRTC"}
-                <Globe class="h-5 w-5 text-blue-600" />
-              {:else if selectedProtocol === "Bitswap"}
-                <Blocks class="h-5 w-5 text-blue-600" />
-              {:else}
-                <Share2 class="h-5 w-5 text-green-600" />
-              {/if}
-            </div>
-            <div>
-              <p class="text-sm font-semibold">
-                {$t("upload.currentProtocol")}: {selectedProtocol}
-              </p>
-              <p class="text-xs text-muted-foreground">
-                {selectedProtocol === "WebRTC"
-                  ? $t("upload.webrtcDescription")
-                  : selectedProtocol === "Bitswap"
-                  ? $t("upload.bitswapDescription")
-                  : $t("torrent.seed.description")}
-              </p>
-            </div>
-          </div>
-          <button
-            on:click={changeProtocol}
-            class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
-          >
-            <RefreshCw class="h-4 w-4 mr-2" />
-            {$t("upload.changeProtocol")}
-          </button>
-        </div>
-      </div>
-    </Card>
-  {/if}
-
   <!-- BitTorrent Seeding Section (Collapsible) - REMOVED: Now integrated as protocol option -->
 
   <Card
@@ -1019,84 +983,11 @@
         ? 'border-orange-500 bg-orange-500/5'
         : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
   >
-    {#if !hasSelectedProtocol}
-      <Card>
-        <div class="p-6">
-          <h2 class="text-2xl font-bold mb-6 text-center">
-            {$t("upload.selectProtocol")}
-          </h2>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-4xl mx-auto">
-            <!-- WebRTC Option -->
-            <button
-              class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol ===
-              'WebRTC'
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                : 'border-gray-200 dark:border-gray-700'}"
-              on:click={() => handleProtocolSelect("WebRTC")}
-            >
-              <div
-                class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full"
-              >
-                <Globe class="w-8 h-8 text-blue-600" />
-              </div>
-              <div class="text-center">
-                <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                  {$t("upload.webrtcDescription")}
-                </p>
-              </div>
-            </button>
-
-            <!-- Bitswap Option -->
-            <button
-              class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol ===
-              'Bitswap'
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                : 'border-gray-200 dark:border-gray-700'}"
-              on:click={() => handleProtocolSelect("Bitswap")}
-            >
-              <div
-                class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full"
-              >
-                <Blocks class="w-8 h-8 text-blue-600" />
-              </div>
-              <div class="text-center">
-                <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                  {$t("upload.bitswapDescription")}
-                </p>
-              </div>
-            </button>
-
-            <!-- BitTorrent Option -->
-            <button
-              class="p-6 border-2 rounded-lg hover:border-green-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol ===
-              'BitTorrent'
-                ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-                : 'border-gray-200 dark:border-gray-700'}"
-              on:click={() => handleProtocolSelect("BitTorrent")}
-            >
-              <div
-                class="w-16 h-16 flex items-center justify-center bg-green-100 rounded-full"
-              >
-                <Share2 class="w-8 h-8 text-green-600" />
-              </div>
-              <div class="text-center">
-                <h3 class="text-lg font-semibold mb-2">BitTorrent</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                  {$t("torrent.seed.description")}
-                </p>
-              </div>
-            </button>
-          </div>
-        </div>
-      </Card>
-    {:else}
-      <!-- Drag & Drop Indicator -->
-            {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length === 0}
-              <div
-                class="text-center py-12 transition-all duration-300 relative overflow-hidden"
-              >
+    <!-- Drag & Drop Indicator -->
+    {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length === 0}
+      <div
+        class="text-center py-12 transition-all duration-300 relative overflow-hidden"
+      >
                 <div class="relative z-10">
                   <div class="relative mb-6">
                     {#if isDragging}
@@ -1421,6 +1312,5 @@
                 </div>
               {/if}
             {/if}
-    {/if}
   </Card>
 </div>
