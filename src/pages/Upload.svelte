@@ -41,7 +41,7 @@
   import { dhtService } from "$lib/dht";
   import Label from "$lib/components/ui/label.svelte";
   import Input from "$lib/components/ui/input.svelte";
-  import { settings } from "$lib/stores";
+  import { selectedProtocol as protocolStore } from "$lib/stores/protocolStore";
   import { paymentService } from '$lib/services/paymentService';
   const tr = (k: string, params?: Record<string, any>): string =>
     $t(k, params);
@@ -153,8 +153,8 @@
   let lastChecked: Date | null = null;
   let isUploading = false;
 
-  // Protocol selection state - read from settings
-  $: selectedProtocol = $settings.selectedProtocol;
+  // Protocol selection state
+  $: selectedProtocol = $protocolStore;
 
   // Encrypted sharing state
   let useEncryptedSharing = false;
