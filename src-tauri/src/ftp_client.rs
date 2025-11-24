@@ -339,7 +339,7 @@ pub async fn download_from_ftp_with_progress(
             .context("Failed to set binary transfer mode")?;
         
         if source_clone.passive_mode {
-            ftp_stream.set_passive_mode(true);
+            ftp_stream.set_mode(suppaftp::Mode::Passive);
         }
         
         // Get file size for progress calculation
@@ -377,8 +377,7 @@ pub async fn download_from_ftp_with_progress(
         }
         
         // Finalize the transfer
-        drop(reader);
-        ftp_stream.finalize_retr_stream()
+        ftp_stream.finalize_retr_stream(reader)
             .context("Failed to finalize retrieval")?;
         
         // Quit connection
