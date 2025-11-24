@@ -1,4 +1,4 @@
-use crate::protocols::SimpleProtocolHandler;
+use crate::protocols::ProtocolHandler;
 use async_trait::async_trait;
 use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions};
 use std::collections::HashMap;
@@ -466,7 +466,7 @@ impl BitTorrentHandler {
 }
 
 #[async_trait]
-impl SimpleProtocolHandler for BitTorrentHandler {
+impl ProtocolHandler for BitTorrentHandler {
     fn name(&self) -> &'static str {
         "bittorrent"
     }

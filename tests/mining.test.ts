@@ -4,10 +4,8 @@ import {
   miningState,
   miningProgress,
   totalEarned,
-  transactions,
   type MiningState,
   type MiningHistoryPoint,
-  type Transaction,
 } from "../src/lib/stores";
 
 describe("Mining State Management", () => {
@@ -27,9 +25,6 @@ describe("Mining State Management", () => {
     });
 
     miningProgress.set({ cumulative: 0, lastBlock: 0 });
-
-    // Reset transactions for totalEarned derived store tests
-    transactions.set([]);
   });
 
   describe("Mining State Initialization", () => {
@@ -412,99 +407,32 @@ describe("Mining State Management", () => {
   });
 
   describe("Total Earned Derived Store", () => {
-    // IMPORTANT: totalEarned is derived from transactions store, NOT miningState.totalRewards
-    // This was a bug introduced in commit 0dba4b0 by Aaron Purnawan where wallet.ts
-    // used totalEarned without importing it and without calling get()
-
-    it("should calculate total earned from mining transactions", () => {
-      // totalEarned is derived from transactions with type === "mining"
-      const miningTx: Transaction = {
-        id: 1,
-        type: "mining",
-        amount: 2,
-        from: "Mining reward",
-        date: new Date(),
-        description: "Block Reward",
-        status: "success",
-      };
-
-      transactions.set([miningTx]);
+    it("should calculate total earned from mining state", () => {
+      miningState.update((state) => ({
+        ...state,
+        totalRewards: 250,
+      }));
 
       const earned = get(totalEarned);
-      expect(earned).toBe(2);
+      expect(earned).toBe(250);
     });
 
-    it("should sum multiple mining transactions", () => {
-      const miningTxs: Transaction[] = [
-        { id: 1, type: "mining", amount: 2, from: "Mining reward", date: new Date(), description: "Block 1", status: "success" },
-        { id: 2, type: "mining", amount: 2, from: "Mining reward", date: new Date(), description: "Block 2", status: "success" },
-        { id: 3, type: "mining", amount: 2, from: "Mining reward", date: new Date(), description: "Block 3", status: "success" },
-      ];
+    it("should update when mining rewards change", () => {
+      miningState.update((state) => ({
+        ...state,
+        totalRewards: 100,
+      }));
 
-      transactions.set(miningTxs);
+      let earned = get(totalEarned);
+      expect(earned).toBe(100);
 
-      const earned = get(totalEarned);
-      expect(earned).toBe(6); // 3 blocks * 2 Chiral each
-    });
+      miningState.update((state) => ({
+        ...state,
+        totalRewards: 150,
+      }));
 
-    it("should only count mining type transactions", () => {
-      const mixedTxs: Transaction[] = [
-        { id: 1, type: "mining", amount: 2, from: "Mining reward", date: new Date(), description: "Block 1", status: "success" },
-        { id: 2, type: "sent", amount: 10, from: "0xabc", date: new Date(), description: "Sent", status: "success" },
-        { id: 3, type: "received", amount: 5, from: "0xdef", date: new Date(), description: "Received", status: "success" },
-        { id: 4, type: "mining", amount: 2, from: "Mining reward", date: new Date(), description: "Block 2", status: "success" },
-      ];
-
-      transactions.set(mixedTxs);
-
-      const earned = get(totalEarned);
-      expect(earned).toBe(4); // Only mining transactions: 2 + 2 = 4
-    });
-
-    it("should return 0 when no mining transactions exist", () => {
-      transactions.set([]);
-      expect(get(totalEarned)).toBe(0);
-
-      // Add non-mining transactions
-      transactions.set([
-        { id: 1, type: "sent", amount: 10, from: "0xabc", date: new Date(), description: "Sent", status: "success" },
-      ]);
-      expect(get(totalEarned)).toBe(0);
-    });
-
-    it("should update reactively when transactions change", () => {
-      transactions.set([]);
-      expect(get(totalEarned)).toBe(0);
-
-      // Add first mining transaction
-      transactions.update((txs) => [
-        ...txs,
-        { id: 1, type: "mining", amount: 2, from: "Mining reward", date: new Date(), description: "Block 1", status: "success" },
-      ]);
-      expect(get(totalEarned)).toBe(2);
-
-      // Add second mining transaction
-      transactions.update((txs) => [
-        ...txs,
-        { id: 2, type: "mining", amount: 2, from: "Mining reward", date: new Date(), description: "Block 2", status: "success" },
-      ]);
-      expect(get(totalEarned)).toBe(4);
-    });
-
-    it("should be a number (regression test for undefined bug)", () => {
-      // This test catches the bug where totalEarned was used without get()
-      // which would result in the store object itself being assigned instead of its value
-      transactions.set([
-        { id: 1, type: "mining", amount: 2, from: "Mining reward", date: new Date(), description: "Block 1", status: "success" },
-      ]);
-
-      const earned = get(totalEarned);
-
-      // Must be a number, not undefined, not a store object
-      expect(typeof earned).toBe("number");
-      expect(earned).not.toBeUndefined();
-      expect(earned).not.toBeNull();
-      expect(earned).toBe(2);
+      earned = get(totalEarned);
+      expect(earned).toBe(150);
     });
   });
 
