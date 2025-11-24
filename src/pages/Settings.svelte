@@ -26,7 +26,7 @@
     Share2
   } from "lucide-svelte";
   import { onMount } from "svelte";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import {open} from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
@@ -135,6 +135,7 @@
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
+  savedSettings = {...defaultSettings,...savedSettings}
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
