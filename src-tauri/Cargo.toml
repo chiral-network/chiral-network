@@ -66,7 +66,7 @@ fs2 = "0.4"
 glob = "0.3"
 rs_merkle = "1.5.0"
 libc = "0.2"
-tokio-util = { version = "0.7", features = ["compat"] }
+tokio-util = { version = "0.7", features = ["compat", "sync"] }
 tokio-socks = "0.5"
 
 # FTP client for FTP download support (sync API)
