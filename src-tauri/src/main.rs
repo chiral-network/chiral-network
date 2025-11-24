@@ -6298,7 +6298,7 @@ fn main() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(state) = app_handle.try_state::<AppState>() {
                         let download_restart_service = Arc::new(
-                            download_restart::DownloadRestartService::new(app_handle.clone()),
+                            download_restart::DownloadRestartService::new(Some(app_handle.clone())),
                         );
                         if let Ok(mut dr_guard) = state.download_restart.try_lock() {
                             *dr_guard = Some(download_restart_service);

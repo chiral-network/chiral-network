@@ -220,12 +220,12 @@ struct DownloadTask {
 /// Download restart service singleton
 pub struct DownloadRestartService {
     downloads: Arc<Mutex<HashMap<DownloadId, DownloadTask>>>,
-    app_handle: AppHandle,
+    app_handle: Option<AppHandle>,
 }
 
 impl DownloadRestartService {
     /// Create new download restart service
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new(app_handle: Option<AppHandle>) -> Self {
         Self {
             downloads: Arc::new(Mutex::new(HashMap::new())),
             app_handle,
@@ -532,9 +532,11 @@ impl DownloadRestartService {
 
     /// Emit download_status event to frontend
     async fn emit_status(&self, status: &DownloadStatus) -> Result<(), DownloadError> {
-        self.app_handle
-            .emit("download_status", status)
-            .map_err(|e| DownloadError::Io(format!("Failed to emit event: {}", e)))?;
+        if let Some(handle) = &self.app_handle {
+            handle
+                .emit("download_status", status)
+                .map_err(|e| DownloadError::Io(format!("Failed to emit event: {}", e)))?;
+        }
         Ok(())
     }
 
