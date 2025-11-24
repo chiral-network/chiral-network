@@ -35,6 +35,7 @@
   import { showToast } from "$lib/toast";
   import { getStorageStatus } from "$lib/uploadHelpers";
   import { fileService } from "$lib/services/fileService";
+  import { toHumanReadableSize } from "$lib/utils";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from "$lib/dht";
@@ -823,11 +824,8 @@
     }
   }
 
-  function formatFileSize(bytes: number): string {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1048576) return (bytes / 1024).toFixed(2) + " KB";
-    return (bytes / 1048576).toFixed(2) + " MB";
-  }
+  // Use centralized file size formatting for consistency
+  const formatFileSize = toHumanReadableSize;
 
   async function handleCopy(hash: string) {
     await navigator.clipboard.writeText(hash);

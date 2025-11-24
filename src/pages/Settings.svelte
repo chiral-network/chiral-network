@@ -26,7 +26,7 @@
     Share2
   } from "lucide-svelte";
   import { onMount } from "svelte";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import {open} from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
@@ -105,6 +105,7 @@
     enableRelayServer: false,
     anonymousMode: false,
     shareAnalytics: true,
+    enableWalletAutoLock: false,
     customBootstrapNodes: [],
     autoStartDHT: false,
 
@@ -134,6 +135,7 @@
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
+  savedSettings = {...defaultSettings,...savedSettings}
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
@@ -1157,6 +1159,7 @@ $: sectionLabels = {
     tr("privacy.enableProxy"),
     tr("privacy.anonymousMode"),
     tr("privacy.shareAnalytics"),
+    tr("privacy.autoLockWallet"),
   ],
   notifications: [
     tr("notifications.title"),
@@ -1998,6 +2001,23 @@ function sectionMatches(section: string, query: string) {
           <Label for="share-analytics" class="cursor-pointer">
             {$t("privacy.shareAnalytics")}
           </Label>
+        </div>
+
+        <div class="flex items-start gap-2">
+          <input
+            type="checkbox"
+            id="wallet-auto-lock"
+            bind:checked={localSettings.enableWalletAutoLock}
+            class="mt-1"
+          />
+          <div>
+            <Label for="wallet-auto-lock" class="cursor-pointer">
+              {$t("privacy.autoLockWallet")}
+            </Label>
+            <p class="text-xs text-muted-foreground">
+              {$t("privacy.autoLockWalletHint")}
+            </p>
+          </div>
         </div>
       </div>
     </Expandable>

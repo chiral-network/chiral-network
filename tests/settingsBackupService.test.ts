@@ -83,6 +83,7 @@ describe("SettingsBackupService", () => {
     relayServerAlias: "",
     anonymousMode: false,
     shareAnalytics: true,
+    enableWalletAutoLock: false,
     enableNotifications: true,
     notifyOnComplete: true,
     notifyOnError: true,

@@ -9,6 +9,7 @@ import { onMount, onDestroy } from 'svelte'
 import { t } from 'svelte-i18n'
 import { suspiciousActivity } from '$lib/stores'; // only import
 import type { FileItem } from '$lib/stores';
+import { toHumanReadableSize } from '$lib/utils';
 import { miningState } from '$lib/stores';
 import { miningProgress } from '$lib/stores';
 import { analyticsService } from '$lib/services/analyticsService';
@@ -567,18 +568,8 @@ let realNetworkActivity: NetworkActivity | null = null
     }
   }
 
-  function formatSize(bytes: number): string {
-    const units = ['B', 'KB', 'MB', 'GB', 'TB']
-    let size = bytes
-    let unitIndex = 0
-
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024
-      unitIndex++
-    }
-
-    return `${size.toFixed(2)} ${units[unitIndex]}`
-  }
+  // Use centralized file size formatting for consistency
+  const formatSize = toHumanReadableSize;
 
   // Calculate top performers
   $: topEarners = uploadedFiles
