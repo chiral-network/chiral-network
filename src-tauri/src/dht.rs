@@ -2,7 +2,6 @@ pub mod models;
 // pub mod protocol;
 use self::models::*;
 use rand::seq::SliceRandom;
-use rand::thread_rng;
 
 // use self::protocol::*;
 use crate::download_source::HttpSourceInfo;
@@ -110,22 +109,18 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
-use libp2p::{
-    kad::{BootstrapError, BootstrapOk, BootstrapResult},
-    multiaddr::Protocol,
-    noise, quic, swarm, tcp, yamux,
-};
+use libp2p::{multiaddr::Protocol, noise, tcp, yamux};
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     str::FromStr,
 };
@@ -4876,6 +4871,10 @@ async fn handle_mdns_event(
                             .behaviour_mut()
                             .kademlia
                             .add_address(&peer_id, multiaddr.clone());
+                        discovered
+                            .entry(peer_id)
+                            .or_insert_with(Vec::new)
+                            .push(multiaddr.to_string());
                     }
                     Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", multiaddr, e),
                 }
@@ -5520,10 +5519,8 @@ impl DhtService {
         blockstore_db_path: Option<&Path>,
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
-        let mut final_enable_autorelay = enable_autorelay;
-
-        // force enable autorelay to facilitate autonat/dcutr
-        final_enable_autorelay = true;
+        // force enable autorelay to facilitate autonat/dcutr unless explicitly disabled
+        let mut final_enable_autorelay = true;
         info!("FINAL ENABLE AUTORELAY {}", enable_autorelay);
         // if is_bootstrap {
         //     final_enable_autorelay = false;

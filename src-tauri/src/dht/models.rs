@@ -1,8 +1,7 @@
 pub use cid::Cid;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::VecDeque;
+use std::time::SystemTime;
 
 // internal crate imports - assumed to exist based on original file
 use crate::download_source::HttpSourceInfo;

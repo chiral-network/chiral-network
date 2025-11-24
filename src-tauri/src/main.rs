@@ -119,7 +119,6 @@ use blockstore::block::Block;
 use rand::Rng;
 use std::io::Write;
 use std::ops::Range;
-use std::ops::RangeInclusive;
 use suppaftp::FtpStream;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
                                              // Settings structure for backend use
