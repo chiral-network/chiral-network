@@ -109,11 +109,6 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
-use libp2p::{multiaddr::Protocol, noise, tcp, yamux};
-use libp2p::{
-    multiaddr::Protocol,
-    noise, tcp, yamux,
-};
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
@@ -171,6 +166,8 @@ use libp2p::{
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
+    multiaddr::Protocol,
+    noise, tcp, yamux,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
