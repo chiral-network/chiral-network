@@ -2,7 +2,6 @@ pub mod models;
 // pub mod protocol;
 use self::models::*;
 use rand::seq::SliceRandom;
-use rand::thread_rng;
 
 // use self::protocol::*;
 use crate::download_source::HttpSourceInfo;
@@ -111,21 +110,20 @@ use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::{
-    kad::{BootstrapError, BootstrapOk, BootstrapResult},
     multiaddr::Protocol,
-    noise, quic, swarm, tcp, yamux,
+    noise, tcp, yamux,
 };
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     str::FromStr,
 };
@@ -4863,7 +4861,7 @@ async fn handle_mdns_event(
 ) {
     match event {
         MdnsEvent::Discovered(list) => {
-            let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
+            let discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
                 // Skip self-discoveries to prevent self-connection attempts
@@ -5520,10 +5518,7 @@ impl DhtService {
         blockstore_db_path: Option<&Path>,
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
-        let mut final_enable_autorelay = enable_autorelay;
-
-        // force enable autorelay to facilitate autonat/dcutr
-        final_enable_autorelay = true;
+        let mut final_enable_autorelay = true; // force enable autorelay to facilitate autonat/dcutr
         info!("FINAL ENABLE AUTORELAY {}", enable_autorelay);
         // if is_bootstrap {
         //     final_enable_autorelay = false;
