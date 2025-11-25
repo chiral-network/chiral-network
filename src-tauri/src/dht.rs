@@ -3,7 +3,7 @@ use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
 
 /// Chain ID for the Chiral network - must match genesis.json and ethereum.rs
-const CHAIN_ID: u64 = 98766;
+const CHAIN_ID: u64 = 98765;
 use x25519_dalek::PublicKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

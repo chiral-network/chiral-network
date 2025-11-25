@@ -1093,7 +1093,7 @@
     if (!isGethRunning) return
     if (!isTauri) {
       // Default chain ID for web mode
-      chainId = 98766
+      chainId = 98765
       return
     }
     
