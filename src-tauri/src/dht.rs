@@ -5741,7 +5741,7 @@ impl DhtService {
         // } else {
         //     None
         // };
-        let dcutr_toggle = dcutr::Behaviour::new(local_peer_id);
+        let dcutr_toggle = toggle::Toggle::from(Some(dcutr::Behaviour::new(local_peer_id)));
 
         // Relay server configuration
         let relay_server_behaviour = if enable_relay_server {
