@@ -110,7 +110,7 @@ impl FtpClient {
             .context("Failed to set write timeout")?;
 
         // Login
-        let (username, password) = Self::get_credentials(source_info)?;
+        let (username, password) = Self::get_credentials(source_info, None)?;
         debug!(username = %username, "Logging in to FTP server");
 
         ftp_stream
@@ -190,7 +190,7 @@ impl FtpClient {
         debug!("FTPS connection established with timeout configured");
 
         // Login
-        let (username, password) = Self::get_credentials(source_info)?;
+        let (username, password) = Self::get_credentials(source_info, None)?;
         debug!(username = %username, "Logging in to FTPS server");
 
         ftp_stream
@@ -266,19 +266,30 @@ impl FtpClient {
     }
 
     /// Get FTP credentials (username and decrypted password)
-    fn get_credentials(source_info: &FtpSourceInfo) -> Result<(String, String)> {
+    /// 
+    /// # Arguments
+    /// * `source_info` - FTP source information
+    /// * `decryption_key` - Optional AES-256 key for decrypting the password
+    fn get_credentials(source_info: &FtpSourceInfo, decryption_key: Option<&[u8; 32]>) -> Result<(String, String)> {
         let username = source_info
             .username
             .clone()
             .unwrap_or_else(|| "anonymous".to_string());
 
-        let password = if let Some(_encrypted_password) = &source_info.encrypted_password {
-            // Decrypt password
-            // Note: This requires the encryption key from the file context
-            // For now, we'll use a placeholder
-            warn!("Encrypted password decryption not fully implemented");
-            // TODO: Implement proper password decryption with file AES key
-            String::new()
+        let password = if let Some(encrypted_password) = &source_info.encrypted_password {
+            // Decrypt password using provided key
+            if let Some(key) = decryption_key {
+                match crate::encryption::FileEncryption::decrypt_string(encrypted_password, key) {
+                    Ok(decrypted) => decrypted,
+                    Err(e) => {
+                        warn!("Failed to decrypt FTP password: {}", e);
+                        String::new()
+                    }
+                }
+            } else {
+                warn!("Encrypted password provided but no decryption key available");
+                String::new()
+            }
         } else {
             // Anonymous FTP or no password
             String::new()
@@ -366,7 +377,7 @@ mod tests {
             timeout_secs: None,
         };
 
-        let (username, password) = FtpClient::get_credentials(&source_info).unwrap();
+        let (username, password) = FtpClient::get_credentials(&source_info, None).unwrap();
         assert_eq!(username, "anonymous");
         assert_eq!(password, "");
     }
@@ -382,7 +393,7 @@ mod tests {
             timeout_secs: None,
         };
 
-        let (username, password) = FtpClient::get_credentials(&source_info).unwrap();
+        let (username, password) = FtpClient::get_credentials(&source_info, None).unwrap();
         assert_eq!(username, "testuser");
         assert_eq!(password, "");
     }
