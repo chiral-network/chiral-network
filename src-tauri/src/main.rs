@@ -41,6 +41,7 @@ pub mod bittorrent_handler;
 pub mod download_restart;
 mod logger;
 pub mod reputation;
+pub mod reassembly;
 
 use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
 
@@ -6002,6 +6003,12 @@ fn main() {
             download_file_http,
             save_temp_file_for_upload,
             get_file_size,
+            // Reassembly system commands
+            reassembly::write_chunk_temp,
+            reassembly::verify_and_finalize,
+            reassembly::save_chunk_bitmap,
+            reassembly::load_chunk_bitmap,
+            reassembly::cleanup_transfer_temp,
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
             //request_file_access,
