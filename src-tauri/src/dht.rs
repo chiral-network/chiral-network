@@ -5519,8 +5519,7 @@ impl DhtService {
         blockstore_db_path: Option<&Path>,
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
-        // force enable autorelay to facilitate autonat/dcutr unless explicitly disabled
-        let mut final_enable_autorelay = true;
+        let mut final_enable_autorelay = true; // force enable autorelay to facilitate autonat/dcutr
         info!("FINAL ENABLE AUTORELAY {}", enable_autorelay);
         // if is_bootstrap {
         //     final_enable_autorelay = false;

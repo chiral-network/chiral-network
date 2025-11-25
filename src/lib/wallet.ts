@@ -7,7 +7,7 @@ import {
   transactionPagination,
   miningPagination,
   wallet,
-  totalEarned as totalEarnedStore,
+  totalEarned,
   type ETCAccount,
   type Transaction,
   type WalletInfo,
@@ -544,11 +544,10 @@ export class WalletService {
       }
 
       // Update mining state totalRewards (don't override blocksFound - it's set by refreshTransactions)
-      const minedTotal = get(totalEarnedStore) ?? 0;
       miningState.update((state) => ({
         ...state,
-        totalRewards: minedTotal,
-        // blocksFound is already set by refreshTransactions
+        totalRewards: get(totalEarned),
+        // blocksFound is already correctly set by refreshTransactions
       }));
     } catch (error) {
       console.error("Failed to refresh balance:", error);
