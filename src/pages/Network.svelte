@@ -88,7 +88,7 @@
   let downloadError = ''
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
-  let chainId = 98765
+  let chainId = 98765 // Default, will be fetched from backend
   let nodeAddress = ''
   let copiedNodeAddr = false
   
@@ -1205,13 +1205,25 @@
         }
       }
       
+      // Fetch chain ID from backend
+      const fetchChainId = async () => {
+        if (isTauri) {
+          try {
+            chainId = await invoke<number>('get_chain_id')
+          } catch (error) {
+            console.warn('Failed to fetch chain ID from backend, using default:', error)
+          }
+        }
+      }
+      
       // Initialize async operations (preserves connections)
       const initAsync = async () => {
         // Run ALL independent checks in parallel for better performance
         await Promise.all([
           fetchBootstrapNodes(),
           checkGethStatus(),
-          syncDhtStatusOnPageLoad() // DHT check is independent from Geth check
+          syncDhtStatusOnPageLoad(), // DHT check is independent from Geth check
+          fetchChainId()
         ])
 
         // Listen for download progress updates (only in Tauri)

@@ -5,43 +5,27 @@
     windows_subsystem = "windows"
 )]
 
-// Declare all modules here
-pub mod analytics;
-pub mod bandwidth;
+// Modules unique to the binary
 pub mod blockchain_listener;
 pub mod commands;
-pub mod dht;
-pub mod download_scheduler;
-pub mod download_source;
-pub mod ed2k_client;
-pub mod encryption;
 pub mod ethereum;
-pub mod file_transfer;
-pub mod ftp_client;
-pub mod ftp_downloader;
 pub mod geth_bootstrap;
 pub mod geth_downloader;
 pub mod headless;
-pub mod http_download;
 pub mod http_server;
-pub mod keystore;
-pub mod manager;
-pub mod multi_source_download;
 pub mod net;
-pub mod peer_selection;
 pub mod pool;
-pub mod protocols;
-pub mod proxy_latency;
-pub mod stream_auth;
 pub mod transaction_services;
 mod transfer_events;
-pub mod webrtc_service;
-
-pub mod bittorrent_handler;
-pub mod download_restart;
-mod logger;
-pub mod reputation;
 pub mod reassembly;
+
+// Re-export modules from the lib crate
+use chiral_network::{
+    analytics, bandwidth, bittorrent_handler, download_restart,
+    download_source, dht, ed2k_client, encryption, file_transfer,
+    http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
+    reputation, stream_auth, webrtc_service,
+};
 
 use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
 
@@ -50,14 +34,14 @@ use crate::commands::auth::{
     validate_proxy_auth_token,
 };
 
-use crate::bandwidth::BandwidthController;
+use bandwidth::BandwidthController;
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
-use crate::stream_auth::{
+use stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
@@ -112,11 +96,11 @@ use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
-use crate::manager::ChunkManager; // Import the ChunkManager
+use manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
-use crate::dht::models::Ed2kDownloadStatus;
-use crate::dht::models::Ed2kSourceInfo;
-use crate::ed2k_client::{Ed2kClient, Ed2kSearchResult, Ed2kServerInfo};
+use dht::models::Ed2kDownloadStatus;
+use dht::models::Ed2kSourceInfo;
+use ed2k_client::{Ed2kClient, Ed2kSearchResult, Ed2kServerInfo};
 use blockstore::block::Block;
 use rand::Rng;
 use std::io::Write;
@@ -932,7 +916,7 @@ async fn upload_file(
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
         if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use crate::download_source::HttpSourceInfo;
+            use download_source::HttpSourceInfo;
             // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
             let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
             metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
@@ -1089,6 +1073,11 @@ async fn get_network_stats() -> Result<(String, String), String> {
     let difficulty = get_network_difficulty().await?;
     let hashrate = get_network_hashrate().await?;
     Ok((difficulty, hashrate.to_string()))
+}
+
+#[tauri::command]
+fn get_chain_id() -> u64 {
+    ethereum::NETWORK_CONFIG.chain_id
 }
 
 #[tauri::command]
@@ -3414,7 +3403,7 @@ async fn remove_ed2k_source(
 
 #[tauri::command]
 async fn test_ed2k_connection(server_url: String) -> Result<Ed2kServerInfo, String> {
-    use crate::ed2k_client::Ed2kClient;
+    use ed2k_client::Ed2kClient;
 
     let mut client = Ed2kClient::new(server_url.clone());
 
@@ -3587,7 +3576,7 @@ async fn download_file_from_network(
                                 .select_peers_with_strategy(
                                     &available_peers,
                                     1,
-                                    crate::peer_selection::SelectionStrategy::FastestFirst,
+                                    peer_selection::SelectionStrategy::FastestFirst,
                                     false,
                                 )
                                 .await;
@@ -3646,7 +3635,7 @@ async fn download_file_from_network(
                                                         info!("WebRTC connection established with peer {}", selected_peer);
 
                                                         // Send file request over WebRTC data channel
-                                                        let file_request = crate::webrtc_service::WebRTCFileRequest {
+                                                        let file_request = webrtc_service::WebRTCFileRequest {
                                                             file_hash: metadata.merkle_root.clone(),
                                                             file_name: metadata.file_name.clone(),
                                                             file_size: metadata.file_size,
@@ -3969,7 +3958,7 @@ async fn upload_file_chunk(
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
         if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use crate::download_source::HttpSourceInfo;
+            use download_source::HttpSourceInfo;
             metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
                 url: format!("http://{}", http_addr),
                 auth_header: None,
@@ -4857,7 +4846,7 @@ async fn record_transfer_failure(
 #[tauri::command]
 async fn get_peer_metrics(
     state: State<'_, AppState>,
-) -> Result<Vec<crate::peer_selection::PeerMetrics>, String> {
+) -> Result<Vec<peer_selection::PeerMetrics>, String> {
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht.get_peer_metrics().await)
@@ -4890,7 +4879,7 @@ async fn select_peers_with_strategy(
     require_encryption: bool,
     blacklisted_peers: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    use crate::peer_selection::SelectionStrategy;
+    use peer_selection::SelectionStrategy;
 
     let selection_strategy = match strategy.as_str() {
         "fastest" => SelectionStrategy::FastestFirst,
@@ -5820,7 +5809,7 @@ fn main() {
             http_server_shutdown: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
-            stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
+            stream_auth: Arc::new(Mutex::new(stream_auth::StreamAuthService::new())),
 
             // Initialize the new map for AES keys
             canonical_aes_keys: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -5897,6 +5886,7 @@ fn main() {
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
+            get_chain_id,
             get_block_details_by_number,
             get_transaction_history,
             get_transaction_history_range,
