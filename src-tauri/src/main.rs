@@ -66,6 +66,7 @@ use ethereum::{
     get_account_from_private_key,
     get_balance,
     get_block_number,
+    get_chain_id,
     get_hashrate,
     get_mined_blocks_count,
     get_mining_logs,
@@ -674,6 +675,11 @@ async fn check_payment_notifications(
 #[tauri::command]
 async fn get_network_peer_count() -> Result<u32, String> {
     get_peer_count().await
+}
+
+#[tauri::command]
+async fn get_network_chain_id() -> Result<u64, String> {
+    get_chain_id().await
 }
 
 #[tauri::command]
@@ -5296,6 +5302,7 @@ fn main() {
             record_seeder_payment,
             check_payment_notifications,
             get_network_peer_count,
+            get_network_chain_id,
             start_geth_node,
             stop_geth_node,
             save_account_to_keystore,

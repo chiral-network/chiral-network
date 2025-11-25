@@ -26,8 +26,8 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             rpc_endpoint: "http://127.0.0.1:8545".to_string(),
-            chain_id: 98765,
-            network_id: 98765,
+            chain_id: 98766,
+            network_id: 98766,
         }
     }
 }
@@ -40,11 +40,11 @@ pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
         chain_id: std::env::var("CHIRAL_CHAIN_ID")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
+            .unwrap_or(98766),
         network_id: std::env::var("CHIRAL_NETWORK_ID")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
+            .unwrap_or(98766),
     }
 });
 
@@ -248,16 +248,18 @@ impl GethProcess {
             }
         }
 
-        // Bootstrap node
-        let bootstrap_enode = "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303,enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303";
+        // Bootstrap node - temporarily disabled until bootstrap servers are updated to new chainId
+        // let bootstrap_enode = "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303,enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303";
 
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")
             .arg(&data_path)
             .arg("--networkid")
-            .arg("98765")
-            .arg("--bootnodes")
-            .arg(bootstrap_enode)
+            .arg("98766")
+            // Bootnodes temporarily disabled until bootstrap servers are updated
+            // .arg("--bootnodes")
+            // .arg(bootstrap_enode)
+            // .arg("--nodiscover")  // Don't try to discover old chain peers
             .arg("--http")
             .arg("--http.addr")
             .arg("127.0.0.1")
@@ -495,6 +497,42 @@ pub async fn get_peer_count() -> Result<u32, String> {
         .map_err(|e| format!("Failed to parse peer count: {}", e))?;
 
     Ok(peer_count)
+}
+
+/// Get the chain ID from the running Geth node via RPC
+pub async fn get_chain_id() -> Result<u64, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_chainId",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    let chain_id_hex = json_response["result"]
+        .as_str()
+        .ok_or("Invalid chain ID response")?;
+
+    // Convert hex to decimal (strip 0x prefix)
+    let chain_id = u64::from_str_radix(&chain_id_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse chain ID: {}", e))?;
+
+    Ok(chain_id)
 }
 
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
@@ -1714,7 +1752,7 @@ pub async fn send_transaction(
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
 
-    let chain_id = 98765u64;
+    let chain_id = NETWORK_CONFIG.chain_id;
     let wallet = wallet.with_chain_id(chain_id);
 
     let client = SignerMiddleware::new(provider.clone(), wallet);

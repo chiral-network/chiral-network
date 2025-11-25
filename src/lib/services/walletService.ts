@@ -1,8 +1,38 @@
 import { ethers } from 'ethers';
 import { get } from 'svelte/store';
 import { etcAccount } from '$lib/stores';
+import { invoke } from '@tauri-apps/api/core';
 
-const CHAIN_ID = 98765; // Chiral Network Chain ID
+// Default chain ID, can be overridden by fetching from backend
+let CHAIN_ID = 98766; // Updated default Chiral Network Chain ID
+
+// Check if running in Tauri environment
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+/**
+ * Fetch the chain ID from the running Geth node
+ */
+export async function fetchChainId(): Promise<number> {
+  if (!isTauri) {
+    return CHAIN_ID;
+  }
+  
+  try {
+    const chainId = await invoke('get_network_chain_id') as number;
+    CHAIN_ID = chainId;
+    return chainId;
+  } catch (error) {
+    console.warn('Failed to fetch chain ID, using default:', error);
+    return CHAIN_ID;
+  }
+}
+
+/**
+ * Get the current chain ID
+ */
+export function getChainId(): number {
+  return CHAIN_ID;
+}
 
 export interface TransactionRequest {
   from: string;

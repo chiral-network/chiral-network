@@ -1,6 +1,9 @@
 use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
+
+/// Chain ID for the Chiral network - must match genesis.json and ethereum.rs
+const CHAIN_ID: u64 = 98766;
 use x25519_dalek::PublicKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -6961,7 +6964,7 @@ impl DhtService {
             "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
                 .parse()
                 .map_err(|e| format!("Failed to parse private key: {}", e))?;
-        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(98765u64));
+        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(CHAIN_ID));
 
         // The contract address needs to be known. This would come from AppState.
         let contract_address: Address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
