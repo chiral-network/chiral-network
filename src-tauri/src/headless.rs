@@ -7,7 +7,7 @@ use clap::Parser;
 use std::{sync::Arc, time::Duration};
 use tokio::signal;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(name = "chiral-network")]
@@ -263,13 +263,15 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             match dht_service.connect_peer(bootstrap_addr.clone()).await {
                 Ok(_) => {
                     info!("Connected to bootstrap: {}", bootstrap_addr);
-                    // TODO: In a full implementation, we might want to verify the connection
-                    // In a real implementation, bootstrap nodes would:
-                    // 1. Add us to their routing table
-                    // 2. Announce our presence to other peers in the network
-                    // 3. Help us discover other peers
-                    // For now, we rely on the DHT's automatic peer discovery mechanisms
-                    // that were initiated when we called connect_peer()
+                    
+                    // Verify the connection by checking if we have any connected peers
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    let connected_peers = dht_service.get_connected_peers().await;
+                    if connected_peers.is_empty() {
+                        warn!("Bootstrap connection to {} succeeded but no peers connected yet", bootstrap_addr);
+                    } else {
+                        info!("Verified bootstrap connection: {} peer(s) connected", connected_peers.len());
+                    }
                 }
                 Err(e) => error!("Failed to connect to {}: {}", bootstrap_addr, e),
             }
