@@ -349,6 +349,7 @@ struct AppState {
     // HTTP server for serving chunks and keys
     http_server_state: Arc<http_server::HttpServerState>,
     http_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
+    http_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -5348,16 +5349,23 @@ async fn start_http_server(state: State<'_, AppState>, port: u16) -> Result<Stri
 
     tracing::info!("Starting HTTP server on {}", bind_addr);
 
-    // Start the server
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+    // Start the server with shutdown signal
     let server_state = state.http_server_state.clone();
-    let bound_addr = http_server::start_server(server_state, bind_addr)
+    let bound_addr = http_server::start_server(server_state, bind_addr, shutdown_rx)
         .await
         .map_err(|e| format!("Failed to start HTTP server: {}", e))?;
 
-    // Store the bound address
+    // Store the bound address and shutdown sender
     {
         let mut addr_lock = state.http_server_addr.lock().await;
         *addr_lock = Some(bound_addr);
+    }
+    {
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        *shutdown_lock = Some(shutdown_tx);
     }
 
     Ok(format!("http://{}", bound_addr))
@@ -5366,17 +5374,29 @@ async fn start_http_server(state: State<'_, AppState>, port: u16) -> Result<Stri
 /// Stop HTTP server
 #[tauri::command]
 async fn stop_http_server(state: State<'_, AppState>) -> Result<(), String> {
-    let mut addr_lock = state.http_server_addr.lock().await;
+    let addr = {
+        let mut addr_lock = state.http_server_addr.lock().await;
+        if addr_lock.is_none() {
+            return Err("HTTP server is not running".to_string());
+        }
+        addr_lock.take()
+    };
 
-    if addr_lock.is_none() {
-        return Err("HTTP server is not running".to_string());
+    tracing::info!("Stopping HTTP server at {:?}", addr);
+
+    // Send shutdown signal
+    let shutdown_tx = {
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        shutdown_lock.take()
+    };
+
+    if let Some(tx) = shutdown_tx {
+        // Send shutdown signal (ignore error if receiver already dropped)
+        let _ = tx.send(());
+        tracing::info!("Sent graceful shutdown signal to HTTP server");
+    } else {
+        tracing::warn!("No shutdown channel found, server may not shut down gracefully");
     }
-
-    tracing::info!("Stopping HTTP server");
-
-    // TODO: Implement graceful shutdown
-    // For now, just clear the address (server task will continue running)
-    *addr_lock = None;
 
     Ok(())
 }
@@ -5796,6 +5816,7 @@ fn main() {
                     .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
             })),
             http_server_addr: Arc::new(Mutex::new(None)),
+            http_server_shutdown: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
@@ -6248,15 +6269,23 @@ fn main() {
 
                             tracing::info!("Attempting to start HTTP server on port {}...", port);
 
+                            // Create shutdown channel
+                            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
                             match http_server::start_server(
                                 state.http_server_state.clone(),
                                 bind_addr,
+                                shutdown_rx,
                             )
                             .await
                             {
                                 Ok(bound_addr) => {
                                     let mut addr_lock = state.http_server_addr.lock().await;
                                     *addr_lock = Some(bound_addr);
+                                    
+                                    let mut shutdown_lock = state.http_server_shutdown.lock().await;
+                                    *shutdown_lock = Some(shutdown_tx);
+                                    
                                     tracing::info!("HTTP server started at http://{}", bound_addr);
                                     println!("✅ HTTP server listening on http://{}", bound_addr);
                                     server_started = true;
