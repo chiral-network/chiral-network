@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration}; // Added for timeout in tests
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 use thiserror::Error;
 
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
