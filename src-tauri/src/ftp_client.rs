@@ -339,7 +339,7 @@ pub async fn download_from_ftp_with_progress(
             .context("Failed to connect to FTP server")?;
         
         // Login
-        let (username, password) = FtpClient::get_credentials(&source_clone)?;
+        let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
         ftp_stream
             .login(&username, &password)
             .context("Failed to login to FTP server")?;

@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tauri::command;
