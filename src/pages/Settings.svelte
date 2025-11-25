@@ -40,6 +40,7 @@
   import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
+  import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -243,7 +244,7 @@
         if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
       }
     } catch (error) {
-      console.warn("Failed to restore settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to restore settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     } finally {
       accordionStateInitialized = true;
     }
@@ -265,7 +266,7 @@
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
-      console.warn("Failed to persist settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to persist settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -416,7 +417,7 @@
           settingsJson: JSON.stringify(localSettings),
         });
       } catch (error) {
-        console.error("Failed to save settings to app data directory:", error);
+        errorLogger.fileOperationError('Save settings', error instanceof Error ? error.message : String(error));
       }
     }
 
@@ -435,7 +436,7 @@
       // showToast("Settings Updated!");
       showToast(tr('toasts.settings.updated'));
     } catch (error) {
-      console.error("Failed to apply networking settings:", error);
+      errorLogger.networkError(`Failed to apply networking settings: ${error instanceof Error ? error.message : String(error)}`);
       // showToast("Settings saved, but networking update failed", "error");
       showToast(tr('toasts.settings.networkingError'), "error");
     }
@@ -453,7 +454,7 @@
         enabled: localSettings.enableFileLogging,
       });
     } catch (error) {
-      console.warn("Failed to update log configuration:", error);
+      diagnosticLogger.warn('Settings', 'Failed to update log configuration', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -567,7 +568,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while updating privacy settings:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while updating privacy settings', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -576,7 +577,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while turning privacy off:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while turning privacy off', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -595,7 +596,7 @@
     try {
       await invoke("stop_dht_node");
     } catch (error) {
-      console.debug("stop_dht_node failed (probably already stopped):", error);
+      diagnosticLogger.debug('Settings', 'stop_dht_node failed (probably already stopped)', { error: error instanceof Error ? error.message : String(error) });
     }
 
     // Use custom bootstrap nodes if configured, otherwise use defaults
@@ -606,7 +607,7 @@
       try {
         bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
       } catch (error) {
-        console.error("Failed to fetch bootstrap nodes:", error);
+        errorLogger.networkError(`Failed to fetch bootstrap nodes: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
       }
 
@@ -705,7 +706,7 @@
           localSettings = { ...localSettings, storagePath: directoryHandle.name };
         } catch (err: any) {
           if (err.name !== "AbortError") {
-            console.error("Directory picker error:", err);
+            errorLogger.fileOperationError('Directory picker', err instanceof Error ? err.message : String(err));
           }
         }
       } else {
@@ -770,7 +771,7 @@
           type: "success",
         };
       } catch (err) {
-        console.error("Failed to import settings:", err);
+        errorLogger.fileOperationError('Import settings', err instanceof Error ? err.message : String(err));
         importExportFeedback = {
           message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
@@ -895,7 +896,7 @@
       const platformDefaultPath = await invoke<string>("get_default_storage_path");
       defaultSettings.storagePath = platformDefaultPath;
     } catch (e) {
-      console.error("Failed to get default storage path:", e);
+      errorLogger.fileOperationError('Get default storage path', e instanceof Error ? e.message : String(e));
       // Fallback to the hardcoded default if the command fails
       defaultSettings.storagePath = "~/ChiralNetwork/Storage";
     }
@@ -911,7 +912,7 @@
     localSettings = JSON.parse(JSON.stringify(get(settings)));
     savedSettings = JSON.parse(JSON.stringify(localSettings));
   } catch (e) {
-    console.error("Failed to load settings:", e);
+    errorLogger.fileOperationError('Load settings', e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -925,7 +926,7 @@ selectedLanguage = initial; // Synchronize dropdown display value
     await getVersion();
     logsDirectory = await invoke("get_logs_directory");
   } catch (error) {
-    console.error("Failed to get logs directory:", error);
+    errorLogger.fileOperationError('Get logs directory', error instanceof Error ? error.message : String(error));
   }
 
 });

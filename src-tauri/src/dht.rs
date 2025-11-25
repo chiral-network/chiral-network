@@ -110,6 +110,10 @@ use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::{multiaddr::Protocol, noise, tcp, yamux};
+use libp2p::{
+    multiaddr::Protocol,
+    noise, tcp, yamux,
+};
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
@@ -4858,7 +4862,7 @@ async fn handle_mdns_event(
 ) {
     match event {
         MdnsEvent::Discovered(list) => {
-            let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
+            let discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
                 // Skip self-discoveries to prevent self-connection attempts

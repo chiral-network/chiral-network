@@ -110,7 +110,7 @@ impl FtpClient {
             .context("Failed to set write timeout")?;
 
         // Login
-        let (username, password) = Self::get_credentials(source_info)?;
+        let (username, password) = Self::get_credentials(source_info, None)?;
         debug!(username = %username, "Logging in to FTP server");
 
         ftp_stream
@@ -190,7 +190,7 @@ impl FtpClient {
         debug!("FTPS connection established with timeout configured");
 
         // Login
-        let (username, password) = Self::get_credentials(source_info)?;
+        let (username, password) = Self::get_credentials(source_info, None)?;
         debug!(username = %username, "Logging in to FTPS server");
 
         ftp_stream
@@ -266,19 +266,30 @@ impl FtpClient {
     }
 
     /// Get FTP credentials (username and decrypted password)
-    fn get_credentials(source_info: &FtpSourceInfo) -> Result<(String, String)> {
+    /// 
+    /// # Arguments
+    /// * `source_info` - FTP source information
+    /// * `decryption_key` - Optional AES-256 key for decrypting the password
+    fn get_credentials(source_info: &FtpSourceInfo, decryption_key: Option<&[u8; 32]>) -> Result<(String, String)> {
         let username = source_info
             .username
             .clone()
             .unwrap_or_else(|| "anonymous".to_string());
 
-        let password = if let Some(_encrypted_password) = &source_info.encrypted_password {
-            // Decrypt password
-            // Note: This requires the encryption key from the file context
-            // For now, we'll use a placeholder
-            warn!("Encrypted password decryption not fully implemented");
-            // TODO: Implement proper password decryption with file AES key
-            String::new()
+        let password = if let Some(encrypted_password) = &source_info.encrypted_password {
+            // Decrypt password using provided key
+            if let Some(key) = decryption_key {
+                match crate::encryption::FileEncryption::decrypt_string(encrypted_password, key) {
+                    Ok(decrypted) => decrypted,
+                    Err(e) => {
+                        warn!("Failed to decrypt FTP password: {}", e);
+                        String::new()
+                    }
+                }
+            } else {
+                warn!("Encrypted password provided but no decryption key available");
+                String::new()
+            }
         } else {
             // Anonymous FTP or no password
             String::new()
@@ -317,11 +328,76 @@ pub async fn download_from_ftp_with_progress(
     output_path: &Path,
     progress_callback: ProgressCallback,
 ) -> Result<u64> {
-    // For now, download without streaming progress
-    // TODO: Implement chunked download with progress reporting
-    let bytes = download_from_ftp(source_info, output_path).await?;
-    progress_callback(bytes, bytes); // Report completion
-    Ok(bytes)
+    let source_clone = source_info.clone();
+    let output_clone = output_path.to_path_buf();
+    
+    spawn_blocking(move || {
+        // Connect to FTP server
+        let (host, port, remote_path) = FtpClient::parse_ftp_url(&source_clone.url)?;
+        
+        let mut ftp_stream = FtpStream::connect(format!("{}:{}", host, port))
+            .context("Failed to connect to FTP server")?;
+        
+        // Login
+        let (username, password) = FtpClient::get_credentials(&source_clone)?;
+        ftp_stream
+            .login(&username, &password)
+            .context("Failed to login to FTP server")?;
+        
+        // Set binary mode and passive mode
+        ftp_stream
+            .transfer_type(FileType::Binary)
+            .context("Failed to set binary transfer mode")?;
+        
+        if source_clone.passive_mode {
+            ftp_stream.set_mode(suppaftp::Mode::Passive);
+        }
+        
+        // Get file size for progress calculation
+        let file_size = ftp_stream
+            .size(&remote_path)
+            .unwrap_or(0) as u64;
+        
+        // Open retrieve stream
+        let mut reader = ftp_stream
+            .retr_as_stream(&remote_path)
+            .context("Failed to start file retrieval")?;
+        
+        // Create output file
+        use std::io::Write;
+        let mut output_file = std::fs::File::create(&output_clone)
+            .context("Failed to create output file")?;
+        
+        // Download in chunks with progress reporting
+        const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
+        let mut buffer = vec![0u8; CHUNK_SIZE];
+        let mut total_downloaded = 0u64;
+        
+        loop {
+            use std::io::Read;
+            match reader.read(&mut buffer) {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    output_file.write_all(&buffer[..n])
+                        .context("Failed to write to output file")?;
+                    total_downloaded += n as u64;
+                    progress_callback(total_downloaded, file_size);
+                }
+                Err(e) => return Err(anyhow::anyhow!("Failed to read from FTP stream: {}", e)),
+            }
+        }
+        
+        // Finalize the transfer
+        ftp_stream.finalize_retr_stream(reader)
+            .context("Failed to finalize retrieval")?;
+        
+        // Quit connection
+        ftp_stream.quit().context("Failed to quit FTP session")?;
+        
+        Ok(total_downloaded)
+    })
+    .await
+    .context("FTP download task panicked")?
 }
 
 #[cfg(test)]
@@ -366,7 +442,7 @@ mod tests {
             timeout_secs: None,
         };
 
-        let (username, password) = FtpClient::get_credentials(&source_info).unwrap();
+        let (username, password) = FtpClient::get_credentials(&source_info, None).unwrap();
         assert_eq!(username, "anonymous");
         assert_eq!(password, "");
     }
@@ -382,7 +458,7 @@ mod tests {
             timeout_secs: None,
         };
 
-        let (username, password) = FtpClient::get_credentials(&source_info).unwrap();
+        let (username, password) = FtpClient::get_credentials(&source_info, None).unwrap();
         assert_eq!(username, "testuser");
         assert_eq!(password, "");
     }

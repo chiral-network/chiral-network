@@ -41,7 +41,9 @@ pub mod bittorrent_handler;
 pub mod download_restart;
 mod logger;
 pub mod reputation;
-use protocols::{ProtocolHandler, ProtocolManager};
+pub mod reassembly;
+
+use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -348,6 +350,7 @@ struct AppState {
     // HTTP server for serving chunks and keys
     http_server_state: Arc<http_server::HttpServerState>,
     http_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
+    http_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -438,7 +441,8 @@ async fn start_geth_node(
 #[tauri::command]
 async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), String> {
     println!("Received download command for: {}", identifier);
-    state.protocol_manager.download(&identifier).await
+    #[allow(deprecated)]
+    state.protocol_manager.download_simple(&identifier).await
 }
 
 /// Tauri command to seed a file.
@@ -447,7 +451,8 @@ async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), 
 async fn seed(file_path: String, state: State<'_, AppState>) -> Result<String, String> {
     println!("Received seed command for: {}", file_path);
     // Delegate the seed operation to the protocol manager.
-    state.protocol_manager.seed(&file_path).await
+    #[allow(deprecated)]
+    state.protocol_manager.seed_simple(&file_path).await
 }
 
 /// Tauri command to create and seed a BitTorrent file.
@@ -5345,16 +5350,23 @@ async fn start_http_server(state: State<'_, AppState>, port: u16) -> Result<Stri
 
     tracing::info!("Starting HTTP server on {}", bind_addr);
 
-    // Start the server
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+    // Start the server with shutdown signal
     let server_state = state.http_server_state.clone();
-    let bound_addr = http_server::start_server(server_state, bind_addr)
+    let bound_addr = http_server::start_server(server_state, bind_addr, shutdown_rx)
         .await
         .map_err(|e| format!("Failed to start HTTP server: {}", e))?;
 
-    // Store the bound address
+    // Store the bound address and shutdown sender
     {
         let mut addr_lock = state.http_server_addr.lock().await;
         *addr_lock = Some(bound_addr);
+    }
+    {
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        *shutdown_lock = Some(shutdown_tx);
     }
 
     Ok(format!("http://{}", bound_addr))
@@ -5363,17 +5375,29 @@ async fn start_http_server(state: State<'_, AppState>, port: u16) -> Result<Stri
 /// Stop HTTP server
 #[tauri::command]
 async fn stop_http_server(state: State<'_, AppState>) -> Result<(), String> {
-    let mut addr_lock = state.http_server_addr.lock().await;
+    let addr = {
+        let mut addr_lock = state.http_server_addr.lock().await;
+        if addr_lock.is_none() {
+            return Err("HTTP server is not running".to_string());
+        }
+        addr_lock.take()
+    };
 
-    if addr_lock.is_none() {
-        return Err("HTTP server is not running".to_string());
+    tracing::info!("Stopping HTTP server at {:?}", addr);
+
+    // Send shutdown signal
+    let shutdown_tx = {
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        shutdown_lock.take()
+    };
+
+    if let Some(tx) = shutdown_tx {
+        // Send shutdown signal (ignore error if receiver already dropped)
+        let _ = tx.send(());
+        tracing::info!("Sent graceful shutdown signal to HTTP server");
+    } else {
+        tracing::warn!("No shutdown channel found, server may not shut down gracefully");
     }
-
-    tracing::info!("Stopping HTTP server");
-
-    // TODO: Implement graceful shutdown
-    // For now, just clear the address (server task will continue running)
-    *addr_lock = None;
 
     Ok(())
 }
@@ -5676,8 +5700,11 @@ fn main() {
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
         let mut manager = ProtocolManager::new();
-        manager.register(bittorrent_handler_arc.clone());
 
+        // Wrap the simple handler in the enhanced protocol handler
+        let bittorrent_protocol_handler = BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
+        manager.register(Box::new(bittorrent_protocol_handler));
+        
         (bittorrent_handler_arc, Arc::new(manager))
     });
 
@@ -5790,6 +5817,7 @@ fn main() {
                     .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
             })),
             http_server_addr: Arc::new(Mutex::new(None)),
+            http_server_shutdown: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
             stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
@@ -5975,6 +6003,12 @@ fn main() {
             download_file_http,
             save_temp_file_for_upload,
             get_file_size,
+            // Reassembly system commands
+            reassembly::write_chunk_temp,
+            reassembly::verify_and_finalize,
+            reassembly::save_chunk_bitmap,
+            reassembly::load_chunk_bitmap,
+            reassembly::cleanup_transfer_temp,
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
             //request_file_access,
@@ -6242,15 +6276,23 @@ fn main() {
 
                             tracing::info!("Attempting to start HTTP server on port {}...", port);
 
+                            // Create shutdown channel
+                            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
                             match http_server::start_server(
                                 state.http_server_state.clone(),
                                 bind_addr,
+                                shutdown_rx,
                             )
                             .await
                             {
                                 Ok(bound_addr) => {
                                     let mut addr_lock = state.http_server_addr.lock().await;
                                     *addr_lock = Some(bound_addr);
+                                    
+                                    let mut shutdown_lock = state.http_server_shutdown.lock().await;
+                                    *shutdown_lock = Some(shutdown_tx);
+                                    
                                     tracing::info!("HTTP server started at http://{}", bound_addr);
                                     println!("✅ HTTP server listening on http://{}", bound_addr);
                                     server_started = true;

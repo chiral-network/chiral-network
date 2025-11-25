@@ -659,11 +659,50 @@ impl ReputationDhtService {
 
         // Search for reputation events for this peer
         let search_key = format!("reputation:{}", peer_id);
-        dht_service.search_file(search_key).await?;
-
-        // TODO: Need to handle the search results and deserialize the events.
-        // For now, return empty vector as placeholder.
-        Ok(vec![])
+        
+        // Use synchronous search with timeout to get actual results
+        let timeout_ms = 5000; // 5 second timeout
+        match dht_service.synchronous_search_metadata(search_key.clone(), timeout_ms).await {
+            Ok(Some(metadata)) => {
+                // Deserialize the reputation events from the file data
+                match serde_json::from_slice::<Vec<ReputationEvent>>(&metadata.file_data) {
+                    Ok(events) => {
+                        tracing::info!(
+                            "Retrieved {} reputation events for peer {}",
+                            events.len(),
+                            peer_id
+                        );
+                        Ok(events)
+                    }
+                    Err(e) => {
+                        // If deserialization fails, try as a single event
+                        match serde_json::from_slice::<ReputationEvent>(&metadata.file_data) {
+                            Ok(event) => {
+                                tracing::info!("Retrieved single reputation event for peer {}", peer_id);
+                                Ok(vec![event])
+                            }
+                            Err(_) => {
+                                tracing::warn!(
+                                    "Failed to deserialize reputation data for peer {}: {}",
+                                    peer_id,
+                                    e
+                                );
+                                Ok(vec![])
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(None) => {
+                // No data found in DHT
+                tracing::debug!("No reputation events found for peer {} in DHT", peer_id);
+                Ok(vec![])
+            }
+            Err(e) => {
+                tracing::warn!("DHT search failed for peer {}: {}", peer_id, e);
+                Ok(vec![])
+            }
+        }
     }
 
     /// Store a TransactionVerdict into the DHT for the given target.
