@@ -1,3 +1,4 @@
+use chiral_network::config::{CHAIN_ID, NETWORK_ID};
 use chrono;
 use ethers::prelude::*;
 use once_cell::sync::Lazy;
@@ -27,25 +28,19 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             rpc_endpoint: "http://127.0.0.1:8545".to_string(),
-            chain_id: 98765,
-            network_id: 98765,
+            chain_id: *CHAIN_ID,
+            network_id: *NETWORK_ID,
         }
     }
 }
 
-// Global configuration - can be updated via environment variables
+// Global configuration - reads from genesis.json or environment variables
 pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
     NetworkConfig {
         rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
             .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: std::env::var("CHIRAL_CHAIN_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-        network_id: std::env::var("CHIRAL_NETWORK_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
+        chain_id: *CHAIN_ID,
+        network_id: *NETWORK_ID,
     }
 });
 
@@ -245,7 +240,7 @@ impl GethProcess {
         cmd.arg("--datadir")
             .arg(&data_path)
             .arg("--networkid")
-            .arg("98765")
+            .arg(NETWORK_CONFIG.network_id.to_string())
             .arg("--bootnodes")
             .arg(bootstrap_enode)
             .arg("--http")
@@ -2006,8 +2001,7 @@ pub async fn send_transaction(
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
 
-    let chain_id = 98765u64;
-    let wallet = wallet.with_chain_id(chain_id);
+    let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
     let client = SignerMiddleware::new(provider.clone(), wallet);
 

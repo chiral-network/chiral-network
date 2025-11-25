@@ -213,9 +213,11 @@
   <div 
     class="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-[15vh] p-4 backdrop-blur-sm"
     onclick={handleBackgroundClick}
+    onkeydown={(e) => e.key === 'Escape' && (isOpen = false)}
     role="dialog"
     aria-modal="true"
     aria-labelledby="command-palette-title"
+    tabindex="-1"
   >
     <!-- Modal Content -->
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl max-w-2xl w-full overflow-hidden">
