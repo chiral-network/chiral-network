@@ -71,7 +71,7 @@ use geth_downloader::GethDownloader;
 use keystore::Keystore;
 use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
-use transfer_events::TransferEventBus;
+use chiral_network::transfer_events::TransferEventBus;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::VecDeque;
