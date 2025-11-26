@@ -1568,54 +1568,71 @@ impl WebRTCService {
             }
         };
 
-        // Create data channel
-        let data_channel = match peer_connection
-            .create_data_channel("file-transfer", None)
-            .await
-        {
-            Ok(dc) => dc,
-            Err(e) => {
-                error!("Failed to create data channel: {}", e);
-                return Err(e.to_string());
-            }
-        };
+        // Answerer should NOT create data channel - it will receive it via on_data_channel
+        // Set up handler to receive data channel from offerer
+        let event_tx_for_dc = self.event_tx.clone();
+        let peer_id_for_dc = peer_id.clone();
+        let file_transfer_service_for_dc = self.file_transfer_service.clone();
+        let connections_for_dc = self.connections.clone();
+        let keystore_for_dc = self.keystore.clone();
+        let active_private_key_for_dc = self.active_private_key.clone();
+        let stream_auth_for_dc = self.stream_auth.clone();
+        let bandwidth_for_dc = self.bandwidth.clone();
+        let app_handle_for_dc = self.app_handle.clone();
 
-        // Set up data channel event handlers
-        let event_tx_clone = self.event_tx.clone();
-        let peer_id_clone = peer_id.clone();
-        let file_transfer_service_clone = Arc::new(self.file_transfer_service.clone());
-        let connections_clone = Arc::new(self.connections.clone());
-        let keystore_clone = Arc::new(self.keystore.clone());
-        let active_private_key_clone = Arc::new(self.active_private_key.clone());
-        let stream_auth_clone = Arc::new(self.stream_auth.clone());
-        let bandwidth_clone = self.bandwidth.clone();
+        peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
+            info!("Received data channel from offerer: {}", data_channel.label());
 
-        let app_handle_clone = self.app_handle.clone();
-        data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
-            let event_tx = event_tx_clone.clone();
-            let peer_id = peer_id_clone.clone();
-            let file_transfer_service = file_transfer_service_clone.clone();
-            let connections = connections_clone.clone();
-            let keystore = keystore_clone.clone();
-            let active_private_key = active_private_key_clone.clone();
-            let stream_auth = stream_auth_clone.clone();
-            let bandwidth = bandwidth_clone.clone();
+            let event_tx = event_tx_for_dc.clone();
+            let peer_id = peer_id_for_dc.clone();
+            let file_transfer_service = Arc::new(file_transfer_service_for_dc.clone());
+            let connections = Arc::new(connections_for_dc.clone());
+            let keystore = Arc::new(keystore_for_dc.clone());
+            let active_private_key = Arc::new(active_private_key_for_dc.clone());
+            let stream_auth = Arc::new(stream_auth_for_dc.clone());
+            let bandwidth = bandwidth_for_dc.clone();
+            let app_handle = app_handle_for_dc.clone();
 
-            let app_handle_for_task = app_handle_clone.clone();
+            // Set up message handler for received data channel
+            data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
+                let event_tx = event_tx.clone();
+                let peer_id = peer_id.clone();
+                let file_transfer_service = file_transfer_service.clone();
+                let connections = connections.clone();
+                let keystore = keystore.clone();
+                let active_private_key = active_private_key.clone();
+                let stream_auth = stream_auth.clone();
+                let bandwidth = bandwidth.clone();
+                let app_handle_for_task = app_handle.clone();
+
+                Box::pin(async move {
+                    Self::handle_data_channel_message(
+                        &peer_id,
+                        &msg,
+                        &event_tx,
+                        &file_transfer_service,
+                        &connections,
+                        &keystore,
+                        &active_private_key,
+                        &stream_auth,
+                        app_handle_for_task,
+                        bandwidth,
+                    )
+                    .await;
+                })
+            }));
+
+            // Store data channel in connections
+            let connections_clone = Arc::new(connections_for_dc.clone());
+            let peer_id_clone = peer_id_for_dc.clone();
+            let data_channel_clone = data_channel.clone();
+
             Box::pin(async move {
-                Self::handle_data_channel_message(
-                    &peer_id,
-                    &msg,
-                    &event_tx,
-                    &file_transfer_service,
-                    &connections,
-                    &keystore,
-                    &active_private_key,
-                    &stream_auth,
-                    app_handle_for_task,
-                    bandwidth,
-                )
-                .await;
+                let mut conns = connections_clone.lock().await;
+                if let Some(connection) = conns.get_mut(&peer_id_clone) {
+                    connection.data_channel = Some(data_channel_clone);
+                    info!("Stored received data channel for peer {}", peer_id_clone);
+                }
             })
         }));
 
@@ -1699,7 +1716,7 @@ impl WebRTCService {
             return Err(e.to_string());
         }
 
-        // Store connection
+        // Store connection (data_channel will be set via on_data_channel callback)
         let mut conns = self.connections.lock().await;
         let connection = PeerConnection {
             peer_id: peer_id.clone(),
@@ -1707,7 +1724,7 @@ impl WebRTCService {
             active_transfers: HashMap::new(),
             last_activity: Instant::now(),
             peer_connection: Some(peer_connection.clone()),
-            data_channel: Some(data_channel),
+            data_channel: None, // Will be set when received via on_data_channel
             pending_chunks: HashMap::new(),
             received_chunks: HashMap::new(),
             acked_chunks: HashMap::new(),
