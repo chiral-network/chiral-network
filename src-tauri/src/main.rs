@@ -16,7 +16,7 @@ pub mod http_server;
 pub mod net;
 pub mod pool;
 pub mod transaction_services;
-mod transfer_events;
+pub mod transfer_events;
 pub mod reassembly;
 
 // Re-export modules from the lib crate
