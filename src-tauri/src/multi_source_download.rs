@@ -512,7 +512,7 @@ impl MultiSourceDownloadService {
         // Emit download started event via TransferEventBus
         let available_source_infos: Vec<SourceInfo> = selected_sources.iter().map(|s| {
             let (source_type, address) = match s {
-                DownloadSource::P2P(info) => (SourceType::P2p, info.peer_id.clone()),
+                DownloadSource::P2p(info) => (SourceType::P2p, info.peer_id.clone()),
                 DownloadSource::Http(info) => (SourceType::Http, info.url.clone()),
                 DownloadSource::Ftp(info) => (SourceType::Ftp, info.url.clone()),
                 DownloadSource::BitTorrent(info) => (SourceType::BitTorrent, info.magnet_uri.clone()),
