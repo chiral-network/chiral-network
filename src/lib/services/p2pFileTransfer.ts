@@ -49,7 +49,9 @@ export class P2PFileTransferService {
 
   constructor() {
     // Initialize signaling service for WebRTC coordination
-    this.signalingService = new SignalingService();
+    this.signalingService = new SignalingService({
+      preferDht: false  // Force WebSocket for WebRTC file transfers
+    });
   }
 
   async getFileMetadata(fileHash: string): Promise<any> {
@@ -156,13 +158,35 @@ export class P2PFileTransferService {
     metadata: FileMetadata,
     maxRetries: number = 3
   ): Promise<void> {
-    const maxSeederIndex = transfer.seeders.length;
+    // For WebRTC, we need to get available peers from signaling service
+    // instead of using libp2p seeder addresses
+    const availablePeers = this.signalingService.peers;
+    let peersList: string[] = [];
+
+    // Subscribe to peers list
+    const unsubscribe = availablePeers.subscribe(peers => {
+      peersList = peers;
+    });
+
+    // If no peers available, fail immediately
+    if (peersList.length === 0) {
+      unsubscribe();
+      transfer.status = "failed";
+      transfer.error = "No WebRTC peers available. Make sure the uploader is online and connected to the signaling server.";
+      this.notifyProgress(transfer);
+      return;
+    }
+
+    // Use the first available peer (in a real system, you'd match by file hash)
+    const seederId = peersList[0];
+    unsubscribe();
+
+    const maxSeederIndex = 1; // We'll only try the first peer for now
 
     while (
       transfer.currentSeederIndex! < maxSeederIndex &&
       transfer.retryCount! < maxRetries
     ) {
-      const seederId = transfer.seeders[transfer.currentSeederIndex!];
 
       try {
         transfer.status = "connecting";

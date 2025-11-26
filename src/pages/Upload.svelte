@@ -279,6 +279,31 @@
   }
 
   onMount(async () => {
+    // Initialize WebRTC seeder to accept download requests
+    try {
+      const { SignalingService } = await import('$lib/services/signalingService');
+      const signalingService = new SignalingService({
+        preferDht: false  // Force WebSocket instead of DHT
+      });
+
+      // Connect to signaling server
+      await signalingService.connect();
+      console.log('[Upload] Connected to signaling server as seeder');
+
+      // Listen for incoming WebRTC connection requests
+      signalingService.setOnMessage(async (message) => {
+        console.log('[Upload] Received signaling message:', message);
+
+        // Handle incoming download requests here
+        // TODO: Implement seeder-side WebRTC connection handling
+        if (message.type === 'offer') {
+          console.log('[Upload] Received download request from:', message.from);
+          // Accept the offer and start seeding
+        }
+      });
+    } catch (error) {
+      console.error('[Upload] Failed to initialize WebRTC seeder:', error);
+    }
 
     // Make storage refresh non-blocking on startup to prevent UI hanging
     setTimeout(() => refreshAvailableStorage(), 100);

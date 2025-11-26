@@ -829,10 +829,12 @@ async function loadAndResumeDownloads() {
     diagnosticLogger.debug('Download', 'handleSearchDownload called', { metadata });
 
     // Auto-detect protocol based on file metadata
+    // FORCE WebRTC for testing - comment out to use Bitswap
+    detectedProtocol = 'WebRTC'
     const hasCids = metadata.cids && metadata.cids.length > 0
-    detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
-    
-    diagnosticLogger.debug('Download', 'Auto-detected protocol', { protocol: detectedProtocol, hasCids });
+    // detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
+
+    diagnosticLogger.debug('Download', 'Forced protocol to WebRTC for testing', { protocol: detectedProtocol, hasCids });
 
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
@@ -1252,10 +1254,75 @@ async function loadAndResumeDownloads() {
     showNotification('Failed to validate download path', 'error', 6000);
     return;
   }
-} 
+}
     else {
-      diagnosticLogger.debug('Download', 'Simulating download', { fileName: downloadingFile.name });
-      simulateDownloadProgress(downloadingFile.id)
+      // WebRTC download path
+      diagnosticLogger.debug('Download', 'Starting WebRTC download', { fileName: downloadingFile.name });
+
+      try {
+        const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+
+        // Prepare metadata for WebRTC download
+        const metadata = {
+          fileHash: downloadingFile.hash,
+          fileName: downloadingFile.name,
+          fileSize: downloadingFile.size,
+          seeders: downloadingFile.seederAddresses || [],
+          createdAt: Date.now(),
+          isEncrypted: downloadingFile.isEncrypted || false,
+          manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined
+        };
+
+        diagnosticLogger.debug('Download', 'Initiating WebRTC P2P transfer', {
+          fileName: metadata.fileName,
+          seeders: metadata.seeders
+        });
+
+        // Start WebRTC download
+        const transferId = await p2pFileTransferService.initiateDownload(
+          metadata,
+          metadata.seeders,
+          (transfer) => {
+            // Update progress
+            files.update(f => f.map(file =>
+              file.id === downloadingFile.id
+                ? {
+                    ...file,
+                    progress: transfer.progress,
+                    speed: `${(transfer.speed / 1024).toFixed(2)} KB/s`,
+                    eta: transfer.eta ? `${Math.ceil(transfer.eta / 1000)}s` : 'N/A',
+                    status: transfer.status === 'completed' ? 'completed' : 'downloading'
+                  }
+                : file
+            ));
+          }
+        );
+
+        diagnosticLogger.debug('Download', 'WebRTC transfer initiated', { transferId });
+
+        // Store transfer ID for cancellation
+        activeTransfers.update(transfers => {
+          transfers.set(downloadingFile.id, {
+            fileId: downloadingFile.id,
+            transferId,
+            type: 'p2p'
+          });
+          return transfers;
+        });
+
+      } catch (error) {
+        errorLogger.fileOperationError('WebRTC download', error instanceof Error ? error.message : String(error));
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? { ...file, status: 'failed' }
+            : file
+        ));
+        showNotification(
+          `WebRTC download failed: ${error instanceof Error ? error.message : String(error)}`,
+          'error',
+          6000
+        );
+      }
     }
   }
 
