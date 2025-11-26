@@ -552,6 +552,21 @@ impl WebRTCService {
         answer_sdp: &str,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
     ) {
+        // Check if the answer is an error message from the seeder
+        if answer_sdp.starts_with("error:") {
+            error!("Seeder {} returned error: {}", peer_id, answer_sdp);
+
+            // Remove the failed connection
+            let mut conns = connections.lock().await;
+            conns.remove(peer_id);
+
+            // Log a helpful error message
+            if answer_sdp.contains("webrtc-service-unavailable") {
+                error!("Seeder does not have WebRTC service running. Try using Bitswap protocol instead.");
+            }
+            return;
+        }
+
         let mut conns = connections.lock().await;
         if let Some(connection) = conns.get_mut(peer_id) {
             if let Some(pc) = &connection.peer_connection {
@@ -1493,6 +1508,14 @@ impl WebRTCService {
         peer_id: String,
         answer: String,
     ) -> Result<(), String> {
+        // Check if the answer is an error message from the seeder
+        if answer.starts_with("error:") {
+            if answer.contains("webrtc-service-unavailable") {
+                return Err("Seeder does not have WebRTC service enabled. Please try using Bitswap protocol instead.".to_string());
+            }
+            return Err(format!("Seeder returned error: {}", answer));
+        }
+
         self.cmd_tx
             .send(WebRTCCommand::HandleAnswer { peer_id, answer })
             .await
