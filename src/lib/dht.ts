@@ -30,6 +30,7 @@ export interface DhtConfig {
   enableAutorelay?: boolean;
   preferredRelays?: string[];
   enableRelayServer?: boolean;
+  enableUpnp?: boolean;
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
@@ -167,6 +168,9 @@ export class DhtService {
       }
       if (typeof config?.enableRelayServer === "boolean") {
         payload.enableRelayServer = config.enableRelayServer;
+      }
+      if (typeof config?.enableUpnp === "boolean") {
+        payload.enableUpnp = config.enableUpnp;
       }
       if (
         typeof config?.relayServerAlias === "string" &&

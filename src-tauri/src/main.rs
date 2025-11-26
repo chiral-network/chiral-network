@@ -53,7 +53,6 @@ use ethereum::{
     get_balance,
     get_block_number,
     get_hashrate,
-    get_mined_blocks_count,
     get_mining_logs,
     get_mining_performance,
     get_mining_status, // Assuming you have a file_handler module
@@ -79,7 +78,6 @@ use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex as StdMutex;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
@@ -955,6 +953,66 @@ async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> R
 }
 
 #[tauri::command]
+async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    use crate::ethereum::NETWORK_CONFIG;
+    use reqwest::Client;
+
+    let client = Client::new();
+
+    // Get current miner address from state
+    let miner_addr = state.miner_address.lock().await;
+    let current_miner = miner_addr.as_ref().map(|s| s.clone()).unwrap_or_else(|| "Not set".to_string());
+
+    // Get current block number
+    let block_num_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+
+    let mut recent_miners = serde_json::Map::new();
+
+    if let Ok(response) = client.post(&NETWORK_CONFIG.rpc_endpoint).json(&block_num_payload).send().await {
+        if let Ok(json) = response.json::<serde_json::Value>().await {
+            if let Some(result) = json.get("result").and_then(|r| r.as_str()) {
+                if let Ok(current_block) = u64::from_str_radix(&result[2..], 16) {
+                    println!("DEBUG: Current block is {}", current_block);
+
+                    // Check last 5 blocks
+                    for block_num in (current_block.saturating_sub(4)..=current_block).rev() {
+                        let block_payload = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "eth_getBlockByNumber",
+                            "params": [format!("0x{:x}", block_num), false],
+                            "id": 1
+                        });
+
+                        if let Ok(block_response) = client.post(&NETWORK_CONFIG.rpc_endpoint).json(&block_payload).send().await {
+                            if let Ok(block_json) = block_response.json::<serde_json::Value>().await {
+                                if let Some(block) = block_json.get("result") {
+                                    if let Some(miner) = block.get("miner").and_then(|m| m.as_str()) {
+                                        recent_miners.insert(format!("{}", block_num), serde_json::Value::String(miner.to_string()));
+                                        println!("DEBUG: Block {} mined by: {}", block_num, miner);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let result = serde_json::json!({
+        "current_miner_address": current_miner,
+        "recent_block_miners": recent_miners
+    });
+
+    Ok(result)
+}
+
+#[tauri::command]
 async fn start_miner(
     state: State<'_, AppState>,
     address: String,
@@ -1061,36 +1119,132 @@ async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
     get_mining_performance(&data_dir).await
 }
 
-lazy_static! {
-    static ref BLOCKS_CACHE: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
-}
 #[tauri::command]
+async fn start_mining_monitor(
+    app: tauri::AppHandle,
+    data_dir: String,
+) -> Result<(), String> {
+    use tokio::time::{sleep, Duration};
+    use std::fs::File;
+    use std::io::{BufReader, Seek, SeekFrom};
 
-async fn get_blocks_mined(address: String) -> Result<u64, String> {
-    // Check cache (directly return within 500ms)
-    {
-        let cache = BLOCKS_CACHE
-            .lock()
-            .map_err(|e| format!("Failed to acquire blocks cache lock: {}", e))?;
-        if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
-            if cached_addr == &address && cached_time.elapsed() < Duration::from_millis(500) {
-                return Ok(*cached_blocks);
+    // Store the last position we read from
+    static LAST_POSITION: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+    // Resolve data directory
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get exe path: {}", e))?
+        .parent()
+        .ok_or("Failed to get exe dir")?
+        .to_path_buf();
+    let data_path = if Path::new(&data_dir).is_absolute() {
+        PathBuf::from(&data_dir)
+    } else {
+        exe_dir.join(&data_dir)
+    };
+    let log_path = data_path.join("geth.log");
+
+    tokio::spawn(async move {
+        // Wait a moment for Geth to potentially create/update the log file
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        loop {
+            if let Ok(file) = File::open(&log_path) {
+                let mut reader = BufReader::new(&file);
+
+                // Get the last known position (don't hold the lock across await)
+                let last_pos_value = {
+                    let last_pos = LAST_POSITION.lock().unwrap();
+                    *last_pos
+                };
+
+                // If this is the first run, start from the end of the file
+                if last_pos_value.is_none() {
+                    if let Ok(metadata) = file.metadata() {
+                        let file_size = metadata.len();
+                        let _ = reader.seek(SeekFrom::Start(file_size));
+                    }
+                } else if let Some(pos) = last_pos_value {
+                    let _ = reader.seek(SeekFrom::Start(pos));
+                }
+
+                let mut new_lines = Vec::new();
+
+                // Read new lines since last position
+                if let Ok(metadata) = file.metadata() {
+                    let file_size = metadata.len();
+
+                    use std::io::BufRead;
+                    for line_result in reader.lines() {
+                        if let Ok(line) = line_result {
+                            // Check if this line indicates a block was mined
+                            // Only trigger on "Successfully sealed new block" to avoid duplicate events
+                            if line.contains("Successfully sealed new block") {
+                                // 🎉 WE MINED A BLOCK! 🎉
+                                // Simple as that - increment our counter and update frontend
+                                increment_mined_blocks().await;
+
+                                // Emit event to frontend - that's it!
+                                let result = app.emit("block_mined", serde_json::json!({
+                                    "log_line": line,
+                                    "timestamp": chrono::Utc::now().timestamp()
+                                }));
+                                match result {
+                                    Ok(_) => {},
+                                    Err(e) => {},
+                                }
+                            }
+                            new_lines.push(line);
+                        }
+                    }
+
+                    // Update the last position (acquire lock only for the update)
+                    {
+                        let mut last_pos = LAST_POSITION.lock().unwrap();
+                        *last_pos = Some(file_size);
+                    }
+                }
             }
+
+            // Check every 1 second
+            sleep(Duration::from_secs(1)).await;
         }
-    }
+    });
 
-    // Invoke existing logic (slow query)
-    let blocks = get_mined_blocks_count(&address).await?;
+    Ok(())
+}
 
-    // Update Cache
-    {
-        let mut cache = BLOCKS_CACHE
-            .lock()
-            .map_err(|e| format!("Failed to acquire blocks cache lock for update: {}", e))?;
-        *cache = Some((address, blocks, Instant::now()));
-    }
+lazy_static! {
+    static ref BLOCKS_CACHE: Mutex<Option<(String, u64, Instant)>> = Mutex::new(None);
+    // Simple running count of total blocks mined (since we started monitoring)
+    static ref TOTAL_MINED_BLOCKS: Mutex<u64> = Mutex::new(0);
+}
 
-    Ok(blocks)
+async fn increment_mined_blocks() {
+    let mut count = TOTAL_MINED_BLOCKS.lock().await;
+    *count += 1;
+    println!("🎉 Block mined! Total blocks mined: {}", *count);
+}
+
+async fn get_total_mined_blocks() -> u64 {
+    let count = TOTAL_MINED_BLOCKS.lock().await;
+    *count
+}
+
+#[tauri::command]
+async fn clear_blocks_cache() {
+    let mut cache = BLOCKS_CACHE.lock().await;
+    *cache = None;
+
+    // Don't reset incremental scanning - let it continue from where it left off
+    // This ensures we maintain our scanning progress and don't lose discovered blocks
+}
+
+#[tauri::command]
+async fn get_blocks_mined(_app: tauri::AppHandle, _address: String) -> Result<u64, String> {
+    // Simple: return our running count
+    let count = get_total_mined_blocks().await;
+    Ok(count)
 }
 #[tauri::command]
 async fn get_recent_mined_blocks_pub(
@@ -1113,6 +1267,11 @@ async fn get_mined_blocks_range(
 #[tauri::command]
 async fn get_total_mining_rewards(address: String) -> Result<f64, String> {
     ethereum::get_total_mining_rewards(&address).await
+}
+
+#[tauri::command]
+fn get_block_reward() -> f64 {
+    ethereum::BLOCK_REWARD
 }
 
 #[tauri::command]
@@ -1164,6 +1323,7 @@ async fn start_dht_node(
     enable_autorelay: Option<bool>,
     preferred_relays: Option<Vec<String>>,
     enable_relay_server: Option<bool>,
+    enable_upnp: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -1247,6 +1407,7 @@ async fn start_dht_node(
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
+        enable_upnp.unwrap_or(true), // enable UPnP by default
         Some(&async_blockstore_path),
     )
     .await
@@ -1860,7 +2021,6 @@ async fn get_power_consumption() -> Option<f32> {
     tokio::task::spawn_blocking(move || {
         use std::sync::OnceLock;
         use std::time::Instant;
-        use tracing::info;
 
         static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
         static POWER_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
@@ -1930,12 +2090,6 @@ async fn get_power_consumption() -> Option<f32> {
         }
 
         // Final fallback: return None when power monitoring is unavailable
-        // Only log the info message once to avoid spamming logs
-        static POWER_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
-
-        POWER_WARNING_LOGGED.get_or_init(|| {
-            info!("Power consumption monitoring not available on this system. Using estimated values.");
-        });
 
         None
     })
@@ -5836,10 +5990,14 @@ fn main() {
             get_transaction_history_range,
             get_miner_logs,
             get_miner_performance,
+            get_miner_diagnostics,
+            start_mining_monitor,
+            clear_blocks_cache,
             get_blocks_mined,
             get_recent_mined_blocks_pub,
             get_mined_blocks_range,
             get_total_mining_rewards,
+            get_block_reward,
             calculate_accurate_totals,
             get_cpu_temperature,
             start_dht_node,
