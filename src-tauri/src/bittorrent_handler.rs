@@ -659,6 +659,63 @@ impl BitTorrentHandler {
         // For seeding, we just cancel without deleting files
         self.cancel_torrent(info_hash, false).await
     }
+
+    /// Get progress information for a torrent
+    pub async fn get_torrent_progress(&self, info_hash: &str) -> Result<TorrentProgress, BitTorrentError> {
+        let torrents = self.active_torrents.lock().await;
+        
+        if let Some(handle) = torrents.get(info_hash) {
+            let stats = handle.stats();
+            
+            // Extract download/upload speed from live stats if available
+            // Speed is in Mbps, convert to bytes/sec (Mbps * 1_000_000 / 8)
+            let (download_speed, upload_speed, eta_seconds) = if let Some(live) = &stats.live {
+                let download_speed = live.download_speed.mbps as f64 * 125_000.0; // Mbps to bytes/sec
+                let upload_speed = live.upload_speed.mbps as f64 * 125_000.0;
+                // time_remaining is a DurationWithHumanReadable, extract seconds if available
+                let eta = live.average_piece_download_time.map(|d| {
+                    if stats.total_bytes > stats.progress_bytes {
+                        let remaining = stats.total_bytes - stats.progress_bytes;
+                        let speed_bps = download_speed.max(1.0);
+                        (remaining as f64 / speed_bps) as u64
+                    } else {
+                        0
+                    }
+                });
+                (download_speed, upload_speed, eta)
+            } else {
+                (0.0, 0.0, None)
+            };
+            
+            Ok(TorrentProgress {
+                downloaded_bytes: stats.progress_bytes,
+                uploaded_bytes: stats.uploaded_bytes,
+                total_bytes: stats.total_bytes,
+                download_speed,
+                upload_speed,
+                eta_seconds,
+                is_finished: stats.finished,
+                state: format!("{}", stats.state),
+            })
+        } else {
+            Err(BitTorrentError::TorrentNotFound {
+                info_hash: info_hash.to_string(),
+            })
+        }
+    }
+}
+
+/// Progress information for a torrent
+#[derive(Debug, Clone)]
+pub struct TorrentProgress {
+    pub downloaded_bytes: u64,
+    pub uploaded_bytes: u64,
+    pub total_bytes: u64,
+    pub download_speed: f64,
+    pub upload_speed: f64,
+    pub eta_seconds: Option<u64>,
+    pub is_finished: bool,
+    pub state: String,
 }
 
 // Helper functions for error mapping and validation

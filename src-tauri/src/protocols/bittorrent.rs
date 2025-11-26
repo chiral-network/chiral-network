@@ -273,20 +273,56 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
         &self,
         identifier: &str,
     ) -> Result<DownloadProgress, ProtocolError> {
-        let downloads = self.active_downloads.lock().await;
+        // Try to get real progress from librqbit first
+        match self.handler.get_torrent_progress(identifier).await {
+            Ok(progress) => {
+                // Update our local state with real values
+                {
+                    let mut downloads = self.active_downloads.lock().await;
+                    if let Some(state) = downloads.get_mut(identifier) {
+                        state.downloaded_bytes = progress.downloaded_bytes;
+                        state.total_bytes = progress.total_bytes;
+                        if progress.is_finished {
+                            state.status = DownloadStatus::Completed;
+                        }
+                    }
+                }
 
-        if let Some(state) = downloads.get(identifier) {
-            // TODO: Get real progress from librqbit handle
-            Ok(DownloadProgress {
-                downloaded_bytes: state.downloaded_bytes,
-                total_bytes: state.total_bytes,
-                download_speed: 0.0, // Would need to track this
-                eta_seconds: None,
-                active_peers: 0, // Would need to get from librqbit
-                status: state.status.clone(),
-            })
-        } else {
-            Err(ProtocolError::DownloadNotFound(identifier.to_string()))
+                // Determine status from torrent state
+                let status = match progress.state.as_str() {
+                    "paused" => DownloadStatus::Paused,
+                    "error" => DownloadStatus::Failed,
+                    "live" if progress.is_finished => DownloadStatus::Completed,
+                    "live" => DownloadStatus::Downloading,
+                    "initializing" => DownloadStatus::FetchingMetadata,
+                    _ => DownloadStatus::Downloading,
+                };
+
+                Ok(DownloadProgress {
+                    downloaded_bytes: progress.downloaded_bytes,
+                    total_bytes: progress.total_bytes,
+                    download_speed: progress.download_speed,
+                    eta_seconds: progress.eta_seconds,
+                    active_peers: 0, // librqbit doesn't expose peer count easily
+                    status,
+                })
+            }
+            Err(_) => {
+                // Fall back to local state if torrent not found in handler
+                let downloads = self.active_downloads.lock().await;
+                if let Some(state) = downloads.get(identifier) {
+                    Ok(DownloadProgress {
+                        downloaded_bytes: state.downloaded_bytes,
+                        total_bytes: state.total_bytes,
+                        download_speed: 0.0,
+                        eta_seconds: None,
+                        active_peers: 0,
+                        status: state.status.clone(),
+                    })
+                } else {
+                    Err(ProtocolError::DownloadNotFound(identifier.to_string()))
+                }
+            }
         }
     }
 
