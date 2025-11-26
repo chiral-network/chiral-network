@@ -1334,18 +1334,73 @@ impl ReputationVerifier {
 
     pub fn verify_event_against_merkle_root(
         &self,
-        _event: &ReputationEvent,
-        _merkle_root: &str,
-        _proof: Vec<String>,
+        event: &ReputationEvent,
+        merkle_root: &str,
+        proof: &MerkleProof,
     ) -> Result<bool, String> {
-        // TODO: Implement actual Merkle proof verification
-        // In a real implementation, this would:
-        // 1. Recreate the event hash
-        // 2. Verify the Merkle proof against the root
-        // 3. Return verification result
+        // 1. Hash the event to get the leaf hash
+        let leaf_hash = self.hash_event(event)?;
+        
+        // 2. Parse the merkle root from hex
+        let root_bytes = hex::decode(merkle_root)
+            .map_err(|e| format!("Invalid merkle root hex: {}", e))?;
+        if root_bytes.len() != 32 {
+            return Err("Merkle root must be 32 bytes".to_string());
+        }
+        let mut expected_root = [0u8; 32];
+        expected_root.copy_from_slice(&root_bytes);
+        
+        // 3. Walk through the proof using the leaf index to determine ordering
+        // At each level: if index is even, we're on the left; if odd, we're on the right
+        let mut current_hash = leaf_hash;
+        let mut index = proof.leaf_index;
+        
+        for proof_hash_hex in &proof.proof_hashes {
+            let sibling_bytes = hex::decode(proof_hash_hex)
+                .map_err(|e| format!("Invalid proof hash hex: {}", e))?;
+            if sibling_bytes.len() != 32 {
+                return Err("Proof hash must be 32 bytes".to_string());
+            }
+            
+            let mut sibling: [u8; 32] = [0u8; 32];
+            sibling.copy_from_slice(&sibling_bytes);
+            
+            // Combine hashes based on position
+            let mut combined = Vec::with_capacity(64);
+            if index % 2 == 0 {
+                // Current node is on the left
+                combined.extend_from_slice(&current_hash);
+                combined.extend_from_slice(&sibling);
+            } else {
+                // Current node is on the right
+                combined.extend_from_slice(&sibling);
+                combined.extend_from_slice(&current_hash);
+            }
+            
+            current_hash = Sha256Hasher::hash(&combined);
+            index /= 2; // Move to parent level
+        }
+        
+        // 4. Compare final hash with merkle root
+        Ok(current_hash == expected_root)
+    }
+    
+    /// Hash a reputation event for Merkle tree inclusion
+    fn hash_event(&self, event: &ReputationEvent) -> Result<[u8; 32], String> {
+        let event_data = serde_json::json!({
+            "id": event.id,
+            "peer_id": event.peer_id,
+            "rater_peer_id": event.rater_peer_id,
+            "event_type": event.event_type,
+            "timestamp": event.timestamp,
+            "data": event.data,
+            "impact": event.impact,
+        });
 
-        // For now, return true as placeholder
-        Ok(true)
+        let serialized =
+            serde_json::to_vec(&event_data).map_err(|e| format!("Serialization error: {}", e))?;
+
+        Ok(Sha256Hasher::hash(&serialized))
     }
 
     pub fn verify_epoch_integrity(

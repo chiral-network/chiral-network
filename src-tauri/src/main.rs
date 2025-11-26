@@ -637,43 +637,7 @@ async fn record_download_payment(
         seeder_wallet_address
     );
 
-    // Send P2P payment notification to the seeder's peer
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        // Convert payment message to JSON
-        let notification_json = serde_json::to_value(&payment_msg)
-            .map_err(|e| format!("Failed to serialize payment notification: {}", e))?;
-
-        // Wrap in a payment notification envelope so receiver can identify it
-        let wrapped_message = serde_json::json!({
-            "type": "payment_notification",
-            "payload": notification_json
-        });
-
-        // Send via DHT to the seeder's peer ID
-        match dht
-            .send_message_to_peer(&seeder_peer_id, wrapped_message)
-            .await
-        {
-            Ok(_) => {
-                println!(
-                    "✅ P2P payment notification sent to peer: {}",
-                    seeder_peer_id
-                );
-            }
-            Err(e) => {
-                // Don't fail the whole operation if P2P message fails
-                println!("⚠️ Failed to send P2P payment notification: {}. Seeder will see payment when they check blockchain.", e);
-            }
-        }
-    } else {
-        println!("⚠️ DHT not available, payment notification only sent locally");
-    }
-
+    // Seeder will see the payment when they check the blockchain
     Ok(())
 }
 
@@ -1731,26 +1695,6 @@ async fn get_active_hmac_exchanges(state: State<'_, AppState>) -> Result<Vec<Str
     Ok(auth_service.get_active_exchanges())
 }
 
-#[tauri::command]
-async fn send_dht_message(
-    state: State<'_, AppState>,
-    peer_id: String,
-    message: serde_json::Value,
-) -> Result<(), String> {
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        // Send message through DHT to target peer
-        dht.send_message_to_peer(&peer_id, message)
-            .await
-            .map_err(|e| format!("Failed to send DHT message: {}", e))
-    } else {
-        Err("DHT not available".to_string())
-    }
-}
 
 #[tauri::command]
 async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsSnapshot>, String> {
@@ -5915,7 +5859,6 @@ fn main() {
             get_peer_id,
             is_dht_running,
             get_dht_connected_peers,
-            send_dht_message,
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
@@ -6283,8 +6226,7 @@ fn main() {
                                     let mut shutdown_lock = state.http_server_shutdown.lock().await;
                                     *shutdown_lock = Some(shutdown_tx);
                                     
-                                    tracing::info!("HTTP server started at http://{}", bound_addr);
-                                    println!("✅ HTTP server listening on http://{}", bound_addr);
+                                    tracing::info!("✅ HTTP server listening on http://{}", bound_addr);
                                     server_started = true;
                                     break;
                                 }
