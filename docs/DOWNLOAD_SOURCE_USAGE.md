@@ -9,8 +9,8 @@ The unified download source abstraction provides a consistent interface for hand
 ### Core Components
 
 1. **`download_source.rs`** - Core abstraction module
-   - `DownloadSource` enum with variants for P2P, HTTP, and FTP
-   - Source info structures: `P2pSourceInfo`, `HttpSourceInfo`, `FtpSourceInfo`
+   - `DownloadSource` enum with variants for P2P, HTTP, FTP, Ed2k, and BitTorrent
+   - Source info structures: `P2pSourceInfo`, `HttpSourceInfo`, `FtpSourceInfo`, `Ed2kSourceInfo`, `BitTorrentSourceInfo`
    - Helper methods for source selection and display
 
 2. **`download_scheduler.rs`** - Example integration
@@ -25,6 +25,8 @@ pub enum DownloadSource {
     P2p(P2pSourceInfo),
     Http(HttpSourceInfo),
     Ftp(FtpSourceInfo),
+    Ed2k(Ed2kSourceInfo), 
+    BitTorrent(BitTorrentSourceInfo),
 }
 ```
 
@@ -95,6 +97,28 @@ DownloadSource::Ftp(FtpSourceInfo {
 - `use_ftps`: Use FTPS (FTP over TLS) (default: false)
 - `timeout_secs`: Connection timeout
 
+### ed2k Source
+
+Used for ed2k downloads from servers and peers on the eDonkey network.
+
+```rust
+DownloadSource::Ed2k(Ed2kSourceInfo {
+    server_url: "ed2k://|server|176.103.48.36|4661|/".to_string(), //
+    file_hash: "31D6CFE0D16AE931B73C59D7E0C089C0".to_string(), //
+    file_size: 3774873600, //
+    file_name: Some("ubuntu-22.04.iso".to_string()), //
+    sources: Some(vec!["192.168.1.10:4662".to_string()]), //
+    timeout_secs: Some(60), //
+})
+```
+**Fields:**
+- `server_url`: ed2k server URL (e.g., "ed2k://|server|1.2.3.4|4661|/")
+- `file_hash`: ed2k file hash (MD4 hash in hex)
+- `file_size`: File size in bytes
+- `file_name`: Optional file name
+- `sources`: Optional list of known sources (IP:Port pairs)
+- `timeout_secs`: Optional timeout in seconds
+
 ## Common Patterns
 
 ### 1. Source Selection
@@ -118,6 +142,7 @@ fn select_source(sources: &[DownloadSource]) -> Option<DownloadSource> {
 **Priority Scores:**
 - P2P: 100 + reputation score (150-190 range)
 - HTTP: 50
+- Ed2k: 30
 - FTP: 25
 
 ### 2. Logging
@@ -153,6 +178,13 @@ match source {
         println!("Passive mode: {}", info.passive_mode);
         println!("FTPS enabled: {}", info.use_ftps);
         // Handle FTP download
+    }
+    DownloadSource::Ed2k(info) => { //
+        log::info!("ed2k download for hash: {}", info.file_hash);
+        // Handle ed2k download
+    }
+    DownloadSource::BitTorrent(info) => {
+        // ...
     }
 }
 ```

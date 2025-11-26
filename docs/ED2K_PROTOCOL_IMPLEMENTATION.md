@@ -148,28 +148,28 @@ If a sub-chunk fails:
 ## Overview
 The orchestrator integrates ED2K as a source by:
 
-Extracting Ed2kSourceInfo from the FileMetadata during "start download"
+* Extracting Ed2kSourceInfo from the FileMetadata during "start download"
 
-Assigning 256 KB sub-chunks to ED2K sources like any other source
+* Assigning 256 KB sub-chunks to ED2K sources like any other source
 
-Connecting to ED2K server using Ed2kClient
+* Connecting to ED2K server using Ed2kClient
 
-Grouping all assigned sub-chunks into 9.28 MB chunks
+* Grouping all assigned sub-chunks into 9.28 MB chunks
 
-Downloading each chunk
+* Downloading each chunk
 
-Verifying each chunk’s MD4 hash
+* Verifying each chunk’s MD4 hash
 
-Splitting verified chunks into 256 KB sub-chunks for storage
+* Splitting verified chunks into 256 KB sub-chunks for storage
 
 ## Key Features
-Sub-Chunk Integrity Awareness: Track and retry each 256 KB block individually
+* Sub-Chunk Integrity Awareness: Track and retry each 256 KB block individually
 
-Peer Reliability Scoring: Peers that send corrupted or incomplete data are deprioritized
+* Peer Reliability Scoring: Peers that send corrupted or incomplete data are deprioritized
 
-Hash-First Operation: Verify metadata before download
+* Hash-First Operation: Verify metadata before download
 
-Resume & Partial Assembly: Incomplete chunks resume where left off
+* Resume & Partial Assembly: Incomplete chunks resume where left off
 
 ## Integration Points
 ## Backend → Orchestrator
@@ -180,37 +180,37 @@ Displays sources, availability, and chunk-level progress
 
 ## Testing
 ### Unit Tests
-Chunk boundary math
+* Chunk boundary math
 
-MD4 hashing correctness
+* MD4 hashing correctness
 
-Sub-chunk assembly
+* Sub-chunk assembly
 
-Corruption detection
+* Corruption detection
 
-Retry behavior
+* Retry behavior
 
 ### Integration Tests
-Multi-source parallel fetch
+* Multi-source parallel fetch
 
-Peer failover
+* Peer failover
 
-Server discovery flow
+* Server discovery flow
 
-Combined chunk hashing
+* Combined chunk hashing
 
 ### End-to-End Tests
-Fetch file from N peers
+* Fetch file from N peers
 
-Intentionally corrupt blocks
+* Intentionally corrupt blocks
 
-Validate recovery and consistency
+* Validate recovery and consistency
 
 ### Security Considerations
-Hash Trust Model: MD4 hash ensures downloaded chunks are correct if metadata is trusted
+* Hash Trust Model: MD4 hash ensures downloaded chunks are correct if metadata is trusted
 
-Peer Hostile Behavior: Penalize peers sending invalid data
+* Peer Hostile Behavior: Penalize peers sending invalid data
 
-Connection Sanitation: Enforce timeouts, check payload lengths, drop invalid connections
+* Connection Sanitation: Enforce timeouts, check payload lengths, drop invalid connections
 
-No Arbitrary Write Surfaces: Data written only to preallocated chunk buffers
+* No Arbitrary Write Surfaces: Data written only to preallocated chunk buffers
