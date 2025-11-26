@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { get } from "svelte/store";
 import {
+  blockReward,
   etcAccount,
   miningState,
   transactions,
@@ -82,6 +83,17 @@ export class WalletService {
     this.pollInterval = options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL;
 
     if (this.isTauri) {
+      // Fetch block reward from backend (single source of truth)
+      try {
+        const reward = await invoke<number>("get_block_reward");
+        blockReward.set(reward);
+      } catch (err) {
+        console.warn(
+          "Failed to fetch block reward from backend, using default:",
+          err
+        );
+      }
+
       await this.syncFromBackend();
       if (options?.autoStartPolling !== false) {
         this.startPolling();
@@ -249,8 +261,10 @@ export class WalletService {
 
     // Check if account changed - if so, clear everything and reset
     const currentPaginationState = get(transactionPagination);
-    if (currentPaginationState.accountAddress !== accountAddress && currentPaginationState.accountAddress !== null) {
-      console.log(`[Account Change] Clearing all data for new account: ${accountAddress}`);
+    if (
+      currentPaginationState.accountAddress !== accountAddress &&
+      currentPaginationState.accountAddress !== null
+    ) {
       this.seenHashes.clear();
       this.stopProgressiveLoading();
       transactions.set([]); // Clear old account's transactions
@@ -279,6 +293,9 @@ export class WalletService {
       const currentBlock = await invoke<number>("get_current_block");
 
       // Get data in parallel: mining blocks AND transaction history
+      console.log(
+        `[Wallet] Calling get_blocks_mined for address: ${accountAddress}`
+      );
       const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
           address: accountAddress,
@@ -314,10 +331,13 @@ export class WalletService {
         >,
       ]);
 
-      // Update total count FIRST, before adding blocks
+      // Update total count AND rewards together to keep them consistent
+      const reward = get(blockReward);
+
       miningState.update((state) => ({
         ...state,
         blocksFound: totalBlockCount,
+        totalRewards: totalBlockCount * reward,
       }));
 
       // Process mining rewards
@@ -329,7 +349,7 @@ export class WalletService {
         this.pushRecentBlock({
           hash: block.hash,
           timestamp: new Date((block.timestamp || 0) * 1000),
-          reward: block.reward ?? 2,
+          reward: block.reward ?? get(blockReward),
           block_number: block.number,
         });
       }
@@ -422,13 +442,11 @@ export class WalletService {
       // Update pagination state - reset if account changed or first load
       transactionPagination.update((state) => {
         // Reset if account changed or this is the first load
-        if (state.accountAddress !== accountAddress || state.oldestBlockScanned === null) {
+        if (
+          state.accountAddress !== accountAddress ||
+          state.oldestBlockScanned === null
+        ) {
           const oldestScanned = Math.max(0, currentBlock - 1000);
-          console.log(`[Pagination] Initializing transaction pagination state:`);
-          console.log(`  - Account: ${accountAddress}`);
-          console.log(`  - Current block: ${currentBlock}`);
-          console.log(`  - Starting scan from block: ${oldestScanned}`);
-          console.log(`  - Blocks to scan progressively: ${oldestScanned} (down to block 0)`);
           return {
             ...state,
             accountAddress,
@@ -437,20 +455,17 @@ export class WalletService {
           };
         }
         // Otherwise, keep existing state (preserve progress)
-        console.log(`[Pagination] Keeping existing transaction state - already scanned down to block ${state.oldestBlockScanned}`);
         return state;
       });
 
       // Update mining pagination state - reset if account changed or first load
       miningPagination.update((state) => {
         // Reset if account changed or this is the first load
-        if (state.accountAddress !== accountAddress || state.oldestBlockScanned === null) {
+        if (
+          state.accountAddress !== accountAddress ||
+          state.oldestBlockScanned === null
+        ) {
           const oldestScanned = Math.max(0, currentBlock - 2000);
-          console.log(`[Mining Pagination] Initializing mining pagination state:`);
-          console.log(`  - Account: ${accountAddress}`);
-          console.log(`  - Current block: ${currentBlock}`);
-          console.log(`  - Starting scan from block: ${oldestScanned}`);
-          console.log(`  - Blocks to scan manually: ${oldestScanned} (down to block 0)`);
           return {
             ...state,
             accountAddress,
@@ -459,7 +474,6 @@ export class WalletService {
           };
         }
         // Otherwise, keep existing state (preserve progress)
-        console.log(`[Mining Pagination] Keeping existing mining state - already scanned down to block ${state.oldestBlockScanned}`);
         return state;
       });
     } catch (error) {
@@ -542,12 +556,8 @@ export class WalletService {
         }
       }
 
-      // Update mining state totalRewards (don't override blocksFound - it's set by refreshTransactions)
-      miningState.update((state) => ({
-        ...state,
-        totalRewards: totalEarned,
-        // blocksFound is already correctly set by refreshTransactions
-      }));
+      // Note: totalRewards and blocksFound are now both set together in refreshTransactions
+      // to ensure they stay consistent (totalRewards = blocksFound * blockReward)
     } catch (error) {
       console.error("Failed to refresh balance:", error);
     }
@@ -571,7 +581,10 @@ export class WalletService {
       // Check if Geth is running
       const isRunning = await invoke<boolean>("is_geth_running");
       if (!isRunning) {
-        transactionPagination.update((state) => ({ ...state, isLoading: false }));
+        transactionPagination.update((state) => ({
+          ...state,
+          isLoading: false,
+        }));
         return;
       }
 
@@ -581,15 +594,19 @@ export class WalletService {
       // Check if pagination state matches current account
       // If not, skip this load and let refreshTransactions() initialize it properly
       if (paginationState.accountAddress !== accountAddress) {
-        console.log(`[Pagination] Account mismatch - pagination: ${paginationState.accountAddress}, current: ${accountAddress}. Waiting for refreshTransactions to initialize.`);
-        transactionPagination.update((state) => ({ ...state, isLoading: false }));
+        transactionPagination.update((state) => ({
+          ...state,
+          isLoading: false,
+        }));
         return;
       }
 
       // If oldestBlockScanned is null, pagination hasn't been initialized yet
       if (paginationState.oldestBlockScanned === null) {
-        console.log(`[Pagination] Not initialized yet. Waiting for refreshTransactions.`);
-        transactionPagination.update((state) => ({ ...state, isLoading: false }));
+        transactionPagination.update((state) => ({
+          ...state,
+          isLoading: false,
+        }));
         return;
       }
 
@@ -597,14 +614,12 @@ export class WalletService {
       const toBlock = paginationState.oldestBlockScanned;
       const fromBlock = Math.max(0, toBlock - paginationState.batchSize);
 
-      console.log(`[Pagination] Loading transactions from block ${fromBlock} to ${toBlock}`);
-
       // Fetch transactions for this range
-      const txHistory = await invoke("get_transaction_history_range", {
+      const txHistory = (await invoke("get_transaction_history_range", {
         address: accountAddress,
         fromBlock,
         toBlock,
-      }) as Promise<Array<{
+      })) as Array<{
         hash: string;
         from: string;
         to: string | null;
@@ -615,9 +630,7 @@ export class WalletService {
         tx_type: string;
         gas_used: string | null;
         gas_price: string | null;
-      }>>;
-
-      console.log(`[Pagination] Found ${txHistory.length} transactions in range`);
+      }>;
 
       // Process transactions
       const newTransactions: Transaction[] = [];
@@ -642,9 +655,10 @@ export class WalletService {
           ? parseInt(tx.gas_price.replace("0x", ""), 16) / 1e9
           : undefined;
 
-        const feeInWei = gasUsed && tx.gas_price
-          ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
-          : undefined;
+        const feeInWei =
+          gasUsed && tx.gas_price
+            ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
+            : undefined;
         const feeInChiral = feeInWei ? feeInWei / 1e18 : undefined;
 
         const transaction: Transaction = {
@@ -702,8 +716,6 @@ export class WalletService {
         hasMore: fromBlock > 0,
         isLoading: false,
       }));
-
-      console.log(`[Pagination] Updated oldestBlockScanned to ${fromBlock}, hasMore: ${fromBlock > 0}`);
     } catch (error) {
       console.error("Failed to load more transactions:", error);
       transactionPagination.update((state) => ({ ...state, isLoading: false }));
@@ -737,14 +749,12 @@ export class WalletService {
 
       // Check if pagination state matches current account
       if (paginationState.accountAddress !== accountAddress) {
-        console.log(`[Mining Pagination] Account mismatch - pagination: ${paginationState.accountAddress}, current: ${accountAddress}. Waiting for refreshTransactions to initialize.`);
         miningPagination.update((state) => ({ ...state, isLoading: false }));
         return;
       }
 
       // If oldestBlockScanned is null, pagination hasn't been initialized yet
       if (paginationState.oldestBlockScanned === null) {
-        console.log(`[Mining Pagination] Not initialized yet. Waiting for refreshTransactions.`);
         miningPagination.update((state) => ({ ...state, isLoading: false }));
         return;
       }
@@ -753,16 +763,17 @@ export class WalletService {
       const toBlock = paginationState.oldestBlockScanned;
       const fromBlock = Math.max(0, toBlock - paginationState.batchSize);
 
-      console.log(`[Mining Pagination] Loading mining rewards from block ${fromBlock} to ${toBlock}`);
-
       // Fetch mining blocks for this range
-      const miningBlocks = await invoke("get_mined_blocks_range", {
+      const miningBlocks = (await invoke("get_mined_blocks_range", {
         address: accountAddress,
         fromBlock,
         toBlock,
-      }) as Array<{ hash: string; timestamp: number; number: number; reward?: number }>;
-
-      console.log(`[Mining Pagination] Found ${miningBlocks.length} mining blocks in range`);
+      })) as Array<{
+        hash: string;
+        timestamp: number;
+        number: number;
+        reward?: number;
+      }>;
 
       // Process mining blocks
       for (const block of miningBlocks) {
@@ -773,7 +784,7 @@ export class WalletService {
         this.pushRecentBlock({
           hash: block.hash,
           timestamp: new Date((block.timestamp || 0) * 1000),
-          reward: block.reward ?? 2,
+          reward: block.reward ?? get(blockReward),
           block_number: block.number,
         });
       }
@@ -785,8 +796,6 @@ export class WalletService {
         hasMore: fromBlock > 0,
         isLoading: false,
       }));
-
-      console.log(`[Mining Pagination] Updated oldestBlockScanned to ${fromBlock}, hasMore: ${fromBlock > 0}`);
     } catch (error) {
       console.error("Failed to load more mining rewards:", error);
       miningPagination.update((state) => ({ ...state, isLoading: false }));
@@ -795,16 +804,13 @@ export class WalletService {
 
   async startProgressiveLoading(): Promise<void> {
     if (this.isProgressiveLoading) {
-      console.log("[Progressive Loading] Already running");
       return;
     }
 
     this.isProgressiveLoading = true;
-    console.log("[Progressive Loading] Starting automatic transaction loading...");
 
     const loadNextBatch = async () => {
       if (!this.isProgressiveLoading) {
-        console.log("[Progressive Loading] Stopped");
         return;
       }
 
@@ -812,7 +818,6 @@ export class WalletService {
 
       // Stop if no more transactions or if we're manually loading
       if (!paginationState.hasMore || paginationState.isLoading) {
-        console.log("[Progressive Loading] Completed - reached beginning of blockchain");
         this.isProgressiveLoading = false;
         return;
       }
@@ -833,7 +838,6 @@ export class WalletService {
   }
 
   stopProgressiveLoading(): void {
-    console.log("[Progressive Loading] Stopping...");
     this.isProgressiveLoading = false;
     if (this.progressiveLoadHandle) {
       clearTimeout(this.progressiveLoadHandle);
@@ -1182,7 +1186,9 @@ export class WalletService {
 
   async calculateAccurateTotals(): Promise<void> {
     if (!this.isTauri) {
-      throw new Error("Accurate totals calculation is only available in the desktop app");
+      throw new Error(
+        "Accurate totals calculation is only available in the desktop app"
+      );
     }
 
     // Get account address from backend
@@ -1193,7 +1199,11 @@ export class WalletService {
       throw new Error("No active account");
     }
 
-    const { isCalculatingAccurateTotals, accurateTotals, accurateTotalsProgress } = await import("$lib/stores");
+    const {
+      isCalculatingAccurateTotals,
+      accurateTotals,
+      accurateTotalsProgress,
+    } = await import("$lib/stores");
 
     // Set loading state
     isCalculatingAccurateTotals.set(true);
@@ -1223,6 +1233,11 @@ export class WalletService {
       });
 
       // Store the results
+      console.log("[Accurate Totals] Updating store with:", {
+        blocksMined: result.blocks_mined,
+        totalReceived: result.total_received,
+        totalSent: result.total_sent,
+      });
       accurateTotals.set({
         blocksMined: result.blocks_mined,
         totalReceived: result.total_received,

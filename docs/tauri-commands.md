@@ -320,14 +320,6 @@ These commands currently operate on in-memory mock data to support “progressiv
 - **Returns**: `string[]`
 - **Description**: List of peer IDs currently connected to this node.
 
-### `send_dht_message`
-
-- **Parameters**
-  - `peer_id: string`
-  - `message: Record<string, unknown>`
-- **Returns**: `void`
-- **Description**: Sends an arbitrary JSON payload to a peer via the DHT messaging channel.
-
 ### `get_dht_health`
 
 - **Parameters**: _(none)_

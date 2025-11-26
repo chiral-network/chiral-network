@@ -1,6 +1,18 @@
 import { writable, derived } from "svelte/store";
 import { normalizeRegion, GEO_REGIONS, UNKNOWN_REGION_ID } from "$lib/geo";
 
+// ============================================================================
+// Network Constants (fetched from backend)
+// ============================================================================
+
+/** Block reward in Chiral - fetched from backend on app init.
+ * Default value is used until the backend responds. */
+export const blockReward = writable<number>(2);
+
+// ============================================================================
+// Types & Interfaces
+// ============================================================================
+
 export interface FileItem {
   id: string;
   name: string;
@@ -252,15 +264,16 @@ const dummyTransactions: Transaction[] = [
 ];
 
 // Stores
-export const files = writable<FileItem[]>(dummyFiles);
+export const files = writable<FileItem[]>([]);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);
 
 // Load pagination state from localStorage
-const storedPagination = typeof window !== 'undefined'
-  ? localStorage.getItem('transactionPagination')
-  : null;
+const storedPagination =
+  typeof window !== "undefined"
+    ? localStorage.getItem("transactionPagination")
+    : null;
 
 const initialPaginationState: TransactionPaginationState = storedPagination
   ? JSON.parse(storedPagination)
@@ -272,48 +285,60 @@ const initialPaginationState: TransactionPaginationState = storedPagination
       batchSize: 5000,
     };
 
-export const transactionPagination = writable<TransactionPaginationState>(initialPaginationState);
+export const transactionPagination = writable<TransactionPaginationState>(
+  initialPaginationState
+);
 
 // Persist pagination state to localStorage
-if (typeof window !== 'undefined') {
+if (typeof window !== "undefined") {
   transactionPagination.subscribe((state) => {
-    localStorage.setItem('transactionPagination', JSON.stringify({
-      accountAddress: state.accountAddress,
-      oldestBlockScanned: state.oldestBlockScanned,
-      hasMore: state.hasMore,
-      batchSize: state.batchSize,
-      // Don't persist isLoading state
-    }));
+    localStorage.setItem(
+      "transactionPagination",
+      JSON.stringify({
+        accountAddress: state.accountAddress,
+        oldestBlockScanned: state.oldestBlockScanned,
+        hasMore: state.hasMore,
+        batchSize: state.batchSize,
+        // Don't persist isLoading state
+      })
+    );
   });
 }
 
 // Load mining pagination state from localStorage
-const storedMiningPagination = typeof window !== 'undefined'
-  ? localStorage.getItem('miningPagination')
-  : null;
+const storedMiningPagination =
+  typeof window !== "undefined"
+    ? localStorage.getItem("miningPagination")
+    : null;
 
-const initialMiningPaginationState: MiningPaginationState = storedMiningPagination
-  ? JSON.parse(storedMiningPagination)
-  : {
-      accountAddress: null,
-      oldestBlockScanned: null,
-      isLoading: false,
-      hasMore: true,
-      batchSize: 5000,
-    };
+const initialMiningPaginationState: MiningPaginationState =
+  storedMiningPagination
+    ? JSON.parse(storedMiningPagination)
+    : {
+        accountAddress: null,
+        oldestBlockScanned: null,
+        isLoading: false,
+        hasMore: true,
+        batchSize: 5000,
+      };
 
-export const miningPagination = writable<MiningPaginationState>(initialMiningPaginationState);
+export const miningPagination = writable<MiningPaginationState>(
+  initialMiningPaginationState
+);
 
 // Persist mining pagination state to localStorage
-if (typeof window !== 'undefined') {
+if (typeof window !== "undefined") {
   miningPagination.subscribe((state) => {
-    localStorage.setItem('miningPagination', JSON.stringify({
-      accountAddress: state.accountAddress,
-      oldestBlockScanned: state.oldestBlockScanned,
-      hasMore: state.hasMore,
-      batchSize: state.batchSize,
-      // Don't persist isLoading state
-    }));
+    localStorage.setItem(
+      "miningPagination",
+      JSON.stringify({
+        accountAddress: state.accountAddress,
+        oldestBlockScanned: state.oldestBlockScanned,
+        hasMore: state.hasMore,
+        batchSize: state.batchSize,
+        // Don't persist isLoading state
+      })
+    );
   });
 }
 
@@ -448,7 +473,9 @@ export interface AccurateTotalsProgress {
 
 export const accurateTotals = writable<AccurateTotals | null>(null);
 export const isCalculatingAccurateTotals = writable<boolean>(false);
-export const accurateTotalsProgress = writable<AccurateTotalsProgress | null>(null);
+export const accurateTotalsProgress = writable<AccurateTotalsProgress | null>(
+  null
+);
 
 // Calculate total mined from loaded mining reward transactions (partial - based on loaded data)
 export const totalEarned = derived(transactions, ($txs) =>
@@ -579,7 +606,7 @@ export const settings = writable<AppSettings>({
   ipPrivacyMode: "off",
   trustedProxyRelays: [],
   disableDirectNatTraversal: false,
-  enableAutonat: false, // Disabled by default - enable if you need NAT detection
+  enableAutonat: true, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
   enableAutorelay: false, // Disabled by default - enable if you need relay connections

@@ -1,67 +1,51 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
 
-// Declare all modules here
-pub mod protocols;
-pub mod commands;
-pub mod analytics;
-pub mod net;
-pub mod peer_selection;
-pub mod pool;
-pub mod proxy_latency;
-pub mod stream_auth;
-pub mod webrtc_service;
-mod transfer_events;
-pub mod transaction_services;
-pub mod bandwidth;
+// Modules unique to the binary
 pub mod blockchain_listener;
-pub mod dht;
-pub mod download_scheduler;
-pub mod download_source;
-pub mod ed2k_client;
-pub mod encryption;
+pub mod commands;
 pub mod ethereum;
-pub mod file_transfer;
-pub mod ftp_client;
-pub mod ftp_downloader;
-pub mod geth_downloader;
 pub mod geth_bootstrap;
+pub mod geth_downloader;
 pub mod headless;
-pub mod http_download;
 pub mod http_server;
-pub mod keystore;
-pub mod manager;
-pub mod multi_source_download;
+pub mod net;
+pub mod pool;
+pub mod transaction_services;
+mod transfer_events;
+pub mod reassembly;
 
-mod logger;
-pub mod bittorrent_handler;
-pub mod download_restart;
-pub mod reputation;
+// Re-export modules from the lib crate
+use chiral_network::{
+    analytics, bandwidth, bittorrent_handler, download_restart,
+    download_source, dht, ed2k_client, encryption, file_transfer,
+    http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
+    reputation, stream_auth, webrtc_service,
+};
 
-use protocols::{ProtocolManager, ProtocolHandler};
+use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
     validate_proxy_auth_token,
 };
 
+use bandwidth::BandwidthController;
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
+use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
-use crate::commands::network::get_full_network_stats;
-use crate::bandwidth::BandwidthController;
-use crate::stream_auth::{
+use stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
-use dht::{DhtEvent, DhtMetricsSnapshot, DhtService, FileMetadata};
+use dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtEvent, DhtService};
 use directories::ProjectDirs;
 use ethereum::{
     create_new_account,
@@ -69,7 +53,6 @@ use ethereum::{
     get_balance,
     get_block_number,
     get_hashrate,
-    get_mined_blocks_count,
     get_mining_logs,
     get_mining_performance,
     get_mining_status, // Assuming you have a file_handler module
@@ -96,7 +79,6 @@ use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex as StdMutex;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
@@ -113,17 +95,18 @@ use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
-use crate::manager::ChunkManager; // Import the ChunkManager
+use manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
+use dht::models::Ed2kDownloadStatus;
+use dht::models::Ed2kSourceInfo;
+use ed2k_client::{Ed2kClient, Ed2kSearchResult, Ed2kServerInfo};
 use blockstore::block::Block;
-use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
-use suppaftp::FtpStream;
+use rand::Rng;
 use std::io::Write;
-use crate::dht::Ed2kSourceInfo;
-use crate::ed2k_client::{Ed2kClient, Ed2kServerInfo, Ed2kSearchResult};
-use crate::dht::Ed2kDownloadStatus;
-
-// Settings structure for backend use
+use std::ops::Range;
+use suppaftp::FtpStream;
+use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
+                                             // Settings structure for backend use
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BackendSettings {
     #[serde(rename = "storagePath")]
@@ -150,27 +133,30 @@ fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
         .path()
         .app_data_dir()
         .expect("Failed to get app data directory");
-    
+
     let settings_file = app_data_dir.join("settings.json");
     info!("Loading settings from: {}", settings_file.display());
-    
+
     if settings_file.exists() {
         match std::fs::read_to_string(&settings_file) {
             Ok(contents) => {
                 match serde_json::from_str::<serde_json::Value>(&contents) {
                     Ok(json) => {
                         // Extract only the fields we need
-                        let storage_path = json.get("storagePath")
+                        let storage_path = json
+                            .get("storagePath")
                             .and_then(|v| v.as_str())
                             .unwrap_or("~/ChiralNetwork/Storage")
                             .to_string();
-                        let enable_file_logging = json.get("enableFileLogging")
+                        let enable_file_logging = json
+                            .get("enableFileLogging")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        let max_log_size_mb = json.get("maxLogSizeMB")
+                        let max_log_size_mb = json
+                            .get("maxLogSizeMB")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(10);
-                        
+
                         return BackendSettings {
                             storage_path,
                             enable_file_logging,
@@ -187,7 +173,7 @@ fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
             }
         }
     }
-    
+
     BackendSettings::default()
 }
 
@@ -195,7 +181,9 @@ fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
 fn expand_tilde(path: &str) -> PathBuf {
     if path.starts_with("~/") || path == "~" {
         if let Some(base_dirs) = directories::BaseDirs::new() {
-            return base_dirs.home_dir().join(path.strip_prefix("~/").unwrap_or(""));
+            return base_dirs
+                .home_dir()
+                .join(path.strip_prefix("~/").unwrap_or(""));
         }
     }
     PathBuf::from(path)
@@ -345,6 +333,7 @@ struct AppState {
     // HTTP server for serving chunks and keys
     http_server_state: Arc<http_server::HttpServerState>,
     http_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
+    http_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -421,7 +410,8 @@ async fn import_chiral_account(
 async fn start_geth_node(
     state: State<'_, AppState>,
     data_dir: String,
-    rpc_url: Option<String>,) -> Result<(), String> {
+    rpc_url: Option<String>,
+) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
     let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
@@ -434,7 +424,8 @@ async fn start_geth_node(
 #[tauri::command]
 async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), String> {
     println!("Received download command for: {}", identifier);
-    state.protocol_manager.download(&identifier).await
+    #[allow(deprecated)]
+    state.protocol_manager.download_simple(&identifier).await
 }
 
 /// Tauri command to seed a file.
@@ -443,14 +434,21 @@ async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), 
 async fn seed(file_path: String, state: State<'_, AppState>) -> Result<String, String> {
     println!("Received seed command for: {}", file_path);
     // Delegate the seed operation to the protocol manager.
-    state.protocol_manager.seed(&file_path).await
+    #[allow(deprecated)]
+    state.protocol_manager.seed_simple(&file_path).await
 }
 
 /// Tauri command to create and seed a BitTorrent file.
 /// It takes a local file path, creates a torrent, starts seeding, and returns a magnet link.
 #[tauri::command]
-async fn create_and_seed_torrent(file_path: String, state: State<'_, AppState>) -> Result<String, String> {
-    println!("Received create_and_seed_torrent command for: {}", file_path);
+async fn create_and_seed_torrent(
+    file_path: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    println!(
+        "Received create_and_seed_torrent command for: {}",
+        file_path
+    );
     // Use the BitTorrent handler directly to create and seed the torrent
     state.bittorrent_handler.seed(&file_path).await
 }
@@ -532,7 +530,9 @@ async fn get_user_balance(state: State<'_, AppState>) -> Result<String, String> 
 }
 
 #[tauri::command]
-async fn get_transaction_receipt(tx_hash: String) -> Result<transaction_services::TransactionReceipt, String> {
+async fn get_transaction_receipt(
+    tx_hash: String,
+) -> Result<transaction_services::TransactionReceipt, String> {
     transaction_services::get_transaction_receipt(&tx_hash).await
 }
 
@@ -540,7 +540,8 @@ async fn get_transaction_receipt(tx_hash: String) -> Result<transaction_services
 async fn can_afford_download(state: State<'_, AppState>, price: f64) -> Result<bool, String> {
     let account = get_active_account(&state).await?;
     let balance_str = get_balance(&account).await?;
-    let balance = balance_str.parse::<f64>()
+    let balance = balance_str
+        .parse::<f64>()
         .map_err(|e| format!("Failed to parse balance: {}", e))?;
     Ok(balance >= price)
 }
@@ -583,9 +584,17 @@ async fn record_download_payment(
 ) -> Result<(), String> {
     println!(
         "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) from {} (peer: {}) tx: {}",
-        amount, seeder_wallet_address, seeder_peer_id, downloader_address, downloader_peer_id, transaction_hash
+        amount,
+        seeder_wallet_address,
+        seeder_peer_id,
+        downloader_address,
+        downloader_peer_id,
+        transaction_hash
     );
-    println!("🔍 IMPORTANT: downloader_peer_id value: '{}'", downloader_peer_id);
+    println!(
+        "🔍 IMPORTANT: downloader_peer_id value: '{}'",
+        downloader_peer_id
+    );
     println!("🔍 IMPORTANT: seeder_peer_id value: '{}'", seeder_peer_id);
 
     // Send P2P payment notification message to the seeder's peer
@@ -622,39 +631,12 @@ async fn record_download_payment(
     app.emit("seeder_payment_received", payment_msg.clone())
         .map_err(|e| format!("Failed to emit payment notification: {}", e))?;
 
-    println!("✅ Payment notification emitted locally for seeder: {}", seeder_wallet_address);
+    println!(
+        "✅ Payment notification emitted locally for seeder: {}",
+        seeder_wallet_address
+    );
 
-    // Send P2P payment notification to the seeder's peer
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        // Convert payment message to JSON
-        let notification_json = serde_json::to_value(&payment_msg)
-            .map_err(|e| format!("Failed to serialize payment notification: {}", e))?;
-
-        // Wrap in a payment notification envelope so receiver can identify it
-        let wrapped_message = serde_json::json!({
-            "type": "payment_notification",
-            "payload": notification_json
-        });
-
-        // Send via DHT to the seeder's peer ID
-        match dht.send_message_to_peer(&seeder_peer_id, wrapped_message).await {
-            Ok(_) => {
-                println!("✅ P2P payment notification sent to peer: {}", seeder_peer_id);
-            }
-            Err(e) => {
-                // Don't fail the whole operation if P2P message fails
-                println!("⚠️ Failed to send P2P payment notification: {}. Seeder will see payment when they check blockchain.", e);
-            }
-        }
-    } else {
-        println!("⚠️ DHT not available, payment notification only sent locally");
-    }
-
+    // Seeder will see the payment when they check the blockchain
     Ok(())
 }
 
@@ -668,7 +650,10 @@ async fn record_seeder_payment(
     _transaction_id: u64,
 ) -> Result<(), String> {
     // Log the seeder payment receipt for analytics/audit purposes
-    println!("💰 Seeder payment received: {} Chiral from {}", _amount, _downloader_address);
+    println!(
+        "💰 Seeder payment received: {} Chiral from {}",
+        _amount, _downloader_address
+    );
     Ok(())
 }
 
@@ -873,21 +858,28 @@ async fn upload_file(
         // Register file with HTTP server for HTTP downloads
         // IMPORTANT: Use merkle_root as the key, not file_hash!
         // The DHT and downloads use merkle_root as the primary identifier
-        state.http_server_state.register_file(http_server::HttpFileMetadata {
-            hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
-            file_hash: file_hash.clone(),        // Use file_hash for storage path
-            name: file_name.clone(),
-            size: file_data.len() as u64,
-            encrypted: is_encrypted,
-        }).await;
-        
-        tracing::info!("Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})", 
-            file_name, metadata.merkle_root, file_hash);
+        state
+            .http_server_state
+            .register_file(http_server::HttpFileMetadata {
+                hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
+                file_hash: file_hash.clone(),       // Use file_hash for storage path
+                name: file_name.clone(),
+                size: file_data.len() as u64,
+                encrypted: is_encrypted,
+            })
+            .await;
+
+        tracing::info!(
+            "Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})",
+            file_name,
+            metadata.merkle_root,
+            file_hash
+        );
 
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
         if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use crate::download_source::HttpSourceInfo;
+            use download_source::HttpSourceInfo;
             // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
             let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
             metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
@@ -959,6 +951,66 @@ async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> R
     }
 
     Err("Geth failed to start up within 30 seconds after restart.".to_string())
+}
+
+#[tauri::command]
+async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    use crate::ethereum::NETWORK_CONFIG;
+    use reqwest::Client;
+
+    let client = Client::new();
+
+    // Get current miner address from state
+    let miner_addr = state.miner_address.lock().await;
+    let current_miner = miner_addr.as_ref().map(|s| s.clone()).unwrap_or_else(|| "Not set".to_string());
+
+    // Get current block number
+    let block_num_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+
+    let mut recent_miners = serde_json::Map::new();
+
+    if let Ok(response) = client.post(&NETWORK_CONFIG.rpc_endpoint).json(&block_num_payload).send().await {
+        if let Ok(json) = response.json::<serde_json::Value>().await {
+            if let Some(result) = json.get("result").and_then(|r| r.as_str()) {
+                if let Ok(current_block) = u64::from_str_radix(&result[2..], 16) {
+                    println!("DEBUG: Current block is {}", current_block);
+
+                    // Check last 5 blocks
+                    for block_num in (current_block.saturating_sub(4)..=current_block).rev() {
+                        let block_payload = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "eth_getBlockByNumber",
+                            "params": [format!("0x{:x}", block_num), false],
+                            "id": 1
+                        });
+
+                        if let Ok(block_response) = client.post(&NETWORK_CONFIG.rpc_endpoint).json(&block_payload).send().await {
+                            if let Ok(block_json) = block_response.json::<serde_json::Value>().await {
+                                if let Some(block) = block_json.get("result") {
+                                    if let Some(miner) = block.get("miner").and_then(|m| m.as_str()) {
+                                        recent_miners.insert(format!("{}", block_num), serde_json::Value::String(miner.to_string()));
+                                        println!("DEBUG: Block {} mined by: {}", block_num, miner);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let result = serde_json::json!({
+        "current_miner_address": current_miner,
+        "recent_block_miners": recent_miners
+    });
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1047,7 +1099,14 @@ async fn get_network_stats() -> Result<(String, String), String> {
 }
 
 #[tauri::command]
-async fn get_block_details_by_number(block_number: u64) -> Result<Option<serde_json::Value>, String> {
+fn get_chain_id() -> u64 {
+    ethereum::NETWORK_CONFIG.chain_id
+}
+
+#[tauri::command]
+async fn get_block_details_by_number(
+    block_number: u64,
+) -> Result<Option<serde_json::Value>, String> {
     ethereum::get_block_details_by_number(block_number).await
 }
 
@@ -1061,34 +1120,132 @@ async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
     get_mining_performance(&data_dir).await
 }
 
-lazy_static! {
-    static ref BLOCKS_CACHE: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
-}
 #[tauri::command]
+async fn start_mining_monitor(
+    app: tauri::AppHandle,
+    data_dir: String,
+) -> Result<(), String> {
+    use tokio::time::{sleep, Duration};
+    use std::fs::File;
+    use std::io::{BufReader, Seek, SeekFrom};
 
-async fn get_blocks_mined(address: String) -> Result<u64, String> {
-    // Check cache (directly return within 500ms)
-    {
-        let cache = BLOCKS_CACHE.lock()
-            .map_err(|e| format!("Failed to acquire blocks cache lock: {}", e))?;
-        if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
-            if cached_addr == &address && cached_time.elapsed() < Duration::from_millis(500) {
-                return Ok(*cached_blocks);
+    // Store the last position we read from
+    static LAST_POSITION: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+    // Resolve data directory
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get exe path: {}", e))?
+        .parent()
+        .ok_or("Failed to get exe dir")?
+        .to_path_buf();
+    let data_path = if Path::new(&data_dir).is_absolute() {
+        PathBuf::from(&data_dir)
+    } else {
+        exe_dir.join(&data_dir)
+    };
+    let log_path = data_path.join("geth.log");
+
+    tokio::spawn(async move {
+        // Wait a moment for Geth to potentially create/update the log file
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        loop {
+            if let Ok(file) = File::open(&log_path) {
+                let mut reader = BufReader::new(&file);
+
+                // Get the last known position (don't hold the lock across await)
+                let last_pos_value = {
+                    let last_pos = LAST_POSITION.lock().unwrap();
+                    *last_pos
+                };
+
+                // If this is the first run, start from the end of the file
+                if last_pos_value.is_none() {
+                    if let Ok(metadata) = file.metadata() {
+                        let file_size = metadata.len();
+                        let _ = reader.seek(SeekFrom::Start(file_size));
+                    }
+                } else if let Some(pos) = last_pos_value {
+                    let _ = reader.seek(SeekFrom::Start(pos));
+                }
+
+                let mut new_lines = Vec::new();
+
+                // Read new lines since last position
+                if let Ok(metadata) = file.metadata() {
+                    let file_size = metadata.len();
+
+                    use std::io::BufRead;
+                    for line_result in reader.lines() {
+                        if let Ok(line) = line_result {
+                            // Check if this line indicates a block was mined
+                            // Only trigger on "Successfully sealed new block" to avoid duplicate events
+                            if line.contains("Successfully sealed new block") {
+                                // 🎉 WE MINED A BLOCK! 🎉
+                                // Simple as that - increment our counter and update frontend
+                                increment_mined_blocks().await;
+
+                                // Emit event to frontend - that's it!
+                                let result = app.emit("block_mined", serde_json::json!({
+                                    "log_line": line,
+                                    "timestamp": chrono::Utc::now().timestamp()
+                                }));
+                                match result {
+                                    Ok(_) => {},
+                                    Err(e) => {},
+                                }
+                            }
+                            new_lines.push(line);
+                        }
+                    }
+
+                    // Update the last position (acquire lock only for the update)
+                    {
+                        let mut last_pos = LAST_POSITION.lock().unwrap();
+                        *last_pos = Some(file_size);
+                    }
+                }
             }
+
+            // Check every 1 second
+            sleep(Duration::from_secs(1)).await;
         }
-    }
+    });
 
-    // Invoke existing logic (slow query)
-    let blocks = get_mined_blocks_count(&address).await?;
+    Ok(())
+}
 
-    // Update Cache
-    {
-        let mut cache = BLOCKS_CACHE.lock()
-            .map_err(|e| format!("Failed to acquire blocks cache lock for update: {}", e))?;
-        *cache = Some((address, blocks, Instant::now()));
-    }
+lazy_static! {
+    static ref BLOCKS_CACHE: Mutex<Option<(String, u64, Instant)>> = Mutex::new(None);
+    // Simple running count of total blocks mined (since we started monitoring)
+    static ref TOTAL_MINED_BLOCKS: Mutex<u64> = Mutex::new(0);
+}
 
-    Ok(blocks)
+async fn increment_mined_blocks() {
+    let mut count = TOTAL_MINED_BLOCKS.lock().await;
+    *count += 1;
+    println!("🎉 Block mined! Total blocks mined: {}", *count);
+}
+
+async fn get_total_mined_blocks() -> u64 {
+    let count = TOTAL_MINED_BLOCKS.lock().await;
+    *count
+}
+
+#[tauri::command]
+async fn clear_blocks_cache() {
+    let mut cache = BLOCKS_CACHE.lock().await;
+    *cache = None;
+
+    // Don't reset incremental scanning - let it continue from where it left off
+    // This ensures we maintain our scanning progress and don't lose discovered blocks
+}
+
+#[tauri::command]
+async fn get_blocks_mined(_app: tauri::AppHandle, _address: String) -> Result<u64, String> {
+    // Simple: return our running count
+    let count = get_total_mined_blocks().await;
+    Ok(count)
 }
 #[tauri::command]
 async fn get_recent_mined_blocks_pub(
@@ -1111,6 +1268,11 @@ async fn get_mined_blocks_range(
 #[tauri::command]
 async fn get_total_mining_rewards(address: String) -> Result<f64, String> {
     ethereum::get_total_mining_rewards(&address).await
+}
+
+#[tauri::command]
+fn get_block_reward() -> f64 {
+    ethereum::BLOCK_REWARD
 }
 
 #[tauri::command]
@@ -1162,6 +1324,7 @@ async fn start_dht_node(
     enable_autorelay: Option<bool>,
     preferred_relays: Option<Vec<String>>,
     enable_relay_server: Option<bool>,
+    enable_upnp: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -1172,8 +1335,9 @@ async fn start_dht_node(
 
     // AutoNAT disabled by default - users can enable in settings if needed for NAT detection
     let auto_enabled = enable_autonat.unwrap_or(false);
+    info!("AUTONAT {}", auto_enabled);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
-    let autonat_server_list = autonat_servers.unwrap_or_default();
+    let autonat_server_list = autonat_servers.unwrap_or(bootstrap_nodes.clone());
 
     // Get the proxy from the command line, if it was provided at launch
     let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
@@ -1213,7 +1377,10 @@ async fn start_dht_node(
     if let Some(relays) = &preferred_relays {
         for relay in relays {
             if !bootstrap_nodes.contains(relay) {
-                info!("🔗 Adding relay {} to bootstrap nodes for DHT operations", relay);
+                info!(
+                    "🔗 Adding relay {} to bootstrap nodes for DHT operations",
+                    relay
+                );
                 bootstrap_nodes.push(relay.clone());
             }
         }
@@ -1230,7 +1397,7 @@ async fn start_dht_node(
         bootstrap_nodes,
         None,
         is_bootstrap.unwrap_or(false),
-        /* enable AutoNAT by default for WAN */ auto_enabled,
+        auto_enabled,
         probe_interval,
         autonat_server_list,
         final_proxy_address,
@@ -1241,6 +1408,7 @@ async fn start_dht_node(
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
+        enable_upnp.unwrap_or(true), // enable UPnP by default
         Some(&async_blockstore_path),
     )
     .await
@@ -1422,7 +1590,12 @@ async fn start_dht_node(
                         });
                         let _ = app_handle.emit("relay_reputation_event", payload);
                     }
-                    DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                    DhtEvent::BitswapChunkDownloaded {
+                        file_hash,
+                        chunk_index,
+                        total_chunks,
+                        chunk_size,
+                    } => {
                         let payload = serde_json::json!({
                             "fileHash": file_hash,
                             "chunkIndex": chunk_index,
@@ -1430,11 +1603,16 @@ async fn start_dht_node(
                             "chunkSize": chunk_size,
                         });
                         let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
-                    },
+                    }
                     DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
-                        println!("💰 Payment notification received from peer {}: {:?}", from_peer, payload);
+                        println!(
+                            "💰 Payment notification received from peer {}: {:?}",
+                            from_peer, payload
+                        );
                         // Convert payload to match the expected format for seeder_payment_received
-                        if let Ok(notification) = serde_json::from_value::<serde_json::Value>(payload.clone()) {
+                        if let Ok(notification) =
+                            serde_json::from_value::<serde_json::Value>(payload.clone())
+                        {
                             let formatted_payload = serde_json::json!({
                                 "file_hash": notification.get("file_hash").and_then(|v| v.as_str()).unwrap_or(""),
                                 "file_name": notification.get("file_name").and_then(|v| v.as_str()).unwrap_or(""),
@@ -1450,7 +1628,7 @@ async fn start_dht_node(
                             let _ = app_handle.emit("seeder_payment_received", formatted_payload);
                             println!("✅ Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
                         }
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -1679,26 +1857,6 @@ async fn get_active_hmac_exchanges(state: State<'_, AppState>) -> Result<Vec<Str
     Ok(auth_service.get_active_exchanges())
 }
 
-#[tauri::command]
-async fn send_dht_message(
-    state: State<'_, AppState>,
-    peer_id: String,
-    message: serde_json::Value,
-) -> Result<(), String> {
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        // Send message through DHT to target peer
-        dht.send_message_to_peer(&peer_id, message)
-            .await
-            .map_err(|e| format!("Failed to send DHT message: {}", e))
-    } else {
-        Err("DHT not available".to_string())
-    }
-}
 
 #[tauri::command]
 async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsSnapshot>, String> {
@@ -1810,12 +1968,20 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 DhtEvent::FileDownloaded { file_hash } => {
                     format!("file_downloaded:{}", file_hash)
                 }
-                DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
-                    format!("bitswap_chunk_downloaded:{}:{}:{}:{}", file_hash, chunk_index, total_chunks, chunk_size)
-                },
+                DhtEvent::BitswapChunkDownloaded {
+                    file_hash,
+                    chunk_index,
+                    total_chunks,
+                    chunk_size,
+                } => {
+                    format!(
+                        "bitswap_chunk_downloaded:{}:{}:{}:{}",
+                        file_hash, chunk_index, total_chunks, chunk_size
+                    )
+                }
                 DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
                     format!("payment_notification_received:{}:{:?}", from_peer, payload)
-                },
+                }
                 DhtEvent::ReputationEvent {
                     peer_id,
                     event_type,
@@ -1856,7 +2022,6 @@ async fn get_power_consumption() -> Option<f32> {
     tokio::task::spawn_blocking(move || {
         use std::sync::OnceLock;
         use std::time::Instant;
-        use tracing::info;
 
         static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
         static POWER_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
@@ -1926,12 +2091,6 @@ async fn get_power_consumption() -> Option<f32> {
         }
 
         // Final fallback: return None when power monitoring is unavailable
-        // Only log the info message once to avoid spamming logs
-        static POWER_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
-
-        POWER_WARNING_LOGGED.get_or_init(|| {
-            info!("Power consumption monitoring not available on this system. Using estimated values.");
-        });
 
         None
     })
@@ -1977,7 +2136,9 @@ fn smooth_power(raw_power: f32) -> f32 {
         raw_power
     } else {
         let total_weight: f32 = (1..=history.len()).map(|i| i as f32).sum();
-        let weighted_sum: f32 = history.iter().enumerate()
+        let weighted_sum: f32 = history
+            .iter()
+            .enumerate()
             .map(|(i, (_, power))| power * (i + 1) as f32)
             .sum();
         weighted_sum / total_weight
@@ -2058,7 +2219,8 @@ fn get_windows_power_via_powershell() -> Option<f32> {
             if let Ok(output_str) = String::from_utf8(output.stdout) {
                 let power_str = output_str.trim();
                 if let Ok(power) = power_str.parse::<f32>() {
-                    if power > 0.0 && power < 500.0 { // Reasonable power range for CPU
+                    if power > 0.0 && power < 500.0 {
+                        // Reasonable power range for CPU
                         return Some(power);
                     }
                 }
@@ -2126,7 +2288,8 @@ fn get_windows_power_via_wmi() -> Option<f32> {
                 let power_str = output_str.trim();
                 if !power_str.is_empty() && power_str != "null" {
                     if let Ok(power) = power_str.parse::<f32>() {
-                        if power > 0.0 && power < 200.0 { // Reasonable power range
+                        if power > 0.0 && power < 200.0 {
+                            // Reasonable power range
                             return Some(power);
                         }
                     }
@@ -2188,7 +2351,8 @@ fn get_windows_power_via_perf_counters() -> Option<f32> {
             if let Ok(output_str) = String::from_utf8(output.stdout) {
                 let power_str = output_str.trim();
                 if let Ok(power) = power_str.parse::<f32>() {
-                    if power > 0.0 && power < 500.0 { // Reasonable power range
+                    if power > 0.0 && power < 500.0 {
+                        // Reasonable power range
                         return Some(power);
                     }
                 }
@@ -2289,7 +2453,8 @@ fn get_windows_power_via_system_info() -> Option<f32> {
             if let Ok(output_str) = String::from_utf8(output.stdout) {
                 let power_str = output_str.trim();
                 if let Ok(power) = power_str.parse::<f32>() {
-                    if power > 20.0 && power < 1000.0 { // Reasonable power range for full system
+                    if power > 20.0 && power < 1000.0 {
+                        // Reasonable power range for full system
                         return Some(power);
                     }
                 }
@@ -2333,7 +2498,8 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
 
                             let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
 
-                            if power_watts > 0.0 && power_watts < 1000.0 { // Reasonable power range
+                            if power_watts > 0.0 && power_watts < 1000.0 {
+                                // Reasonable power range
                                 LAST_POWER = power_watts as f32;
                                 LAST_ENERGY = Some((energy_uj, now));
                                 return Some((power_watts as f32, PowerMethod::Systemstat));
@@ -2354,23 +2520,23 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
 #[cfg(target_os = "macos")]
 fn get_mac_power() -> Option<(f32, PowerMethod)> {
     use std::time::Instant;
-    
+
     // Static variables to track power readings over time
     static mut LAST_CPU_USAGE: Option<(f32, Instant)> = None;
     static mut LAST_POWER: f32 = 0.0;
-    
+
     // Try to get power from SMC (System Management Controller)
     // SMC provides direct hardware power readings on Mac systems
     if let Some(power) = get_mac_power_from_smc() {
         return Some((power, PowerMethod::Systemstat));
     }
-    
+
     // Fallback: Estimate power based on CPU usage
     // This is less accurate but works when SMC access is unavailable
     if let Some(power) = get_mac_power_from_cpu_usage() {
         return Some((power, PowerMethod::Sysinfo));
     }
-    
+
     None
 }
 
@@ -2378,30 +2544,30 @@ fn get_mac_power() -> Option<(f32, PowerMethod)> {
 fn get_mac_power_from_smc() -> Option<f32> {
     // Try to read power consumption from SMC
     // The SMC provides real-time power metrics on Mac hardware
-    
+
     // Note: SMC access on macOS requires specific hardware keys
     // This implementation may need adjustment based on actual Mac hardware
     // For now, we'll skip SMC implementation and rely on CPU estimation
-    
+
     // The smc crate has complex API requirements and version conflicts
     // that make it difficult to use reliably across different Mac models
-    
+
     None
 }
 
 #[cfg(target_os = "macos")]
 fn get_mac_power_from_cpu_usage() -> Option<f32> {
     use std::process::Command;
-    
+
     // Use system commands to estimate power consumption
     // Method 1: Get CPU usage and estimate from TDP
-    
+
     // Get CPU usage percentage
     let cpu_usage_output = Command::new("sh")
         .arg("-c")
         .arg("ps -A -o %cpu | awk '{s+=$1} END {print s}'")
         .output();
-    
+
     if let Ok(output) = cpu_usage_output {
         if output.status.success() {
             if let Ok(usage_str) = String::from_utf8(output.stdout) {
@@ -2411,13 +2577,16 @@ fn get_mac_power_from_cpu_usage() -> Option<f32> {
                         .arg("-n")
                         .arg("machdep.cpu.brand_string")
                         .output();
-                    
+
                     let mut estimated_tdp = 15.0; // Default for MacBook
-                    
+
                     if let Ok(sysctl_out) = sysctl_output {
                         if let Ok(cpu_brand) = String::from_utf8(sysctl_out.stdout) {
                             // Estimate TDP based on CPU model
-                            if cpu_brand.contains("M1") || cpu_brand.contains("M2") || cpu_brand.contains("M3") {
+                            if cpu_brand.contains("M1")
+                                || cpu_brand.contains("M2")
+                                || cpu_brand.contains("M3")
+                            {
                                 // Apple Silicon - very efficient
                                 estimated_tdp = 20.0; // M-series chips are low power
                             } else if cpu_brand.contains("Intel") {
@@ -2434,13 +2603,11 @@ fn get_mac_power_from_cpu_usage() -> Option<f32> {
                             }
                         }
                     }
-                    
+
                     // Get number of cores to adjust estimation
-                    let core_count_output = Command::new("sysctl")
-                        .arg("-n")
-                        .arg("hw.ncpu")
-                        .output();
-                    
+                    let core_count_output =
+                        Command::new("sysctl").arg("-n").arg("hw.ncpu").output();
+
                     let mut num_cores = 4.0;
                     if let Ok(core_out) = core_count_output {
                         if let Ok(cores_str) = String::from_utf8(core_out.stdout) {
@@ -2449,19 +2616,19 @@ fn get_mac_power_from_cpu_usage() -> Option<f32> {
                             }
                         }
                     }
-                    
+
                     // Calculate power consumption
                     // cpu_usage is total across all cores, so normalize by core count
                     let normalized_usage = cpu_usage / num_cores;
                     let cpu_power = estimated_tdp * (normalized_usage / 100.0);
-                    
+
                     // Add base system power (display, memory, etc.)
                     let base_power = 5.0; // Base system power for Mac
                     let total_power = cpu_power + base_power;
-                    
+
                     // Ensure minimum power draw
                     let final_power = total_power.max(estimated_tdp * 0.2); // At least 20% of TDP
-                    
+
                     if final_power > 0.0 && final_power < 200.0 {
                         return Some(final_power);
                     }
@@ -2469,7 +2636,7 @@ fn get_mac_power_from_cpu_usage() -> Option<f32> {
             }
         }
     }
-    
+
     None
 }
 
@@ -2961,16 +3128,18 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 async fn ensure_directory_exists(path: String) -> Result<(), String> {
     let path_obj = Path::new(&path);
-    
+
     // Get parent directory (in case path is a file path)
     let dir_to_create = if path_obj.extension().is_some() {
         // This looks like a file path, get the parent directory
-        path_obj.parent().ok_or_else(|| "Invalid path".to_string())?
+        path_obj
+            .parent()
+            .ok_or_else(|| "Invalid path".to_string())?
     } else {
         // This is a directory path
         path_obj
     };
-    
+
     tokio::fs::create_dir_all(dir_to_create)
         .await
         .map_err(|e| format!("Failed to create directory: {}", e))
@@ -3077,7 +3246,10 @@ async fn upload_file_to_network(
     file_path: String,
     price: Option<f64>,
 ) -> Result<(), String> {
-    println!("🔍 BACKEND: upload_file_to_network called with price: {:?}", price);
+    println!(
+        "🔍 BACKEND: upload_file_to_network called with price: {:?}",
+        price
+    );
 
     // Get the active account address
     let account = get_active_account(&state).await?;
@@ -3099,9 +3271,9 @@ async fn upload_file_to_network(
         // Upload the file
         let c = file_path.clone();
         let file_name = Path::new(&c)
-            .file_name()             // returns Option<&OsStr>
+            .file_name() // returns Option<&OsStr>
             .and_then(|s| s.to_str()) // convert OsStr -> &str
-            .unwrap_or(&file_path);   // fallback to whole path if not found
+            .unwrap_or(&file_path); // fallback to whole path if not found
 
         ft.upload_file_with_account(
             file_path.clone(),
@@ -3147,7 +3319,7 @@ async fn upload_file_to_network(
                 uploader_address: Some(account.clone()),
                 ..Default::default()
             };
-          // Prepare a timestamp for metadata
+            // Prepare a timestamp for metadata
             let created_at = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::from_secs(0))
@@ -3161,12 +3333,12 @@ async fn upload_file_to_network(
                     file_data.len() as u64,
                     file_data.clone(),
                     created_at,
-                    None,  // mime_type
-                    None,  // encrypted_key_bundle
-                    false, // is_encrypted
-                    None,  // encryption_method
-                    None,  // key_fingerprint
-                    price, // Add price parameter
+                    None,                  // mime_type
+                    None,                  // encrypted_key_bundle
+                    false,                 // is_encrypted
+                    None,                  // encryption_method
+                    None,                  // key_fingerprint
+                    price,                 // Add price parameter
                     Some(account.clone()), // Add uploader_address parameter
                 )
                 .await
@@ -3178,16 +3350,21 @@ async fn upload_file_to_network(
 
                     // Register file with HTTP server for HTTP downloads
                     // IMPORTANT: Use merkle_root as the key, not file_hash!
-                    state.http_server_state.register_file(http_server::HttpFileMetadata {
-                        hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
-                        file_hash: file_hash.clone(),        // Use file_hash for storage path
-                        name: file_name.to_string(),
-                        size: file_data.len() as u64,
-                        encrypted: false,
-                    }).await;
-                    
-                    info!("Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})", 
-                        file_name, metadata.merkle_root, file_hash);
+                    state
+                        .http_server_state
+                        .register_file(http_server::HttpFileMetadata {
+                            hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
+                            file_hash: file_hash.clone(),       // Use file_hash for storage path
+                            name: file_name.to_string(),
+                            size: file_data.len() as u64,
+                            encrypted: false,
+                        })
+                        .await;
+
+                    info!(
+                        "Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})",
+                        file_name, metadata.merkle_root, file_hash
+                    );
 
                     match dht.publish_file(metadata.clone(), None).await {
                         Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
@@ -3264,7 +3441,6 @@ async fn add_ed2k_source(
     ed2k_link: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-
     let ed2k_info = Ed2kSourceInfo::from_ed2k_link(&ed2k_link)
         .map_err(|e| format!("Invalid ed2k link: {}", e))?;
 
@@ -3291,7 +3467,6 @@ async fn list_ed2k_sources(
     file_hash: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<Ed2kSourceInfo>, String> {
-
     let dht_guard = state.dht.lock().await;
     let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
 
@@ -3310,7 +3485,6 @@ async fn remove_ed2k_source(
     server_url: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-
     let dht_guard = state.dht.lock().await;
     let dht = dht_guard.as_ref().ok_or("DHT not initialized")?;
 
@@ -3330,21 +3504,20 @@ async fn remove_ed2k_source(
 }
 
 #[tauri::command]
-async fn test_ed2k_connection(
-    server_url: String,
-) -> Result<Ed2kServerInfo, String> {
-    use crate::ed2k_client::Ed2kClient;
-    
+async fn test_ed2k_connection(server_url: String) -> Result<Ed2kServerInfo, String> {
+    use ed2k_client::Ed2kClient;
+
     let mut client = Ed2kClient::new(server_url.clone());
-    
+
     // Try to connect
-    client.connect().await
+    client
+        .connect()
+        .await
         .map_err(|e| format!("Connection failed: {}", e))?;
-    
+
     // Get server info
-    let server_info = client.get_server_info().await
-        .map_err(|e| e.to_string())?;
-    
+    let server_info = client.get_server_info().await.map_err(|e| e.to_string())?;
+
     Ok(server_info)
 }
 
@@ -3353,14 +3526,11 @@ async fn search_ed2k_file(
     query: String,
     server_url: Option<String>,
 ) -> Result<Vec<Ed2kSearchResult>, String> {
-    let server = server_url.unwrap_or_else(|| 
-        "ed2k://|server|176.103.48.36|4661|/".to_string()
-    );
+    let server = server_url.unwrap_or_else(|| "ed2k://|server|176.103.48.36|4661|/".to_string());
     let mut client = Ed2kClient::new(server);
 
     client.connect().await.map_err(|e| e.to_string())?;
-    let results = client.search(&query).await
-        .map_err(|e| e.to_string())?;
+    let results = client.search(&query).await.map_err(|e| e.to_string())?;
 
     Ok(results)
 }
@@ -3382,8 +3552,7 @@ async fn get_ed2k_download_status(
 
 #[tauri::command]
 fn parse_ed2k_link(ed2k_link: String) -> Result<Ed2kSourceInfo, String> {
-    Ed2kSourceInfo::from_ed2k_link(&ed2k_link)
-        .map_err(|e| e.to_string())
+    Ed2kSourceInfo::from_ed2k_link(&ed2k_link).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -3409,13 +3578,13 @@ async fn download_blocks_from_network(
 async fn download_file_from_network(
     state: State<'_, AppState>,
     file_hash: String,
-    output_path: String,  // Remove the underscore - we'll use this now
+    output_path: String, // Remove the underscore - we'll use this now
 ) -> Result<String, String> {
     use std::path::Path;
 
     // ✅ VALIDATE OUTPUT PATH BEFORE STARTING DOWNLOAD
     let path = Path::new(&output_path);
-    
+
     // Check if parent directory exists
     if let Some(parent) = path.parent() {
         if !parent.exists() {
@@ -3509,7 +3678,7 @@ async fn download_file_from_network(
                                 .select_peers_with_strategy(
                                     &available_peers,
                                     1,
-                                    crate::peer_selection::SelectionStrategy::FastestFirst,
+                                    peer_selection::SelectionStrategy::FastestFirst,
                                     false,
                                 )
                                 .await;
@@ -3568,7 +3737,7 @@ async fn download_file_from_network(
                                                         info!("WebRTC connection established with peer {}", selected_peer);
 
                                                         // Send file request over WebRTC data channel
-                                                        let file_request = crate::webrtc_service::WebRTCFileRequest {
+                                                        let file_request = webrtc_service::WebRTCFileRequest {
                                                             file_hash: metadata.merkle_root.clone(),
                                                             file_name: metadata.file_name.clone(),
                                                             file_size: metadata.file_size,
@@ -3716,8 +3885,8 @@ async fn save_temp_file_for_upload(
 /// Get file size in bytes
 #[tauri::command]
 async fn get_file_size(file_path: String) -> Result<u64, String> {
-    let metadata = fs::metadata(&file_path)
-        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+    let metadata =
+        fs::metadata(&file_path).map_err(|e| format!("Failed to get file metadata: {}", e))?;
     Ok(metadata.len())
 }
 
@@ -3842,7 +4011,7 @@ async fn upload_file_chunk(
             .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
-        let metadata = dht::FileMetadata {
+        let metadata = dht::models::FileMetadata {
             merkle_root: merkle_root, // Store Merkle root for verification
             file_name: session.file_name.clone(),
             file_size: session.file_size,
@@ -3891,7 +4060,7 @@ async fn upload_file_chunk(
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
         if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use crate::download_source::HttpSourceInfo;
+            use download_source::HttpSourceInfo;
             metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
                 url: format!("http://{}", http_addr),
                 auth_header: None,
@@ -3899,7 +4068,10 @@ async fn upload_file_chunk(
                 headers: None,
                 timeout_secs: None,
             }]);
-            tracing::info!("Added HTTP source to streaming upload metadata: http://{}", http_addr);
+            tracing::info!(
+                "Added HTTP source to streaming upload metadata: http://{}",
+                http_addr
+            );
         }
 
         // Publish to DHT
@@ -4776,7 +4948,7 @@ async fn record_transfer_failure(
 #[tauri::command]
 async fn get_peer_metrics(
     state: State<'_, AppState>,
-) -> Result<Vec<crate::peer_selection::PeerMetrics>, String> {
+) -> Result<Vec<peer_selection::PeerMetrics>, String> {
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht.get_peer_metrics().await)
@@ -4809,7 +4981,7 @@ async fn select_peers_with_strategy(
     require_encryption: bool,
     blacklisted_peers: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    use crate::peer_selection::SelectionStrategy;
+    use peer_selection::SelectionStrategy;
 
     let selection_strategy = match strategy.as_str() {
         "fastest" => SelectionStrategy::FastestFirst,
@@ -5143,24 +5315,21 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
 // Logger configuration commands
 /// Saves application settings to a JSON file in the app data directory
 #[tauri::command]
-async fn save_app_settings(
-    app: tauri::AppHandle,
-    settings_json: String,
-) -> Result<(), String> {
+async fn save_app_settings(app: tauri::AppHandle, settings_json: String) -> Result<(), String> {
     let app_data_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     // Ensure the directory exists
     std::fs::create_dir_all(&app_data_dir)
         .map_err(|e| format!("Failed to create app data directory: {}", e))?;
-    
+
     let settings_file = app_data_dir.join("settings.json");
-    
+
     std::fs::write(&settings_file, settings_json)
         .map_err(|e| format!("Failed to write settings file: {}", e))?;
-    
+
     info!("Settings saved to: {}", settings_file.display());
     Ok(())
 }
@@ -5168,12 +5337,12 @@ async fn save_app_settings(
 /// Updates the file logger configuration at runtime.
 /// This allows enabling/disabling file logging and changing log rotation settings
 /// without restarting the application.
-/// 
+///
 /// All existing `info!()`, `debug!()`, `error!()` etc. calls throughout the codebase
 /// will automatically be captured and written to the log files when enabled.
-/// 
+///
 /// Logs are always written to the AppData directory, not the user's storage directory.
-/// 
+///
 /// Note: The tracing subscriber is initialized at startup, so changes to enable/disable
 /// logging will only affect whether logs are written to disk. Console logging remains active.
 #[tauri::command]
@@ -5188,16 +5357,20 @@ async fn update_log_config(
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let logs_dir = app_data_dir.join("logs");
     let config = logger::LogConfig::new(&logs_dir, max_log_size_mb, enabled);
-    
+
     let logger_lock = state.file_logger.lock().await;
     if let Some(ref writer) = *logger_lock {
         writer.update_config(config).map_err(|e| e.to_string())?;
-        
+
         if enabled {
-            info!("File logging enabled: {} (max size: {} MB)", logs_dir.display(), max_log_size_mb);
+            info!(
+                "File logging enabled: {} (max size: {} MB)",
+                logs_dir.display(),
+                max_log_size_mb
+            );
             // Force a write to create the log file if it doesn't exist
             info!("Logger configuration updated");
         } else {
@@ -5206,7 +5379,7 @@ async fn update_log_config(
     } else {
         return Err("File logger not initialized. Please restart the application.".to_string());
     }
-    
+
     Ok(())
 }
 
@@ -5217,7 +5390,7 @@ fn get_logs_directory(app: tauri::AppHandle) -> Result<String, String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let logs_dir = app_data_dir.join("logs");
     Ok(logs_dir.to_string_lossy().to_string())
 }
@@ -5255,10 +5428,7 @@ async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String
 ///
 /// Returns the actual bound address (useful if port 0 was used for auto-assignment)
 #[tauri::command]
-async fn start_http_server(
-    state: State<'_, AppState>,
-    port: u16,
-) -> Result<String, String> {
+async fn start_http_server(state: State<'_, AppState>, port: u16) -> Result<String, String> {
     // Check if server is already running
     {
         let addr_lock = state.http_server_addr.lock().await;
@@ -5271,16 +5441,23 @@ async fn start_http_server(
 
     tracing::info!("Starting HTTP server on {}", bind_addr);
 
-    // Start the server
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+    // Start the server with shutdown signal
     let server_state = state.http_server_state.clone();
-    let bound_addr = http_server::start_server(server_state, bind_addr)
+    let bound_addr = http_server::start_server(server_state, bind_addr, shutdown_rx)
         .await
         .map_err(|e| format!("Failed to start HTTP server: {}", e))?;
 
-    // Store the bound address
+    // Store the bound address and shutdown sender
     {
         let mut addr_lock = state.http_server_addr.lock().await;
         *addr_lock = Some(bound_addr);
+    }
+    {
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        *shutdown_lock = Some(shutdown_tx);
     }
 
     Ok(format!("http://{}", bound_addr))
@@ -5289,26 +5466,36 @@ async fn start_http_server(
 /// Stop HTTP server
 #[tauri::command]
 async fn stop_http_server(state: State<'_, AppState>) -> Result<(), String> {
-    let mut addr_lock = state.http_server_addr.lock().await;
+    let addr = {
+        let mut addr_lock = state.http_server_addr.lock().await;
+        if addr_lock.is_none() {
+            return Err("HTTP server is not running".to_string());
+        }
+        addr_lock.take()
+    };
 
-    if addr_lock.is_none() {
-        return Err("HTTP server is not running".to_string());
+    tracing::info!("Stopping HTTP server at {:?}", addr);
+
+    // Send shutdown signal
+    let shutdown_tx = {
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        shutdown_lock.take()
+    };
+
+    if let Some(tx) = shutdown_tx {
+        // Send shutdown signal (ignore error if receiver already dropped)
+        let _ = tx.send(());
+        tracing::info!("Sent graceful shutdown signal to HTTP server");
+    } else {
+        tracing::warn!("No shutdown channel found, server may not shut down gracefully");
     }
-
-    tracing::info!("Stopping HTTP server");
-
-    // TODO: Implement graceful shutdown
-    // For now, just clear the address (server task will continue running)
-    *addr_lock = None;
 
     Ok(())
 }
 
 /// Get HTTP server status
 #[tauri::command]
-async fn get_http_server_status(
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+async fn get_http_server_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let addr_lock = state.http_server_addr.lock().await;
 
     match &*addr_lock {
@@ -5352,7 +5539,7 @@ async fn download_file_http(
         merkle_root,
         seeder_url
     );
-    
+
     tracing::info!("Output path: {}", output_path);
 
     // Get our local peer ID to send to provider
@@ -5361,13 +5548,14 @@ async fn download_file_http(
     } else {
         None
     };
-    
+
     if let Some(ref local_id) = downloader_peer_id {
         tracing::info!("📤 Downloader peer ID: {}", local_id);
     }
 
     // Create progress channel
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<http_download::HttpDownloadProgress>(100);
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::channel::<http_download::HttpDownloadProgress>(100);
 
     // Spawn progress event emitter
     let app_handle = app.clone();
@@ -5399,44 +5587,50 @@ async fn download_file_http(
             Some(progress_tx),
         )
         .await;
-    
+
     // Wait for progress emitter to finish
     drop(emit_task);
-    
+
     match result {
         Ok(()) => {
             let duration_ms = start_time.elapsed().as_millis() as u64;
-            
+
             // Get file size
             let file_size = tokio::fs::metadata(&output_path)
                 .await
                 .map(|m| m.len())
                 .unwrap_or(0);
-            
-            tracing::info!("HTTP download completed successfully: {} ({} bytes in {} ms)", 
-                output_path, file_size, duration_ms);
-            
+
+            tracing::info!(
+                "HTTP download completed successfully: {} ({} bytes in {} ms)",
+                output_path,
+                file_size,
+                duration_ms
+            );
+
             // Record successful transfer metrics if peer_id provided
             if let Some(ref peer_id_str) = peer_id {
                 if let Some(dht) = state.dht.lock().await.as_ref() {
-                    dht.record_transfer_success(peer_id_str, file_size, duration_ms).await;
+                    dht.record_transfer_success(peer_id_str, file_size, duration_ms)
+                        .await;
                     tracing::info!("📊 Recorded successful transfer for peer: {}", peer_id_str);
                 }
             }
-            
+
             Ok(())
         }
         Err(e) => {
             tracing::error!("HTTP download failed: {}", e);
-            
+
             // Record failed transfer metrics if peer_id provided
             if let Some(ref peer_id_str) = peer_id {
                 if let Some(dht) = state.dht.lock().await.as_ref() {
-                    dht.record_transfer_failure(peer_id_str, "http_download_error").await;
+                    dht.record_transfer_failure(peer_id_str, "http_download_error")
+                        .await;
                     tracing::info!("📊 Recorded failed transfer for peer: {}", peer_id_str);
                 }
             }
-            
+
             Err(e)
         }
     }
@@ -5451,7 +5645,10 @@ async fn start_download_restart(
 ) -> Result<String, String> {
     let dr_guard = state.download_restart.lock().await;
     if let Some(ref service) = *dr_guard {
-        service.start_download(request).await.map_err(|e| e.to_string())
+        service
+            .start_download(request)
+            .await
+            .map_err(|e| e.to_string())
     } else {
         Err("Download restart service not initialized".to_string())
     }
@@ -5464,7 +5661,10 @@ async fn pause_download_restart(
 ) -> Result<(), String> {
     let dr_guard = state.download_restart.lock().await;
     if let Some(ref service) = *dr_guard {
-        service.pause_download(&download_id).await.map_err(|e| e.to_string())
+        service
+            .pause_download(&download_id)
+            .await
+            .map_err(|e| e.to_string())
     } else {
         Err("Download restart service not initialized".to_string())
     }
@@ -5477,7 +5677,10 @@ async fn resume_download_restart(
 ) -> Result<(), String> {
     let dr_guard = state.download_restart.lock().await;
     if let Some(ref service) = *dr_guard {
-        service.resume_download(&download_id).await.map_err(|e| e.to_string())
+        service
+            .resume_download(&download_id)
+            .await
+            .map_err(|e| e.to_string())
     } else {
         Err("Download restart service not initialized".to_string())
     }
@@ -5490,17 +5693,20 @@ async fn get_download_status_restart(
 ) -> Result<download_restart::DownloadStatus, String> {
     let dr_guard = state.download_restart.lock().await;
     if let Some(ref service) = *dr_guard {
-        service.get_status(&download_id).await.map_err(|e| e.to_string())
+        service
+            .get_status(&download_id)
+            .await
+            .map_err(|e| e.to_string())
     } else {
         Err("Download restart service not initialized".to_string())
     }
 }
 
-#[cfg(not(test))]
+// #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
     // so we can configure file logging properly
-    
+
     // Parse command line arguments
     use clap::Parser;
     let args = headless::CliArgs::parse();
@@ -5509,7 +5715,7 @@ fn main() {
     if args.headless {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
         let mut filter = EnvFilter::from_default_env();
-        
+
         // Add directives with safe fallback
         if let Ok(directive) = "chiral_network=info".parse() {
             filter = filter.add_directive(directive);
@@ -5526,12 +5732,12 @@ fn main() {
         if let Ok(directive) = "libp2p_mdns=warn".parse() {
             filter = filter.add_directive(directive);
         }
-        
+
         tracing_subscriber::registry()
             .with(fmt::layer())
             .with(filter)
             .init();
-            
+
         println!("Running in headless mode...");
 
         // Create a tokio runtime for async operations
@@ -5552,36 +5758,43 @@ fn main() {
             .ok()
             .and_then(|id| id.parse::<u16>().ok())
             .unwrap_or(1);
-        
+
         let instance_suffix = if instance_id == 1 {
             String::new()
         } else {
             format!("-{}", instance_id)
         };
-        
-        let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-            .map(|dirs| dirs.data_dir().join(format!("downloads{}", instance_suffix)))
-            .unwrap_or_else(|| std::env::current_dir().unwrap().join(format!("downloads{}", instance_suffix)));
-        
+
+        let download_dir =
+            directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .map(|dirs| {
+                    dirs.data_dir()
+                        .join(format!("downloads{}", instance_suffix))
+                })
+                .unwrap_or_else(|| {
+                    std::env::current_dir()
+                        .unwrap()
+                        .join(format!("downloads{}", instance_suffix))
+                });
+
         if let Err(e) = std::fs::create_dir_all(&download_dir) {
             eprintln!("Failed to create download directory: {}", e);
         }
 
         // Calculate port range based on instance ID to avoid conflicts
         // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
+
         let base_port = 6881 + ((instance_id - 1) * 11);
         let port_range = base_port..(base_port + 10);
-
-        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
-            download_dir,
-            Some(port_range)
-        )
-            .await
-            .expect("Failed to create BitTorrent handler");
+        // random port fallback, npm run tauri dev seems to not work with environment var solution
+        let bittorrent_handler = create_bt_handler_with_fallback(download_dir, port_range).await;
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
-        
+
         let mut manager = ProtocolManager::new();
-        manager.register(bittorrent_handler_arc.clone());
+
+        // Wrap the simple handler in the enhanced protocol handler
+        let bittorrent_protocol_handler = BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
+        manager.register(Box::new(bittorrent_protocol_handler));
         
         (bittorrent_handler_arc, Arc::new(manager))
     });
@@ -5593,22 +5806,30 @@ fn main() {
         state: State<'_, AppState>,
     ) -> Result<(), String> {
         println!("📊 RUST: publish_reputation_verdict called");
-        tracing::info!("📊 publish_reputation_verdict: {} -> {} ({:?})", 
-            verdict.issuer_id, verdict.target_id, verdict.outcome);
-        
+        tracing::info!(
+            "📊 publish_reputation_verdict: {} -> {} ({:?})",
+            verdict.issuer_id,
+            verdict.target_id,
+            verdict.outcome
+        );
+
         // Get DHT service from AppState
         let dht_guard = state.dht.lock().await;
-        let dht = dht_guard.as_ref()
+        let dht = dht_guard
+            .as_ref()
             .ok_or_else(|| "DHT service not initialized".to_string())?;
-        
+
         // Create ReputationDhtService and store verdict
         let mut reputation_dht = reputation::ReputationDhtService::new();
         reputation_dht.set_dht_service(Arc::clone(dht));
         println!("📊 RUST: About to store verdict");
         reputation_dht.store_transaction_verdict(&verdict).await?;
-        
+
         println!("✅ RUST: Verdict stored successfully");
-        tracing::info!("✅ Published verdict to DHT for peer: {}", verdict.target_id);
+        tracing::info!(
+            "✅ Published verdict to DHT for peer: {}",
+            verdict.target_id
+        );
         Ok(())
     }
 
@@ -5619,20 +5840,27 @@ fn main() {
     ) -> Result<Vec<reputation::TransactionVerdict>, String> {
         println!("🔍 RUST: get_reputation_verdicts called for: {}", peer_id);
         tracing::info!("📊 get_reputation_verdicts for peer: {}", peer_id);
-        
+
         // Get DHT service from AppState
         let dht_guard = state.dht.lock().await;
-        let dht = dht_guard.as_ref()
+        let dht = dht_guard
+            .as_ref()
             .ok_or_else(|| "DHT service not initialized".to_string())?;
-        
+
         // Create ReputationDhtService and retrieve verdicts
         let mut reputation_dht = reputation::ReputationDhtService::new();
         reputation_dht.set_dht_service(Arc::clone(dht));
         println!("🔍 RUST: About to retrieve verdicts");
-        let verdicts = reputation_dht.retrieve_transaction_verdicts(&peer_id).await?;
-        
+        let verdicts = reputation_dht
+            .retrieve_transaction_verdicts(&peer_id)
+            .await?;
+
         println!("✅ RUST: Retrieved {} verdicts", verdicts.len());
-        tracing::info!("✅ Retrieved {} verdicts for peer: {}", verdicts.len(), peer_id);
+        tracing::info!(
+            "✅ Retrieved {} verdicts for peer: {}",
+            verdicts.len(),
+            peer_id
+        );
         Ok(verdicts)
     }
 
@@ -5680,9 +5908,10 @@ fn main() {
                     .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
             })),
             http_server_addr: Arc::new(Mutex::new(None)),
+            http_server_shutdown: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
-            stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
+            stream_auth: Arc::new(Mutex::new(stream_auth::StreamAuthService::new())),
 
             // Initialize the new map for AES keys
             canonical_aes_keys: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -5701,9 +5930,9 @@ fn main() {
             // Protocol Manager with BitTorrent support
             protocol_manager: protocol_manager_arc,
 
-          // File logger - will be initialized in setup phase after loading settings
+            // File logger - will be initialized in setup phase after loading settings
             file_logger: Arc::new(Mutex::new(None)),
-          
+
             // BitTorrent handler for creating and seeding torrents
             bittorrent_handler: bittorrent_handler_arc,
 
@@ -5759,15 +5988,20 @@ fn main() {
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
+            get_chain_id,
             get_block_details_by_number,
             get_transaction_history,
             get_transaction_history_range,
             get_miner_logs,
             get_miner_performance,
+            get_miner_diagnostics,
+            start_mining_monitor,
+            clear_blocks_cache,
             get_blocks_mined,
             get_recent_mined_blocks_pub,
             get_mined_blocks_range,
             get_total_mining_rewards,
+            get_block_reward,
             calculate_accurate_totals,
             get_cpu_temperature,
             start_dht_node,
@@ -5787,7 +6021,6 @@ fn main() {
             get_peer_id,
             is_dht_running,
             get_dht_connected_peers,
-            send_dht_message,
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
@@ -5865,6 +6098,12 @@ fn main() {
             download_file_http,
             save_temp_file_for_upload,
             get_file_size,
+            // Reassembly system commands
+            reassembly::write_chunk_temp,
+            reassembly::verify_and_finalize,
+            reassembly::save_chunk_bitmap,
+            reassembly::load_chunk_bitmap,
+            reassembly::cleanup_transfer_temp,
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
             //request_file_access,
@@ -5925,7 +6164,7 @@ fn main() {
 
             // Initialize tracing subscriber with console output and optionally file output
             use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-            
+
             let env_filter = {
                 #[cfg(debug_assertions)]
                 {
@@ -5943,14 +6182,20 @@ fn main() {
                         .add_directive("libp2p=error".parse().unwrap())
                 }
             };
-            
+
             // Always create file logger (even if disabled) so it can be enabled/disabled later
-            let app_data_dir = app.path().app_data_dir()
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
                 .expect("Failed to get app data directory");
             let logs_dir = app_data_dir.join("logs");
 
-            let log_config = logger::LogConfig::new(&logs_dir, settings.max_log_size_mb, settings.enable_file_logging);
-            
+            let log_config = logger::LogConfig::new(
+                &logs_dir,
+                settings.max_log_size_mb,
+                settings.enable_file_logging,
+            );
+
             let file_logger_writer = match logger::RotatingFileWriter::new(log_config) {
                 Ok(writer) => {
                     let thread_safe_writer = logger::ThreadSafeWriter::new(writer);
@@ -5961,7 +6206,7 @@ fn main() {
                     None
                 }
             };
-            
+
             // Initialize tracing subscriber with both console and file output
             // File output will only write if enabled in config
             if let Some(ref file_writer) = file_logger_writer {
@@ -5982,7 +6227,7 @@ fn main() {
                 if let Some(state) = app.try_state::<AppState>() {
                     let mut file_logger = state.file_logger.blocking_lock();
                     *file_logger = Some(file_writer.clone());
-                    
+
                     // Log the current log file path if logging is enabled
                     if settings.enable_file_logging {
                         if let Some(path) = file_writer.current_log_file_path() {
@@ -5991,7 +6236,7 @@ fn main() {
                     }
                 }
             }
-            
+
             // Clean up any orphaned geth processes on startup
             #[cfg(unix)]
             {
@@ -6032,7 +6277,8 @@ fn main() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
-            let icon = app.default_window_icon()
+            let icon = app
+                .default_window_icon()
                 .ok_or("Failed to get default window icon")?
                 .clone();
 
@@ -6125,32 +6371,58 @@ fn main() {
 
                             tracing::info!("Attempting to start HTTP server on port {}...", port);
 
-                            match http_server::start_server(state.http_server_state.clone(), bind_addr).await {
+                            // Create shutdown channel
+                            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+                            match http_server::start_server(
+                                state.http_server_state.clone(),
+                                bind_addr,
+                                shutdown_rx,
+                            )
+                            .await
+                            {
                                 Ok(bound_addr) => {
                                     let mut addr_lock = state.http_server_addr.lock().await;
                                     *addr_lock = Some(bound_addr);
-                                    tracing::info!("HTTP server started at http://{}", bound_addr);
-                                    println!("✅ HTTP server listening on http://{}", bound_addr);
+                                    
+                                    let mut shutdown_lock = state.http_server_shutdown.lock().await;
+                                    *shutdown_lock = Some(shutdown_tx);
+                                    
+                                    tracing::info!("✅ HTTP server listening on http://{}", bound_addr);
                                     server_started = true;
                                     break;
                                 }
-                                Err(e) if e.to_string().contains("address already in use") || 
-                                          e.to_string().contains("Address already in use") || 
-                                          e.to_string().contains("os error 48") => {
-                                    tracing::debug!("Port {} already in use, trying next port...", port);
+                                Err(e)
+                                    if e.to_string().contains("address already in use")
+                                        || e.to_string().contains("Address already in use")
+                                        || e.to_string().contains("os error 48") =>
+                                {
+                                    tracing::debug!(
+                                        "Port {} already in use, trying next port...",
+                                        port
+                                    );
                                     continue;
                                 }
                                 Err(e) => {
-                                    tracing::error!("Failed to start HTTP server on port {}: {}", port, e);
-                                    eprintln!("⚠️  HTTP server failed to start on port {}: {}", port, e);
+                                    tracing::error!(
+                                        "Failed to start HTTP server on port {}: {}",
+                                        port,
+                                        e
+                                    );
+                                    eprintln!(
+                                        "⚠️  HTTP server failed to start on port {}: {}",
+                                        port, e
+                                    );
                                     break;
                                 }
                             }
                         }
-                        
+
                         if !server_started {
                             tracing::warn!("Could not start HTTP server on any port (8080-8090)");
-                            eprintln!("⚠️  HTTP server could not start - all ports 8080-8090 are in use");
+                            eprintln!(
+                                "⚠️  HTTP server could not start - all ports 8080-8090 are in use"
+                            );
                         }
                     }
                 });
@@ -6161,9 +6433,9 @@ fn main() {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     if let Some(state) = app_handle.try_state::<AppState>() {
-                        let download_restart_service = Arc::new(download_restart::DownloadRestartService::new(
-                            app_handle.clone()
-                        ));
+                        let download_restart_service = Arc::new(
+                            download_restart::DownloadRestartService::new(app_handle.clone()),
+                        );
                         if let Ok(mut dr_guard) = state.download_restart.try_lock() {
                             *dr_guard = Some(download_restart_service);
                         }
@@ -6192,6 +6464,38 @@ fn main() {
             }
             _ => {}
         });
+}
+
+async fn create_bt_handler_with_fallback(
+    download_dir: PathBuf,
+    port_range: Range<u16>,
+) -> bittorrent_handler::BitTorrentHandler {
+    // Try the requested range first
+    if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+        download_dir.clone(),
+        Some(port_range.clone()),
+    )
+    .await
+    {
+        return h;
+    }
+
+    // Fallback: random range
+    let mut rng = rand::thread_rng();
+
+    loop {
+        let start = rng.gen_range(30000..60000);
+        let fallback = start..(start + 10);
+
+        if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+            download_dir.clone(),
+            Some(fallback),
+        )
+        .await
+        {
+            return h;
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -6547,7 +6851,7 @@ async fn stop_proof_of_storage_watcher(state: State<'_, AppState>) -> Result<(),
         // Abort the task to ensure it stops immediately.
         handle.abort();
         // Awaiting the aborted handle can confirm it's terminated.
-    match tokio::time::timeout(tokio::time::Duration::from_secs(2), handle).await {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(2), handle).await {
             Ok(_) => tracing::info!("Proof watcher task successfully joined."),
             Err(_) => tracing::warn!("Proof watcher abort timed out"),
         }
@@ -6679,7 +6983,6 @@ async fn get_multiaddresses(state: State<'_, AppState>) -> Result<Vec<String>, S
     }
 }
 
-
 #[tauri::command]
 async fn clear_seed_list() -> Result<(), String> {
     // Since you're using localStorage fallback, this command just needs to exist
@@ -6687,7 +6990,6 @@ async fn clear_seed_list() -> Result<(), String> {
     // This command is here for consistency if you add file-based storage later
     Ok(())
 }
-
 
 #[tauri::command]
 fn check_directory_exists(path: String) -> Result<bool, String> {
