@@ -251,10 +251,6 @@ pub enum DhtCommand {
         offer_request: WebRTCOfferRequest,
         sender: oneshot::Sender<Result<WebRTCAnswerResponse, String>>,
     },
-    SendMessageToPeer {
-        target_peer_id: PeerId,
-        message: serde_json::Value,
-    },
     StoreBlock {
         cid: Cid,
         data: Vec<u8>,
@@ -2292,21 +2288,6 @@ async fn run_dht_node(
                             Some(DhtCommand::SendWebRTCOffer { peer, offer_request, sender }) => {
                                 let id = swarm.behaviour_mut().webrtc_signaling_rr.send_request(&peer, offer_request);
                                 pending_webrtc_offers.lock().await.insert(id, sender);
-                            }
-                            Some(DhtCommand::SendMessageToPeer { target_peer_id, message }) => {
-                                // TODO: Implement a proper messaging protocol
-                                // For now, we'll use the proxy protocol to send messages
-                                // In a real implementation, this could use a dedicated messaging protocol
-                                match serde_json::to_vec(&message) {
-                                    Ok(message_data) => {
-                                        // Send the message directly using the proxy protocol
-                                        let request_id = swarm.behaviour_mut().proxy_rr.send_request(&target_peer_id, EchoRequest(message_data));
-                                        info!("Sent message to peer {} with request ID {:?}", target_peer_id, request_id);
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to serialize message: {}", e);
-                                    }
-                                }
                             }
                             Some(DhtCommand::StoreBlock { cid, data }) => {
                                 match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid, data) {
@@ -6426,27 +6407,6 @@ impl DhtService {
             .map_err(|e| format!("Echo response error: {}", e))?
     }
 
-    pub async fn send_message_to_peer(
-        &self,
-        peer_id: &str,
-        message: serde_json::Value,
-    ) -> Result<(), String> {
-        let target_peer_id: PeerId = peer_id
-            .parse()
-            .map_err(|e| format!("Invalid peer ID: {}", e))?;
-
-        // Send message through DHT command system
-        self.cmd_tx
-            .send(DhtCommand::SendMessageToPeer {
-                target_peer_id,
-                message,
-            })
-            .await
-            .map_err(|e| format!("Failed to send DHT command: {e}"))?;
-
-        Ok(())
-    }
-
     pub async fn update_privacy_proxy_targets(&self, addresses: Vec<String>) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SetPrivacyProxies { addresses })
@@ -6880,18 +6840,6 @@ impl DhtService {
             trusted_count, mode
         );
 
-        // Send event to notify about privacy routing status
-        let _ = self.cmd_tx.send(DhtCommand::SendMessageToPeer {
-            target_peer_id: self
-                .peer_id
-                .parse()
-                .map_err(|e| format!("Invalid peer ID: {}", e))?,
-            message: serde_json::json!({
-                "type": "privacy_routing_enabled",
-                "trusted_proxies": trusted_count
-            }),
-        });
-
         Ok(())
     }
 
@@ -6907,17 +6855,6 @@ impl DhtService {
         proxy_mgr.manual_trusted.clear();
 
         info!("Privacy routing disabled - reverting to direct connections");
-
-        // Send event to notify about privacy routing status
-        let _ = self.cmd_tx.send(DhtCommand::SendMessageToPeer {
-            target_peer_id: self
-                .peer_id
-                .parse()
-                .map_err(|e| format!("Invalid peer ID: {}", e))?,
-            message: serde_json::json!({
-                "type": "privacy_routing_disabled"
-            }),
-        });
 
         Ok(())
     }
