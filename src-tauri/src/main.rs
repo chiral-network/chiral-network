@@ -6283,8 +6283,7 @@ fn main() {
                                     let mut shutdown_lock = state.http_server_shutdown.lock().await;
                                     *shutdown_lock = Some(shutdown_tx);
                                     
-                                    tracing::info!("HTTP server started at http://{}", bound_addr);
-                                    println!("✅ HTTP server listening on http://{}", bound_addr);
+                                    tracing::info!("✅ HTTP server listening on http://{}", bound_addr);
                                     server_started = true;
                                     break;
                                 }

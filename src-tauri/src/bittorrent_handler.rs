@@ -65,6 +65,14 @@ pub enum BitTorrentError {
     #[error("Torrent already exists: {info_hash}")]
     TorrentExists { info_hash: String },
 
+    /// Torrent not found
+    #[error("Torrent not found: {info_hash}")]
+    TorrentNotFound { info_hash: String },
+
+    /// Protocol-specific error
+    #[error("Protocol error: {message}")]
+    ProtocolSpecific { message: String },
+
     /// Unknown error from librqbit
     #[error("Unknown BitTorrent error: {message}")]
     Unknown { message: String },
@@ -116,6 +124,12 @@ impl BitTorrentError {
             BitTorrentError::TorrentExists { .. } => {
                 "This torrent is already being downloaded or seeded.".to_string()
             }
+            BitTorrentError::TorrentNotFound { .. } => {
+                "Torrent not found. It may have been removed or never added.".to_string()
+            }
+            BitTorrentError::ProtocolSpecific { message } => {
+                format!("BitTorrent operation failed: {}", message)
+            }
             BitTorrentError::Unknown { .. } => {
                 "An unexpected error occurred. Please try again or contact support if the issue persists.".to_string()
             }
@@ -137,6 +151,8 @@ impl BitTorrentError {
             BitTorrentError::IoError { .. } => "filesystem",
             BitTorrentError::ConfigError { .. } => "config",
             BitTorrentError::TorrentExists { .. } => "state",
+            BitTorrentError::TorrentNotFound { .. } => "state",
+            BitTorrentError::ProtocolSpecific { .. } => "protocol",
             BitTorrentError::Unknown { .. } => "unknown",
         }
     }
@@ -563,6 +579,143 @@ impl SimpleProtocolHandler for BitTorrentHandler {
         info!("Successfully started seeding. Magnet link: {}", magnet_link);
         Ok(magnet_link)
     }
+}
+
+// Pause/Resume/Cancel methods for torrent control
+impl BitTorrentHandler {
+    /// Pause a torrent by info hash
+    pub async fn pause_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
+        info!("Pausing torrent: {}", info_hash);
+        
+        let torrents = self.active_torrents.lock().await;
+        if let Some(handle) = torrents.get(info_hash) {
+            self.rqbit_session
+                .pause(handle)
+                .await
+                .map_err(|e| BitTorrentError::ProtocolSpecific {
+                    message: format!("Failed to pause torrent: {}", e),
+                })?;
+            info!("Successfully paused torrent: {}", info_hash);
+            Ok(())
+        } else {
+            Err(BitTorrentError::TorrentNotFound {
+                info_hash: info_hash.to_string(),
+            })
+        }
+    }
+
+    /// Resume a paused torrent by info hash
+    pub async fn resume_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
+        info!("Resuming torrent: {}", info_hash);
+        
+        let torrents = self.active_torrents.lock().await;
+        if let Some(handle) = torrents.get(info_hash) {
+            self.rqbit_session
+                .unpause(handle)
+                .await
+                .map_err(|e| BitTorrentError::ProtocolSpecific {
+                    message: format!("Failed to resume torrent: {}", e),
+                })?;
+            info!("Successfully resumed torrent: {}", info_hash);
+            Ok(())
+        } else {
+            Err(BitTorrentError::TorrentNotFound {
+                info_hash: info_hash.to_string(),
+            })
+        }
+    }
+
+    /// Cancel/remove a torrent by info hash
+    pub async fn cancel_torrent(&self, info_hash: &str, delete_files: bool) -> Result<(), BitTorrentError> {
+        info!("Cancelling torrent: {} (delete_files: {})", info_hash, delete_files);
+        
+        // Remove from our tracking first
+        let handle = {
+            let mut torrents = self.active_torrents.lock().await;
+            torrents.remove(info_hash)
+        };
+        
+        if let Some(handle) = handle {
+            // Use the torrent's ID for deletion
+            let torrent_id = handle.id();
+            self.rqbit_session
+                .delete(torrent_id.into(), delete_files)
+                .await
+                .map_err(|e| BitTorrentError::ProtocolSpecific {
+                    message: format!("Failed to cancel torrent: {}", e),
+                })?;
+            info!("Successfully cancelled torrent: {}", info_hash);
+            Ok(())
+        } else {
+            Err(BitTorrentError::TorrentNotFound {
+                info_hash: info_hash.to_string(),
+            })
+        }
+    }
+
+    /// Stop seeding a torrent (same as cancel but specifically for seeding)
+    pub async fn stop_seeding_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
+        info!("Stopping seeding for torrent: {}", info_hash);
+        // For seeding, we just cancel without deleting files
+        self.cancel_torrent(info_hash, false).await
+    }
+
+    /// Get progress information for a torrent
+    pub async fn get_torrent_progress(&self, info_hash: &str) -> Result<TorrentProgress, BitTorrentError> {
+        let torrents = self.active_torrents.lock().await;
+        
+        if let Some(handle) = torrents.get(info_hash) {
+            let stats = handle.stats();
+            
+            // Extract download/upload speed from live stats if available
+            // Speed is in Mbps, convert to bytes/sec (Mbps * 1_000_000 / 8)
+            let (download_speed, upload_speed, eta_seconds) = if let Some(live) = &stats.live {
+                let download_speed = live.download_speed.mbps as f64 * 125_000.0; // Mbps to bytes/sec
+                let upload_speed = live.upload_speed.mbps as f64 * 125_000.0;
+                // time_remaining is a DurationWithHumanReadable, extract seconds if available
+                let eta = live.average_piece_download_time.map(|d| {
+                    if stats.total_bytes > stats.progress_bytes {
+                        let remaining = stats.total_bytes - stats.progress_bytes;
+                        let speed_bps = download_speed.max(1.0);
+                        (remaining as f64 / speed_bps) as u64
+                    } else {
+                        0
+                    }
+                });
+                (download_speed, upload_speed, eta)
+            } else {
+                (0.0, 0.0, None)
+            };
+            
+            Ok(TorrentProgress {
+                downloaded_bytes: stats.progress_bytes,
+                uploaded_bytes: stats.uploaded_bytes,
+                total_bytes: stats.total_bytes,
+                download_speed,
+                upload_speed,
+                eta_seconds,
+                is_finished: stats.finished,
+                state: format!("{}", stats.state),
+            })
+        } else {
+            Err(BitTorrentError::TorrentNotFound {
+                info_hash: info_hash.to_string(),
+            })
+        }
+    }
+}
+
+/// Progress information for a torrent
+#[derive(Debug, Clone)]
+pub struct TorrentProgress {
+    pub downloaded_bytes: u64,
+    pub uploaded_bytes: u64,
+    pub total_bytes: u64,
+    pub download_speed: f64,
+    pub upload_speed: f64,
+    pub eta_seconds: Option<u64>,
+    pub is_finished: bool,
+    pub state: String,
 }
 
 // Helper functions for error mapping and validation
