@@ -74,7 +74,7 @@ use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1025,6 +1025,12 @@ async fn start_miner(
         *miner_address = Some(address.clone());
     } // MutexGuard is dropped here
 
+    // Also store in static variable for mining monitor
+    {
+        let mut current_address = CURRENT_MINER_ADDRESS.lock().await;
+        *current_address = Some(address.clone());
+    }
+
     // Try to start mining
     match start_mining(&address, threads).await {
         Ok(_) => Ok(()),
@@ -1067,7 +1073,13 @@ async fn start_miner(
 
 #[tauri::command]
 async fn stop_miner() -> Result<(), String> {
-    stop_mining().await
+    stop_mining().await?;
+    // Clear the current mining address
+    {
+        let mut current_address = CURRENT_MINER_ADDRESS.lock().await;
+        *current_address = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1181,8 +1193,12 @@ async fn start_mining_monitor(
                             // Only trigger on "Successfully sealed new block" to avoid duplicate events
                             if line.contains("Successfully sealed new block") {
                                 // 🎉 WE MINED A BLOCK! 🎉
-                                // Simple as that - increment our counter and update frontend
-                                increment_mined_blocks().await;
+                                // Get the current mining address and increment the counter for that address
+                                if let Some(miner_address) = CURRENT_MINER_ADDRESS.lock().await.clone() {
+                                    increment_mined_blocks(miner_address).await;
+                                } else {
+                                    println!("⚠️  Block mined but no current miner address set!");
+                                }
 
                                 // Emit event to frontend - that's it!
                                 let result = app.emit("block_mined", serde_json::json!({
@@ -1216,19 +1232,22 @@ async fn start_mining_monitor(
 
 lazy_static! {
     static ref BLOCKS_CACHE: Mutex<Option<(String, u64, Instant)>> = Mutex::new(None);
-    // Simple running count of total blocks mined (since we started monitoring)
-    static ref TOTAL_MINED_BLOCKS: Mutex<u64> = Mutex::new(0);
+    // Running count of blocks mined per address
+    static ref TOTAL_MINED_BLOCKS: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
+    // Current mining address
+    static ref CURRENT_MINER_ADDRESS: Mutex<Option<String>> = Mutex::new(None);
 }
 
-async fn increment_mined_blocks() {
-    let mut count = TOTAL_MINED_BLOCKS.lock().await;
+async fn increment_mined_blocks(miner_address: String) {
+    let mut counts = TOTAL_MINED_BLOCKS.lock().await;
+    let count = counts.entry(miner_address.clone()).or_insert(0);
     *count += 1;
-    println!("🎉 Block mined! Total blocks mined: {}", *count);
+    println!("🎉 Block mined by {}! Total blocks mined by this address: {}", miner_address, *count);
 }
 
-async fn get_total_mined_blocks() -> u64 {
-    let count = TOTAL_MINED_BLOCKS.lock().await;
-    *count
+async fn get_total_mined_blocks(miner_address: &str) -> u64 {
+    let counts = TOTAL_MINED_BLOCKS.lock().await;
+    *counts.get(miner_address).unwrap_or(&0)
 }
 
 #[tauri::command]
@@ -1241,9 +1260,9 @@ async fn clear_blocks_cache() {
 }
 
 #[tauri::command]
-async fn get_blocks_mined(_app: tauri::AppHandle, _address: String) -> Result<u64, String> {
-    // Simple: return our running count
-    let count = get_total_mined_blocks().await;
+async fn get_blocks_mined(_app: tauri::AppHandle, address: String) -> Result<u64, String> {
+    // Return the running count for this address
+    let count = get_total_mined_blocks(&address).await;
     Ok(count)
 }
 #[tauri::command]
