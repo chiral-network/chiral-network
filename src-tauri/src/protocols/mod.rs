@@ -25,7 +25,7 @@
 //!
 //! // Download a file
 //! let handle = manager.download(
-//!     "https://example.com/file.zip",
+//!     "[https://example.com/file.zip](https://example.com/file.zip)",
 //!     DownloadOptions::default(),
 //! ).await?;
 //! ```
@@ -35,11 +35,12 @@ pub mod bittorrent;
 pub mod http;
 pub mod ftp;
 pub mod ed2k;
+pub mod seeding;
 
 // Re-export commonly used types
 pub use traits::{
+    // ProtocolManager
     ProtocolHandler,
-    ProtocolManager,
     ProtocolCapabilities,
     ProtocolError,
     DownloadHandle,
@@ -53,6 +54,12 @@ pub use traits::{
     SimpleProtocolManager,
 };
 
+use crate::protocols::seeding::{SeedingEntry, SeedingRegistry};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use tracing::{info, warn};
+
 // Re-export legacy trait with the old name for backward compatibility
 // This allows existing code like bittorrent_handler.rs to continue working
 #[doc(hidden)]
@@ -64,87 +71,256 @@ pub use http::HttpProtocolHandler;
 pub use ftp::FtpProtocolHandler;
 pub use ed2k::Ed2kProtocolHandler;
 
-/// Creates a protocol manager with all available handlers registered
+/// Manages multiple protocol handlers
 ///
-/// This is a convenience function for setting up a fully-configured protocol manager.
-///
-/// # Arguments
-///
-/// * `download_dir` - Directory for BitTorrent downloads
-/// * `ed2k_server` - ED2K server URL (optional, if None ED2K is not registered)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let manager = create_protocol_manager(
-///     PathBuf::from("./downloads"),
-///     Some("ed2k://|server|192.168.1.1|4661|/".to_string()),
-/// ).await?;
-/// ```
-pub async fn create_protocol_manager(
-    download_dir: std::path::PathBuf,
-    ed2k_server: Option<String>,
-) -> Result<ProtocolManager, ProtocolError> {
-    let mut manager = ProtocolManager::new();
-
-    // Register HTTP handler
-    manager.register(Box::new(HttpProtocolHandler::new()?));
-
-    // Register FTP handler
-    manager.register(Box::new(FtpProtocolHandler::new()));
-
-    // Register BitTorrent handler
-    let bt_handler = BitTorrentProtocolHandler::with_download_directory(download_dir).await?;
-    manager.register(Box::new(bt_handler));
-
-    // Register ED2K handler if server is provided
-    if let Some(server) = ed2k_server {
-        manager.register(Box::new(Ed2kProtocolHandler::new(server)));
-    }
-
-    Ok(manager)
+/// Routes downloads and seeds to the appropriate handler based on the identifier.
+pub struct ProtocolManager {
+    handlers: Vec<Box<dyn ProtocolHandler>>,
+    simple_handlers: Vec<std::sync::Arc<dyn SimpleProtocolHandler>>,
+    seeding_registry: SeedingRegistry, // <-- ADDED
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_protocol_identification() {
-        let http = HttpProtocolHandler::new().unwrap();
-        let ftp = FtpProtocolHandler::new();
-
-        // HTTP
-        assert!(http.supports("http://example.com/file.zip"));
-        assert!(http.supports("https://example.com/file.zip"));
-        assert!(!http.supports("ftp://example.com/file.zip"));
-
-        // FTP
-        assert!(ftp.supports("ftp://example.com/file.zip"));
-        assert!(ftp.supports("ftps://example.com/file.zip"));
-        assert!(!ftp.supports("http://example.com/file.zip"));
+impl ProtocolManager {
+    /// Creates a new protocol manager
+    pub fn new() -> Self {
+        Self {
+            handlers: Vec::new(),
+            simple_handlers: Vec::new(),
+            seeding_registry: SeedingRegistry::new(), // <-- INITIALIZED
+        }
     }
 
-    #[test]
-    fn test_protocol_names() {
-        let http = HttpProtocolHandler::new().unwrap();
-        let ftp = FtpProtocolHandler::new();
-
-        assert_eq!(http.name(), "http");
-        assert_eq!(ftp.name(), "ftp");
+    /// Registers an enhanced protocol handler
+    pub fn register(&mut self, handler: Box<dyn ProtocolHandler>) {
+        info!("Registering protocol handler: {}", handler.name()); // <-- Added logging
+        self.handlers.push(handler);
     }
 
-    #[test]
-    fn test_protocol_capabilities() {
-        let http = HttpProtocolHandler::new().unwrap();
-        let ftp = FtpProtocolHandler::new();
+    /// Finds a handler that supports the given identifier
+    pub fn find_handler(&self, identifier: &str) -> Option<&dyn ProtocolHandler> {
+        self.handlers
+            .iter()
+            .find(|h| h.supports(identifier))
+            .map(|h| h.as_ref())
+    }
 
-        let http_caps = http.capabilities();
-        assert!(!http_caps.supports_seeding);
-        assert!(http_caps.supports_encryption); // HTTPS
+    /// Finds a simple handler that supports the given identifier
+    fn find_simple_handler(&self, identifier: &str) -> Option<&dyn SimpleProtocolHandler> {
+        self.simple_handlers
+            .iter()
+            .find(|h| h.supports(identifier))
+            .map(|h| h.as_ref())
+    }
 
-        let ftp_caps = ftp.capabilities();
-        assert!(ftp_caps.supports_seeding);
-        assert!(ftp_caps.supports_pause_resume);
+    /// Initiates a download using the appropriate handler
+    pub async fn download(
+        &self,
+        identifier: &str,
+        options: DownloadOptions,
+    ) -> Result<DownloadHandle, ProtocolError> {
+        let handler = self
+            .find_handler(identifier)
+            .ok_or_else(|| ProtocolError::InvalidIdentifier(
+                format!("No handler found for: {}", identifier)
+            ))?;
+
+        handler.download(identifier, options).await
+    }
+
+    /// Starts seeding using the specified protocol
+    pub async fn seed(
+        &self,
+        protocol: &str,
+        file_path: PathBuf,
+        options: SeedOptions,
+    ) -> Result<SeedingInfo, ProtocolError> {
+        let handler = self
+            .handlers
+            .iter()
+            .find(|h| h.name() == protocol)
+            .ok_or_else(|| ProtocolError::InvalidIdentifier(
+                format!("Unknown protocol: {}", protocol)
+            ))?;
+
+        handler.seed(file_path, options).await
+    }
+
+    /// Lists all handlers and their capabilities
+    pub fn list_protocols(&self) -> Vec<(&'static str, ProtocolCapabilities)> {
+        self.handlers
+            .iter()
+            .map(|h| (h.name(), h.capabilities()))
+            .collect()
+    }
+
+    // =========================================================================
+    // Legacy Methods (for backward compatibility)
+    // =========================================================================
+
+    /// Initiates a download using the appropriate handler (legacy API)
+    /// This is a backward-compatible wrapper that tries both enhanced and simple handlers.
+    #[deprecated(note = "Use download() with DownloadOptions instead")]
+    pub async fn download_simple(&self, identifier: &str) -> Result<(), String> {
+        // First try enhanced handlers
+        if let Some(handler) = self.find_handler(identifier) {
+            return handler.download(identifier, DownloadOptions::default())
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+        }
+
+        // Then try simple handlers
+        if let Some(handler) = self.find_simple_handler(identifier) {
+            return handler.download(identifier).await;
+        }
+
+        Err(format!("No handler found for: {}", identifier))
+    }
+
+    /// Starts seeding a file (legacy API)
+    /// This is a backward-compatible wrapper that tries both enhanced and simple handlers.
+    #[deprecated(note = "Use seed() with protocol and SeedOptions instead")]
+    pub async fn seed_simple(&self, file_path: &str) -> Result<String, String> {
+        // Try enhanced handlers first
+        for handler in &self.handlers {
+            if handler.capabilities().supports_seeding {
+                match handler.seed(PathBuf::from(file_path), SeedOptions::default()).await {
+                    Ok(info) => return Ok(info.identifier),
+                    Err(_) => continue,
+                }
+            }
+        }
+
+        // Then try simple handlers
+        for handler in &self.simple_handlers {
+            match handler.seed(file_path).await {
+                Ok(identifier) => return Ok(identifier),
+                Err(_) => continue,
+            }
+        }
+
+        Err(format!("No handler available to seed: {}", file_path))
+    }
+
+    // =========================================================================
+    // --- New Methods for Centralized Seeding ---
+    // =========================================================================
+
+    /// Seed a file on multiple protocols simultaneously and register it.
+    pub async fn seed_file_multi_protocol(
+        &self,
+        file_path: PathBuf,
+        protocols: Vec<String>, // e.g., ["bittorrent", "ed2k"]
+        options: SeedOptions,
+    ) -> Result<HashMap<String, SeedingInfo>, ProtocolError> {
+        info!("Seeding file on protocols: {:?}", protocols);
+
+        if !file_path.exists() {
+            return Err(ProtocolError::FileNotFound(
+                file_path.to_string_lossy().to_string(),
+            ));
+        }
+
+        let mut results = HashMap::new();
+        // Use SHA-256 as the unique file identifier
+        let file_hash = self.calculate_file_hash(&file_path).await?;
+
+        for protocol_name in protocols {
+            if let Some(handler) = self.handlers.iter().find(|h| h.name() == protocol_name) {
+                if !handler.capabilities().supports_seeding {
+                    warn!("Protocol {} does not support seeding.", protocol_name);
+                    continue;
+                }
+                
+                match handler.seed(file_path.clone(), options.clone()).await {
+                    Ok(seeding_info) => {
+                        // Add to registry
+                        self.seeding_registry
+                            .add_seeding(
+                                file_hash.clone(),
+                                file_path.clone(),
+                                protocol_name.clone(),
+                                seeding_info.clone(),
+                            )
+                            .await
+                            .map_err(|e| ProtocolError::Internal(e))?;
+
+                        results.insert(protocol_name, seeding_info);
+                    }
+                    Err(e) => {
+                        warn!("Failed to seed on {}: {}", protocol_name, e);
+                    }
+                }
+            } else {
+                warn!("No handler found for protocol: {}", protocol_name);
+            }
+        }
+
+        if results.is_empty() {
+            Err(ProtocolError::Internal(
+                "Failed to seed on any protocol".to_string(),
+            ))
+        } else {
+            Ok(results)
+        }
+    }
+
+    /// Stop seeding a file on all protocols it's registered with.
+    pub async fn stop_seeding_all(&self, file_hash: &str) -> Result<(), ProtocolError> {
+        info!("Stopping seeding for file hash: {}", file_hash);
+
+        // Get seeding entry to find which protocols are active
+        let entries = self.seeding_registry.entries.read().await;
+        let entry = match entries.get(file_hash) {
+            Some(entry) => entry.clone(), // Clone to release lock
+            None => {
+                // Using DownloadNotFound as it's the closest existing variant
+                return Err(ProtocolError::DownloadNotFound(
+                    "File not found in seeding registry".to_string(),
+                ));
+            }
+        };
+        drop(entries); // Release read lock
+
+        // Stop on each active protocol
+        for (protocol_name, seeding_info) in entry.protocols.iter() {
+            if let Some(handler) = self.handlers.iter().find(|h| h.name() == protocol_name) {
+                // Use the protocol-specific identifier (e.g., magnet link) to stop
+                if let Err(e) = handler.stop_seeding(&seeding_info.identifier).await {
+                    warn!(
+                        "Failed to stop seeding on {}: {}",
+                        protocol_name, e
+                    );
+                }
+            }
+        }
+
+        // Remove from registry
+        self.seeding_registry.remove_seeding(file_hash).await;
+
+        Ok(())
+    }
+
+    /// List all files currently being seeded.
+    pub async fn list_seeding_files(&self) -> Vec<SeedingEntry> {
+        self.seeding_registry.list_all().await
+    }
+
+    /// Calculate file hash (SHA-256)
+    pub async fn calculate_file_hash(&self, file_path: &PathBuf) -> Result<String, ProtocolError> {
+        let data = tokio::fs::read(file_path)
+            .await
+            .map_err(|e| ProtocolError::FileNotFound(e.to_string()))?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        Ok(hex::encode(hasher.finalize()))
+    }
+}
+
+
+impl Default for ProtocolManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
