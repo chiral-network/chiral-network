@@ -2467,6 +2467,7 @@ fn get_windows_power_via_system_info() -> Option<f32> {
 #[cfg(target_os = "linux")]
 fn get_linux_power() -> Option<(f32, PowerMethod)> {
     use std::fs;
+    use std::process::Command;
 
     // Try RAPL (Running Average Power Limit) interface on Intel systems
     // This provides power consumption for CPU package and DRAM
@@ -2508,6 +2509,93 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
                         // First reading, store and wait for next
                         LAST_ENERGY = Some((energy_uj, now));
                     }
+                }
+            }
+        }
+    }
+
+    // Fallback: Try lm-sensors for CPU power estimation
+    // Use sensors command to get CPU temperature and estimate power
+    if let Ok(output) = Command::new("sensors")
+        .arg("-j") // JSON output format
+        .output()
+    {
+        if let Ok(json_str) = String::from_utf8(output.stdout) {
+            // Try to parse lm-sensors JSON output for CPU power estimation
+            if let Ok(sensors_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                // Look for coretemp adapter (Intel CPU temperature)
+                if let Some(coretemp) = sensors_data.get("coretemp-isa-0000") {
+                    if let Some(package_temp) = coretemp.get("Package id 0") {
+                        if let Some(temp_obj) = package_temp.get("temp1_input") {
+                            if let Some(temp_celsius) = temp_obj.as_f64() {
+                                // Estimate power based on CPU temperature
+                                // This is a rough approximation: higher temperature = higher power
+                                // Base power + temperature-based scaling
+                                let base_power = 45.0; // Base CPU power in Watts
+                                let temp_factor = (temp_celsius - 40.0).max(0.0) * 0.5; // Rough scaling
+                                let estimated_power = base_power + temp_factor;
+
+                                if estimated_power > 0.0 && estimated_power < 500.0 {
+                                    return Some((estimated_power as f32, PowerMethod::Systemstat));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Try AMD CPU temperature estimation
+                if let Some(k10temp) = sensors_data.get("k10temp-pci-00c3") {
+                    if let Some(temp_obj) = k10temp.get("Tdie") {
+                        if let Some(temp_obj) = temp_obj.get("temp1_input") {
+                            if let Some(temp_celsius) = temp_obj.as_f64() {
+                                // AMD power estimation
+                                let base_power = 45.0;
+                                let temp_factor = (temp_celsius - 40.0).max(0.0) * 0.5;
+                                let estimated_power = base_power + temp_factor;
+
+                                if estimated_power > 0.0 && estimated_power < 500.0 {
+                                    return Some((estimated_power as f32, PowerMethod::Systemstat));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Final fallback: CPU usage-based estimation
+    // This is very rough but better than nothing
+    if let Ok(output) = Command::new("cat")
+        .arg("/proc/stat")
+        .output()
+    {
+        if let Ok(stat_str) = String::from_utf8(output.stdout) {
+            // Parse /proc/stat for CPU usage
+            for line in stat_str.lines() {
+                if line.starts_with("cpu ") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 8 {
+                        // Calculate rough CPU usage percentage
+                        let user: u64 = parts[1].parse().unwrap_or(0);
+                        let nice: u64 = parts[2].parse().unwrap_or(0);
+                        let system: u64 = parts[3].parse().unwrap_or(0);
+                        let idle: u64 = parts[4].parse().unwrap_or(0);
+                        let total: u64 = user + nice + system + idle;
+
+                        if total > 0 {
+                            let usage_percent = ((user + nice + system) as f32 / total as f32) * 100.0;
+                            // Rough power estimation based on CPU usage
+                            let base_power = 35.0; // Idle power
+                            let usage_power = (usage_percent / 100.0) * 65.0; // Max additional power
+                            let estimated_power = base_power + usage_power;
+
+                            if estimated_power > 0.0 && estimated_power < 300.0 {
+                                return Some((estimated_power as f32, PowerMethod::Systemstat));
+                            }
+                        }
+                    }
+                    break;
                 }
             }
         }
