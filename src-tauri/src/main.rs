@@ -2564,43 +2564,6 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
         }
     }
 
-    // Final fallback: CPU usage-based estimation
-    // This is very rough but better than nothing
-    if let Ok(output) = Command::new("cat")
-        .arg("/proc/stat")
-        .output()
-    {
-        if let Ok(stat_str) = String::from_utf8(output.stdout) {
-            // Parse /proc/stat for CPU usage
-            for line in stat_str.lines() {
-                if line.starts_with("cpu ") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 8 {
-                        // Calculate rough CPU usage percentage
-                        let user: u64 = parts[1].parse().unwrap_or(0);
-                        let nice: u64 = parts[2].parse().unwrap_or(0);
-                        let system: u64 = parts[3].parse().unwrap_or(0);
-                        let idle: u64 = parts[4].parse().unwrap_or(0);
-                        let total: u64 = user + nice + system + idle;
-
-                        if total > 0 {
-                            let usage_percent = ((user + nice + system) as f32 / total as f32) * 100.0;
-                            // Rough power estimation based on CPU usage
-                            let base_power = 35.0; // Idle power
-                            let usage_power = (usage_percent / 100.0) * 65.0; // Max additional power
-                            let estimated_power = base_power + usage_power;
-
-                            if estimated_power > 0.0 && estimated_power < 300.0 {
-                                return Some((estimated_power as f32, PowerMethod::Systemstat));
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
     None
 }
 
