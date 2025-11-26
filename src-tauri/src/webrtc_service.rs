@@ -25,7 +25,7 @@ use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
-const CHUNK_SIZE: usize = 16384; // 16KB chunks
+const CHUNK_SIZE: usize = 10240; // 10KB chunks (to account for JSON serialization overhead)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebRTCFileRequest {
