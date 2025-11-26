@@ -5,58 +5,43 @@
     windows_subsystem = "windows"
 )]
 
-// Declare all modules here
-pub mod analytics;
-pub mod bandwidth;
+// Modules unique to the binary
 pub mod blockchain_listener;
 pub mod commands;
-pub mod dht;
-pub mod download_scheduler;
-pub mod download_source;
-pub mod ed2k_client;
-pub mod encryption;
 pub mod ethereum;
-pub mod file_transfer;
-pub mod ftp_client;
-pub mod ftp_downloader;
 pub mod geth_bootstrap;
 pub mod geth_downloader;
 pub mod headless;
-pub mod http_download;
 pub mod http_server;
-pub mod keystore;
-pub mod manager;
-pub mod multi_source_download;
 pub mod net;
-pub mod peer_selection;
 pub mod pool;
-pub mod protocols;
-pub mod proxy_latency;
-pub mod stream_auth;
 pub mod transaction_services;
 mod transfer_events;
-pub mod webrtc_service;
+pub mod reassembly;
 
-pub mod bittorrent_handler;
-pub mod download_restart;
-mod logger;
-pub mod reputation;
+// Re-export modules from the lib crate
+use chiral_network::{
+    analytics, bandwidth, bittorrent_handler, download_restart,
+    download_source, dht, ed2k_client, encryption, file_transfer,
+    http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
+    reputation, stream_auth, webrtc_service,
+};
 
-use protocols::{ProtocolHandler, ProtocolManager, SimpleProtocolHandler};
+use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
     validate_proxy_auth_token,
 };
 
-use crate::bandwidth::BandwidthController;
+use bandwidth::BandwidthController;
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
-use crate::stream_auth::{
+use stream_auth::{
     AuthMessage, HmacKeyExchangeConfirmation, HmacKeyExchangeRequest, HmacKeyExchangeResponse,
     StreamAuthService,
 };
@@ -68,7 +53,6 @@ use ethereum::{
     get_balance,
     get_block_number,
     get_hashrate,
-    get_mined_blocks_count,
     get_mining_logs,
     get_mining_performance,
     get_mining_status, // Assuming you have a file_handler module
@@ -94,7 +78,6 @@ use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex as StdMutex;
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
@@ -111,16 +94,15 @@ use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
 
-use crate::manager::ChunkManager; // Import the ChunkManager
+use manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
-use crate::dht::models::Ed2kDownloadStatus;
-use crate::dht::models::Ed2kSourceInfo;
-use crate::ed2k_client::{Ed2kClient, Ed2kSearchResult, Ed2kServerInfo};
+use dht::models::Ed2kDownloadStatus;
+use dht::models::Ed2kSourceInfo;
+use ed2k_client::{Ed2kClient, Ed2kSearchResult, Ed2kServerInfo};
 use blockstore::block::Block;
 use rand::Rng;
 use std::io::Write;
 use std::ops::Range;
-use std::ops::RangeInclusive;
 use suppaftp::FtpStream;
 use x25519_dalek::{PublicKey, StaticSecret}; // For key handling
                                              // Settings structure for backend use
@@ -350,6 +332,7 @@ struct AppState {
     // HTTP server for serving chunks and keys
     http_server_state: Arc<http_server::HttpServerState>,
     http_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
+    http_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 
     // Stream authentication service
     stream_auth: Arc<Mutex<StreamAuthService>>,
@@ -652,43 +635,7 @@ async fn record_download_payment(
         seeder_wallet_address
     );
 
-    // Send P2P payment notification to the seeder's peer
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        // Convert payment message to JSON
-        let notification_json = serde_json::to_value(&payment_msg)
-            .map_err(|e| format!("Failed to serialize payment notification: {}", e))?;
-
-        // Wrap in a payment notification envelope so receiver can identify it
-        let wrapped_message = serde_json::json!({
-            "type": "payment_notification",
-            "payload": notification_json
-        });
-
-        // Send via DHT to the seeder's peer ID
-        match dht
-            .send_message_to_peer(&seeder_peer_id, wrapped_message)
-            .await
-        {
-            Ok(_) => {
-                println!(
-                    "✅ P2P payment notification sent to peer: {}",
-                    seeder_peer_id
-                );
-            }
-            Err(e) => {
-                // Don't fail the whole operation if P2P message fails
-                println!("⚠️ Failed to send P2P payment notification: {}. Seeder will see payment when they check blockchain.", e);
-            }
-        }
-    } else {
-        println!("⚠️ DHT not available, payment notification only sent locally");
-    }
-
+    // Seeder will see the payment when they check the blockchain
     Ok(())
 }
 
@@ -931,7 +878,7 @@ async fn upload_file(
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
         if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use crate::download_source::HttpSourceInfo;
+            use download_source::HttpSourceInfo;
             // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
             let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
             metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
@@ -1003,6 +950,66 @@ async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> R
     }
 
     Err("Geth failed to start up within 30 seconds after restart.".to_string())
+}
+
+#[tauri::command]
+async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    use crate::ethereum::NETWORK_CONFIG;
+    use reqwest::Client;
+
+    let client = Client::new();
+
+    // Get current miner address from state
+    let miner_addr = state.miner_address.lock().await;
+    let current_miner = miner_addr.as_ref().map(|s| s.clone()).unwrap_or_else(|| "Not set".to_string());
+
+    // Get current block number
+    let block_num_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+
+    let mut recent_miners = serde_json::Map::new();
+
+    if let Ok(response) = client.post(&NETWORK_CONFIG.rpc_endpoint).json(&block_num_payload).send().await {
+        if let Ok(json) = response.json::<serde_json::Value>().await {
+            if let Some(result) = json.get("result").and_then(|r| r.as_str()) {
+                if let Ok(current_block) = u64::from_str_radix(&result[2..], 16) {
+                    println!("DEBUG: Current block is {}", current_block);
+
+                    // Check last 5 blocks
+                    for block_num in (current_block.saturating_sub(4)..=current_block).rev() {
+                        let block_payload = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "eth_getBlockByNumber",
+                            "params": [format!("0x{:x}", block_num), false],
+                            "id": 1
+                        });
+
+                        if let Ok(block_response) = client.post(&NETWORK_CONFIG.rpc_endpoint).json(&block_payload).send().await {
+                            if let Ok(block_json) = block_response.json::<serde_json::Value>().await {
+                                if let Some(block) = block_json.get("result") {
+                                    if let Some(miner) = block.get("miner").and_then(|m| m.as_str()) {
+                                        recent_miners.insert(format!("{}", block_num), serde_json::Value::String(miner.to_string()));
+                                        println!("DEBUG: Block {} mined by: {}", block_num, miner);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let result = serde_json::json!({
+        "current_miner_address": current_miner,
+        "recent_block_miners": recent_miners
+    });
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1091,6 +1098,11 @@ async fn get_network_stats() -> Result<(String, String), String> {
 }
 
 #[tauri::command]
+fn get_chain_id() -> u64 {
+    ethereum::NETWORK_CONFIG.chain_id
+}
+
+#[tauri::command]
 async fn get_block_details_by_number(
     block_number: u64,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -1107,36 +1119,132 @@ async fn get_miner_performance(data_dir: String) -> Result<(u64, f64), String> {
     get_mining_performance(&data_dir).await
 }
 
-lazy_static! {
-    static ref BLOCKS_CACHE: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
-}
 #[tauri::command]
+async fn start_mining_monitor(
+    app: tauri::AppHandle,
+    data_dir: String,
+) -> Result<(), String> {
+    use tokio::time::{sleep, Duration};
+    use std::fs::File;
+    use std::io::{BufReader, Seek, SeekFrom};
 
-async fn get_blocks_mined(address: String) -> Result<u64, String> {
-    // Check cache (directly return within 500ms)
-    {
-        let cache = BLOCKS_CACHE
-            .lock()
-            .map_err(|e| format!("Failed to acquire blocks cache lock: {}", e))?;
-        if let Some((cached_addr, cached_blocks, cached_time)) = cache.as_ref() {
-            if cached_addr == &address && cached_time.elapsed() < Duration::from_millis(500) {
-                return Ok(*cached_blocks);
+    // Store the last position we read from
+    static LAST_POSITION: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+    // Resolve data directory
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get exe path: {}", e))?
+        .parent()
+        .ok_or("Failed to get exe dir")?
+        .to_path_buf();
+    let data_path = if Path::new(&data_dir).is_absolute() {
+        PathBuf::from(&data_dir)
+    } else {
+        exe_dir.join(&data_dir)
+    };
+    let log_path = data_path.join("geth.log");
+
+    tokio::spawn(async move {
+        // Wait a moment for Geth to potentially create/update the log file
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        loop {
+            if let Ok(file) = File::open(&log_path) {
+                let mut reader = BufReader::new(&file);
+
+                // Get the last known position (don't hold the lock across await)
+                let last_pos_value = {
+                    let last_pos = LAST_POSITION.lock().unwrap();
+                    *last_pos
+                };
+
+                // If this is the first run, start from the end of the file
+                if last_pos_value.is_none() {
+                    if let Ok(metadata) = file.metadata() {
+                        let file_size = metadata.len();
+                        let _ = reader.seek(SeekFrom::Start(file_size));
+                    }
+                } else if let Some(pos) = last_pos_value {
+                    let _ = reader.seek(SeekFrom::Start(pos));
+                }
+
+                let mut new_lines = Vec::new();
+
+                // Read new lines since last position
+                if let Ok(metadata) = file.metadata() {
+                    let file_size = metadata.len();
+
+                    use std::io::BufRead;
+                    for line_result in reader.lines() {
+                        if let Ok(line) = line_result {
+                            // Check if this line indicates a block was mined
+                            // Only trigger on "Successfully sealed new block" to avoid duplicate events
+                            if line.contains("Successfully sealed new block") {
+                                // 🎉 WE MINED A BLOCK! 🎉
+                                // Simple as that - increment our counter and update frontend
+                                increment_mined_blocks().await;
+
+                                // Emit event to frontend - that's it!
+                                let result = app.emit("block_mined", serde_json::json!({
+                                    "log_line": line,
+                                    "timestamp": chrono::Utc::now().timestamp()
+                                }));
+                                match result {
+                                    Ok(_) => {},
+                                    Err(e) => {},
+                                }
+                            }
+                            new_lines.push(line);
+                        }
+                    }
+
+                    // Update the last position (acquire lock only for the update)
+                    {
+                        let mut last_pos = LAST_POSITION.lock().unwrap();
+                        *last_pos = Some(file_size);
+                    }
+                }
             }
+
+            // Check every 1 second
+            sleep(Duration::from_secs(1)).await;
         }
-    }
+    });
 
-    // Invoke existing logic (slow query)
-    let blocks = get_mined_blocks_count(&address).await?;
+    Ok(())
+}
 
-    // Update Cache
-    {
-        let mut cache = BLOCKS_CACHE
-            .lock()
-            .map_err(|e| format!("Failed to acquire blocks cache lock for update: {}", e))?;
-        *cache = Some((address, blocks, Instant::now()));
-    }
+lazy_static! {
+    static ref BLOCKS_CACHE: Mutex<Option<(String, u64, Instant)>> = Mutex::new(None);
+    // Simple running count of total blocks mined (since we started monitoring)
+    static ref TOTAL_MINED_BLOCKS: Mutex<u64> = Mutex::new(0);
+}
 
-    Ok(blocks)
+async fn increment_mined_blocks() {
+    let mut count = TOTAL_MINED_BLOCKS.lock().await;
+    *count += 1;
+    println!("🎉 Block mined! Total blocks mined: {}", *count);
+}
+
+async fn get_total_mined_blocks() -> u64 {
+    let count = TOTAL_MINED_BLOCKS.lock().await;
+    *count
+}
+
+#[tauri::command]
+async fn clear_blocks_cache() {
+    let mut cache = BLOCKS_CACHE.lock().await;
+    *cache = None;
+
+    // Don't reset incremental scanning - let it continue from where it left off
+    // This ensures we maintain our scanning progress and don't lose discovered blocks
+}
+
+#[tauri::command]
+async fn get_blocks_mined(_app: tauri::AppHandle, _address: String) -> Result<u64, String> {
+    // Simple: return our running count
+    let count = get_total_mined_blocks().await;
+    Ok(count)
 }
 #[tauri::command]
 async fn get_recent_mined_blocks_pub(
@@ -1159,6 +1267,11 @@ async fn get_mined_blocks_range(
 #[tauri::command]
 async fn get_total_mining_rewards(address: String) -> Result<f64, String> {
     ethereum::get_total_mining_rewards(&address).await
+}
+
+#[tauri::command]
+fn get_block_reward() -> f64 {
+    ethereum::BLOCK_REWARD
 }
 
 #[tauri::command]
@@ -1210,6 +1323,7 @@ async fn start_dht_node(
     enable_autorelay: Option<bool>,
     preferred_relays: Option<Vec<String>>,
     enable_relay_server: Option<bool>,
+    enable_upnp: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -1293,6 +1407,7 @@ async fn start_dht_node(
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
         preferred_relays.unwrap_or_default(),
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
+        enable_upnp.unwrap_or(true), // enable UPnP by default
         Some(&async_blockstore_path),
     )
     .await
@@ -1741,26 +1856,6 @@ async fn get_active_hmac_exchanges(state: State<'_, AppState>) -> Result<Vec<Str
     Ok(auth_service.get_active_exchanges())
 }
 
-#[tauri::command]
-async fn send_dht_message(
-    state: State<'_, AppState>,
-    peer_id: String,
-    message: serde_json::Value,
-) -> Result<(), String> {
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht) = dht {
-        // Send message through DHT to target peer
-        dht.send_message_to_peer(&peer_id, message)
-            .await
-            .map_err(|e| format!("Failed to send DHT message: {}", e))
-    } else {
-        Err("DHT not available".to_string())
-    }
-}
 
 #[tauri::command]
 async fn get_dht_health(state: State<'_, AppState>) -> Result<Option<DhtMetricsSnapshot>, String> {
@@ -1926,7 +2021,6 @@ async fn get_power_consumption() -> Option<f32> {
     tokio::task::spawn_blocking(move || {
         use std::sync::OnceLock;
         use std::time::Instant;
-        use tracing::info;
 
         static LAST_UPDATE: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
         static POWER_HISTORY: OnceLock<std::sync::Mutex<Vec<(Instant, f32)>>> = OnceLock::new();
@@ -1996,12 +2090,6 @@ async fn get_power_consumption() -> Option<f32> {
         }
 
         // Final fallback: return None when power monitoring is unavailable
-        // Only log the info message once to avoid spamming logs
-        static POWER_WARNING_LOGGED: OnceLock<()> = OnceLock::new();
-
-        POWER_WARNING_LOGGED.get_or_init(|| {
-            info!("Power consumption monitoring not available on this system. Using estimated values.");
-        });
 
         None
     })
@@ -3413,7 +3501,7 @@ async fn remove_ed2k_source(
 
 #[tauri::command]
 async fn test_ed2k_connection(server_url: String) -> Result<Ed2kServerInfo, String> {
-    use crate::ed2k_client::Ed2kClient;
+    use ed2k_client::Ed2kClient;
 
     let mut client = Ed2kClient::new(server_url.clone());
 
@@ -3586,7 +3674,7 @@ async fn download_file_from_network(
                                 .select_peers_with_strategy(
                                     &available_peers,
                                     1,
-                                    crate::peer_selection::SelectionStrategy::FastestFirst,
+                                    peer_selection::SelectionStrategy::FastestFirst,
                                     false,
                                 )
                                 .await;
@@ -3645,7 +3733,7 @@ async fn download_file_from_network(
                                                         info!("WebRTC connection established with peer {}", selected_peer);
 
                                                         // Send file request over WebRTC data channel
-                                                        let file_request = crate::webrtc_service::WebRTCFileRequest {
+                                                        let file_request = webrtc_service::WebRTCFileRequest {
                                                             file_hash: metadata.merkle_root.clone(),
                                                             file_name: metadata.file_name.clone(),
                                                             file_size: metadata.file_size,
@@ -3968,7 +4056,7 @@ async fn upload_file_chunk(
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
         if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use crate::download_source::HttpSourceInfo;
+            use download_source::HttpSourceInfo;
             metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
                 url: format!("http://{}", http_addr),
                 auth_header: None,
@@ -4856,7 +4944,7 @@ async fn record_transfer_failure(
 #[tauri::command]
 async fn get_peer_metrics(
     state: State<'_, AppState>,
-) -> Result<Vec<crate::peer_selection::PeerMetrics>, String> {
+) -> Result<Vec<peer_selection::PeerMetrics>, String> {
     let dht_guard = state.dht.lock().await;
     if let Some(ref dht) = *dht_guard {
         Ok(dht.get_peer_metrics().await)
@@ -4889,7 +4977,7 @@ async fn select_peers_with_strategy(
     require_encryption: bool,
     blacklisted_peers: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    use crate::peer_selection::SelectionStrategy;
+    use peer_selection::SelectionStrategy;
 
     let selection_strategy = match strategy.as_str() {
         "fastest" => SelectionStrategy::FastestFirst,
@@ -5349,16 +5437,23 @@ async fn start_http_server(state: State<'_, AppState>, port: u16) -> Result<Stri
 
     tracing::info!("Starting HTTP server on {}", bind_addr);
 
-    // Start the server
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+    // Start the server with shutdown signal
     let server_state = state.http_server_state.clone();
-    let bound_addr = http_server::start_server(server_state, bind_addr)
+    let bound_addr = http_server::start_server(server_state, bind_addr, shutdown_rx)
         .await
         .map_err(|e| format!("Failed to start HTTP server: {}", e))?;
 
-    // Store the bound address
+    // Store the bound address and shutdown sender
     {
         let mut addr_lock = state.http_server_addr.lock().await;
         *addr_lock = Some(bound_addr);
+    }
+    {
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        *shutdown_lock = Some(shutdown_tx);
     }
 
     Ok(format!("http://{}", bound_addr))
@@ -5367,17 +5462,29 @@ async fn start_http_server(state: State<'_, AppState>, port: u16) -> Result<Stri
 /// Stop HTTP server
 #[tauri::command]
 async fn stop_http_server(state: State<'_, AppState>) -> Result<(), String> {
-    let mut addr_lock = state.http_server_addr.lock().await;
+    let addr = {
+        let mut addr_lock = state.http_server_addr.lock().await;
+        if addr_lock.is_none() {
+            return Err("HTTP server is not running".to_string());
+        }
+        addr_lock.take()
+    };
 
-    if addr_lock.is_none() {
-        return Err("HTTP server is not running".to_string());
+    tracing::info!("Stopping HTTP server at {:?}", addr);
+
+    // Send shutdown signal
+    let shutdown_tx = {
+        let mut shutdown_lock = state.http_server_shutdown.lock().await;
+        shutdown_lock.take()
+    };
+
+    if let Some(tx) = shutdown_tx {
+        // Send shutdown signal (ignore error if receiver already dropped)
+        let _ = tx.send(());
+        tracing::info!("Sent graceful shutdown signal to HTTP server");
+    } else {
+        tracing::warn!("No shutdown channel found, server may not shut down gracefully");
     }
-
-    tracing::info!("Stopping HTTP server");
-
-    // TODO: Implement graceful shutdown
-    // For now, just clear the address (server task will continue running)
-    *addr_lock = None;
 
     Ok(())
 }
@@ -5680,13 +5787,11 @@ fn main() {
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
         let mut manager = ProtocolManager::new();
-<<<<<<< HEAD
-        manager.register_simple(bittorrent_handler_arc.clone());
-        
-=======
-        manager.register(bittorrent_handler_arc.clone());
 
->>>>>>> upstream/main
+        // Wrap the simple handler in the enhanced protocol handler
+        let bittorrent_protocol_handler = BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
+        manager.register(Box::new(bittorrent_protocol_handler));
+        
         (bittorrent_handler_arc, Arc::new(manager))
     });
 
@@ -5799,9 +5904,10 @@ fn main() {
                     .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
             })),
             http_server_addr: Arc::new(Mutex::new(None)),
+            http_server_shutdown: Arc::new(Mutex::new(None)),
 
             // Initialize stream authentication
-            stream_auth: Arc::new(Mutex::new(crate::stream_auth::StreamAuthService::new())),
+            stream_auth: Arc::new(Mutex::new(stream_auth::StreamAuthService::new())),
 
             // Initialize the new map for AES keys
             canonical_aes_keys: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -5878,15 +5984,20 @@ fn main() {
             get_miner_hashrate,
             get_current_block,
             get_network_stats,
+            get_chain_id,
             get_block_details_by_number,
             get_transaction_history,
             get_transaction_history_range,
             get_miner_logs,
             get_miner_performance,
+            get_miner_diagnostics,
+            start_mining_monitor,
+            clear_blocks_cache,
             get_blocks_mined,
             get_recent_mined_blocks_pub,
             get_mined_blocks_range,
             get_total_mining_rewards,
+            get_block_reward,
             calculate_accurate_totals,
             get_cpu_temperature,
             start_dht_node,
@@ -5906,7 +6017,6 @@ fn main() {
             get_peer_id,
             is_dht_running,
             get_dht_connected_peers,
-            send_dht_message,
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
@@ -5984,6 +6094,12 @@ fn main() {
             download_file_http,
             save_temp_file_for_upload,
             get_file_size,
+            // Reassembly system commands
+            reassembly::write_chunk_temp,
+            reassembly::verify_and_finalize,
+            reassembly::save_chunk_bitmap,
+            reassembly::load_chunk_bitmap,
+            reassembly::cleanup_transfer_temp,
             encrypt_file_for_self_upload,
             encrypt_file_for_recipient,
             //request_file_access,
@@ -6251,17 +6367,24 @@ fn main() {
 
                             tracing::info!("Attempting to start HTTP server on port {}...", port);
 
+                            // Create shutdown channel
+                            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
                             match http_server::start_server(
                                 state.http_server_state.clone(),
                                 bind_addr,
+                                shutdown_rx,
                             )
                             .await
                             {
                                 Ok(bound_addr) => {
                                     let mut addr_lock = state.http_server_addr.lock().await;
                                     *addr_lock = Some(bound_addr);
-                                    tracing::info!("HTTP server started at http://{}", bound_addr);
-                                    println!("✅ HTTP server listening on http://{}", bound_addr);
+                                    
+                                    let mut shutdown_lock = state.http_server_shutdown.lock().await;
+                                    *shutdown_lock = Some(shutdown_tx);
+                                    
+                                    tracing::info!("✅ HTTP server listening on http://{}", bound_addr);
                                     server_started = true;
                                     break;
                                 }

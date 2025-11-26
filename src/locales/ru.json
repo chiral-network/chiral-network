@@ -505,6 +505,7 @@
     "balance": "Баланс",
     "totalEarned": "Всего заработано",
     "totalSpent": "Всего потрачено",
+    "totalReceived": "Всего получено",
     "address": "Адрес Chiral",
     "qrModal": {
       "title": "Ваш адрес Chiral",

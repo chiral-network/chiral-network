@@ -2,9 +2,9 @@ pub mod models;
 // pub mod protocol;
 use self::models::*;
 use rand::seq::SliceRandom;
-use rand::thread_rng;
 
 // use self::protocol::*;
+use crate::config::CHAIN_ID;
 use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
@@ -111,21 +111,20 @@ use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 use libp2p::{
-    kad::{BootstrapError, BootstrapOk, BootstrapResult},
     multiaddr::Protocol,
-    noise, quic, swarm, tcp, yamux,
+    noise, tcp, yamux,
 };
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     str::FromStr,
 };
@@ -173,6 +172,7 @@ use libp2p::{
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
+    upnp,
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
 use rand::rngs::OsRng;
@@ -208,7 +208,8 @@ struct DhtBehaviour {
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
     relay_server: toggle::Toggle<relay::Behaviour>,
-    dcutr: dcutr::Behaviour,
+    dcutr: toggle::Toggle<dcutr::Behaviour>,
+    upnp: toggle::Toggle<upnp::tokio::Behaviour>,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -251,10 +252,6 @@ pub enum DhtCommand {
         peer: PeerId,
         offer_request: WebRTCOfferRequest,
         sender: oneshot::Sender<Result<WebRTCAnswerResponse, String>>,
-    },
-    SendMessageToPeer {
-        target_peer_id: PeerId,
-        message: serde_json::Value,
     },
     StoreBlock {
         cid: Cid,
@@ -2294,21 +2291,6 @@ async fn run_dht_node(
                                 let id = swarm.behaviour_mut().webrtc_signaling_rr.send_request(&peer, offer_request);
                                 pending_webrtc_offers.lock().await.insert(id, sender);
                             }
-                            Some(DhtCommand::SendMessageToPeer { target_peer_id, message }) => {
-                                // TODO: Implement a proper messaging protocol
-                                // For now, we'll use the proxy protocol to send messages
-                                // In a real implementation, this could use a dedicated messaging protocol
-                                match serde_json::to_vec(&message) {
-                                    Ok(message_data) => {
-                                        // Send the message directly using the proxy protocol
-                                        let request_id = swarm.behaviour_mut().proxy_rr.send_request(&target_peer_id, EchoRequest(message_data));
-                                        info!("Sent message to peer {} with request ID {:?}", target_peer_id, request_id);
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to serialize message: {}", e);
-                                    }
-                                }
-                            }
                             Some(DhtCommand::StoreBlock { cid, data }) => {
                                 match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid, data) {
                                     Ok(_) => {
@@ -2929,6 +2911,9 @@ async fn run_dht_node(
                             }
                             SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) if !is_bootstrap => {
                                 handle_dcutr_event(ev, &metrics, &event_tx).await;
+                            }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Upnp(upnp_event)) => {
+                                handle_upnp_event(upnp_event, &mut swarm, &event_tx).await;
                             }
                             SwarmEvent::ExternalAddrConfirmed { address, .. } if !is_bootstrap => {
                                 handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr)
@@ -4863,7 +4848,7 @@ async fn handle_mdns_event(
 ) {
     match event {
         MdnsEvent::Discovered(list) => {
-            let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
+            let discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
                 // Skip self-discoveries to prevent self-connection attempts
@@ -5033,6 +5018,62 @@ async fn handle_dcutr_event(
                     "✗ Direct connection upgrade to peer {} failed: {}",
                     remote_peer_id, error
                 )))
+                .await;
+        }
+    }
+}
+
+async fn handle_upnp_event(
+    event: upnp::Event,
+    swarm: &mut Swarm<DhtBehaviour>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+) {
+    match event {
+        upnp::Event::NewExternalAddr(addr) => {
+            info!("🌐 UPnP: Successfully mapped external address: {}", addr);
+            
+            // Add the external address to the swarm
+            swarm.add_external_address(addr.clone());
+            
+            // Notify the UI
+            let _ = event_tx
+                .send(DhtEvent::Info(format!(
+                    "✓ UPnP port mapping successful: {}",
+                    addr
+                )))
+                .await;
+        }
+        upnp::Event::ExpiredExternalAddr(addr) => {
+            warn!("⏰ UPnP: External address expired: {}", addr);
+            
+            let _ = event_tx
+                .send(DhtEvent::Warning(format!(
+                    "UPnP port mapping expired: {}",
+                    addr
+                )))
+                .await;
+        }
+        upnp::Event::GatewayNotFound => {
+            warn!("⚠️  UPnP: No UPnP gateway found on network");
+            warn!("    - Make sure your router supports UPnP/IGD");
+            warn!("    - Check if UPnP is enabled in router settings");
+            warn!("    - Falling back to relay connections");
+            
+            let _ = event_tx
+                .send(DhtEvent::Info(
+                    "UPnP not available - using relay for NAT traversal".to_string()
+                ))
+                .await;
+        }
+        upnp::Event::NonRoutableGateway => {
+            warn!("⚠️  UPnP: Gateway is not routable");
+            warn!("    - Your router may be behind another NAT (carrier-grade NAT)");
+            warn!("    - Direct connections may not be possible");
+            
+            let _ = event_tx
+                .send(DhtEvent::Warning(
+                    "UPnP gateway not routable - behind CGNAT?".to_string()
+                ))
                 .await;
         }
     }
@@ -5517,13 +5558,11 @@ impl DhtService {
         enable_autorelay: bool,
         preferred_relays: Vec<String>,
         enable_relay_server: bool,
+        enable_upnp: bool,
         blockstore_db_path: Option<&Path>,
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
-        let mut final_enable_autorelay = enable_autorelay;
-
-        // force enable autorelay to facilitate autonat/dcutr
-        final_enable_autorelay = true;
+        let mut final_enable_autorelay = true; // force enable autorelay to facilitate autonat/dcutr
         info!("FINAL ENABLE AUTORELAY {}", enable_autorelay);
         // if is_bootstrap {
         //     final_enable_autorelay = false;
@@ -5683,7 +5722,7 @@ impl DhtService {
         // } else {
         //     None
         // };
-        let dcutr_toggle = dcutr::Behaviour::new(local_peer_id);
+        let dcutr_toggle = toggle::Toggle::from(Some(dcutr::Behaviour::new(local_peer_id)));
 
         // Relay server configuration
         let relay_server_behaviour = if enable_relay_server {
@@ -5697,6 +5736,15 @@ impl DhtService {
         };
         let relay_server_toggle = toggle::Toggle::from(relay_server_behaviour);
 
+        // UPnP configuration for automatic port mapping
+        let upnp_behaviour = if enable_upnp {
+            info!("🌐 UPnP enabled - attempting automatic port mapping");
+            Some(upnp::tokio::Behaviour::default())
+        } else {
+            info!("UPnP disabled");
+            None
+        };
+        let upnp_toggle = toggle::Toggle::from(upnp_behaviour);
         let bootstrap_set: HashSet<String> = bootstrap_nodes.iter().cloned().collect();
         let mut autonat_targets: HashSet<String> = if enable_autonat && !autonat_servers.is_empty()
         {
@@ -5782,6 +5830,7 @@ impl DhtService {
                     relay_client: relay_client_behaviour,
                     relay_server: relay_server_toggle,
                     dcutr: dcutr_toggle,
+                    upnp: upnp_toggle,
                 }
             })?
             .with_swarm_config(
@@ -6430,27 +6479,6 @@ impl DhtService {
             .map_err(|e| format!("Echo response error: {}", e))?
     }
 
-    pub async fn send_message_to_peer(
-        &self,
-        peer_id: &str,
-        message: serde_json::Value,
-    ) -> Result<(), String> {
-        let target_peer_id: PeerId = peer_id
-            .parse()
-            .map_err(|e| format!("Invalid peer ID: {}", e))?;
-
-        // Send message through DHT command system
-        self.cmd_tx
-            .send(DhtCommand::SendMessageToPeer {
-                target_peer_id,
-                message,
-            })
-            .await
-            .map_err(|e| format!("Failed to send DHT command: {e}"))?;
-
-        Ok(())
-    }
-
     pub async fn update_privacy_proxy_targets(&self, addresses: Vec<String>) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::SetPrivacyProxies { addresses })
@@ -6884,18 +6912,6 @@ impl DhtService {
             trusted_count, mode
         );
 
-        // Send event to notify about privacy routing status
-        let _ = self.cmd_tx.send(DhtCommand::SendMessageToPeer {
-            target_peer_id: self
-                .peer_id
-                .parse()
-                .map_err(|e| format!("Invalid peer ID: {}", e))?,
-            message: serde_json::json!({
-                "type": "privacy_routing_enabled",
-                "trusted_proxies": trusted_count
-            }),
-        });
-
         Ok(())
     }
 
@@ -6911,17 +6927,6 @@ impl DhtService {
         proxy_mgr.manual_trusted.clear();
 
         info!("Privacy routing disabled - reverting to direct connections");
-
-        // Send event to notify about privacy routing status
-        let _ = self.cmd_tx.send(DhtCommand::SendMessageToPeer {
-            target_peer_id: self
-                .peer_id
-                .parse()
-                .map_err(|e| format!("Invalid peer ID: {}", e))?,
-            message: serde_json::json!({
-                "type": "privacy_routing_disabled"
-            }),
-        });
 
         Ok(())
     }
@@ -7057,7 +7062,7 @@ impl DhtService {
             "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
                 .parse()
                 .map_err(|e| format!("Failed to parse private key: {}", e))?;
-        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(98765u64));
+        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(*CHAIN_ID));
 
         // The contract address needs to be known. This would come from AppState.
         let contract_address: Address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
@@ -7592,6 +7597,7 @@ mod tests {
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
             false,      // enable_relay_server
+            false,      // enable_upnp (disabled for testing)
             None,
         )
         .await

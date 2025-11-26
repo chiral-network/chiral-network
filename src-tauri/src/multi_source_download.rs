@@ -2247,8 +2247,12 @@ impl MultiSourceDownloadService {
                             let _ = ed2k_client.disconnect().await;
                         }
                     }
-                    DownloadSource::BitTorrent(_) => {
-                        // TODO: Cancel BitTorrent download
+                    DownloadSource::BitTorrent(bt_info) => {
+                        // BitTorrent downloads are managed by the BitTorrentHandler
+                        // The handler tracks torrents by info_hash and manages cleanup internally
+                        info!("Cancelling BitTorrent download: {}", bt_info.magnet_uri);
+                        // Note: The BitTorrentHandler doesn't currently expose a cancel/stop method
+                        // Torrents will continue seeding unless explicitly stopped via the handler
                     }
                 }
             }
