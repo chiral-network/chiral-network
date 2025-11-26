@@ -1387,7 +1387,6 @@ async fn start_dht_node(
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
         .ok_or("Failed to get project directories")?;
-    // Create the async_std::path::Path here so we can pass a reference to it.
     let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
     let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
 
@@ -2467,100 +2466,74 @@ fn get_windows_power_via_system_info() -> Option<f32> {
 #[cfg(target_os = "linux")]
 fn get_linux_power() -> Option<(f32, PowerMethod)> {
     use std::fs;
-    use std::process::Command;
 
     // Try RAPL (Running Average Power Limit) interface on Intel systems
-    // This provides power consumption for CPU package and DRAM
+    // Read from all available RAPL domains (core, dram, etc.) and sum them
 
-    let rapl_paths = [
-        "/sys/class/powercap/intel-rapl:0/energy_uj", // CPU package
-        "/sys/class/powercap/intel-rapl/energy_uj",   // Alternative path
-    ];
+    static mut LAST_TOTAL_ENERGY: Option<(u64, Instant)> = None;
+    static mut LAST_TOTAL_POWER: f32 = 0.0;
 
-    static mut LAST_ENERGY: Option<(u64, Instant)> = None;
-    static mut LAST_POWER: f32 = 0.0;
+    // Find all RAPL energy files
+    let mut rapl_paths = Vec::new();
 
-    for path in &rapl_paths {
-        if let Ok(energy_str) = fs::read_to_string(path) {
-            if let Ok(energy_uj) = energy_str.trim().parse::<u64>() {
-                let now = Instant::now();
+    // Main package
+    rapl_paths.push("/sys/class/powercap/intel-rapl:0/energy_uj".to_string());
 
-                unsafe {
-                    if let Some((last_energy, last_time)) = LAST_ENERGY {
-                        let time_diff = now.duration_since(last_time).as_secs_f64();
-                        if time_diff > 0.0 {
-                            let energy_diff = if energy_uj >= last_energy {
-                                energy_uj - last_energy
-                            } else {
-                                // Counter wrapped around
-                                (u64::MAX - last_energy) + energy_uj
-                            };
+    // Alternative main package path
+    rapl_paths.push("/sys/class/powercap/intel-rapl/energy_uj".to_string());
 
-                            let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
-
-                            if power_watts > 0.0 && power_watts < 1000.0 {
-                                // Reasonable power range
-                                LAST_POWER = power_watts as f32;
-                                LAST_ENERGY = Some((energy_uj, now));
-                                return Some((power_watts as f32, PowerMethod::Systemstat));
-                            }
-                        }
-                    } else {
-                        // First reading, store and wait for next
-                        LAST_ENERGY = Some((energy_uj, now));
-                    }
-                }
+    // Sub-domains (core, dram, etc.)
+    for i in 0..10 {
+        for j in 0..10 {
+            let path = format!("/sys/class/powercap/intel-rapl:{}/intel-rapl:{}:{}/energy_uj", i, i, j);
+            if std::path::Path::new(&path).exists() {
+                rapl_paths.push(path);
             }
         }
     }
 
-    // Fallback: Try lm-sensors for CPU power estimation
-    // Use sensors command to get CPU temperature and estimate power
-    if let Ok(output) = Command::new("sensors")
-        .arg("-j") // JSON output format
-        .output()
-    {
-        if let Ok(json_str) = String::from_utf8(output.stdout) {
-            // Try to parse lm-sensors JSON output for CPU power estimation
-            if let Ok(sensors_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                // Look for coretemp adapter (Intel CPU temperature)
-                if let Some(coretemp) = sensors_data.get("coretemp-isa-0000") {
-                    if let Some(package_temp) = coretemp.get("Package id 0") {
-                        if let Some(temp_obj) = package_temp.get("temp1_input") {
-                            if let Some(temp_celsius) = temp_obj.as_f64() {
-                                // Estimate power based on CPU temperature
-                                // This is a rough approximation: higher temperature = higher power
-                                // Base power + temperature-based scaling
-                                let base_power = 45.0; // Base CPU power in Watts
-                                let temp_factor = (temp_celsius - 40.0).max(0.0) * 0.5; // Rough scaling
-                                let estimated_power = base_power + temp_factor;
+    let mut total_energy_uj: u64 = 0;
+    let mut valid_readings = 0;
 
-                                if estimated_power > 0.0 && estimated_power < 500.0 {
-                                    return Some((estimated_power as f32, PowerMethod::Systemstat));
-                                }
-                            }
-                        }
-                    }
-                }
+    // Sum energy from all domains
+    for path in &rapl_paths {
+        if let Ok(energy_str) = fs::read_to_string(path) {
+            if let Ok(energy_uj) = energy_str.trim().parse::<u64>() {
+                total_energy_uj += energy_uj;
+                valid_readings += 1;
+            }
+        }
+    }
 
-                // Try AMD CPU temperature estimation
-                if let Some(k10temp) = sensors_data.get("k10temp-pci-00c3") {
-                    if let Some(temp_obj) = k10temp.get("Tdie") {
-                        if let Some(temp_obj) = temp_obj.get("temp1_input") {
-                            if let Some(temp_celsius) = temp_obj.as_f64() {
-                                // AMD power estimation
-                                let base_power = 45.0;
-                                let temp_factor = (temp_celsius - 40.0).max(0.0) * 0.5;
-                                let estimated_power = base_power + temp_factor;
+    if valid_readings == 0 {
+        return None; // No RAPL sensors available
+    }
 
-                                if estimated_power > 0.0 && estimated_power < 500.0 {
-                                    return Some((estimated_power as f32, PowerMethod::Systemstat));
-                                }
-                            }
-                        }
-                    }
+    let now = Instant::now();
+
+    unsafe {
+        if let Some((last_total_energy, last_time)) = LAST_TOTAL_ENERGY {
+            let time_diff = now.duration_since(last_time).as_secs_f64();
+            if time_diff > 0.0 {
+                let energy_diff = if total_energy_uj >= last_total_energy {
+                    total_energy_uj - last_total_energy
+                } else {
+                    // Counter wrapped around (highly unlikely for total)
+                    u64::MAX - last_total_energy + total_energy_uj
+                };
+
+                let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+
+                if power_watts > 0.0 && power_watts < 2000.0 {
+                    // Reasonable power range (allow higher for multi-domain sum)
+                    LAST_TOTAL_POWER = power_watts as f32;
+                    LAST_TOTAL_ENERGY = Some((total_energy_uj, now));
+                    return Some((power_watts as f32, PowerMethod::Systemstat));
                 }
             }
+        } else {
+            // First reading, store and wait for next
+            LAST_TOTAL_ENERGY = Some((total_energy_uj, now));
         }
     }
 
