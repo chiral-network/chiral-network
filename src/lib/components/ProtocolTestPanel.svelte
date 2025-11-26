@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { downloadDir } from '@tauri-apps/api/path';
   import Button from '$lib/components/ui/button.svelte';
   import Card from '$lib/components/ui/card.svelte';
   import { CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, FlaskConical } from 'lucide-svelte';
@@ -17,8 +18,11 @@
     ftpTestMessage = 'Downloading from ftp.gnu.org...';
 
     try {
-      // Use Downloads folder directly - it's more reliable
-      const outputPath = `C:\\Users\\yvett\\Downloads\\ftp-test-${Date.now()}.tar.gz`;
+      // Use cross-platform Downloads folder with non-conflicting filename
+      const downloadsPath = await downloadDir();
+      const timestamp = Date.now();
+      const filename = `chiral-ftp-test-${timestamp}.tar.gz`;
+      const outputPath = `${downloadsPath}${filename}`;
 
       await invoke('start_ftp_download', {
         url: 'ftp://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz',
@@ -28,7 +32,7 @@
       });
 
       ftpTestStatus = 'success';
-      ftpTestMessage = `✅ Success! File saved to Downloads folder (26 KB)`;
+      ftpTestMessage = `✅ Success! Saved: ${downloadsPath}${filename} (26 KB)`;
       showToast('FTP test successful!', 'success');
     } catch (error) {
       ftpTestStatus = 'error';
