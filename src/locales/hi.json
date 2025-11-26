@@ -525,6 +525,7 @@
     "balance": "Saldo",
     "totalEarned": "Total Minerado",
     "totalSpent": "Total Gasto",
+    "totalReceived": "कुल प्राप्त",
     "address": "Endereço Chiral",
     "qrModal": {
       "title": "Seu Endereço Chiral",
