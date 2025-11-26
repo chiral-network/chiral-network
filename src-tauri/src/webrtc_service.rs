@@ -1445,12 +1445,17 @@ impl WebRTCService {
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
 
+        // Create channel to signal ICE gathering complete
+        let (ice_complete_tx, mut ice_complete_rx) = tokio::sync::mpsc::channel::<()>(1);
+
         peer_connection.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
             let event_tx = event_tx_for_ice.clone();
             let peer_id = peer_id_for_ice.clone();
+            let ice_complete_tx = ice_complete_tx.clone();
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
+                    info!("🧊 ICE candidate generated for peer {}: {}", peer_id, candidate.address);
                     if let Ok(candidate_str) =
                         serde_json::to_string(&candidate.to_json().unwrap_or_default())
                     {
@@ -1461,6 +1466,9 @@ impl WebRTCService {
                             })
                             .await;
                     }
+                } else {
+                    info!("✅ ICE gathering complete for peer {}", peer_id);
+                    let _ = ice_complete_tx.send(()).await;
                 }
             })
         }));
@@ -1502,6 +1510,21 @@ impl WebRTCService {
         if let Err(e) = peer_connection.set_local_description(offer).await {
             error!("Failed to set local description: {}", e);
             return Err(e.to_string());
+        }
+
+        // Wait for ICE gathering to complete (with timeout)
+        info!("⏳ Waiting for ICE gathering to complete for peer {}...", peer_id);
+        let ice_timeout = tokio::time::Duration::from_secs(5);
+        match tokio::time::timeout(ice_timeout, ice_complete_rx.recv()).await {
+            Ok(Some(())) => {
+                info!("✅ ICE gathering completed successfully for peer {}", peer_id);
+            }
+            Ok(None) => {
+                warn!("ICE gathering channel closed unexpectedly for peer {}", peer_id);
+            }
+            Err(_) => {
+                warn!("⚠️  ICE gathering timeout ({}s) for peer {}, proceeding anyway", ice_timeout.as_secs(), peer_id);
+            }
         }
 
         // Store connection
@@ -1580,8 +1603,10 @@ impl WebRTCService {
         let bandwidth_for_dc = self.bandwidth.clone();
         let app_handle_for_dc = self.app_handle.clone();
 
+        info!("Setting up on_data_channel callback for peer: {}", peer_id);
+
         peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
-            info!("Received data channel from offerer: {}", data_channel.label());
+            info!("✅ CALLBACK FIRED! Received data channel from offerer: {}", data_channel.label());
 
             let event_tx = event_tx_for_dc.clone();
             let peer_id = peer_id_for_dc.clone();
@@ -1627,13 +1652,18 @@ impl WebRTCService {
             let peer_id_clone = peer_id_for_dc.clone();
             let data_channel_clone = data_channel.clone();
 
-            Box::pin(async move {
+            tokio::spawn(async move {
+                info!("🔍 Attempting to store data channel for peer {}", peer_id_clone);
                 let mut conns = connections_clone.lock().await;
                 if let Some(connection) = conns.get_mut(&peer_id_clone) {
                     connection.data_channel = Some(data_channel_clone);
-                    info!("Stored received data channel for peer {}", peer_id_clone);
+                    info!("✅ Successfully stored received data channel for peer {}", peer_id_clone);
+                } else {
+                    error!("❌ FAILED to store data channel - peer {} not found in connections map!", peer_id_clone);
                 }
-            })
+            });
+
+            Box::pin(async {})
         }));
 
         // Set up peer connection event handlers
@@ -1643,12 +1673,17 @@ impl WebRTCService {
         let event_tx_for_ice = event_tx_clone.clone();
         let peer_id_for_ice = peer_id_clone.clone();
 
+        // Create channel to signal ICE gathering complete
+        let (ice_complete_tx, mut ice_complete_rx) = tokio::sync::mpsc::channel::<()>(1);
+
         peer_connection.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
             let event_tx = event_tx_for_ice.clone();
             let peer_id = peer_id_for_ice.clone();
+            let ice_complete_tx = ice_complete_tx.clone();
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
+                    info!("🧊 ICE candidate generated for peer {}: {}", peer_id, candidate.address);
                     if let Ok(candidate_str) =
                         serde_json::to_string(&candidate.to_json().unwrap_or_default())
                     {
@@ -1659,6 +1694,9 @@ impl WebRTCService {
                             })
                             .await;
                     }
+                } else {
+                    info!("✅ ICE gathering complete for peer {}", peer_id);
+                    let _ = ice_complete_tx.send(()).await;
                 }
             })
         }));
@@ -1686,6 +1724,26 @@ impl WebRTCService {
                 })
             },
         ));
+
+        // Store connection BEFORE set_remote_description so on_data_channel callback can find it
+        // (data_channel will be set via on_data_channel callback when it fires during set_remote_description)
+        info!("Storing peer connection in map BEFORE set_remote_description for peer: {}", peer_id);
+        let mut conns = self.connections.lock().await;
+        let connection = PeerConnection {
+            peer_id: peer_id.clone(),
+            is_connected: false, // Will be set to true when connected
+            active_transfers: HashMap::new(),
+            last_activity: Instant::now(),
+            peer_connection: Some(peer_connection.clone()),
+            data_channel: None, // Will be set when received via on_data_channel
+            pending_chunks: HashMap::new(),
+            received_chunks: HashMap::new(),
+            acked_chunks: HashMap::new(),
+            pending_acks: HashMap::new(),
+        };
+        conns.insert(peer_id.clone(), connection);
+        info!("✅ Peer {} stored in connections map, now calling set_remote_description", peer_id);
+        drop(conns); // Release lock before calling set_remote_description
 
         // Set remote description from offer
         let offer_desc = match serde_json::from_str::<RTCSessionDescription>(offer.as_str()) {
@@ -1716,21 +1774,20 @@ impl WebRTCService {
             return Err(e.to_string());
         }
 
-        // Store connection (data_channel will be set via on_data_channel callback)
-        let mut conns = self.connections.lock().await;
-        let connection = PeerConnection {
-            peer_id: peer_id.clone(),
-            is_connected: false, // Will be set to true when connected
-            active_transfers: HashMap::new(),
-            last_activity: Instant::now(),
-            peer_connection: Some(peer_connection.clone()),
-            data_channel: None, // Will be set when received via on_data_channel
-            pending_chunks: HashMap::new(),
-            received_chunks: HashMap::new(),
-            acked_chunks: HashMap::new(),
-            pending_acks: HashMap::new(),
-        };
-        conns.insert(peer_id, connection);
+        // Wait for ICE gathering to complete (with timeout)
+        info!("⏳ Waiting for ICE gathering to complete for peer {}...", peer_id);
+        let ice_timeout = tokio::time::Duration::from_secs(5);
+        match tokio::time::timeout(ice_timeout, ice_complete_rx.recv()).await {
+            Ok(Some(())) => {
+                info!("✅ ICE gathering completed successfully for peer {}", peer_id);
+            }
+            Ok(None) => {
+                warn!("ICE gathering channel closed unexpectedly for peer {}", peer_id);
+            }
+            Err(_) => {
+                warn!("⚠️  ICE gathering timeout ({}s) for peer {}, proceeding anyway", ice_timeout.as_secs(), peer_id);
+            }
+        }
 
         // Return answer SDP
         if let Some(local_desc) = peer_connection.local_description().await {
