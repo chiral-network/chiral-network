@@ -8,12 +8,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::sync::Mutex;
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 use tracing::info;
 use crate::http_download::{HttpDownloadClient, HttpDownloadProgress, DownloadStatus as HttpDownloadStatus};
+use crate::transfer_events::{
+    TransferEventBus, TransferProgressEvent, TransferPausedEvent, TransferResumedEvent,
+    TransferCompletedEvent, TransferFailedEvent, TransferStartedEvent, TransferQueuedEvent,
+    PauseReason, ErrorCategory, SourceInfo, SourceType, TransferPriority,
+    current_timestamp_ms, calculate_progress, calculate_eta,
+};
 
 /// Download ID type (UUID string)
 pub type DownloadId = String;
@@ -195,23 +201,39 @@ struct DownloadTask {
 pub struct DownloadRestartService {
     downloads: Arc<Mutex<HashMap<DownloadId, DownloadTask>>>,
     app_handle: AppHandle,
+    event_bus: Arc<TransferEventBus>,
 }
 
 impl DownloadRestartService {
     /// Create new download restart service
     pub fn new(app_handle: AppHandle) -> Self {
+        let event_bus = Arc::new(TransferEventBus::new(app_handle.clone()));
         Self {
             downloads: Arc::new(Mutex::new(HashMap::new())),
             app_handle,
+            event_bus,
         }
     }
 
-    /// Emit download_status event to frontend
-    async fn emit_status(&self, status: &DownloadStatus) -> Result<(), DownloadError> {
-        self.app_handle
-            .emit("download_status", status)
-            .map_err(|e| DownloadError::Io(format!("Failed to emit event: {}", e)))?;
-        Ok(())
+    /// Emit progress event via TransferEventBus
+    fn emit_progress(&self, download_id: &str, status: &DownloadStatus) {
+        let downloaded = status.bytes_downloaded;
+        let total = status.expected_size.unwrap_or(0);
+        let progress_pct = calculate_progress(downloaded, total);
+
+        self.event_bus.emit_progress(TransferProgressEvent {
+            transfer_id: download_id.to_string(),
+            downloaded_bytes: downloaded,
+            total_bytes: total,
+            completed_chunks: 0, // Not tracking chunks in this service
+            total_chunks: 0,
+            progress_percentage: progress_pct,
+            download_speed_bps: 0.0, // Would need speed tracking
+            upload_speed_bps: 0.0,
+            eta_seconds: None,
+            active_sources: 1,
+            timestamp: current_timestamp_ms(),
+        });
     }
 
     /// Clone service for spawning tasks
@@ -219,6 +241,7 @@ impl DownloadRestartService {
         Self {
             downloads: self.downloads.clone(),
             app_handle: self.app_handle.clone(),
+            event_bus: self.event_bus.clone(),
         }
     }
 
@@ -375,7 +398,14 @@ impl DownloadRestartService {
                                 task.status.state = DownloadState::Downloading;
                                 let status = task.status.clone();
                                 drop(downloads);
-                                self.emit_status(&status).await?;
+                                // Emit resumed event via TransferEventBus
+                                self.event_bus.emit_resumed(TransferResumedEvent {
+                                    transfer_id: download_id.clone(),
+                                    resumed_at: current_timestamp_ms(),
+                                    downloaded_bytes: status.bytes_downloaded,
+                                    remaining_bytes: status.expected_size.unwrap_or(0).saturating_sub(status.bytes_downloaded),
+                                    active_sources: 1,
+                                });
                                 continue;
                             }
                             _ => {}
@@ -389,8 +419,7 @@ impl DownloadRestartService {
         Ok(())
     }
 
-    /// Update download state with progress
-    /// Update download state with error
+    /// Update download state with error and emit via TransferEventBus
     async fn update_state_with_error(
         &self,
         download_id: &str,
@@ -399,11 +428,27 @@ impl DownloadRestartService {
     ) {
         let mut downloads = self.downloads.lock().await;
         if let Some(task) = downloads.get_mut(download_id) {
-            task.status.state = state;
-            task.status.last_error = Some(error);
+            task.status.state = state.clone();
+            task.status.last_error = Some(error.clone());
             let status = task.status.clone();
+            let file_hash = task.metadata.url.clone(); // Use URL as identifier
             drop(downloads);
-            let _ = self.emit_status(&status).await;
+
+            // Emit failed event via TransferEventBus
+            if state == DownloadState::Failed {
+                self.event_bus.emit_failed(TransferFailedEvent {
+                    transfer_id: download_id.to_string(),
+                    file_hash,
+                    failed_at: current_timestamp_ms(),
+                    error,
+                    error_category: ErrorCategory::Unknown,
+                    downloaded_bytes: status.bytes_downloaded,
+                    total_bytes: status.expected_size.unwrap_or(0),
+                    retry_possible: true,
+                });
+            } else {
+                self.emit_progress(download_id, &status);
+            }
         }
     }
 
@@ -449,7 +494,8 @@ impl DownloadRestartService {
 
                 let status = task.status.clone();
                 drop(downloads);
-                let _ = self.emit_status(&status).await;
+                // Emit progress via TransferEventBus
+                self.emit_progress(&download_id, &status);
             } else {
                 return; // Download was deleted
             }
@@ -468,16 +514,31 @@ impl DownloadRestartService {
             task.metadata.sha256_final = Some("abc123def456...".to_string());
 
             let status = task.status.clone();
+            let file_name = task.metadata.url.clone();
+            let output_path = task.destination_path.to_string_lossy().to_string();
             drop(downloads);
-            let _ = self.emit_status(&status).await;
+
+            // Emit completed event via TransferEventBus
+            self.event_bus.emit_completed(TransferCompletedEvent {
+                transfer_id: download_id.clone(),
+                file_hash: download_id,
+                file_name,
+                file_size: total_size,
+                output_path,
+                completed_at: current_timestamp_ms(),
+                duration_seconds: 0,
+                average_speed_bps: 0.0,
+                total_chunks: 0,
+                sources_used: vec![],
+            });
         }
     }
 
-    /// Update download state (helper for simulation)
+    /// Update download state (helper for simulation) and emit via TransferEventBus
     async fn update_state(&self, download_id: &str, state: DownloadState, expected_size: Option<u64>, etag: Option<String>) {
         let mut downloads = self.downloads.lock().await;
         if let Some(task) = downloads.get_mut(download_id) {
-            task.status.state = state;
+            task.status.state = state.clone();
             if let Some(size) = expected_size {
                 task.status.expected_size = Some(size);
                 task.metadata.expected_size = Some(size);
@@ -488,8 +549,40 @@ impl DownloadRestartService {
             }
 
             let status = task.status.clone();
+            let file_name = task.metadata.url.clone();
+            let output_path = task.destination_path.to_string_lossy().to_string();
             drop(downloads);
-            let _ = self.emit_status(&status).await;
+
+            // Emit appropriate event based on state
+            match state {
+                DownloadState::Completed => {
+                    self.event_bus.emit_completed(TransferCompletedEvent {
+                        transfer_id: download_id.to_string(),
+                        file_hash: download_id.to_string(),
+                        file_name,
+                        file_size: status.expected_size.unwrap_or(0),
+                        output_path,
+                        completed_at: current_timestamp_ms(),
+                        duration_seconds: 0, // Would need start time tracking
+                        average_speed_bps: 0.0,
+                        total_chunks: 0,
+                        sources_used: vec![],
+                    });
+                }
+                DownloadState::Paused => {
+                    self.event_bus.emit_paused(TransferPausedEvent {
+                        transfer_id: download_id.to_string(),
+                        paused_at: current_timestamp_ms(),
+                        reason: PauseReason::UserRequested,
+                        can_resume: true,
+                        downloaded_bytes: status.bytes_downloaded,
+                        total_bytes: status.expected_size.unwrap_or(0),
+                    });
+                }
+                _ => {
+                    self.emit_progress(download_id, &status);
+                }
+            }
         }
     }
 
@@ -553,9 +646,19 @@ impl DownloadRestartService {
             },
         );
 
-        // Emit initial status
+        // Emit queued event via TransferEventBus
         drop(downloads); // Release lock before emitting
-        self.emit_status(&status).await?;
+        self.event_bus.emit_queued(TransferQueuedEvent {
+            transfer_id: download_id.clone(),
+            file_hash: download_id.clone(),
+            file_name: request.source_url.clone(),
+            file_size: 0, // Unknown until metadata is fetched
+            output_path: request.destination_path.clone(),
+            priority: TransferPriority::Normal,
+            queued_at: current_timestamp_ms(),
+            queue_position: 0,
+            estimated_sources: 1,
+        });
 
         // Start actual download state machine in background task
         let service = self.clone_service();
@@ -609,7 +712,16 @@ impl DownloadRestartService {
         let task_handle = task.active_task.take();
 
         drop(downloads); // Release lock before emitting
-        self.emit_status(&status).await?;
+
+        // Emit paused event via TransferEventBus
+        self.event_bus.emit_paused(TransferPausedEvent {
+            transfer_id: download_id.to_string(),
+            paused_at: current_timestamp_ms(),
+            reason: PauseReason::UserRequested,
+            can_resume: true,
+            downloaded_bytes: status.bytes_downloaded,
+            total_bytes: status.expected_size.unwrap_or(0),
+        });
 
         // Cancel the active download task if it's running
         if let Some(task_handle) = task_handle {
@@ -658,7 +770,15 @@ impl DownloadRestartService {
         let status = task.status.clone();
 
         drop(downloads); // Release lock before emitting
-        self.emit_status(&status).await?;
+
+        // Emit resumed event via TransferEventBus
+        self.event_bus.emit_resumed(TransferResumedEvent {
+            transfer_id: download_id.to_string(),
+            resumed_at: current_timestamp_ms(),
+            downloaded_bytes: bytes_already_downloaded,
+            remaining_bytes: total_size.saturating_sub(bytes_already_downloaded),
+            active_sources: 1,
+        });
 
         // Start the resume download task
         let http_client = HttpDownloadClient::new();

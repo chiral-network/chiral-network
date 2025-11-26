@@ -1,4 +1,10 @@
 use crate::protocols::SimpleProtocolHandler;
+use crate::transfer_events::{
+    TransferEventBus, TransferProgressEvent, TransferCompletedEvent, TransferFailedEvent,
+    TransferStartedEvent, TransferPausedEvent, TransferResumedEvent,
+    SourceInfo, SourceType, SourceSummary, ErrorCategory, PauseReason,
+    current_timestamp_ms, calculate_progress, calculate_eta,
+};
 use async_trait::async_trait;
 use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions};
 use std::collections::HashMap;
@@ -202,6 +208,7 @@ pub struct BitTorrentHandler {
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
     app_handle: Option<AppHandle>,
+    event_bus: Option<Arc<TransferEventBus>>,
 }
 
 impl BitTorrentHandler {
@@ -214,6 +221,23 @@ impl BitTorrentHandler {
     pub async fn new_with_port_range(
         download_directory: std::path::PathBuf,
         listen_port_range: Option<std::ops::Range<u16>>,
+    ) -> Result<Self, BitTorrentError> {
+        Self::new_with_port_range_and_app_handle(download_directory, listen_port_range, None).await
+    }
+
+    /// Creates a new BitTorrentHandler with AppHandle for TransferEventBus integration.
+    pub async fn new_with_app_handle(
+        download_directory: std::path::PathBuf,
+        app_handle: AppHandle,
+    ) -> Result<Self, BitTorrentError> {
+        Self::new_with_port_range_and_app_handle(download_directory, None, Some(app_handle)).await
+    }
+
+    /// Creates a new BitTorrentHandler with all options.
+    pub async fn new_with_port_range_and_app_handle(
+        download_directory: std::path::PathBuf,
+        listen_port_range: Option<std::ops::Range<u16>>,
+        app_handle: Option<AppHandle>,
     ) -> Result<Self, BitTorrentError> {
         info!(
             "Creating BitTorrent session with download_directory: {:?}, port_range: {:?}",
@@ -243,7 +267,7 @@ impl BitTorrentHandler {
         // Disable DHT entirely to avoid conflicts between multiple instances
         opts.disable_dht = true;
         opts.persistence = None;
-        
+
         info!("Initializing session with disable_dht=true, persistence=None");
         let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
             error!("Session initialization failed: {}", e);
@@ -252,12 +276,16 @@ impl BitTorrentHandler {
             }
         })?;
 
+        // Create TransferEventBus if app_handle is provided
+        let event_bus = app_handle.as_ref().map(|handle| Arc::new(TransferEventBus::new(handle.clone())));
+
         let handler = Self {
             rqbit_session: session,
             download_directory,
             active_torrents: Default::default(),
             peer_states: Default::default(),
-            app_handle: None,
+            app_handle,
+            event_bus,
         };
 
         // Spawn the background task for statistics polling.
@@ -274,7 +302,8 @@ impl BitTorrentHandler {
     fn spawn_stats_poller(&self) {
         let active_torrents = self.active_torrents.clone();
         let peer_states = self.peer_states.clone();
-    let app_handle = self.app_handle.clone();
+        let app_handle = self.app_handle.clone();
+        let event_bus = self.event_bus.clone();
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(5));
@@ -293,6 +322,38 @@ impl BitTorrentHandler {
 
                     let uploaded_total = stats.uploaded_bytes;
                     let downloaded_total = stats.progress_bytes;
+                    let total_bytes = stats.total_bytes;
+
+                    // Emit progress event via TransferEventBus
+                    if let Some(ref bus) = event_bus {
+                        let progress_pct = calculate_progress(downloaded_total, total_bytes);
+                        let (download_speed, upload_speed) = if let Some(live) = &stats.live {
+                            (
+                                live.download_speed.mbps as f64 * 125_000.0,
+                                live.upload_speed.mbps as f64 * 125_000.0,
+                            )
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        let eta = calculate_eta(
+                            total_bytes.saturating_sub(downloaded_total),
+                            download_speed,
+                        );
+
+                        bus.emit_progress(TransferProgressEvent {
+                            transfer_id: info_hash_str.clone(),
+                            downloaded_bytes: downloaded_total,
+                            total_bytes,
+                            completed_chunks: 0,
+                            total_chunks: 0,
+                            progress_percentage: progress_pct,
+                            download_speed_bps: download_speed,
+                            upload_speed_bps: upload_speed,
+                            eta_seconds: eta,
+                            active_sources: 1,
+                            timestamp: current_timestamp_ms(),
+                        });
+                    }
 
                     let uploaded_delta = uploaded_total.saturating_sub(state.last_uploaded_bytes);
                     if uploaded_delta >= PAYMENT_THRESHOLD_BYTES {
@@ -586,15 +647,29 @@ impl BitTorrentHandler {
     /// Pause a torrent by info hash
     pub async fn pause_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
         info!("Pausing torrent: {}", info_hash);
-        
+
         let torrents = self.active_torrents.lock().await;
         if let Some(handle) = torrents.get(info_hash) {
+            let stats = handle.stats();
             self.rqbit_session
                 .pause(handle)
                 .await
                 .map_err(|e| BitTorrentError::ProtocolSpecific {
                     message: format!("Failed to pause torrent: {}", e),
                 })?;
+
+            // Emit paused event via TransferEventBus
+            if let Some(ref bus) = self.event_bus {
+                bus.emit_paused(TransferPausedEvent {
+                    transfer_id: info_hash.to_string(),
+                    paused_at: current_timestamp_ms(),
+                    reason: PauseReason::UserRequested,
+                    can_resume: true,
+                    downloaded_bytes: stats.progress_bytes,
+                    total_bytes: stats.total_bytes,
+                });
+            }
+
             info!("Successfully paused torrent: {}", info_hash);
             Ok(())
         } else {
@@ -607,15 +682,28 @@ impl BitTorrentHandler {
     /// Resume a paused torrent by info hash
     pub async fn resume_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
         info!("Resuming torrent: {}", info_hash);
-        
+
         let torrents = self.active_torrents.lock().await;
         if let Some(handle) = torrents.get(info_hash) {
+            let stats = handle.stats();
             self.rqbit_session
                 .unpause(handle)
                 .await
                 .map_err(|e| BitTorrentError::ProtocolSpecific {
                     message: format!("Failed to resume torrent: {}", e),
                 })?;
+
+            // Emit resumed event via TransferEventBus
+            if let Some(ref bus) = self.event_bus {
+                bus.emit_resumed(TransferResumedEvent {
+                    transfer_id: info_hash.to_string(),
+                    resumed_at: current_timestamp_ms(),
+                    downloaded_bytes: stats.progress_bytes,
+                    remaining_bytes: stats.total_bytes.saturating_sub(stats.progress_bytes),
+                    active_sources: 1,
+                });
+            }
+
             info!("Successfully resumed torrent: {}", info_hash);
             Ok(())
         } else {
