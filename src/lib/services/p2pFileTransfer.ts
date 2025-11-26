@@ -50,7 +50,8 @@ export class P2PFileTransferService {
   constructor() {
     // Initialize signaling service for WebRTC coordination
     this.signalingService = new SignalingService({
-      preferDht: false  // Force WebSocket for WebRTC file transfers
+      preferDht: false,  // Force WebSocket for WebRTC file transfers
+      persistPeers: false  // Don't persist peers to avoid stale peer IDs
     });
   }
 
@@ -158,8 +159,9 @@ export class P2PFileTransferService {
     metadata: FileMetadata,
     maxRetries: number = 3
   ): Promise<void> {
-    // For WebRTC, we need to get available peers from signaling service
-    // instead of using libp2p seeder addresses
+    // For WebRTC, we need to find the correct seeder from the file metadata
+    // metadata.seeders contains both libp2p peer IDs and WebSocket client IDs
+    // We need to find which one is a WebSocket client ID by checking if it's in the connected peers list
     const availablePeers = this.signalingService.peers;
     let peersList: string[] = [];
 
@@ -168,17 +170,19 @@ export class P2PFileTransferService {
       peersList = peers;
     });
 
-    // If no peers available, fail immediately
-    if (peersList.length === 0) {
+    // Find a seeder that is currently connected via WebSocket
+    const seederId = metadata.seeders?.find(seeder => peersList.includes(seeder));
+
+    // If no matching seeder found in connected peers, fail immediately
+    if (!seederId) {
       unsubscribe();
       transfer.status = "failed";
-      transfer.error = "No WebRTC peers available. Make sure the uploader is online and connected to the signaling server.";
+      transfer.error = `No WebRTC seeder online for this file. File seeders: ${metadata.seeders?.join(', ') || 'none'}. Connected peers: ${peersList.join(', ') || 'none'}`;
       this.notifyProgress(transfer);
       return;
     }
 
-    // Use the first available peer (in a real system, you'd match by file hash)
-    const seederId = peersList[0];
+    console.log(`Found WebRTC seeder for file ${metadata.fileHash}: ${seederId}`);
     unsubscribe();
 
     const maxSeederIndex = 1; // We'll only try the first peer for now
