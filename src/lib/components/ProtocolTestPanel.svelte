@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { downloadDir } from '@tauri-apps/api/path';
+  import { downloadDir, join } from '@tauri-apps/api/path';
   import Button from '$lib/components/ui/button.svelte';
   import Card from '$lib/components/ui/card.svelte';
   import { CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, FlaskConical } from 'lucide-svelte';
@@ -22,7 +22,7 @@
       const downloadsPath = await downloadDir();
       const timestamp = Date.now();
       const filename = `chiral-ftp-test-${timestamp}.tar.gz`;
-      const outputPath = `${downloadsPath}${filename}`;
+      const outputPath = await join(downloadsPath, filename);
 
       await invoke('start_ftp_download', {
         url: 'ftp://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz',
@@ -32,7 +32,7 @@
       });
 
       ftpTestStatus = 'success';
-      ftpTestMessage = `✅ Success! Saved: ${downloadsPath}${filename} (26 KB)`;
+      ftpTestMessage = `✅ Success! Saved: ${outputPath} (26 KB)`;
       showToast('FTP test successful!', 'success');
     } catch (error) {
       ftpTestStatus = 'error';
