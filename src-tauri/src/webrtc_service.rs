@@ -674,20 +674,48 @@ impl WebRTCService {
     ) {
         bandwidth.acquire_upload(chunk.data.len()).await;
 
-        let mut conns = connections.lock().await;
-        if let Some(connection) = conns.get_mut(peer_id) {
-            if let Some(dc) = &connection.data_channel {
-                // Serialize chunk and send over data channel
-                match serde_json::to_string(chunk) {
-                    Ok(chunk_json) => {
-                        if let Err(e) = dc.send_text(chunk_json).await {
-                            error!("Failed to send chunk over data channel: {}", e);
-                        }
+        // Wait for data channel to open (with timeout)
+        use webrtc::data_channel::data_channel_state::RTCDataChannelState;
+        let start = Instant::now();
+        let timeout = Duration::from_secs(10);
+
+        let dc = loop {
+            let conns = connections.lock().await;
+            if let Some(connection) = conns.get(peer_id) {
+                if let Some(dc) = &connection.data_channel {
+                    let state = dc.ready_state();
+                    if state == RTCDataChannelState::Open {
+                        break dc.clone();
                     }
-                    Err(e) => {
-                        error!("Failed to serialize chunk: {}", e);
+                    if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing {
+                        error!("Data channel is closed or closing for peer {}", peer_id);
+                        return;
                     }
+                    if start.elapsed() > timeout {
+                        error!("Timeout waiting for data channel to open for peer {}", peer_id);
+                        return;
+                    }
+                } else {
+                    error!("No data channel found for peer {}", peer_id);
+                    return;
                 }
+            } else {
+                error!("Peer {} not found in connections", peer_id);
+                return;
+            }
+            drop(conns); // Release lock before sleeping
+            sleep(Duration::from_millis(50)).await;
+        };
+
+        // Serialize chunk and send over data channel
+        match serde_json::to_string(chunk) {
+            Ok(chunk_json) => {
+                if let Err(e) = dc.send_text(chunk_json).await {
+                    error!("Failed to send chunk over data channel: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Failed to serialize chunk: {}", e);
             }
         }
     }

@@ -94,7 +94,7 @@ use tauri::{
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
-use webrtc_service::{WebRTCFileRequest, WebRTCService};
+use webrtc_service::{init_webrtc_service, WebRTCFileRequest, WebRTCService};
 
 use manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
@@ -3012,13 +3012,17 @@ async fn start_file_transfer_service(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    info!("🔧 Starting file transfer service...");
+
     {
         let ft_guard = state.file_transfer.lock().await;
         if ft_guard.is_some() {
+            warn!("File transfer service is already running");
             return Err("File transfer service is already running".to_string());
         }
     }
 
+    info!("🔧 Creating FileTransferService...");
     let file_transfer_service = FileTransferService::new_with_encryption(true)
         .await
         .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
@@ -3028,8 +3032,10 @@ async fn start_file_transfer_service(
         let mut ft_guard = state.file_transfer.lock().await;
         *ft_guard = Some(ft_arc.clone());
     }
+    info!("✅ FileTransferService created and stored in AppState");
 
     // Initialize WebRTC service with file transfer service
+    info!("🔧 Creating WebRTCService...");
     let webrtc_service = WebRTCService::new(
         app.app_handle().clone(),
         ft_arc.clone(),
@@ -3044,6 +3050,18 @@ async fn start_file_transfer_service(
         let mut webrtc_guard = state.webrtc.lock().await;
         *webrtc_guard = Some(webrtc_arc.clone());
     }
+
+    // Initialize global singleton for DHT access
+    init_webrtc_service(
+        ft_arc.clone(),
+        app.app_handle().clone(),
+        state.keystore.clone(),
+        state.bandwidth.clone(),
+    )
+    .await
+    .map_err(|e| format!("Failed to initialize WebRTC global singleton: {}", e))?;
+
+    info!("✅ WebRTCService created and stored in AppState");
 
     // Initialize multi-source download service
     let dht_arc = {
