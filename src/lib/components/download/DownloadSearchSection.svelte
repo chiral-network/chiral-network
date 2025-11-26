@@ -577,13 +577,14 @@
       // HTTP download flow
       await handleHttpDownload(selectedFile, selectedPeers);
     } else {
-      // WebRTC download flow (existing)
+      // WebRTC or Bitswap download flow
       console.log(`🔍 DEBUG: Initiating ${selectedProtocol} download for file: ${selectedFile.fileName}`);
 
-      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[] } = {
+      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {
         ...selectedFile,
         seeders: selectedPeers,  // Override with selected peers
-        peerAllocation
+        peerAllocation,
+        selectedProtocol: selectedProtocol  // Pass the user's protocol selection
       };
 
       // Dispatch to parent (Download.svelte)

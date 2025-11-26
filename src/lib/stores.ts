@@ -39,6 +39,7 @@ export interface FileItem {
   totalChunks?: number;
   downloadStartTime?: number;
   price?: number; // Price in Chiral for this file
+  protocol?: 'WebRTC' | 'Bitswap' | null; // Download protocol (WebRTC or Bitswap)
 }
 
 export interface ProxyNode {

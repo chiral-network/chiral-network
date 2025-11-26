@@ -825,16 +825,19 @@ async function loadAndResumeDownloads() {
     showNotification(message, type, duration)
   }
 
-  async function handleSearchDownload(metadata: FileMetadata) {
+  async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
     diagnosticLogger.debug('Download', 'handleSearchDownload called', { metadata });
 
-    // Auto-detect protocol based on file metadata
-    // FORCE WebRTC for testing - comment out to use Bitswap
-    detectedProtocol = 'WebRTC'
-    const hasCids = metadata.cids && metadata.cids.length > 0
-    // detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
-
-    diagnosticLogger.debug('Download', 'Forced protocol to WebRTC for testing', { protocol: detectedProtocol, hasCids });
+    // Use user's protocol selection if provided, otherwise auto-detect
+    if (metadata.selectedProtocol) {
+      detectedProtocol = metadata.selectedProtocol === 'webrtc' ? 'WebRTC' : 'Bitswap';
+      diagnosticLogger.debug('Download', 'Using user-selected protocol', { protocol: detectedProtocol });
+    } else {
+      // Auto-detect protocol based on file metadata
+      const hasCids = metadata.cids && metadata.cids.length > 0
+      detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
+      diagnosticLogger.debug('Download', 'Auto-detected protocol', { protocol: detectedProtocol, hasCids });
+    }
 
     const allFiles = [...$downloadQueue]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
@@ -885,7 +888,8 @@ async function loadAndResumeDownloads() {
       // Pass encryption info to the download item
       isEncrypted: metadata.isEncrypted,
       manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null,
-      cids: metadata.cids // IMPORTANT: Pass CIDs for Bitswap downloads
+      cids: metadata.cids, // IMPORTANT: Pass CIDs for Bitswap downloads
+      protocol: detectedProtocol // Store the selected protocol with the file
     }
 
     diagnosticLogger.debug('Download', 'Created new file for queue', { fileName: newFile.name, hash: newFile.hash });
@@ -1104,9 +1108,12 @@ async function loadAndResumeDownloads() {
     }
     diagnosticLogger.debug('Download', 'Created downloadingFile object', { fileName: downloadingFile.name });
     files.update(f => [...f, downloadingFile])
-    diagnosticLogger.debug('Download', 'Added file to files store', { fileName: downloadingFile.name, protocol: detectedProtocol });
 
-    if (detectedProtocol === "Bitswap"){
+    // Use the protocol stored with the file, or fall back to global detectedProtocol
+    const fileProtocol = downloadingFile.protocol || detectedProtocol;
+    diagnosticLogger.debug('Download', 'Added file to files store', { fileName: downloadingFile.name, protocol: fileProtocol });
+
+    if (fileProtocol === "Bitswap"){
   diagnosticLogger.debug('Download', 'Starting Bitswap download', { fileName: downloadingFile.name });
 
   // CRITICAL: Bitswap requires CIDs to download
