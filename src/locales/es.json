@@ -410,6 +410,7 @@
     "balance": "Saldo",
     "totalEarned": "Total ganado",
     "totalSpent": "Total gastado",
+    "totalReceived": "Total recibido",
     "address": "Dirección Chiral",
     "qrModal": {
       "title": "Tu dirección Chiral",

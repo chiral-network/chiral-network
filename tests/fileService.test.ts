@@ -607,9 +607,6 @@ describe("FileService", () => {
       // Both should be manifest objects
       expect(result1).toHaveProperty('merkleRoot');
       expect(result2).toHaveProperty('merkleRoot');
-      
-      // TODO: Fix FileService.uploadFile() to consistently use encryptionService
-      // Currently it sometimes calls invoke("encrypt_file_for_self_upload") directly
     });
 
     it("should handle concurrent downloads", async () => {

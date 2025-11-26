@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::info;
 
 /// BitTorrent protocol handler implementing the enhanced ProtocolHandler trait
 pub struct BitTorrentProtocolHandler {
@@ -184,13 +184,21 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
     async fn stop_seeding(&self, identifier: &str) -> Result<(), ProtocolError> {
         info!("BitTorrent: Stopping seed for {}", identifier);
 
-        let mut seeding = self.seeding_files.lock().await;
-        if seeding.remove(identifier).is_none() {
-            return Err(ProtocolError::DownloadNotFound(identifier.to_string()));
+        // Extract info hash from identifier
+        let info_hash = Self::extract_info_hash(identifier)
+            .unwrap_or_else(|| identifier.to_string());
+
+        // Remove from our tracking
+        {
+            let mut seeding = self.seeding_files.lock().await;
+            seeding.remove(&info_hash);
         }
 
-        // TODO: Actually stop seeding in librqbit when API is available
-        warn!("BitTorrent: stop_seeding not fully implemented in underlying handler");
+        // Stop seeding in librqbit
+        self.handler
+            .stop_seeding_torrent(&info_hash)
+            .await
+            .map_err(|e| ProtocolError::ProtocolSpecific(e.to_string()))?;
 
         Ok(())
     }
@@ -198,64 +206,123 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
     async fn pause_download(&self, identifier: &str) -> Result<(), ProtocolError> {
         info!("BitTorrent: Pausing download {}", identifier);
 
-        let mut downloads = self.active_downloads.lock().await;
-        if let Some(state) = downloads.get_mut(identifier) {
-            state.is_paused = true;
-            state.status = DownloadStatus::Paused;
-            // TODO: Actually pause in librqbit when API is available
-            warn!("BitTorrent: pause_download not fully implemented in underlying handler");
-            Ok(())
-        } else {
-            Err(ProtocolError::DownloadNotFound(identifier.to_string()))
+        // Update our local state
+        {
+            let mut downloads = self.active_downloads.lock().await;
+            if let Some(state) = downloads.get_mut(identifier) {
+                state.is_paused = true;
+                state.status = DownloadStatus::Paused;
+            } else {
+                return Err(ProtocolError::DownloadNotFound(identifier.to_string()));
+            }
         }
+
+        // Pause in librqbit
+        self.handler
+            .pause_torrent(identifier)
+            .await
+            .map_err(|e| ProtocolError::ProtocolSpecific(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn resume_download(&self, identifier: &str) -> Result<(), ProtocolError> {
         info!("BitTorrent: Resuming download {}", identifier);
 
-        let mut downloads = self.active_downloads.lock().await;
-        if let Some(state) = downloads.get_mut(identifier) {
-            state.is_paused = false;
-            state.status = DownloadStatus::Downloading;
-            // TODO: Actually resume in librqbit when API is available
-            warn!("BitTorrent: resume_download not fully implemented in underlying handler");
-            Ok(())
-        } else {
-            Err(ProtocolError::DownloadNotFound(identifier.to_string()))
+        // Update our local state
+        {
+            let mut downloads = self.active_downloads.lock().await;
+            if let Some(state) = downloads.get_mut(identifier) {
+                state.is_paused = false;
+                state.status = DownloadStatus::Downloading;
+            } else {
+                return Err(ProtocolError::DownloadNotFound(identifier.to_string()));
+            }
         }
+
+        // Resume in librqbit
+        self.handler
+            .resume_torrent(identifier)
+            .await
+            .map_err(|e| ProtocolError::ProtocolSpecific(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn cancel_download(&self, identifier: &str) -> Result<(), ProtocolError> {
         info!("BitTorrent: Cancelling download {}", identifier);
 
-        let mut downloads = self.active_downloads.lock().await;
-        if downloads.remove(identifier).is_some() {
-            // TODO: Actually cancel in librqbit when API is available
-            warn!("BitTorrent: cancel_download not fully implemented in underlying handler");
-            Ok(())
-        } else {
-            Err(ProtocolError::DownloadNotFound(identifier.to_string()))
+        // Remove from our tracking
+        {
+            let mut downloads = self.active_downloads.lock().await;
+            if downloads.remove(identifier).is_none() {
+                return Err(ProtocolError::DownloadNotFound(identifier.to_string()));
+            }
         }
+
+        // Cancel in librqbit (delete files since it's a cancel, not stop)
+        self.handler
+            .cancel_torrent(identifier, true)
+            .await
+            .map_err(|e| ProtocolError::ProtocolSpecific(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn get_download_progress(
         &self,
         identifier: &str,
     ) -> Result<DownloadProgress, ProtocolError> {
-        let downloads = self.active_downloads.lock().await;
+        // Try to get real progress from librqbit first
+        match self.handler.get_torrent_progress(identifier).await {
+            Ok(progress) => {
+                // Update our local state with real values
+                {
+                    let mut downloads = self.active_downloads.lock().await;
+                    if let Some(state) = downloads.get_mut(identifier) {
+                        state.downloaded_bytes = progress.downloaded_bytes;
+                        state.total_bytes = progress.total_bytes;
+                        if progress.is_finished {
+                            state.status = DownloadStatus::Completed;
+                        }
+                    }
+                }
 
-        if let Some(state) = downloads.get(identifier) {
-            // TODO: Get real progress from librqbit handle
-            Ok(DownloadProgress {
-                downloaded_bytes: state.downloaded_bytes,
-                total_bytes: state.total_bytes,
-                download_speed: 0.0, // Would need to track this
-                eta_seconds: None,
-                active_peers: 0, // Would need to get from librqbit
-                status: state.status.clone(),
-            })
-        } else {
-            Err(ProtocolError::DownloadNotFound(identifier.to_string()))
+                // Determine status from torrent state
+                let status = match progress.state.as_str() {
+                    "paused" => DownloadStatus::Paused,
+                    "error" => DownloadStatus::Failed,
+                    "live" if progress.is_finished => DownloadStatus::Completed,
+                    "live" => DownloadStatus::Downloading,
+                    "initializing" => DownloadStatus::FetchingMetadata,
+                    _ => DownloadStatus::Downloading,
+                };
+
+                Ok(DownloadProgress {
+                    downloaded_bytes: progress.downloaded_bytes,
+                    total_bytes: progress.total_bytes,
+                    download_speed: progress.download_speed,
+                    eta_seconds: progress.eta_seconds,
+                    active_peers: 0, // librqbit doesn't expose peer count easily
+                    status,
+                })
+            }
+            Err(_) => {
+                // Fall back to local state if torrent not found in handler
+                let downloads = self.active_downloads.lock().await;
+                if let Some(state) = downloads.get(identifier) {
+                    Ok(DownloadProgress {
+                        downloaded_bytes: state.downloaded_bytes,
+                        total_bytes: state.total_bytes,
+                        download_speed: 0.0,
+                        eta_seconds: None,
+                        active_peers: 0,
+                        status: state.status.clone(),
+                    })
+                } else {
+                    Err(ProtocolError::DownloadNotFound(identifier.to_string()))
+                }
+            }
         }
     }
 

@@ -35,6 +35,10 @@ struct Ed2kDownloadState {
     started_at: u64,
     status: DownloadStatus,
     is_paused: bool,
+    /// Track which chunks have been downloaded for resume
+    downloaded_chunks: Vec<bool>,
+    /// Partial data downloaded so far
+    partial_data: Vec<u8>,
 }
 
 impl Ed2kProtocolHandler {
@@ -192,6 +196,8 @@ impl ProtocolHandler for Ed2kProtocolHandler {
                 started_at,
                 status: DownloadStatus::Downloading,
                 is_paused: false,
+                downloaded_chunks: vec![false; total_chunks],
+                partial_data: Vec::new(),
             });
         }
 
@@ -352,8 +358,35 @@ impl ProtocolHandler for Ed2kProtocolHandler {
             seeding.insert(ed2k_link.clone(), seeding_info.clone());
         }
 
-        // TODO: Register with ED2K server for sharing
-        warn!("ED2K: Seeding registration with server not fully implemented");
+        // Parse ed2k link to get file info for registration
+        let file_info = Self::parse_ed2k_link(&ed2k_link)?;
+
+        // Register with ED2K server for sharing
+        {
+            let mut client = self.client.lock().await;
+            
+            // Connect if not already connected
+            if !client.is_connected() {
+                if let Err(e) = client.connect().await {
+                    warn!("ED2K: Failed to connect to server for seeding: {}", e);
+                    // Don't fail - file is still tracked locally
+                } else {
+                    // Offer the file to the server
+                    if let Err(e) = client.offer_files(vec![file_info]).await {
+                        warn!("ED2K: Failed to register file with server: {}", e);
+                    } else {
+                        info!("ED2K: File registered with server for sharing");
+                    }
+                }
+            } else {
+                // Already connected, just offer the file
+                if let Err(e) = client.offer_files(vec![file_info]).await {
+                    warn!("ED2K: Failed to register file with server: {}", e);
+                } else {
+                    info!("ED2K: File registered with server for sharing");
+                }
+            }
+        }
 
         Ok(seeding_info)
     }
@@ -366,7 +399,19 @@ impl ProtocolHandler for Ed2kProtocolHandler {
             return Err(ProtocolError::DownloadNotFound(identifier.to_string()));
         }
 
-        // TODO: Unregister from ED2K server
+        // Unregister from ED2K server
+        let file_info = Self::parse_ed2k_link(identifier)?;
+        {
+            let mut client = self.client.lock().await;
+            if client.is_connected() {
+                if let Err(e) = client.remove_shared_file(&file_info.file_hash).await {
+                    warn!("ED2K: Failed to unregister file from server: {}", e);
+                } else {
+                    info!("ED2K: File unregistered from server");
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -392,22 +437,162 @@ impl ProtocolHandler for Ed2kProtocolHandler {
     async fn resume_download(&self, identifier: &str) -> Result<(), ProtocolError> {
         info!("ED2K: Resuming download {}", identifier);
 
-        let mut downloads = self.active_downloads.lock().await;
-        if let Some(state) = downloads.get_mut(identifier) {
-            state.is_paused = false;
-            state.status = DownloadStatus::Downloading;
+        // Get download state and determine where to resume from
+        let (file_info, output_path, start_chunk, partial_data) = {
+            let mut downloads = self.active_downloads.lock().await;
+            if let Some(state) = downloads.get_mut(identifier) {
+                state.is_paused = false;
+                state.status = DownloadStatus::Downloading;
 
+                // Find the first incomplete chunk
+                let start_chunk = state.downloaded_chunks.iter()
+                    .position(|&completed| !completed)
+                    .unwrap_or(state.downloaded_chunks.len());
+
+                (
+                    state.file_info.clone(),
+                    state.output_path.clone(),
+                    start_chunk,
+                    state.partial_data.clone(),
+                )
+            } else {
+                return Err(ProtocolError::DownloadNotFound(identifier.to_string()));
+            }
+        };
+
+        // Update progress status
+        {
             let mut prog = self.download_progress.lock().await;
             if let Some(p) = prog.get_mut(identifier) {
                 p.status = DownloadStatus::Downloading;
             }
-
-            // TODO: Actually resume the download task
-            warn!("ED2K: resume_download - need to restart download task from last chunk");
-            Ok(())
-        } else {
-            Err(ProtocolError::DownloadNotFound(identifier.to_string()))
         }
+
+        // Spawn resumed download task
+        let client = self.client.clone();
+        let progress = self.download_progress.clone();
+        let downloads = self.active_downloads.clone();
+        let id = identifier.to_string();
+        let file_hash = file_info.file_hash.clone();
+        let file_size = file_info.file_size;
+        let total_chunks = Self::calculate_chunks(file_size);
+
+        tokio::spawn(async move {
+            // Reconnect if needed
+            {
+                let mut c = client.lock().await;
+                if !c.is_connected() {
+                    if let Err(e) = c.connect().await {
+                        error!("ED2K: Failed to reconnect for resume: {}", e);
+                        let mut prog = progress.lock().await;
+                        if let Some(p) = prog.get_mut(&id) {
+                            p.status = DownloadStatus::Failed;
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // Continue with existing data
+            let mut all_data = partial_data;
+            let start_time = std::time::Instant::now();
+
+            info!("ED2K: Resuming from chunk {} of {}", start_chunk, total_chunks);
+
+            for chunk_idx in start_chunk..total_chunks {
+                // Check if paused or cancelled
+                {
+                    let dl = downloads.lock().await;
+                    if let Some(state) = dl.get(&id) {
+                        if state.is_paused {
+                            // Save progress before pausing
+                            drop(dl);
+                            let mut dl = downloads.lock().await;
+                            if let Some(state) = dl.get_mut(&id) {
+                                state.partial_data = all_data.clone();
+                            }
+                            info!("ED2K: Download paused at chunk {}", chunk_idx);
+                            return;
+                        }
+                    } else {
+                        info!("ED2K: Download cancelled");
+                        return;
+                    }
+                }
+
+                // Download chunk
+                let expected_hash = format!("{:032x}", chunk_idx);
+                let chunk_data = {
+                    let mut c = client.lock().await;
+                    match c.download_chunk(&file_hash, chunk_idx as u32, &expected_hash).await {
+                        Ok(data) => data,
+                        Err(e) => {
+                            error!("ED2K: Failed to download chunk {}: {}", chunk_idx, e);
+                            let mut prog = progress.lock().await;
+                            if let Some(p) = prog.get_mut(&id) {
+                                p.status = DownloadStatus::Failed;
+                            }
+                            return;
+                        }
+                    }
+                };
+
+                all_data.extend(chunk_data);
+
+                // Mark chunk as complete
+                {
+                    let mut dl = downloads.lock().await;
+                    if let Some(state) = dl.get_mut(&id) {
+                        if chunk_idx < state.downloaded_chunks.len() {
+                            state.downloaded_chunks[chunk_idx] = true;
+                        }
+                        state.partial_data = all_data.clone();
+                    }
+                }
+
+                // Update progress
+                let downloaded = all_data.len() as u64;
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let speed = if elapsed > 0.0 { downloaded as f64 / elapsed } else { 0.0 };
+                let eta = if speed > 0.0 && file_size > downloaded {
+                    Some(((file_size - downloaded) as f64 / speed) as u64)
+                } else {
+                    None
+                };
+
+                {
+                    let mut prog = progress.lock().await;
+                    if let Some(p) = prog.get_mut(&id) {
+                        p.downloaded_bytes = downloaded;
+                        p.download_speed = speed;
+                        p.eta_seconds = eta;
+                    }
+                }
+            }
+
+            // Write to file
+            if let Err(e) = tokio::fs::write(&output_path, &all_data).await {
+                error!("ED2K: Failed to write file: {}", e);
+                let mut prog = progress.lock().await;
+                if let Some(p) = prog.get_mut(&id) {
+                    p.status = DownloadStatus::Failed;
+                }
+                return;
+            }
+
+            // Mark as completed
+            {
+                let mut prog = progress.lock().await;
+                if let Some(p) = prog.get_mut(&id) {
+                    p.status = DownloadStatus::Completed;
+                    p.downloaded_bytes = file_size;
+                }
+            }
+
+            info!("ED2K: Resumed download completed: {} bytes", file_size);
+        });
+
+        Ok(())
     }
 
     async fn cancel_download(&self, identifier: &str) -> Result<(), ProtocolError> {
