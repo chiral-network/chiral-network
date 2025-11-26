@@ -1263,59 +1263,53 @@ async function loadAndResumeDownloads() {
   }
 }
     else {
-      // WebRTC download path
-      diagnosticLogger.debug('Download', 'Starting WebRTC download', { fileName: downloadingFile.name });
+      // WebRTC download path - Use backend Rust WebRTC (works in Tauri)
+      diagnosticLogger.debug('Download', 'Starting WebRTC download via backend', { fileName: downloadingFile.name });
 
       try {
-        const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { save } = await import('@tauri-apps/plugin-dialog');
 
-        // Prepare metadata for WebRTC download
-        const metadata = {
-          fileHash: downloadingFile.hash,
+        // Get download path from user
+        const outputPath = await save(buildSaveDialogOptions(downloadingFile.name));
+
+        if (!outputPath) {
+          files.update(f => f.map(file =>
+            file.id === downloadingFile.id
+              ? { ...file, status: 'failed' }
+              : file
+          ));
+          showNotification('Download cancelled by user', 'info');
+          return;
+        }
+
+        diagnosticLogger.debug('Download', 'Initiating backend WebRTC transfer', {
           fileName: downloadingFile.name,
-          fileSize: downloadingFile.size,
-          seeders: downloadingFile.seederAddresses || [],
-          createdAt: Date.now(),
-          isEncrypted: downloadingFile.isEncrypted || false,
-          manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined
-        };
-
-        diagnosticLogger.debug('Download', 'Initiating WebRTC P2P transfer', {
-          fileName: metadata.fileName,
-          seeders: metadata.seeders
+          hash: downloadingFile.hash,
+          outputPath
         });
 
-        // Start WebRTC download
-        const transferId = await p2pFileTransferService.initiateDownload(
-          metadata,
-          metadata.seeders,
-          (transfer) => {
-            // Update progress
-            files.update(f => f.map(file =>
-              file.id === downloadingFile.id
-                ? {
-                    ...file,
-                    progress: transfer.progress,
-                    speed: `${(transfer.speed / 1024).toFixed(2)} KB/s`,
-                    eta: transfer.eta ? `${Math.ceil(transfer.eta / 1000)}s` : 'N/A',
-                    status: transfer.status === 'completed' ? 'completed' : 'downloading'
-                  }
-                : file
-            ));
-          }
-        );
-
-        diagnosticLogger.debug('Download', 'WebRTC transfer initiated', { transferId });
-
-        // Store transfer ID for cancellation
-        activeTransfers.update(transfers => {
-          transfers.set(downloadingFile.id, {
-            fileId: downloadingFile.id,
-            transferId,
-            type: 'p2p'
-          });
-          return transfers;
+        // Call backend Rust WebRTC via Tauri command
+        // This uses the WebRTCService with webrtc-rs crate (works in Tauri)
+        await invoke('download_file_from_network', {
+          fileHash: downloadingFile.hash,
+          outputPath: outputPath
         });
+
+        // Update file status to completed
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? {
+                ...file,
+                status: 'completed',
+                progress: 100,
+                downloadPath: outputPath
+              }
+            : file
+        ));
+
+        diagnosticLogger.debug('Download', 'WebRTC download completed', { outputPath });
+        showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success');
 
       } catch (error) {
         errorLogger.fileOperationError('WebRTC download', error instanceof Error ? error.message : String(error));
