@@ -332,13 +332,17 @@ export class WalletService {
       ]);
 
       // Update total count AND rewards together to keep them consistent
+      // During active mining, don't override with potentially inconsistent scan data
       const reward = get(blockReward);
+      const currentMiningState = get(miningState);
 
-      miningState.update((state) => ({
-        ...state,
-        blocksFound: totalBlockCount,
-        totalRewards: totalBlockCount * reward,
-      }));
+      if (!currentMiningState.isMining) {
+        miningState.update((state) => ({
+          ...state,
+          blocksFound: totalBlockCount,
+          totalRewards: totalBlockCount * reward,
+        }));
+      }
 
       // Process mining rewards
       for (const block of blocks) {
