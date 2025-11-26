@@ -172,6 +172,7 @@ use libp2p::{
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
+    upnp,
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
 use rand::rngs::OsRng;
@@ -207,7 +208,8 @@ struct DhtBehaviour {
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
     relay_client: relay::client::Behaviour,
     relay_server: toggle::Toggle<relay::Behaviour>,
-    dcutr: dcutr::Behaviour,
+    dcutr: toggle::Toggle<dcutr::Behaviour>,
+    upnp: toggle::Toggle<upnp::tokio::Behaviour>,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -2910,6 +2912,9 @@ async fn run_dht_node(
                             SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) if !is_bootstrap => {
                                 handle_dcutr_event(ev, &metrics, &event_tx).await;
                             }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Upnp(upnp_event)) => {
+                                handle_upnp_event(upnp_event, &mut swarm, &event_tx).await;
+                            }
                             SwarmEvent::ExternalAddrConfirmed { address, .. } if !is_bootstrap => {
                                 handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr)
                                     .await;
@@ -5018,6 +5023,62 @@ async fn handle_dcutr_event(
     }
 }
 
+async fn handle_upnp_event(
+    event: upnp::Event,
+    swarm: &mut Swarm<DhtBehaviour>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+) {
+    match event {
+        upnp::Event::NewExternalAddr(addr) => {
+            info!("🌐 UPnP: Successfully mapped external address: {}", addr);
+            
+            // Add the external address to the swarm
+            swarm.add_external_address(addr.clone());
+            
+            // Notify the UI
+            let _ = event_tx
+                .send(DhtEvent::Info(format!(
+                    "✓ UPnP port mapping successful: {}",
+                    addr
+                )))
+                .await;
+        }
+        upnp::Event::ExpiredExternalAddr(addr) => {
+            warn!("⏰ UPnP: External address expired: {}", addr);
+            
+            let _ = event_tx
+                .send(DhtEvent::Warning(format!(
+                    "UPnP port mapping expired: {}",
+                    addr
+                )))
+                .await;
+        }
+        upnp::Event::GatewayNotFound => {
+            warn!("⚠️  UPnP: No UPnP gateway found on network");
+            warn!("    - Make sure your router supports UPnP/IGD");
+            warn!("    - Check if UPnP is enabled in router settings");
+            warn!("    - Falling back to relay connections");
+            
+            let _ = event_tx
+                .send(DhtEvent::Info(
+                    "UPnP not available - using relay for NAT traversal".to_string()
+                ))
+                .await;
+        }
+        upnp::Event::NonRoutableGateway => {
+            warn!("⚠️  UPnP: Gateway is not routable");
+            warn!("    - Your router may be behind another NAT (carrier-grade NAT)");
+            warn!("    - Direct connections may not be possible");
+            
+            let _ = event_tx
+                .send(DhtEvent::Warning(
+                    "UPnP gateway not routable - behind CGNAT?".to_string()
+                ))
+                .await;
+        }
+    }
+}
+
 async fn handle_external_addr_confirmed(
     swarm: &mut Swarm<DhtBehaviour>,
     addr: &Multiaddr,
@@ -5497,6 +5558,7 @@ impl DhtService {
         enable_autorelay: bool,
         preferred_relays: Vec<String>,
         enable_relay_server: bool,
+        enable_upnp: bool,
         blockstore_db_path: Option<&Path>,
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
@@ -5660,7 +5722,7 @@ impl DhtService {
         // } else {
         //     None
         // };
-        let dcutr_toggle = dcutr::Behaviour::new(local_peer_id);
+        let dcutr_toggle = toggle::Toggle::from(Some(dcutr::Behaviour::new(local_peer_id)));
 
         // Relay server configuration
         let relay_server_behaviour = if enable_relay_server {
@@ -5674,6 +5736,15 @@ impl DhtService {
         };
         let relay_server_toggle = toggle::Toggle::from(relay_server_behaviour);
 
+        // UPnP configuration for automatic port mapping
+        let upnp_behaviour = if enable_upnp {
+            info!("🌐 UPnP enabled - attempting automatic port mapping");
+            Some(upnp::tokio::Behaviour::default())
+        } else {
+            info!("UPnP disabled");
+            None
+        };
+        let upnp_toggle = toggle::Toggle::from(upnp_behaviour);
         let bootstrap_set: HashSet<String> = bootstrap_nodes.iter().cloned().collect();
         let mut autonat_targets: HashSet<String> = if enable_autonat && !autonat_servers.is_empty()
         {
@@ -5759,6 +5830,7 @@ impl DhtService {
                     relay_client: relay_client_behaviour,
                     relay_server: relay_server_toggle,
                     dcutr: dcutr_toggle,
+                    upnp: upnp_toggle,
                 }
             })?
             .with_swarm_config(
@@ -7525,6 +7597,7 @@ mod tests {
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
             false,      // enable_relay_server
+            false,      // enable_upnp (disabled for testing)
             None,
         )
         .await

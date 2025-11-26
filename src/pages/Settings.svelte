@@ -625,6 +625,7 @@
       cacheSizeMb: localSettings.cacheSize,
       enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
       enableRelayServer: localSettings.enableRelayServer,
+      enableUpnp: localSettings.enableUPnP,
     };
 
     if (localSettings.autonatServers?.length) {
