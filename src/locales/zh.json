@@ -410,6 +410,7 @@
     "balance": "余额",
     "totalEarned": "总收入",
     "totalSpent": "总支出",
+    "totalReceived": "总收入",
     "address": "Chiral地址",
     "qrModal": {
       "title": "你的Chiral地址",

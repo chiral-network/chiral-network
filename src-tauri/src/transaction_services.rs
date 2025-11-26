@@ -1,10 +1,12 @@
 // transactions.rs - Transaction handling with enriched error responses
 // This module provides Geth RPC interaction with developer-friendly error enrichment
 
-use crate::ethereum::{get_balance, get_block_number, HTTP_CLIENT, NETWORK_CONFIG};
-use rlp::Rlp;
+use crate::ethereum::{NETWORK_CONFIG, HTTP_CLIENT, get_balance, get_block_number};
+use rlp::{Rlp, RlpStream};
+use secp256k1::{ecdsa::RecoverableSignature, ecdsa::RecoveryId, Message, Secp256k1};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha3::{Digest, Keccak256};
 
 // ============================================================================
 // Data Structures
@@ -142,7 +144,7 @@ pub fn is_valid_ethereum_address(address: &str) -> bool {
     if !address.starts_with("0x") || address.len() != 42 {
         return false;
     }
-
+    
     hex::decode(&address[2..]).is_ok()
 }
 
@@ -157,25 +159,15 @@ pub fn decode_transaction(signed_tx_hex: &str) -> Result<DecodedTransaction, Str
     let tx_bytes = hex::decode(hex_str).map_err(|e| format!("Invalid hex: {}", e))?;
     let rlp = Rlp::new(&tx_bytes);
 
-    if rlp
-        .item_count()
-        .map_err(|e| format!("RLP decode error: {}", e))?
-        < 9
-    {
+    if rlp.item_count().map_err(|e| format!("RLP decode error: {}", e))? < 9 {
         return Err("Invalid transaction format".to_string());
     }
 
     let nonce: u64 = rlp.val_at(0).map_err(|e| format!("Invalid nonce: {}", e))?;
-    let gas_price: u128 = rlp
-        .val_at(1)
-        .map_err(|e| format!("Invalid gas price: {}", e))?;
-    let gas_limit: u64 = rlp
-        .val_at(2)
-        .map_err(|e| format!("Invalid gas limit: {}", e))?;
-
-    let to_bytes: Vec<u8> = rlp
-        .val_at(3)
-        .map_err(|e| format!("Invalid to address: {}", e))?;
+    let gas_price: u128 = rlp.val_at(1).map_err(|e| format!("Invalid gas price: {}", e))?;
+    let gas_limit: u64 = rlp.val_at(2).map_err(|e| format!("Invalid gas limit: {}", e))?;
+    
+    let to_bytes: Vec<u8> = rlp.val_at(3).map_err(|e| format!("Invalid to address: {}", e))?;
     let to = if to_bytes.is_empty() {
         None
     } else {
@@ -185,13 +177,13 @@ pub fn decode_transaction(signed_tx_hex: &str) -> Result<DecodedTransaction, Str
     let value: u128 = rlp.val_at(4).map_err(|e| format!("Invalid value: {}", e))?;
     let data: Vec<u8> = rlp.val_at(5).map_err(|e| format!("Invalid data: {}", e))?;
     let v: u64 = rlp.val_at(6).map_err(|e| format!("Invalid v: {}", e))?;
-
+    
     let r_bytes: Vec<u8> = rlp.val_at(7).map_err(|e| format!("Invalid r: {}", e))?;
     let s_bytes: Vec<u8> = rlp.val_at(8).map_err(|e| format!("Invalid s: {}", e))?;
 
     let mut r = [0u8; 32];
     let mut s = [0u8; 32];
-
+    
     if r_bytes.len() <= 32 {
         let start = 32 - r_bytes.len();
         r[start..].copy_from_slice(&r_bytes);
@@ -218,18 +210,80 @@ pub fn decode_transaction(signed_tx_hex: &str) -> Result<DecodedTransaction, Str
     })
 }
 
-/// Recover sender address from transaction signature (simplified)
-/// NOTE: This is a placeholder - in production, use proper ECDSA recovery
-fn recover_sender(
-    _tx_bytes: &[u8],
-    _v: u64,
-    _r: &[u8; 32],
-    _s: &[u8; 32],
-) -> Result<String, String> {
-    // TODO: Implement proper ECDSA recovery using secp256k1
-    // For now, return placeholder - actual recovery would use the transaction hash
-    // and signature to recover the public key, then derive the address
-    Ok("0x0000000000000000000000000000000000000000".to_string())
+/// Recover sender address from transaction signature using ECDSA recovery
+/// 
+/// This implements proper Ethereum signature recovery:
+/// 1. Reconstructs the unsigned transaction and hashes it with Keccak256
+/// 2. Uses secp256k1 ECDSA recovery to get the public key
+/// 3. Derives the Ethereum address from the public key
+fn recover_sender(tx_bytes: &[u8], v: u64, r: &[u8; 32], s: &[u8; 32]) -> Result<String, String> {
+    let rlp = Rlp::new(tx_bytes);
+    
+    // Extract transaction fields for re-encoding
+    let nonce: u64 = rlp.val_at(0).map_err(|e| format!("Invalid nonce: {}", e))?;
+    let gas_price: u128 = rlp.val_at(1).map_err(|e| format!("Invalid gas price: {}", e))?;
+    let gas_limit: u64 = rlp.val_at(2).map_err(|e| format!("Invalid gas limit: {}", e))?;
+    let to: Vec<u8> = rlp.val_at(3).map_err(|e| format!("Invalid to: {}", e))?;
+    let value: u128 = rlp.val_at(4).map_err(|e| format!("Invalid value: {}", e))?;
+    let data: Vec<u8> = rlp.val_at(5).map_err(|e| format!("Invalid data: {}", e))?;
+    
+    // Determine chain_id and recovery_id from v
+    // EIP-155: v = chain_id * 2 + 35 or chain_id * 2 + 36
+    // Legacy: v = 27 or 28
+    let (chain_id, recovery_id) = if v >= 35 {
+        // EIP-155 transaction
+        let chain_id = (v - 35) / 2;
+        let recovery_id = ((v - 35) % 2) as i32;
+        (Some(chain_id), recovery_id)
+    } else if v == 27 || v == 28 {
+        // Legacy transaction
+        (None, (v - 27) as i32)
+    } else {
+        return Err(format!("Invalid v value: {}", v));
+    };
+    
+    // Build the unsigned transaction RLP for hashing
+    let mut stream = RlpStream::new_list(if chain_id.is_some() { 9 } else { 6 });
+    stream.append(&nonce);
+    stream.append(&gas_price);
+    stream.append(&gas_limit);
+    stream.append(&to);
+    stream.append(&value);
+    stream.append(&data);
+    
+    // For EIP-155, append chain_id, 0, 0
+    if let Some(cid) = chain_id {
+        stream.append(&cid);
+        stream.append(&0u8);
+        stream.append(&0u8);
+    }
+    
+    let unsigned_tx = stream.out();
+    let msg_hash = Keccak256::digest(&unsigned_tx);
+    
+    // Create the signature for recovery
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes[..32].copy_from_slice(r);
+    sig_bytes[32..].copy_from_slice(s);
+    
+    let secp = Secp256k1::new();
+    let recovery_id = RecoveryId::from_i32(recovery_id)
+        .map_err(|e| format!("Invalid recovery id: {}", e))?;
+    let recoverable_sig = RecoverableSignature::from_compact(&sig_bytes, recovery_id)
+        .map_err(|e| format!("Invalid signature: {}", e))?;
+    
+    let message = Message::from_slice(&msg_hash)
+        .map_err(|e| format!("Invalid message hash: {}", e))?;
+    
+    let public_key = secp.recover_ecdsa(&message, &recoverable_sig)
+        .map_err(|e| format!("Failed to recover public key: {}", e))?;
+    
+    // Derive address from public key (last 20 bytes of keccak256 of uncompressed pubkey without prefix)
+    let pubkey_bytes = public_key.serialize_uncompressed();
+    let pubkey_hash = Keccak256::digest(&pubkey_bytes[1..]); // Skip 0x04 prefix
+    let address = format!("0x{}", hex::encode(&pubkey_hash[12..])); // Last 20 bytes
+    
+    Ok(address)
 }
 
 // ============================================================================
@@ -314,7 +368,7 @@ pub async fn enrich_geth_error(geth_message: &str, signed_tx: &str) -> EnrichedA
                     }
                     Err(_) => 0u128,
                 };
-
+                    
                 let gas_cost = decoded_tx.gas_limit as u128 * decoded_tx.gas_price;
                 let total_required = decoded_tx.value + gas_cost;
                 let shortfall = total_required.saturating_sub(balance_wei);
@@ -459,9 +513,7 @@ pub async fn enrich_geth_error(geth_message: &str, signed_tx: &str) -> EnrichedA
 // ============================================================================
 
 /// Broadcast a signed transaction to the network with enriched error handling
-pub async fn broadcast_raw_transaction(
-    signed_tx: &str,
-) -> Result<BroadcastResponse, EnrichedApiError> {
+pub async fn broadcast_raw_transaction(signed_tx: &str) -> Result<BroadcastResponse, EnrichedApiError> {
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_sendRawTransaction",
@@ -482,21 +534,23 @@ pub async fn broadcast_raw_transaction(
                 "endpoint": NETWORK_CONFIG.rpc_endpoint
             }),
             suggestion: "Ensure the Chiral node is running and accessible".to_string(),
-            documentation_url: "https://docs.chiral-network.com/errors#node_unavailable"
-                .to_string(),
+            documentation_url: "https://docs.chiral-network.com/errors#node_unavailable".to_string(),
             geth_error: format!("Connection failed: {}", e),
         })?;
 
-    let json_response: serde_json::Value = response.json().await.map_err(|e| EnrichedApiError {
-        code: "INVALID_RESPONSE".to_string(),
-        message: "Invalid response from node".to_string(),
-        details: json!({
-            "parse_error": e.to_string()
-        }),
-        suggestion: "Check node status and configuration".to_string(),
-        documentation_url: "https://docs.chiral-network.com/errors#invalid_response".to_string(),
-        geth_error: format!("JSON parse error: {}", e),
-    })?;
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| EnrichedApiError {
+            code: "INVALID_RESPONSE".to_string(),
+            message: "Invalid response from node".to_string(),
+            details: json!({
+                "parse_error": e.to_string()
+            }),
+            suggestion: "Check node status and configuration".to_string(),
+            documentation_url: "https://docs.chiral-network.com/errors#invalid_response".to_string(),
+            geth_error: format!("JSON parse error: {}", e),
+        })?;
 
     if let Some(error) = json_response.get("error") {
         let geth_message = error["message"].as_str().unwrap_or("unknown error");
@@ -511,8 +565,7 @@ pub async fn broadcast_raw_transaction(
             message: "Missing transaction hash in response".to_string(),
             details: json!({}),
             suggestion: "Check node configuration and try again".to_string(),
-            documentation_url: "https://docs.chiral-network.com/errors#invalid_response"
-                .to_string(),
+            documentation_url: "https://docs.chiral-network.com/errors#invalid_response".to_string(),
             geth_error: "Missing transaction hash".to_string(),
         })?;
 
@@ -594,8 +647,7 @@ pub async fn get_transaction_receipt(tx_hash: &str) -> Result<TransactionReceipt
         let from_address = tx["from"].as_str().unwrap_or("").to_string();
         let to_address = tx["to"].as_str().map(|s| s.to_string());
         let value = tx["value"].as_str().unwrap_or("0x0").to_string();
-        let nonce = tx["nonce"]
-            .as_str()
+        let nonce = tx["nonce"].as_str()
             .and_then(|s| u64::from_str_radix(&s[2..], 16).ok())
             .unwrap_or(0);
 
@@ -627,8 +679,7 @@ pub async fn get_transaction_receipt(tx_hash: &str) -> Result<TransactionReceipt
         "failed".to_string()
     };
 
-    let block_number = receipt["blockNumber"]
-        .as_str()
+    let block_number = receipt["blockNumber"].as_str()
         .and_then(|s| u64::from_str_radix(&s[2..], 16).ok());
 
     let confirmations = if let Some(block_num) = block_number {
@@ -666,29 +717,22 @@ pub async fn get_transaction_receipt(tx_hash: &str) -> Result<TransactionReceipt
         status: status.clone(),
         block_number,
         block_hash: receipt["blockHash"].as_str().map(|s| s.to_string()),
-        transaction_index: receipt["transactionIndex"]
-            .as_str()
+        transaction_index: receipt["transactionIndex"].as_str()
             .and_then(|s| u32::from_str_radix(&s[2..], 16).ok()),
-        gas_used: receipt["gasUsed"]
-            .as_str()
+        gas_used: receipt["gasUsed"].as_str()
             .and_then(|s| u64::from_str_radix(&s[2..], 16).ok()),
         effective_gas_price: receipt["effectiveGasPrice"].as_str().map(|s| s.to_string()),
         confirmations,
         from_address: tx["from"].as_str().unwrap_or("").to_string(),
         to_address: tx["to"].as_str().map(|s| s.to_string()),
         value: tx["value"].as_str().unwrap_or("0x0").to_string(),
-        nonce: tx["nonce"]
-            .as_str()
+        nonce: tx["nonce"].as_str()
             .and_then(|s| u64::from_str_radix(&s[2..], 16).ok())
             .unwrap_or(0),
         logs: receipt["logs"].as_array().unwrap_or(&vec![]).clone(),
         confirmation_time: None,
         submission_time: None,
-        failure_reason: if status == "failed" {
-            Some("execution reverted".to_string())
-        } else {
-            None
-        },
+        failure_reason: if status == "failed" { Some("execution reverted".to_string()) } else { None },
         error_message: None,
     })
 }
@@ -731,7 +775,7 @@ pub async fn get_transaction_count(address: &str) -> Result<u64, String> {
 /// Get detailed nonce information for an address
 pub async fn get_address_nonce(address: &str) -> Result<NonceInfo, String> {
     let pending_nonce = get_transaction_count(address).await?;
-
+    
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_getTransactionCount",
@@ -766,12 +810,7 @@ pub async fn get_address_nonce(address: &str) -> Result<NonceInfo, String> {
 }
 
 /// Estimate gas for a transaction
-pub async fn estimate_gas(
-    from: &str,
-    to: &str,
-    value: &str,
-    data: Option<&str>,
-) -> Result<u64, String> {
+pub async fn estimate_gas(from: &str, to: &str, value: &str, data: Option<&str>) -> Result<u64, String> {
     let mut params = json!({
         "from": from,
         "to": to,
@@ -868,6 +907,7 @@ pub async fn get_recommended_gas_prices() -> Result<GasPrices, String> {
         base_fee: base_price,
     })
 }
+
 
 // Note: estimate_transaction, get_network_status, and get_transaction_history
 // would require additional dependencies from ethereum.rs (get_balance, get_peer_count, etc.)

@@ -30,6 +30,7 @@ export interface DhtConfig {
   enableAutorelay?: boolean;
   preferredRelays?: string[];
   enableRelayServer?: boolean;
+  enableUpnp?: boolean;
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
@@ -61,28 +62,6 @@ export interface FileMetadata {
   uploaderAddress?: string;
   httpSources?: HttpSourceInfo[];
 }
-
-export interface FileManifestForJs {
-  merkleRoot: string;
-  chunks: any[]; // Define a proper type for ChunkInfo if you can
-  encryptedKeyBundle: string; // This is the JSON string
-}
-
-export const encryptionService = {
-  async encryptFile(filePath: string): Promise<FileManifestForJs> {
-    return await invoke("encrypt_file_for_upload", { filePath });
-  },
-
-  async decryptFile(
-    manifest: FileManifestForJs,
-    outputPath: string
-  ): Promise<void> {
-    await invoke("decrypt_and_reassemble_file", {
-      manifestJs: manifest,
-      outputPath,
-    });
-  },
-};
 
 export interface DhtHealth {
   peerCount: number;
@@ -189,6 +168,9 @@ export class DhtService {
       }
       if (typeof config?.enableRelayServer === "boolean") {
         payload.enableRelayServer = config.enableRelayServer;
+      }
+      if (typeof config?.enableUpnp === "boolean") {
+        payload.enableUpnp = config.enableUpnp;
       }
       if (
         typeof config?.relayServerAlias === "string" &&

@@ -87,6 +87,7 @@
   let hdPassphrase: string = '';
   type HDAccountItem = { index: number; change: number; address: string; label?: string; privateKeyHex?: string };
   let hdAccounts: HDAccountItem[] = [];
+  let chainId = 98765; // Default, will be fetched from backend
 
   // Transaction receipt modal state
   let selectedTransaction: any = null;
@@ -568,6 +569,15 @@
   onMount(async () => {
     await walletService.initialize();
     await loadKeystoreAccountsList();
+
+    // Fetch chain ID from backend
+    if (isTauri) {
+      try {
+        chainId = await invoke<number>('get_chain_id');
+      } catch (error) {
+        console.warn('Failed to fetch chain ID from backend, using default:', error);
+      }
+    }
 
     if ($etcAccount && isGethRunning) {
       // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
@@ -1960,7 +1970,7 @@
               <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
             </div>
           </div>
-          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
+          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{chainId}'/0'/0/*</p>
           <AccountList
             mnemonic={hdMnemonic}
             passphrase={hdPassphrase}
