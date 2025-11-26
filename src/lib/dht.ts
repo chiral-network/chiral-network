@@ -62,28 +62,6 @@ export interface FileMetadata {
   httpSources?: HttpSourceInfo[];
 }
 
-export interface FileManifestForJs {
-  merkleRoot: string;
-  chunks: any[]; // Define a proper type for ChunkInfo if you can
-  encryptedKeyBundle: string; // This is the JSON string
-}
-
-export const encryptionService = {
-  async encryptFile(filePath: string): Promise<FileManifestForJs> {
-    return await invoke("encrypt_file_for_upload", { filePath });
-  },
-
-  async decryptFile(
-    manifest: FileManifestForJs,
-    outputPath: string
-  ): Promise<void> {
-    await invoke("decrypt_and_reassemble_file", {
-      manifestJs: manifest,
-      outputPath,
-    });
-  },
-};
-
 export interface DhtHealth {
   peerCount: number;
   lastBootstrap: number | null;
