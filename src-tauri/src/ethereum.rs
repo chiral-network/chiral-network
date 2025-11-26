@@ -1,3 +1,4 @@
+use chiral_network::config::{CHAIN_ID, NETWORK_ID};
 use chrono;
 use ethers::prelude::*;
 use once_cell::sync::Lazy;
@@ -27,25 +28,19 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             rpc_endpoint: "http://127.0.0.1:8545".to_string(),
-            chain_id: 98765,
-            network_id: 98765,
+            chain_id: *CHAIN_ID,
+            network_id: *NETWORK_ID,
         }
     }
 }
 
-// Global configuration - can be updated via environment variables
+// Global configuration - reads from genesis.json or environment variables
 pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
     NetworkConfig {
         rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
             .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: std::env::var("CHIRAL_CHAIN_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-        network_id: std::env::var("CHIRAL_NETWORK_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
+        chain_id: *CHAIN_ID,
+        network_id: *NETWORK_ID,
     }
 });
 
@@ -103,26 +98,15 @@ impl GethProcess {
 
         // Also check if geth is actually running on port 8545
         // This handles cases where the app restarted but geth is still running
-        if let Ok(response) = std::process::Command::new("curl")
-            .arg("-s")
-            .arg("-X")
-            .arg("POST")
-            .arg("-H")
-            .arg("Content-Type: application/json")
-            .arg("--data")
-            .arg(r#"{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}"#)
-            .arg("http://127.0.0.1:8545")
-            .output()
-        {
-            if response.status.success() && !response.stdout.is_empty() {
-                // Try to parse as JSON and check if it's a valid response
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&response.stdout) {
-                    return json.get("result").is_some();
-                }
-            }
-        }
+        // Use TCP socket check - cross-platform and works in both sync/async contexts
+        use std::net::TcpStream;
+        use std::time::Duration;
 
-        false
+        // Try to connect to the Geth RPC port
+        TcpStream::connect_timeout(
+            &"127.0.0.1:8545".parse().unwrap(),
+            Duration::from_secs(1)
+        ).is_ok()
     }
 
     fn resolve_data_dir(&self, data_dir: &str) -> Result<PathBuf, String> {
@@ -256,7 +240,7 @@ impl GethProcess {
         cmd.arg("--datadir")
             .arg(&data_path)
             .arg("--networkid")
-            .arg("98765")
+            .arg(NETWORK_CONFIG.network_id.to_string())
             .arg("--bootnodes")
             .arg(bootstrap_enode)
             .arg("--http")
@@ -2017,8 +2001,7 @@ pub async fn send_transaction(
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
 
-    let chain_id = 98765u64;
-    let wallet = wallet.with_chain_id(chain_id);
+    let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
     let client = SignerMiddleware::new(provider.clone(), wallet);
 
