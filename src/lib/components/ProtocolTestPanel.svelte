@@ -32,7 +32,7 @@
       });
 
       ftpTestStatus = 'success';
-      ftpTestMessage = `✅ Success! Saved: ${outputPath} (26 KB)`;
+      ftpTestMessage = `✅ Success! Saved: ${outputPath} (~1 MB)`;
       showToast('FTP test successful!', 'success');
     } catch (error) {
       ftpTestStatus = 'error';
@@ -118,7 +118,7 @@
             <XCircle class="h-3 w-3 mr-2" />
             FTP Test Failed - Retry?
           {:else}
-            🌐 Test FTP Download (GNU Hello - 26KB)
+            🌐 Test FTP Download (GNU Hello - ~1MB)
           {/if}
         </Button>
 
