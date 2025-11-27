@@ -545,6 +545,7 @@
     "balance": "Balance",
     "totalEarned": "Total Mined",
     "totalSpent": "Total Spent",
+    "totalReceived": "Total Received",
     "address": "Chiral Address",
     "qrModal": {
       "title": "Your Chiral Address",

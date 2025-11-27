@@ -28,6 +28,32 @@ use webrtc::peer_connection::RTCPeerConnection;
 
 const CHUNK_SIZE: usize = 10240; // 10KB chunks (to account for JSON serialization overhead)
 
+/// Creates a WebRTC configuration with public STUN servers for NAT traversal.
+/// Without ICE servers, WebRTC connections will fail for users behind NAT (majority of users).
+fn create_rtc_configuration() -> RTCConfiguration {
+    RTCConfiguration {
+        ice_servers: vec![
+            RTCIceServer {
+                urls: vec![
+                    "stun:stun.l.google.com:19302".to_string(),
+                    "stun:stun1.l.google.com:19302".to_string(),
+                    "stun:stun2.l.google.com:19302".to_string(),
+                    "stun:stun3.l.google.com:19302".to_string(),
+                ],
+                ..Default::default()
+            },
+            // Additional fallback STUN servers for reliability
+            RTCIceServer {
+                urls: vec![
+                    "stun:stun.stunprotocol.org:3478".to_string(),
+                ],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebRTCFileRequest {
     pub file_hash: String,
@@ -342,14 +368,8 @@ impl WebRTCService {
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
-        // Create peer connection with STUN server for NAT traversal
-        let config = RTCConfiguration {
-            ice_servers: vec![RTCIceServer {
-                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        // Create peer connection with ICE servers for NAT traversal
+        let config = create_rtc_configuration();
         let peer_connection = match api.new_peer_connection(config).await {
             Ok(pc) => Arc::new(pc),
             Err(e) => {
@@ -1384,14 +1404,8 @@ impl WebRTCService {
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
-        // Create peer connection with STUN server for NAT traversal
-        let config = RTCConfiguration {
-            ice_servers: vec![RTCIceServer {
-                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        // Create peer connection with ICE servers for NAT traversal
+        let config = create_rtc_configuration();
         let peer_connection: Arc<RTCPeerConnection> = match api.new_peer_connection(config).await {
             Ok(pc) => Arc::new(pc),
             Err(e) => {
@@ -1594,14 +1608,8 @@ impl WebRTCService {
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
-        // Create peer connection with STUN server for NAT traversal
-        let config = RTCConfiguration {
-            ice_servers: vec![RTCIceServer {
-                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        // Create peer connection with ICE servers for NAT traversal
+        let config = create_rtc_configuration();
         let peer_connection: Arc<RTCPeerConnection> = match api.new_peer_connection(config).await {
             Ok(pc) => Arc::new(pc),
             Err(e) => {

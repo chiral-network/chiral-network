@@ -628,6 +628,36 @@ Disadvantages vs WebTorrent for NAT'd nodes:
 - DHT may be slower than WebRTC STUN/TURN
 
 [Decision Point]: WebTorrent (browser-friendly) vs BitTorrent (efficient) for NAT default?
+```
+
+##### 4. ed2k (eDonkey2000) Protocol
+
+The ed2k protocol is integrated as another "Style 1" public protocol, primarily for accessing files available on the eDonkey network.
+
+```
+Characteristics:
+- Hash-based file identification (MD4 hash)
+- Multi-source downloading from both servers and peers
+- Network-wide file searching
+- Uses a fixed chunk size of 9.28 MB (9,728,000 bytes)
+- Verifies chunks using MD4 hashes
+
+Flow:
+- Kad Search: Find sources via DHT
+- Connection: TCP connection to sources
+- Multi-source: Download 9.28 MB chunks from multiple peers
+- Verification: ed2k file and chunk MD4 hash verification
+- Payment: Blockchain transaction (separate, out-of-band)
+
+Advantages:
+- Access to a large, established network with many legacy files
+- Efficient for finding and downloading rare files
+
+Limitations:
+- Aging protocol, generally slower than BitTorrent
+- Does not support native encryption
+- Uses MD4 for hashing, which is not cryptographically secure against modern attacks (though sufficient for file integrity)
+```
 
 ###### Chiral Client Identification in BitTorrent Swarms
 

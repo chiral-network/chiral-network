@@ -410,6 +410,7 @@
     "balance": "잔액",
     "totalEarned": "총 수익",
     "totalSpent": "총 지출",
+    "totalReceived": "총 수신",
     "address": "카이럴 주소",
     "qrModal": {
       "title": "나의 카이럴 주소",
