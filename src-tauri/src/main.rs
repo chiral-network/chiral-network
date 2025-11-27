@@ -73,8 +73,7 @@ use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
 use chiral_network::transfer_events::{
     TransferEventBus, TransferStartedEvent, TransferCompletedEvent, TransferFailedEvent,
-    TransferProgressEvent, SourceInfo, SourceType, ErrorCategory, current_timestamp_ms,
-    calculate_progress,
+    SourceInfo, SourceType, ErrorCategory, current_timestamp_ms,
 };
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -3494,23 +3493,27 @@ async fn start_ftp_download(
     // Create output file
     let mut file = std::fs::File::create(&output_path)
         .map_err(|e| {
+            // Capture error message before moving
+            let error_msg = format!("Failed to create output file: {}", e);
+
             // Emit failed event on file creation error
             let event_bus = TransferEventBus::new(app.clone());
             let analytics = analytics_service.clone();
             let tid = transfer_id.clone();
+            let error_for_event = error_msg.clone();
             tokio::spawn(async move {
                 event_bus.emit_failed_with_analytics(TransferFailedEvent {
                     transfer_id: tid.clone(),
                     file_hash: tid,
                     failed_at: current_timestamp_ms(),
-                    error: format!("Failed to create output file: {}", e),
+                    error: error_for_event,
                     error_category: ErrorCategory::Filesystem,
                     downloaded_bytes: 0,
                     total_bytes: file_size,
                     retry_possible: true,
                 }, &analytics).await;
             });
-            format!("Failed to create output file: {}", e)
+            error_msg
         })?;
 
     // Track downloaded bytes for progress updates
