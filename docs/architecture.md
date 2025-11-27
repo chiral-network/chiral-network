@@ -546,14 +546,15 @@ Advantages:
 - Simple implementation
 - Works through proxies/firewalls
 - Easy debugging
-- No NAT traversal needed
+- No NAT traversal needed for public IP nodes
 - Most reliable for public IP nodes
+- UPnP support (libp2p built-in feature) automatically attempts port forwarding for NAT'd nodes
 
 Limitations:
 - No built-in swarming
 - Single-source per request
 - Higher overhead
-- Requires public IP or port forwarding
+- Requires public IP, manual port forwarding, or UPnP-capable router
 ```
 
 ##### 2. WebTorrent Protocol (WebRTC) (Default for NAT'd Nodes)
@@ -627,6 +628,36 @@ Disadvantages vs WebTorrent for NAT'd nodes:
 - DHT may be slower than WebRTC STUN/TURN
 
 [Decision Point]: WebTorrent (browser-friendly) vs BitTorrent (efficient) for NAT default?
+```
+
+##### 4. ed2k (eDonkey2000) Protocol
+
+The ed2k protocol is integrated as another "Style 1" public protocol, primarily for accessing files available on the eDonkey network.
+
+```
+Characteristics:
+- Hash-based file identification (MD4 hash)
+- Multi-source downloading from both servers and peers
+- Network-wide file searching
+- Uses a fixed chunk size of 9.28 MB (9,728,000 bytes)
+- Verifies chunks using MD4 hashes
+
+Flow:
+- Kad Search: Find sources via DHT
+- Connection: TCP connection to sources
+- Multi-source: Download 9.28 MB chunks from multiple peers
+- Verification: ed2k file and chunk MD4 hash verification
+- Payment: Blockchain transaction (separate, out-of-band)
+
+Advantages:
+- Access to a large, established network with many legacy files
+- Efficient for finding and downloading rare files
+
+Limitations:
+- Aging protocol, generally slower than BitTorrent
+- Does not support native encryption
+- Uses MD4 for hashing, which is not cryptographically secure against modern attacks (though sufficient for file integrity)
+```
 
 ###### Chiral Client Identification in BitTorrent Swarms
 
@@ -773,24 +804,30 @@ function selectDefaultSeedingProtocol(): Protocol {
   // Check if node has public IP
   if (hasPublicIP()) {
     return Protocol.HTTP; // DEFAULT for public IP nodes
-  } else {
-    // Behind NAT
-    // [DECISION NEEDED]: WebTorrent or BitTorrent as default?
-    return Protocol.WebTorrent; // Current default for NAT'd nodes
-    // OR
-    // return Protocol.BitTorrent;  // Alternative (needs discussion)
   }
+  
+  // Behind NAT - try UPnP first
+  if (tryUPnPPortForward()) {
+    return Protocol.HTTP; // Use HTTP if UPnP succeeds
+  }
+  
+  // UPnP failed or unavailable
+  // [DECISION NEEDED]: WebTorrent or BitTorrent as default?
+  return Protocol.WebTorrent; // Current default for NAT'd nodes
+  // OR
+  // return Protocol.BitTorrent;  // Alternative (needs discussion)
 }
 ```
 
 **Default Protocol Matrix**:
 
 ```
-Network Capability      → Default Seeding Protocol
-─────────────────────────────────────────────────
-Public IP               → HTTP
-Behind NAT              → WebTorrent (or BitTorrent? TBD)
-Browser Only            → WebTorrent (only option)
+Network Capability              → Default Seeding Protocol
+───────────────────────────────────────────────────────────
+Public IP                       → HTTP
+Behind NAT + UPnP Available     → HTTP (auto port forward)
+Behind NAT + UPnP Failed        → WebTorrent (or BitTorrent? TBD)
+Browser Only                    → WebTorrent (only option)
 ```
 
 #### Protocol Selection Strategy (Downloader Side)

@@ -5,7 +5,6 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyLatencyInfo {
     pub proxy_id: String,
-    pub address: String,
     pub latency_ms: Option<u64>,
     pub last_updated: u64, // timestamp
     pub status: ProxyStatus,
@@ -40,9 +39,6 @@ impl ProxyLatencyService {
     ) {
         let info = ProxyLatencyInfo {
             proxy_id: proxy_id.clone(),
-            // TODO: Fetch actual address from proxy management
-            // For now, use ID as address
-            address: proxy_id.clone(),
             latency_ms,
             last_updated: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

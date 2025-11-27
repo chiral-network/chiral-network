@@ -170,6 +170,14 @@ class DownloadHistoryService {
   }
 
   /**
+   * Clear only canceled downloads
+   */
+  clearCanceledDownloads(): void {
+    this.history = this.history.filter((entry) => entry.status !== "canceled");
+    this.saveHistory();
+  }
+
+  /**
    * Get history statistics
    */
   getStatistics(): {
