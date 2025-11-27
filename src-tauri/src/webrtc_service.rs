@@ -20,6 +20,7 @@ use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
+use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
@@ -341,8 +342,14 @@ impl WebRTCService {
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
-        // Create peer connection
-        let config = RTCConfiguration::default();
+        // Create peer connection with STUN server for NAT traversal
+        let config = RTCConfiguration {
+            ice_servers: vec![RTCIceServer {
+                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
         let peer_connection = match api.new_peer_connection(config).await {
             Ok(pc) => Arc::new(pc),
             Err(e) => {
@@ -1377,8 +1384,14 @@ impl WebRTCService {
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
-        // Create peer connection
-        let config = RTCConfiguration::default();
+        // Create peer connection with STUN server for NAT traversal
+        let config = RTCConfiguration {
+            ice_servers: vec![RTCIceServer {
+                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
         let peer_connection: Arc<RTCPeerConnection> = match api.new_peer_connection(config).await {
             Ok(pc) => Arc::new(pc),
             Err(e) => {
@@ -1581,8 +1594,14 @@ impl WebRTCService {
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
-        // Create peer connection
-        let config = RTCConfiguration::default();
+        // Create peer connection with STUN server for NAT traversal
+        let config = RTCConfiguration {
+            ice_servers: vec![RTCIceServer {
+                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
         let peer_connection: Arc<RTCPeerConnection> = match api.new_peer_connection(config).await {
             Ok(pc) => Arc::new(pc),
             Err(e) => {
