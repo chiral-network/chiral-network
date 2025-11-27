@@ -5,6 +5,12 @@ use crate::download_source::{
     FtpSourceInfo as DownloadFtpSourceInfo,
 };
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
+use crate::transfer_events::{
+    TransferEventBus, TransferStartedEvent, SourceConnectedEvent, SourceDisconnectedEvent,
+    ChunkCompletedEvent, ChunkFailedEvent, TransferProgressEvent, TransferCompletedEvent,
+    TransferFailedEvent, SourceInfo, SourceType, SourceSummary, DisconnectReason, ErrorCategory,
+    current_timestamp_ms, calculate_progress, calculate_eta,
+};
 use crate::ftp_downloader::{FtpCredentials, FtpDownloader};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
 use md4::Md4;
@@ -189,6 +195,8 @@ pub struct MultiSourceDownloadService {
     ftp_connections: Arc<Mutex<HashMap<String, FtpStream>>>,
     // Ed2k connection pool - maps server URL to Ed2k client for reuse
     ed2k_connections: Arc<Mutex<HashMap<String, Ed2kClient>>>,
+    // Transfer event bus for unified event emission to frontend
+    transfer_event_bus: Arc<TransferEventBus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -254,6 +262,7 @@ impl MultiSourceDownloadService {
         dht_service: Arc<DhtService>,
         webrtc_service: Arc<WebRTCService>,
         bittorrent_handler: Arc<BitTorrentHandler>,
+        transfer_event_bus: Arc<TransferEventBus>,
     ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
@@ -273,6 +282,7 @@ impl MultiSourceDownloadService {
             command_rx: Arc::new(Mutex::new(command_rx)),
             ftp_connections: Arc::new(Mutex::new(HashMap::new())),
             ed2k_connections: Arc::new(Mutex::new(HashMap::new())),
+            transfer_event_bus,
         }
     }
 
@@ -499,7 +509,41 @@ impl MultiSourceDownloadService {
         self.start_source_connections(&file_hash, selected_sources.clone())
             .await?;
 
-        // Emit download started event
+        // Emit download started event via TransferEventBus
+        let available_source_infos: Vec<SourceInfo> = selected_sources.iter().map(|s| {
+            let (source_type, address) = match s {
+                DownloadSource::P2p(info) => (SourceType::P2p, info.peer_id.clone()),
+                DownloadSource::Http(info) => (SourceType::Http, info.url.clone()),
+                DownloadSource::Ftp(info) => (SourceType::Ftp, info.url.clone()),
+                DownloadSource::BitTorrent(info) => (SourceType::BitTorrent, info.magnet_uri.clone()),
+                DownloadSource::Ed2k(info) => (SourceType::P2p, info.server_url.clone()),
+            };
+            SourceInfo {
+                id: s.identifier(),
+                source_type,
+                address,
+                reputation: None,
+                estimated_speed_bps: None,
+                latency_ms: None,
+                location: None,
+            }
+        }).collect();
+
+        let selected_source_ids: Vec<String> = selected_sources.iter().map(|s| s.identifier()).collect();
+
+        self.transfer_event_bus.emit_started(TransferStartedEvent {
+            transfer_id: file_hash.clone(),
+            file_hash: file_hash.clone(),
+            file_name: metadata.file_name.clone(),
+            file_size: metadata.file_size,
+            total_chunks,
+            chunk_size,
+            started_at: current_timestamp_ms(),
+            available_sources: available_source_infos,
+            selected_sources: selected_source_ids,
+        });
+
+        // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::DownloadStarted {
             file_hash: file_hash.clone(),
             total_peers: selected_sources.len(),
@@ -943,6 +987,7 @@ impl MultiSourceDownloadService {
         let ftp_url_clone = ftp_url_id.clone();
         let event_tx = self.event_tx.clone();
         let downloads = self.active_downloads.clone();
+        let transfer_event_bus = self.transfer_event_bus.clone();
 
         tokio::spawn(async move {
             let semaphore = Arc::new(tokio::sync::Semaphore::new(2)); // Max 2 concurrent FTP downloads per server
@@ -963,6 +1008,7 @@ impl MultiSourceDownloadService {
                 let event_tx = event_tx.clone();
                 let downloads = downloads.clone();
                 let chunk = chunk_info.clone();
+                let transfer_event_bus = transfer_event_bus.clone();
 
                 let task = tokio::spawn(async move {
                     let _permit = permit.unwrap();
@@ -1021,6 +1067,19 @@ impl MultiSourceDownloadService {
                                             download.failed_chunks.push_back(chunk.chunk_id);
                                         }
                                     }
+                                    // Emit chunk failed event via TransferEventBus
+                                    transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                                        transfer_id: file_hash.clone(),
+                                        chunk_id: chunk.chunk_id,
+                                        source_id: ftp_url.clone(),
+                                        source_type: SourceType::Ftp,
+                                        failed_at: current_timestamp_ms(),
+                                        error: error_msg.clone(),
+                                        retry_count: 0,
+                                        will_retry: true,
+                                        next_retry_at: None,
+                                    });
+                                    // Also emit legacy internal event
                                     let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
                                         file_hash: file_hash.clone(),
                                         chunk_id: chunk.chunk_id,
@@ -1046,6 +1105,19 @@ impl MultiSourceDownloadService {
                                         download.failed_chunks.push_back(chunk.chunk_id);
                                     }
                                 }
+                                // Emit chunk failed event via TransferEventBus
+                                transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                                    transfer_id: file_hash.clone(),
+                                    chunk_id: chunk.chunk_id,
+                                    source_id: ftp_url.clone(),
+                                    source_type: SourceType::Ftp,
+                                    failed_at: current_timestamp_ms(),
+                                    error: error_msg.clone(),
+                                    retry_count: 0,
+                                    will_retry: true,
+                                    next_retry_at: None,
+                                });
+                                // Also emit legacy internal event
                                 let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
                                     file_hash: file_hash.clone(),
                                     chunk_id: chunk.chunk_id,
@@ -1088,7 +1160,19 @@ impl MultiSourceDownloadService {
                                 chunk.chunk_id, chunk.size
                             );
 
-                            // Emit chunk completed event
+                            // Emit chunk completed event via TransferEventBus
+                            transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
+                                transfer_id: file_hash.clone(),
+                                chunk_id: chunk.chunk_id,
+                                chunk_size: chunk.size,
+                                source_id: ftp_url.clone(),
+                                source_type: SourceType::Ftp,
+                                completed_at: current_timestamp_ms(),
+                                download_duration_ms: 0, // TODO: track actual duration
+                                verified: true,
+                            });
+
+                            // Also emit legacy internal event for backwards compatibility
                             let _ = event_tx.send(MultiSourceEvent::ChunkCompleted {
                                 file_hash: file_hash.clone(),
                                 chunk_id: chunk.chunk_id,
@@ -1106,7 +1190,19 @@ impl MultiSourceDownloadService {
                                 }
                             }
 
-                            // Emit chunk failed event
+                            // Emit chunk failed event via TransferEventBus
+                            transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                                transfer_id: file_hash.clone(),
+                                chunk_id: chunk.chunk_id,
+                                source_id: ftp_url.clone(),
+                                source_type: SourceType::Ftp,
+                                failed_at: current_timestamp_ms(),
+                                error: e.clone(),
+                                retry_count: 0,
+                                will_retry: true,
+                                next_retry_at: None,
+                            });
+                            // Also emit legacy internal event
                             let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
                                 file_hash: file_hash.clone(),
                                 chunk_id: chunk.chunk_id,
@@ -1296,7 +1392,19 @@ impl MultiSourceDownloadService {
         };
         download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
 
-        // Emit chunk completed event
+        // Emit chunk completed event via TransferEventBus
+        self.transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
+            transfer_id: file_hash.to_string(),
+            chunk_id: chunk_info.chunk_id,
+            chunk_size: chunk_info.size,
+            source_id: "http".to_string(),
+            source_type: SourceType::Http,
+            completed_at: current_timestamp_ms(),
+            download_duration_ms: 0, // TODO: track actual duration
+            verified: true,
+        });
+
+        // Also emit legacy internal event for backwards compatibility
         if let Err(e) = self.event_tx.send(MultiSourceEvent::ChunkCompleted {
             file_hash: file_hash.to_string(),
             chunk_id: chunk_info.chunk_id,
@@ -2055,6 +2163,19 @@ impl MultiSourceDownloadService {
 
     /// Report chunk completion progress
     async fn report_chunk_complete(&self, file_hash: &str, chunk_id: u32) -> Result<(), String> {
+        // Emit chunk completed event via TransferEventBus
+        self.transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
+            transfer_id: file_hash.to_string(),
+            chunk_id,
+            chunk_size: 0, // Size unknown at this point
+            source_id: "ed2k".to_string(),
+            source_type: SourceType::P2p,
+            completed_at: current_timestamp_ms(),
+            download_duration_ms: 0,
+            verified: true,
+        });
+
+        // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::ChunkCompleted {
             file_hash: file_hash.to_string(),
             chunk_id,
@@ -2067,13 +2188,18 @@ impl MultiSourceDownloadService {
     async fn on_source_connected(&self, file_hash: &str, source_id: &str, chunk_ids: Vec<u32>) {
         info!("Source {} connected for file {}", source_id, file_hash);
 
-        // Avoid unwrap() on SystemTime duration to prevent panics when system clock is before UNIX_EPOCH
-        let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(d) => d.as_secs(),
-            Err(e) => {
-                warn!("System time before UNIX_EPOCH: {}", e);
-                0
-            }
+        let now_ms = current_timestamp_ms();
+        let now_secs = now_ms / 1000;
+
+        // Determine source type from source_id pattern
+        let source_type = if source_id.starts_with("http://") || source_id.starts_with("https://") {
+            SourceType::Http
+        } else if source_id.starts_with("ftp://") {
+            SourceType::Ftp
+        } else if source_id.starts_with("magnet:") {
+            SourceType::BitTorrent
+        } else {
+            SourceType::P2p
         };
 
         // Update source status
@@ -2082,13 +2208,31 @@ impl MultiSourceDownloadService {
             if let Some(download) = downloads.get_mut(file_hash) {
                 if let Some(assignment) = download.source_assignments.get_mut(source_id) {
                     assignment.status = SourceStatus::Connected;
-                    assignment.connected_at = Some(now);
-                    assignment.last_activity = Some(now);
+                    assignment.connected_at = Some(now_secs);
+                    assignment.last_activity = Some(now_secs);
                 }
             }
         }
 
-        // Emit event
+        // Emit event via TransferEventBus
+        self.transfer_event_bus.emit_source_connected(SourceConnectedEvent {
+            transfer_id: file_hash.to_string(),
+            source_id: source_id.to_string(),
+            source_type: source_type.clone(),
+            source_info: SourceInfo {
+                id: source_id.to_string(),
+                source_type,
+                address: source_id.to_string(),
+                reputation: None,
+                estimated_speed_bps: None,
+                latency_ms: None,
+                location: None,
+            },
+            connected_at: now_ms,
+            assigned_chunks: chunk_ids.iter().map(|&id| id).collect(),
+        });
+
+        // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::PeerConnected {
             file_hash: file_hash.to_string(),
             peer_id: source_id.to_string(),
@@ -2102,29 +2246,67 @@ impl MultiSourceDownloadService {
             source_id, file_hash, error
         );
 
+        let now_ms = current_timestamp_ms();
+
+        // Determine source type from source_id pattern
+        let source_type = if source_id.starts_with("http://") || source_id.starts_with("https://") {
+            SourceType::Http
+        } else if source_id.starts_with("ftp://") {
+            SourceType::Ftp
+        } else if source_id.starts_with("magnet:") {
+            SourceType::BitTorrent
+        } else {
+            SourceType::P2p
+        };
+
         // Update source status and reassign chunks
-        let reassign_chunks = {
+        let (reassign_chunks, chunks_completed) = {
             let mut downloads = self.active_downloads.write().await;
             if let Some(download) = downloads.get_mut(file_hash) {
                 if let Some(assignment) = download.source_assignments.get_mut(source_id) {
                     assignment.status = SourceStatus::Failed;
                     let chunks = assignment.chunks.clone();
+                    let completed = download.completed_chunks.len() as u32;
 
                     // Add failed chunks back to retry queue
                     for chunk_id in &chunks {
                         download.failed_chunks.push_back(*chunk_id);
                     }
 
-                    chunks
+                    (chunks, completed)
                 } else {
-                    Vec::new()
+                    (Vec::new(), 0)
                 }
             } else {
-                Vec::new()
+                (Vec::new(), 0)
             }
         };
 
-        // Emit event
+        // Determine disconnect reason from error message
+        let disconnect_reason = if error.contains("timeout") || error.contains("Timeout") {
+            DisconnectReason::Timeout
+        } else if error.contains("network") || error.contains("Network") || error.contains("connection") {
+            DisconnectReason::NetworkError
+        } else if error.contains("unavailable") || error.contains("not found") {
+            DisconnectReason::SourceUnavailable
+        } else if error.contains("protocol") || error.contains("Protocol") {
+            DisconnectReason::ProtocolError
+        } else {
+            DisconnectReason::Other(error.clone())
+        };
+
+        // Emit event via TransferEventBus
+        self.transfer_event_bus.emit_source_disconnected(SourceDisconnectedEvent {
+            transfer_id: file_hash.to_string(),
+            source_id: source_id.to_string(),
+            source_type,
+            disconnected_at: now_ms,
+            reason: disconnect_reason,
+            chunks_completed,
+            will_retry: !reassign_chunks.is_empty(),
+        });
+
+        // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::PeerFailed {
             file_hash: file_hash.to_string(),
             peer_id: source_id.to_string(),
@@ -2378,37 +2560,101 @@ impl MultiSourceDownloadService {
     async fn spawn_download_monitor(&self, file_hash: String) {
         let downloads = self.active_downloads.clone();
         let event_tx = self.event_tx.clone();
+        let transfer_event_bus = self.transfer_event_bus.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(2));
+            let start_time = std::time::Instant::now();
 
             loop {
                 interval.tick().await;
 
-                let progress = {
+                let (progress, download_info) = {
                     let downloads = downloads.read().await;
                     if let Some(download) = downloads.get(&file_hash) {
-                        Some(Self::calculate_progress_static(download))
+                        let progress = Self::calculate_progress_static(download);
+                        let info = (
+                            download.file_metadata.file_name.clone(),
+                            download.file_metadata.file_size,
+                            download.output_path.clone(),
+                        );
+                        (Some(progress), Some(info))
                     } else {
-                        None
+                        (None, None)
                     }
                 };
 
                 if let Some(progress) = progress {
                     // Check if download is complete
                     if progress.completed_chunks >= progress.total_chunks {
+                        let (file_name, file_size, output_path) = download_info.unwrap_or_default();
+                        let duration = start_time.elapsed();
+                        let avg_speed = if duration.as_secs_f64() > 0.0 {
+                            file_size as f64 / duration.as_secs_f64()
+                        } else {
+                            0.0
+                        };
+
                         // Finalize download
                         if let Err(e) = Self::finalize_download_static(&downloads, &file_hash).await
                         {
+                            // Emit failed event via TransferEventBus
+                            transfer_event_bus.emit_failed(TransferFailedEvent {
+                                transfer_id: file_hash.clone(),
+                                file_hash: file_hash.clone(),
+                                failed_at: current_timestamp_ms(),
+                                error: format!("Failed to finalize download: {}", e),
+                                error_category: ErrorCategory::Filesystem,
+                                downloaded_bytes: progress.downloaded_size,
+                                total_bytes: progress.total_size,
+                                retry_possible: false,
+                            });
+                            // Also emit legacy internal event
                             let _ = event_tx.send(MultiSourceEvent::DownloadFailed {
                                 file_hash: file_hash.clone(),
                                 error: format!("Failed to finalize download: {}", e),
+                            });
+                        } else {
+                            // Emit completed event via TransferEventBus
+                            transfer_event_bus.emit_completed(TransferCompletedEvent {
+                                transfer_id: file_hash.clone(),
+                                file_hash: file_hash.clone(),
+                                file_name,
+                                file_size,
+                                output_path,
+                                completed_at: current_timestamp_ms(),
+                                duration_seconds: duration.as_secs(),
+                                average_speed_bps: avg_speed,
+                                total_chunks: progress.total_chunks,
+                                sources_used: Vec::new(), // TODO: track sources
+                            });
+                            // Also emit legacy internal event
+                            let _ = event_tx.send(MultiSourceEvent::DownloadCompleted {
+                                file_hash: file_hash.clone(),
+                                output_path: String::new(),
+                                duration_secs: duration.as_secs(),
+                                average_speed_bps: avg_speed,
                             });
                         }
                         break;
                     }
 
-                    // Emit progress update
+                    // Emit progress update via TransferEventBus
+                    transfer_event_bus.emit_progress(TransferProgressEvent {
+                        transfer_id: file_hash.clone(),
+                        downloaded_bytes: progress.downloaded_size,
+                        total_bytes: progress.total_size,
+                        completed_chunks: progress.completed_chunks,
+                        total_chunks: progress.total_chunks,
+                        progress_percentage: calculate_progress(progress.downloaded_size, progress.total_size),
+                        download_speed_bps: progress.download_speed_bps,
+                        upload_speed_bps: 0.0,
+                        eta_seconds: progress.eta_seconds,
+                        active_sources: progress.active_sources,
+                        timestamp: current_timestamp_ms(),
+                    });
+
+                    // Also emit legacy internal event
                     let _ = event_tx.send(MultiSourceEvent::ProgressUpdate {
                         file_hash: file_hash.clone(),
                         progress,

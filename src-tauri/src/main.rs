@@ -16,7 +16,6 @@ pub mod http_server;
 pub mod net;
 pub mod pool;
 pub mod transaction_services;
-mod transfer_events;
 pub mod reassembly;
 
 // Re-export modules from the lib crate
@@ -72,6 +71,7 @@ use geth_downloader::GethDownloader;
 use keystore::Keystore;
 use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
+use chiral_network::transfer_events::TransferEventBus;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::{HashMap, VecDeque};
@@ -3232,10 +3232,13 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
+        // Create transfer event bus for unified event emission
+        let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
         let multi_source_service = MultiSourceDownloadService::new(
             dht_service,
             webrtc_arc.clone(),
             state.bittorrent_handler.clone(),
+            transfer_event_bus,
         );
         let multi_source_arc = Arc::new(multi_source_service);
 

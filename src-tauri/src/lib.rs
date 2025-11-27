@@ -6,6 +6,7 @@ pub mod config;
 pub mod control_plane;
 pub mod multi_source_download;
 pub mod download_restart;
+pub mod transfer_events;
 
 // Download source abstraction
 pub mod download_source;
