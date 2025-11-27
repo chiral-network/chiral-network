@@ -1,3 +1,4 @@
+use chiral_network::config::{CHAIN_ID, NETWORK_ID};
 use chrono;
 use ethers::prelude::*;
 use once_cell::sync::Lazy;
@@ -6,14 +7,21 @@ use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use tokio::sync::Mutex;
+use tauri::Emitter;
 
 // ============================================================================
 // Configuration & Shared Resources
 // ============================================================================
+
+/// Block reward in Chiral - the amount awarded for mining a block.
+/// This is the single source of truth for block rewards throughout the codebase.
+pub const BLOCK_REWARD: f64 = 2.0;
 
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
@@ -26,25 +34,19 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             rpc_endpoint: "http://127.0.0.1:8545".to_string(),
-            chain_id: 98765,
-            network_id: 98765,
+            chain_id: *CHAIN_ID,
+            network_id: *NETWORK_ID,
         }
     }
 }
 
-// Global configuration - can be updated via environment variables
+// Global configuration - reads from genesis.json or environment variables
 pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
     NetworkConfig {
         rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
             .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: std::env::var("CHIRAL_CHAIN_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-        network_id: std::env::var("CHIRAL_NETWORK_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
+        chain_id: *CHAIN_ID,
+        network_id: *NETWORK_ID,
     }
 });
 
@@ -102,26 +104,15 @@ impl GethProcess {
 
         // Also check if geth is actually running on port 8545
         // This handles cases where the app restarted but geth is still running
-        if let Ok(response) = std::process::Command::new("curl")
-            .arg("-s")
-            .arg("-X")
-            .arg("POST")
-            .arg("-H")
-            .arg("Content-Type: application/json")
-            .arg("--data")
-            .arg(r#"{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}"#)
-            .arg("http://127.0.0.1:8545")
-            .output()
-        {
-            if response.status.success() && !response.stdout.is_empty() {
-                // Try to parse as JSON and check if it's a valid response
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&response.stdout) {
-                    return json.get("result").is_some();
-                }
-            }
-        }
+        // Use TCP socket check - cross-platform and works in both sync/async contexts
+        use std::net::TcpStream;
+        use std::time::Duration;
 
-        false
+        // Try to connect to the Geth RPC port
+        TcpStream::connect_timeout(
+            &"127.0.0.1:8545".parse().unwrap(),
+            Duration::from_secs(1)
+        ).is_ok()
     }
 
     fn resolve_data_dir(&self, data_dir: &str) -> Result<PathBuf, String> {
@@ -255,7 +246,7 @@ impl GethProcess {
         cmd.arg("--datadir")
             .arg(&data_path)
             .arg("--networkid")
-            .arg("98765")
+            .arg(NETWORK_CONFIG.network_id.to_string())
             .arg("--bootnodes")
             .arg(bootstrap_enode)
             .arg("--http")
@@ -1337,8 +1328,9 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
     Ok(all_lines[start..].to_vec())
 }
 
-pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> {
-    let mut blocks_mined = 0u64;
+pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str) -> Result<u64, String> {
+
+    println!("🔍 get_mined_blocks_count called for address: {}", miner_address);
 
     // Get the current block number
     let block_number_payload = json!({
@@ -1371,13 +1363,67 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
     let current_block = u64::from_str_radix(&block_hex[2..], 16)
         .map_err(|e| format!("Failed to parse block number: {}", e))?;
 
-    // Check recent blocks (last 100 or current block count, whichever is smaller)
-    let blocks_to_check = std::cmp::min(1000, current_block);
-    let start_block = current_block.saturating_sub(blocks_to_check).max(1);
-
     // Normalize the miner address for comparison
     let normalized_miner = miner_address.to_lowercase();
 
+    // Maintain cumulative count per address - only increases, never decreases
+    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+    // Incremental scanning: only scan blocks we haven't checked yet
+    // Much more efficient than rescanning the same blocks repeatedly
+    static LAST_SCANNED_BLOCK: Lazy<Mutex<u64>> = Lazy::new(|| Mutex::new(0));
+
+    // Start from the last scanned block, or very recent blocks if this is first scan
+    let start_block = {
+        let last_scanned = LAST_SCANNED_BLOCK.lock().await;
+        if *last_scanned == 0 {
+            // First scan: check minimal recent blocks since mining happens at tip
+            // For active mining, our blocks are at the very end - minimal scanning needed
+            current_block.saturating_sub(1)
+        } else {
+            // Incremental: start from where we left off
+            *last_scanned
+        }
+    };
+
+    // Get current cumulative count for this address (atomic with update)
+    let current_cumulative = {
+        let counts = CUMULATIVE_COUNTS.lock().await;
+        *counts.get(miner_address).unwrap_or(&0)
+    };
+
+    // Update the last scanned block for next time
+    {
+        let mut last_scanned = LAST_SCANNED_BLOCK.lock().await;
+        *last_scanned = current_block;
+    }
+
+    // Only scan recent blocks for efficiency
+
+    // Process blocks one at a time for maximum incremental updates
+    // Each block discovery triggers immediate UI feedback
+    const BATCH_SIZE: usize = 1;
+    let mut newly_discovered_blocks = 0u64;
+
+    // Scan from newest to oldest for active mining (recent blocks more likely to be mined)
+    // Process in smaller batches for more responsive incremental updates
+    let mut scanned_blocks = 0u64;
+
+    // Calculate batches from newest to oldest
+    let mut batch_starts = Vec::new();
+    let mut current_start = start_block;
+    while current_start <= current_block {
+        batch_starts.push(current_start);
+        if current_start + BATCH_SIZE as u64 > current_block {
+            break;
+        }
+        current_start += BATCH_SIZE as u64;
+    }
+    // Reverse to scan newest first
+    batch_starts.reverse();
+
+    // Process blocks sequentially for truly incremental discovery
+    // Each block is checked individually with small delays between discoveries
     for block_num in start_block..=current_block {
         let block_payload = json!({
             "jsonrpc": "2.0",
@@ -1386,25 +1432,78 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
             "id": 1
         });
 
-        if let Ok(response) = HTTP_CLIENT
-            .post(&NETWORK_CONFIG.rpc_endpoint)
-            .json(&block_payload)
-            .send()
-            .await
-        {
-            if let Ok(json_response) = response.json::<serde_json::Value>().await {
-                if let Some(block) = json_response.get("result") {
-                    if let Some(miner) = block.get("miner").and_then(|m| m.as_str()) {
-                        if miner.to_lowercase() == normalized_miner {
-                            blocks_mined += 1;
+        // Check this block
+        let mut block_result = 0u64;
+        for attempt in 0..3 {
+            if let Ok(response) = HTTP_CLIENT
+                .post(&NETWORK_CONFIG.rpc_endpoint)
+                .json(&block_payload)
+                .send()
+                .await
+            {
+                if let Ok(json_response) = response.json::<serde_json::Value>().await {
+                    if let Some(block) = json_response.get("result") {
+                        if let Some(block_miner) = block.get("miner").and_then(|m| m.as_str()) {
+                            if block_miner.to_lowercase() == normalized_miner {
+                                block_result = 1;
+                                break;
+                            }
                         }
                     }
                 }
             }
+
+            // Wait before retry
+            if attempt < 2 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
+
+        scanned_blocks += 1;
+
+        // If we found a mined block, update immediately
+        if block_result > 0 {
+            newly_discovered_blocks += block_result;
+
+            // Update cumulative count immediately (drop guard before await)
+            {
+                let mut counts = CUMULATIVE_COUNTS.lock().await;
+                let existing_count = *counts.get(miner_address).unwrap_or(&0);
+                let new_total = existing_count + block_result;
+                counts.insert(miner_address.to_string(), new_total);
+
+                println!("🔍 Found 1 NEW block! (cumulative total: {}, scanned {} blocks)",
+                         new_total, scanned_blocks);
+
+                // Emit event to frontend for real-time UI updates
+                let _ = app.emit("mining_scan_progress", serde_json::json!({
+                    "address": miner_address,
+                    "blocks_found_in_batch": 1,
+                    "total_scanned": scanned_blocks,
+                    "timestamp": chrono::Utc::now().timestamp()
+                }));
+            }
+
+            // Small delay between discoveries for better visual feedback
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         }
     }
 
-    Ok(blocks_mined)
+    // Update the cumulative count with any newly discovered blocks
+    let final_total = if newly_discovered_blocks > 0 {
+        let mut counts = CUMULATIVE_COUNTS.lock().await;
+        let existing_count = *counts.get(miner_address).unwrap_or(&0);
+        let new_total = existing_count + newly_discovered_blocks;
+        counts.insert(miner_address.to_string(), new_total);
+        new_total
+    } else {
+        current_cumulative
+    };
+
+    // Return the cumulative count (existing + newly discovered)
+    println!("🔍 get_mined_blocks_count returning: {} total blocks for address: {} (discovered {} new, previous total: {})",
+             final_total, miner_address, newly_discovered_blocks, current_cumulative);
+    Ok(final_total)
 }
 
 //Fetching Recent Blocks Mined by address, scanning backwards from latest
@@ -1555,9 +1654,7 @@ pub async fn get_recent_mined_blocks(
         //     }
         // };
 
-        // Since Geth's default reward (2.0) doesn't match the intended Chiral Network
-        // reward, we hardcode the intended value of 5.0 here.
-        let reward = Some(2.0);
+        let reward = Some(BLOCK_REWARD);
 
         out.push(MinedBlock {
             hash,
@@ -1570,6 +1667,281 @@ pub async fn get_recent_mined_blocks(
     }
 
     Ok(out)
+}
+
+// Range-based mining blocks fetch (for progressive loading)
+pub async fn get_mined_blocks_range(
+    miner_address: &str,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<MinedBlock>, String> {
+    let target = miner_address.to_lowercase();
+    let mut out: Vec<MinedBlock> = Vec::new();
+
+    for n in (from_block..=to_block).rev() {
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [format!("0x{:x}", n), false],
+                "id": 1
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("RPC send: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("RPC parse: {e}"))?;
+
+        if block_v.get("result").is_none() {
+            continue;
+        }
+        let b = &block_v["result"];
+
+        let miner = b
+            .get("author")
+            .and_then(|x| x.as_str())
+            .or_else(|| b.get("miner").and_then(|x| x.as_str()))
+            .unwrap_or("")
+            .to_lowercase();
+
+        if miner != target {
+            continue;
+        }
+
+        let hash = b
+            .get("hash")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let nonce = b
+            .get("nonce")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        let difficulty = b
+            .get("difficulty")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        let timestamp = b
+            .get("timestamp")
+            .and_then(|x| x.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+        let number = b
+            .get("number")
+            .and_then(|x| x.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(n);
+
+        let reward = Some(BLOCK_REWARD);
+
+        out.push(MinedBlock {
+            hash,
+            nonce,
+            difficulty,
+            timestamp,
+            number,
+            reward,
+        });
+    }
+
+    Ok(out)
+}
+
+// Get total mining rewards by summing actual rewards from all mined blocks
+// This is more accurate than blocksFound * 2 and returns just a number
+pub async fn get_total_mining_rewards(miner_address: &str) -> Result<f64, String> {
+    let target = miner_address.to_lowercase();
+    let mut total_rewards = 0.0;
+
+    // Get the current block number
+    let current_block = get_block_number().await?;
+
+    // Scan all blocks from 0 to current
+    // This could be slow for many blocks, but it's a one-time calculation
+    for n in 0..=current_block {
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [format!("0x{:x}", n), false],
+                "id": 1
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("RPC send: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("RPC parse: {e}"))?;
+
+        if block_v.get("result").is_none() {
+            continue;
+        }
+        let b = &block_v["result"];
+
+        let miner = b
+            .get("author")
+            .and_then(|x| x.as_str())
+            .or_else(|| b.get("miner").and_then(|x| x.as_str()))
+            .unwrap_or("")
+            .to_lowercase();
+
+        if miner == target {
+            total_rewards += BLOCK_REWARD;
+        }
+    }
+
+    Ok(total_rewards)
+}
+
+// Struct to return accurate totals from blockchain scan
+#[derive(Debug, Serialize, Clone)]
+pub struct AccurateTotals {
+    pub blocks_mined: u64,
+    pub total_received: f64,
+    pub total_sent: f64,
+}
+
+// Progress event for accurate totals calculation
+#[derive(Debug, Serialize, Clone)]
+pub struct AccurateTotalsProgress {
+    pub current_block: u64,
+    pub total_blocks: u64,
+    pub percentage: u8,
+}
+
+/// Scans the entire blockchain once and calculates:
+/// - Total blocks mined by the address
+/// - Total Chiral received (incoming transactions)
+/// - Total Chiral sent (outgoing transactions)
+/// Emits progress events via Tauri event system
+pub async fn calculate_accurate_totals(
+    address: &str,
+    app_handle: tauri::AppHandle,
+) -> Result<AccurateTotals, String> {
+    let target_address = address.to_lowercase();
+    let mut blocks_mined = 0u64;
+    let mut total_received = 0.0;
+    let mut total_sent = 0.0;
+
+    // Get the current block number
+    let current_block = get_block_number().await?;
+
+    // Emit initial progress
+    let _ = app_handle.emit(
+        "accurate-totals-progress",
+        AccurateTotalsProgress {
+            current_block: 0,
+            total_blocks: current_block,
+            percentage: 0,
+        },
+    );
+
+    // Scan ALL blocks from genesis for maximum accuracy
+    for n in 0..=current_block {
+        // Emit progress every 100 blocks
+        if n % 100 == 0 {
+            let percentage = ((n as f64 / current_block as f64) * 100.0) as u8;
+            let _ = app_handle.emit(
+                "accurate-totals-progress",
+                AccurateTotalsProgress {
+                    current_block: n,
+                    total_blocks: current_block,
+                    percentage,
+                },
+            );
+        }
+
+        // Get block with full transaction data
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [format!("0x{:x}", n), true], // true = include full transaction objects
+                "id": 1
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("RPC send: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("RPC parse: {e}"))?;
+
+        if block_v.get("result").is_none() {
+            continue;
+        }
+        let b = &block_v["result"];
+
+        // Check if this address mined this block
+        let miner = b
+            .get("author")
+            .and_then(|x| x.as_str())
+            .or_else(|| b.get("miner").and_then(|x| x.as_str()))
+            .unwrap_or("")
+            .to_lowercase();
+
+        if miner == target_address {
+            blocks_mined += 1;
+        }
+
+        // Process all transactions in this block
+        if let Some(txs) = b.get("transactions").and_then(|t| t.as_array()) {
+            for tx in txs {
+                let from = tx
+                    .get("from")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let to = tx
+                    .get("to")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let value_hex = tx
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0x0");
+
+                // Parse value (Wei to Chiral: divide by 10^18)
+                if let Ok(value_wei) = u128::from_str_radix(&value_hex.trim_start_matches("0x"), 16) {
+                    let value_chiral = value_wei as f64 / 1e18;
+
+                    // Check if this is a received transaction
+                    if to == target_address && value_chiral > 0.0 {
+                        println!("DEBUG: Received transaction: {} Chiral (from: {}, to: {})", value_chiral, from, to);
+                        total_received += value_chiral;
+                    }
+
+                    // Check if this is a sent transaction
+                    if from == target_address && value_chiral > 0.0 {
+                        println!("DEBUG: Sent transaction: {} Chiral (from: {}, to: {})", value_chiral, from, to);
+                        total_sent += value_chiral;
+                    }
+                }
+            }
+        }
+    }
+
+    // Emit final progress (100%)
+    let _ = app_handle.emit(
+        "accurate-totals-progress",
+        AccurateTotalsProgress {
+            current_block: current_block,
+            total_blocks: current_block,
+            percentage: 100,
+        },
+    );
+
+    println!("DEBUG: Accurate totals calculation complete - blocks_mined: {}, total_received: {}, total_sent: {}", blocks_mined, total_received, total_sent);
+
+    Ok(AccurateTotals {
+        blocks_mined,
+        total_received,
+        total_sent,
+    })
 }
 
 #[tauri::command]
@@ -1744,8 +2116,7 @@ pub async fn send_transaction(
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
 
-    let chain_id = 98765u64;
-    let wallet = wallet.with_chain_id(chain_id);
+    let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
     let client = SignerMiddleware::new(provider.clone(), wallet);
 
@@ -1979,3 +2350,17 @@ pub async fn get_transaction_history(
 
     Ok(transactions)
 }
+
+/// Reset the incremental block scanning state
+/// Call this when switching accounts or when cache is cleared
+pub async fn reset_incremental_scanning() {
+    static LAST_SCANNED_BLOCK: Lazy<Mutex<u64>> = Lazy::new(|| Mutex::new(0));
+    let mut last_scanned = LAST_SCANNED_BLOCK.lock().await;
+    *last_scanned = 0;
+
+    // Also reset cumulative counts
+    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+    let mut counts = CUMULATIVE_COUNTS.lock().await;
+    counts.clear();
+}
+

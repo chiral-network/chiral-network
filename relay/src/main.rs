@@ -18,24 +18,27 @@
 mod relay_auth;
 use relay_auth::*;
 
-
 use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
 use libp2p::{
-    autonat::v2 as autonat, identify, identity,
+    autonat::v2 as autonat,
+    identify, identity,
     multiaddr::Protocol,
     noise, ping, relay,
+    request_response::{
+        Behaviour as RequestResponse, Config as RequestResponseConfig,
+        Event as RequestResponseEvent, Message as RequestResponseMessage, ProtocolSupport,
+    },
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId,
-    request_response::{Behaviour as RequestResponse, Config as RequestResponseConfig, Event as RequestResponseEvent, ProtocolSupport, Message as RequestResponseMessage},
 };
 use std::{
+    collections::HashSet,
     net::Ipv4Addr,
     path::PathBuf,
-    time::Duration,
-    collections::{HashSet},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -88,16 +91,24 @@ enum RelayBehaviourEvent {
     RelayAuth(RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>),
 }
 impl From<relay::Event> for RelayBehaviourEvent {
-    fn from(e: relay::Event) -> Self { RelayBehaviourEvent::Relay(e) }
+    fn from(e: relay::Event) -> Self {
+        RelayBehaviourEvent::Relay(e)
+    }
 }
 impl From<ping::Event> for RelayBehaviourEvent {
-    fn from(e: ping::Event) -> Self { RelayBehaviourEvent::Ping(e) }
+    fn from(e: ping::Event) -> Self {
+        RelayBehaviourEvent::Ping(e)
+    }
 }
 impl From<identify::Event> for RelayBehaviourEvent {
-    fn from(e: identify::Event) -> Self { RelayBehaviourEvent::Identify(e) }
+    fn from(e: identify::Event) -> Self {
+        RelayBehaviourEvent::Identify(e)
+    }
 }
 impl From<autonat::server::Event> for RelayBehaviourEvent {
-    fn from(_e: autonat::server::Event) -> Self { RelayBehaviourEvent::Autonat(()) }
+    fn from(_e: autonat::server::Event) -> Self {
+        RelayBehaviourEvent::Autonat(())
+    }
 }
 impl From<RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>> for RelayBehaviourEvent {
     fn from(e: RequestResponseEvent<RelayAuthRequest, RelayAuthResponse>) -> Self {
@@ -133,8 +144,7 @@ async fn main() -> Result<()> {
     let log_level = if args.verbose { "debug" } else { "info" };
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(log_level)),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
         )
         .init();
 
@@ -147,7 +157,10 @@ async fn main() -> Result<()> {
             let bytes = std::fs::read(path)?;
             identity::Keypair::from_protobuf_encoding(&bytes)?
         } else {
-            info!("🔑 Generating new identity and saving to {}", path.display());
+            info!(
+                "🔑 Generating new identity and saving to {}",
+                path.display()
+            );
             let keypair = identity::Keypair::generate_ed25519();
             let bytes = keypair.to_protobuf_encoding()?;
             std::fs::write(path, bytes)?;
@@ -170,19 +183,16 @@ async fn main() -> Result<()> {
 
     // === TOKEN SETUP ===
     // Replace with your real tokens!
-    let tokens: HashSet<Vec<u8>> = [
-        b"mysecrettoken1".to_vec(),
-        b"mysecrettoken2".to_vec(),
-    ].iter().cloned().collect();
+    let tokens: HashSet<Vec<u8>> = [b"mysecrettoken1".to_vec(), b"mysecrettoken2".to_vec()]
+        .iter()
+        .cloned()
+        .collect();
     // Track authenticated peers
     let authed_peers: Arc<Mutex<HashSet<PeerId>>> = Arc::new(Mutex::new(HashSet::new()));
 
     // Relay Auth protocol setup
     let relay_auth_protocols = std::iter::once((RelayAuthProtocol(), ProtocolSupport::Full));
-    let relay_auth = RequestResponse::new(
-        relay_auth_protocols,
-        RequestResponseConfig::default(),
-    );
+    let relay_auth = RequestResponse::new(relay_auth_protocols, RequestResponseConfig::default());
 
     // === RELAY CONFIG ===
     // Note: In libp2p 0.54, reservation_handler is not supported
@@ -244,16 +254,15 @@ async fn main() -> Result<()> {
     if let Some(external) = args.external_address {
         swarm.add_external_address(external.clone());
         info!("🌐 External address: {}", external);
-        info!(
-            "📋 Full multiaddr: {}/p2p/{}",
-            external, local_peer_id
-        );
+        info!("📋 Full multiaddr: {}/p2p/{}", external, local_peer_id);
     }
 
     let start_time = std::time::Instant::now();
     let mut connected_peers = 0usize;
-    let mut reservation_count = 0usize;
-    let mut circuit_count = 0usize;
+    // Track active reservations and circuits with timestamps
+    use std::collections::VecDeque;
+    let mut reservations: VecDeque<(PeerId, std::time::Instant)> = VecDeque::new();
+    let mut circuits: VecDeque<((PeerId, PeerId), std::time::Instant)> = VecDeque::new();
 
     // Main event loop
     info!("✅ Relay daemon is running");
@@ -268,8 +277,16 @@ async fn main() -> Result<()> {
                         match relay_event {
                             relay::Event::ReservationReqAccepted { src_peer_id, .. } => {
                                 if authed_peers.lock().unwrap().contains(&src_peer_id) {
-                                    reservation_count += 1;
-                                    info!("✅ Reservation accepted for authenticated peer: {}", src_peer_id);
+                                    // Evict if over limit
+                                    while reservations.len() >= args.max_reservations {
+                                        if let Some((old_peer, _)) = reservations.pop_front() {
+                                            info!("♻️  Evicting old reservation: {}", old_peer);
+                                            // Forcefully drop via swarm.disconnect
+                                            let _ = swarm.disconnect_peer_id(old_peer);
+                                        }
+                                    }
+                                    reservations.push_back((src_peer_id, std::time::Instant::now()));
+                                    info!("✅ Reservation accepted: {}", src_peer_id);
                                 } else {
                                     warn!("⚠️  Reservation accepted for unauthenticated peer: {} (should not happen)", src_peer_id);
                                 }
@@ -282,7 +299,7 @@ async fn main() -> Result<()> {
                                 }
                             }
                             relay::Event::ReservationTimedOut { src_peer_id } => {
-                                reservation_count = reservation_count.saturating_sub(1);
+                                reservations.retain(|(p, _)| p != &src_peer_id);
                                 debug!("⏱️  Reservation timed out for peer: {}", src_peer_id);
                             }
                             relay::Event::ReservationReqAcceptFailed { src_peer_id, error } => {
@@ -292,8 +309,14 @@ async fn main() -> Result<()> {
                                 error!("❌ Failed to deny reservation from {}: {:?}", src_peer_id, error);
                             }
                             relay::Event::CircuitReqAccepted { src_peer_id, dst_peer_id } => {
-                                circuit_count += 1;
-                                info!("🔗 Circuit established: {} -> {}", src_peer_id, dst_peer_id);
+                                // Evict oldest circuit if full
+                                while circuits.len() >= args.max_circuits {
+                                    if let Some(((old_src, old_dst), _)) = circuits.pop_front() {
+                                        info!("♻️  Evicting old circuit: {} -> {}", old_src, old_dst);
+                                        // Nothing to disconnect explicitly; libp2p will close automatically
+                                    }
+                                }
+                                circuits.push_back(((src_peer_id, dst_peer_id), std::time::Instant::now()));
                             }
                             relay::Event::CircuitReqDenied { src_peer_id, dst_peer_id } => {
                                 warn!("⚠️  Circuit denied: {} -> {}", src_peer_id, dst_peer_id);
@@ -308,7 +331,7 @@ async fn main() -> Result<()> {
                                 error!("❌ Outbound connection failed {} -> {}: {:?}", src_peer_id, dst_peer_id, error);
                             }
                             relay::Event::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
-                                circuit_count = circuit_count.saturating_sub(1);
+                                circuits.retain(|((src, dst), _)| !(src == &src_peer_id && dst == &dst_peer_id));
                                 debug!("❌ Circuit closed: {} -> {}", src_peer_id, dst_peer_id);
                             }
                         }
@@ -379,8 +402,8 @@ async fn main() -> Result<()> {
                             .collect(),
                         connected_peers,
                         uptime_seconds: start_time.elapsed().as_secs(),
-                        relay_reservations: reservation_count,
-                        relay_circuits: circuit_count,
+                        relay_reservations: reservations.len(),
+                        relay_circuits: circuits.len(),
                     };
                     if let Err(e) = std::fs::write(metrics_path, serde_json::to_string_pretty(&metrics)?) {
                         error!("Failed to write metrics: {}", e);

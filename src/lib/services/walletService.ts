@@ -1,8 +1,33 @@
 import { ethers } from 'ethers';
 import { get } from 'svelte/store';
+import { invoke } from '@tauri-apps/api/core';
 import { etcAccount } from '$lib/stores';
 
-const CHAIN_ID = 98765; // Chiral Network Chain ID
+const DEFAULT_CHAIN_ID = 98765; // Fallback Chiral Network Chain ID
+
+// Cache for the chain ID
+let cachedChainId: number | null = null;
+
+/**
+ * Get the chain ID from the backend, with caching
+ */
+export async function getChainId(): Promise<number> {
+  if (cachedChainId !== null) {
+    return cachedChainId;
+  }
+
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  if (isTauri) {
+    try {
+      cachedChainId = await invoke<number>('get_chain_id');
+      return cachedChainId;
+    } catch (error) {
+      console.warn('Failed to get chain ID from backend, using default:', error);
+      return DEFAULT_CHAIN_ID;
+    }
+  }
+  return DEFAULT_CHAIN_ID;
+}
 
 export interface TransactionRequest {
   from: string;
@@ -29,6 +54,9 @@ export async function signTransaction(txRequest: TransactionRequest): Promise<st
   // Convert value from ETH string to Wei
   const valueWei = ethers.parseEther(txRequest.value);
 
+  // Get chain ID from backend
+  const chainId = await getChainId();
+
   // Build transaction
   const transaction: ethers.TransactionRequest = {
     to: txRequest.to,
@@ -36,7 +64,7 @@ export async function signTransaction(txRequest: TransactionRequest): Promise<st
     gasLimit: BigInt(txRequest.gasLimit),
     gasPrice: BigInt(txRequest.gasPrice),
     nonce: txRequest.nonce,
-    chainId: CHAIN_ID,
+    chainId: chainId,
     type: 0, // Legacy transaction type
   };
 

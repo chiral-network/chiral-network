@@ -1,26 +1,14 @@
+pub mod models;
+// pub mod protocol;
+use self::models::*;
+use rand::seq::SliceRandom;
+
+// use self::protocol::*;
+use crate::config::CHAIN_ID;
 use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
 use x25519_dalek::PublicKey;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum Ed2kError {
-    InvalidLink(String),
-    MissingPart(&'static str),
-    InvalidFileSize(String),
-}
-
-impl std::fmt::Display for Ed2kError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Ed2kError::InvalidLink(s) => write!(f, "Invalid ed2k link format: {}", s),
-            Ed2kError::MissingPart(s) => write!(f, "Missing required part in link: {}", s),
-            Ed2kError::InvalidFileSize(s) => write!(f, "Invalid file size: {}", s),
-        }
-    }
-}
-impl std::error::Error for Ed2kError {}
-
 // ------ Key Request Protocol Implementation ------
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyRequestProtocol;
@@ -122,18 +110,21 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
-use libp2p::multiaddr::Protocol;
+use libp2p::{
+    multiaddr::Protocol,
+    noise, tcp, yamux,
+};
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     str::FromStr,
 };
@@ -160,6 +151,9 @@ pub trait AsyncIo: FAsyncRead + FAsyncWrite + Unpin + Send {}
 impl<T: FAsyncRead + FAsyncWrite + Unpin + Send> AsyncIo for T {}
 use anyhow::Result;
 
+// Rate limiting for connection error logs (log at most once every 30 seconds)
+static LAST_CONNECTION_ERROR_LOG: AtomicU64 = AtomicU64::new(0);
+
 use libp2p::{
     autonat::v2,
     core::{
@@ -178,6 +172,7 @@ use libp2p::{
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
+    upnp,
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
 use rand::rngs::OsRng;
@@ -192,35 +187,8 @@ pub const RAW_CODEC: u64 = 0x55;
 const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
 /// File seeder TTL – if no heartbeat lands within this window, drop the entry.
 const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(90); // Longer TTL with grace period
-pub struct PendingKeywordIndex;
-
-/// Extracts a set of unique, searchable keywords from a filename.
-fn extract_keywords(file_name: &str) -> Vec<String> {
-    // 1. Sanitize: remove the file extension and convert to lowercase.
-    let name_without_ext = std::path::Path::new(file_name)
-        .file_stem()
-        .unwrap_or_default()
-        .to_str()
-        .unwrap_or_default()
-        .to_lowercase();
-
-    // 2. Split the name into words based on common non-alphanumeric delimiters.
-    let keywords: std::collections::HashSet<String> = name_without_ext
-        .split(|c: char| !c.is_alphanumeric())
-        // 3. Filter out empty strings and common short words (e.g., "a", "of").
-        .filter(|s| !s.is_empty() && s.len() > 2)
-        .map(String::from)
-        .collect(); // Using a HashSet automatically handles duplicates.
-
-    // 4. Return the unique keywords as a Vec.
-    keywords.into_iter().collect()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct FileMetadata {
-    // !IMPORTANT: Please make use of serde(default) and ..Default::default() for backwards/forwards compatability
-    /// The Merkle root of the original file chunks, used as the primary identifier for integrity.
+pub struct PendingKeywordIndex {
+    pub keyword: String,
     pub merkle_root: String,
     pub file_name: String,
     pub file_size: u64,
@@ -616,28 +584,6 @@ pub enum NatConfidence {
     High,
 }
 
-impl Default for NatConfidence {
-    fn default() -> Self {
-        NatConfidence::Low
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NatHistoryItem {
-    pub state: NatReachabilityState,
-    pub confidence: NatConfidence,
-    pub timestamp: u64,
-    pub summary: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct ReachabilityRecord {
-    state: NatReachabilityState,
-    confidence: NatConfidence,
-    timestamp: SystemTime,
-    summary: Option<String>,
-}
 /// thread-safe, mutable block store
 
 #[derive(NetworkBehaviour)]
@@ -655,6 +601,7 @@ struct DhtBehaviour {
     relay_client: relay::client::Behaviour,
     relay_server: toggle::Toggle<relay::Behaviour>,
     dcutr: toggle::Toggle<dcutr::Behaviour>,
+    upnp: toggle::Toggle<upnp::tokio::Behaviour>,
 }
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -699,10 +646,6 @@ pub enum DhtCommand {
         offer_request: WebRTCOfferRequest,
         sender: oneshot::Sender<Result<WebRTCAnswerResponse, String>>,
     },
-    SendMessageToPeer {
-        target_peer_id: PeerId,
-        message: serde_json::Value,
-    },
     StoreBlock {
         cid: Cid,
         data: Vec<u8>,
@@ -720,6 +663,15 @@ pub enum DhtCommand {
     },
     AnnounceTorrent {
         info_hash: String,
+    },
+    PutDhtValue {
+        key: String,
+        value: Vec<u8>,
+        sender: oneshot::Sender<Result<(), String>>,
+    },
+    GetDhtValue {
+        key: String,
+        sender: oneshot::Sender<Result<Option<Vec<u8>>, String>>,
     },
 }
 #[derive(Debug, Clone, Serialize)]
@@ -992,78 +944,6 @@ struct PendingProviderQuery {
     id: u64,
     sender: oneshot::Sender<Result<Vec<String>, String>>,
 }
-
-#[derive(Debug, Clone, Default)]
-struct DhtMetrics {
-    last_bootstrap: Option<SystemTime>,
-    last_success: Option<SystemTime>,
-    last_error_at: Option<SystemTime>,
-    last_error: Option<String>,
-    bootstrap_failures: u64,
-    listen_addrs: Vec<String>,
-    reachability_state: NatReachabilityState,
-    reachability_confidence: NatConfidence,
-    last_reachability_change: Option<SystemTime>,
-    last_probe_at: Option<SystemTime>,
-    last_reachability_error: Option<String>,
-    observed_addrs: Vec<String>,
-    reachability_history: VecDeque<ReachabilityRecord>,
-    success_streak: u32,
-    failure_streak: u32,
-    autonat_enabled: bool,
-    // AutoRelay metrics
-    autorelay_enabled: bool,
-    active_relay_peer_id: Option<String>,
-    relay_reservation_status: Option<String>,
-    last_reservation_success: Option<SystemTime>,
-    last_reservation_failure: Option<SystemTime>,
-    reservation_renewals: u64,
-    reservation_evictions: u64,
-    // DCUtR metrics
-    dcutr_enabled: bool,
-    dcutr_hole_punch_attempts: u64,
-    dcutr_hole_punch_successes: u64,
-    dcutr_hole_punch_failures: u64,
-    last_dcutr_success: Option<SystemTime>,
-    last_dcutr_failure: Option<SystemTime>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DhtMetricsSnapshot {
-    pub peer_count: usize,
-    pub last_bootstrap: Option<u64>,
-    pub last_peer_event: Option<u64>,
-    pub last_error: Option<String>,
-    pub last_error_at: Option<u64>,
-    pub bootstrap_failures: u64,
-    pub listen_addrs: Vec<String>,
-    pub relay_listen_addrs: Vec<String>,
-    pub reachability: NatReachabilityState,
-    pub reachability_confidence: NatConfidence,
-    pub last_reachability_change: Option<u64>,
-    pub last_probe_at: Option<u64>,
-    pub last_reachability_error: Option<String>,
-    pub observed_addrs: Vec<String>,
-    pub reachability_history: Vec<NatHistoryItem>,
-    pub autonat_enabled: bool,
-    // AutoRelay metrics
-    pub autorelay_enabled: bool,
-    pub active_relay_peer_id: Option<String>,
-    pub relay_reservation_status: Option<String>,
-    pub last_reservation_success: Option<u64>,
-    pub last_reservation_failure: Option<u64>,
-    pub reservation_renewals: u64,
-    pub reservation_evictions: u64,
-    // DCUtR metrics
-    pub dcutr_enabled: bool,
-    pub dcutr_hole_punch_attempts: u64,
-    pub dcutr_hole_punch_successes: u64,
-    pub dcutr_hole_punch_failures: u64,
-    pub last_dcutr_success: Option<u64>,
-    pub last_dcutr_failure: Option<u64>,
-}
-
 // ------Proxy Protocol Implementation------
 #[derive(Clone, Debug, Default)]
 struct ProxyCodec;
@@ -1287,158 +1167,6 @@ impl Transport for Socks5Transport {
         }
         .boxed())
     }
-}
-
-// Helper function to convert Multiaddr to SocketAddr
-fn addr_to_socket_addr(addr: &libp2p::Multiaddr) -> Option<SocketAddr> {
-    use libp2p::multiaddr::Protocol;
-
-    let mut iter = addr.iter();
-    match (iter.next(), iter.next()) {
-        (Some(Protocol::Ip4(ip)), Some(Protocol::Tcp(port))) => {
-            Some(SocketAddr::new(ip.into(), port))
-        }
-        (Some(Protocol::Ip6(ip)), Some(Protocol::Tcp(port))) => {
-            Some(SocketAddr::new(ip.into(), port))
-        }
-        _ => None,
-    }
-}
-
-pub fn build_relay_listen_addr(base: &Multiaddr) -> Option<Multiaddr> {
-    let mut out = base.clone();
-    let has_p2p = out.iter().any(|p| matches!(p, Protocol::P2p(_)));
-    if !has_p2p {
-        return None;
-    }
-    out.push(Protocol::P2pCircuit);
-    Some(out)
-}
-
-fn is_relay_candidate(peer_id: &PeerId, relay_candidates: &HashSet<String>) -> bool {
-    if relay_candidates.is_empty() {
-        return false;
-    }
-
-    let peer_str = peer_id.to_string();
-    relay_candidates.iter().any(|candidate| {
-        // Check if the candidate multiaddr contains this peer ID
-        candidate.contains(&peer_str)
-    })
-}
-
-fn peer_id_from_multiaddr_str(s: &str) -> Option<PeerId> {
-    if let Ok(ma) = s.parse::<Multiaddr>() {
-        let mut last_p2p: Option<PeerId> = None;
-        for p in ma.iter() {
-            if let Protocol::P2p(mh) = p {
-                if let Ok(pid) = PeerId::from_multihash(mh.into()) {
-                    last_p2p = Some(pid);
-                }
-            }
-        }
-        return last_p2p;
-    }
-
-    if let Ok(pid) = s.parse::<PeerId>() {
-        return Some(pid);
-    }
-    None
-}
-
-fn should_try_relay(
-    pid: &PeerId,
-    relay_candidates: &HashSet<String>,
-    blacklist: &HashSet<PeerId>,
-    cooldown: &HashMap<PeerId, Instant>,
-) -> bool {
-    // 1) Check if the peer ID is in the preferred/bootstrap candidates
-    if relay_candidates.is_empty() {
-        return false;
-    }
-    let peer_str = pid.to_string();
-    let in_candidates = relay_candidates.iter().any(|cand| cand.contains(&peer_str));
-    if !in_candidates {
-        return false;
-    }
-    // 2) Check permanent blacklist
-    if blacklist.contains(pid) {
-        tracing::debug!("skip blacklisted relay candidate {}", pid);
-        return false;
-    }
-    // 3) Check cooldown
-    if let Some(until) = cooldown.get(pid) {
-        if Instant::now() < *until {
-            tracing::debug!("skip cooldown relay candidate {} until {:?}", pid, until);
-            return false;
-        }
-    }
-    true
-}
-
-/// candidates(HashSet<String>) → (PeerId, Multiaddr)
-fn filter_relay_candidates(
-    relay_candidates: &HashSet<String>,
-    blacklist: &HashSet<PeerId>,
-    cooldown: &HashMap<PeerId, Instant>,
-) -> Vec<(PeerId, Multiaddr)> {
-    let now = Instant::now();
-    let mut out = Vec::new();
-    for cand in relay_candidates {
-        if let Ok(ma) = cand.parse::<Multiaddr>() {
-            // Skip unreachable addresses (localhost/private IPs)
-            if !ma_plausibly_reachable(&ma) {
-                tracing::debug!("Skipping unreachable relay candidate: {}", ma);
-                continue;
-            }
-
-            // PeerId extraction
-            let mut pid_opt: Option<PeerId> = None;
-            for p in ma.iter() {
-                if let Protocol::P2p(mh) = p {
-                    if let Ok(pid) = PeerId::from_multihash(mh.into()) {
-                        pid_opt = Some(pid);
-                    }
-                }
-            }
-            if let Some(pid) = pid_opt {
-                if !blacklist.contains(&pid) {
-                    if let Some(until) = cooldown.get(&pid) {
-                        if Instant::now() < *until {
-                            tracing::debug!(
-                                "skip cooldown relay candidate {} until {:?}",
-                                pid,
-                                until
-                            );
-                            continue;
-                        }
-                    }
-                    out.push((pid, ma.clone()));
-                } else {
-                    tracing::debug!("skip blacklisted relay candidate {}", pid);
-                }
-            }
-        }
-    }
-    out
-}
-
-fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
-    use libp2p::multiaddr::Protocol;
-
-    let mut last_p2p: Option<PeerId> = None;
-    for protocol in address.iter() {
-        match protocol {
-            Protocol::P2p(peer_id) => {
-                last_p2p = Some(peer_id.clone());
-            }
-            Protocol::P2pCircuit => {
-                return last_p2p.clone();
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 enum RelayTransportOutput {
@@ -1744,6 +1472,14 @@ async fn run_dht_node(
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
     pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
+    pending_dht_queries: Arc<
+        Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
+    >,
+    pending_key_requests: Arc<
+        Mutex<
+            HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>,
+        >,
+    >,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -1861,51 +1597,11 @@ async fn run_dht_node(
         out
     }
 
-    let mut filtered_relays: Vec<(PeerId, Multiaddr)> = Vec::new();
-    for cand in &relay_candidates {
-        if let Ok(base) = cand.parse::<Multiaddr>() {
-            if let Some(pid) = parse_peer_id_from_ma(&base) {
-                if relay_blacklist.contains(&pid) {
-                    tracing::debug!("skip blacklisted relay candidate {}", pid);
-                    continue;
-                }
-                if let Some(until) = relay_cooldown.get(&pid) {
-                    if Instant::now() < *until {
-                        tracing::debug!("skip cooldown relay candidate {} until {:?}", pid, until);
-                        continue;
-                    }
-                }
-                filtered_relays.push((pid, base));
-            }
-        }
-    }
-
-    if filtered_relays.is_empty() {
-        tracing::warn!("No usable relay candidates after blacklist/cooldown filtering");
-    } else {
-        tracing::info!("Using {} filtered relay candidates", filtered_relays.len());
-        for (i, (pid, addr)) in filtered_relays.iter().take(5).enumerate() {
-            tracing::info!("   Filtered {}: {} via {}", i + 1, pid, addr);
-        }
-    }
-
-    for (pid, mut base_addr) in filtered_relays {
-        use libp2p::multiaddr::Protocol;
-        last_tried_relay = Some(pid);
-        base_addr.push(Protocol::P2pCircuit);
-        tracing::info!("📡 Attempting to listen via relay {} at {}", pid, base_addr);
-        if let Err(e) = swarm.listen_on(base_addr.clone()) {
-            tracing::warn!("listen_on via relay {} failed: {}", pid, e);
-            // Temporary failure: 10min cooldown
-            relay_cooldown.insert(pid, Instant::now() + Duration::from_secs(600));
-        }
-    }
-
     'outer: loop {
         tokio::select! {
                     // periodic maintenance tick - prune expired seeder heartbeats and update DHT
                     // Fast heartbeat tick — refresh DHT records for files this node is actively seeding
-                    _ = heartbeat_maintenance_interval.tick() => {
+                    _ = heartbeat_maintenance_interval.tick(), if !is_bootstrap => {
                         let now = unix_timestamp();
                         let my_id = peer_id.to_string();
                         let mut updated_records: Vec<(String, Vec<u8>)> = Vec::new();
@@ -2082,9 +1778,27 @@ async fn run_dht_node(
                                     }
 
                                     // The file_hash is the Merkle Root. The root_cid is for retrieval.
-                                    metadata.merkle_root = hex::encode(merkle_root);
+                                    // ONLY overwrite merkle_root if it's empty (preserves custom keys for verdicts/etc)
+                                    let computed_merkle_root = hex::encode(merkle_root);
+                                    let file_data_len = metadata.file_data.len();
+                                    if metadata.merkle_root.is_empty() {
+                                        metadata.merkle_root = computed_merkle_root.clone();
+                                        println!("💾 Using computed merkle_root: {}", metadata.merkle_root);
+                                    } else {
+                                        println!("💾 Preserving custom merkle_root: {} (computed: {})",
+                                            metadata.merkle_root, computed_merkle_root);
+                                    }
                                     metadata.cids = Some(vec![root_cid]); // Store root CID for bitswap retrieval
-                                    metadata.file_data.clear(); // Don't store full data in DHT record
+
+                                    // Only clear file_data for large files (>10KB) to save DHT space
+                                    // Keep small files (like reputation verdicts) in cache for fast retrieval
+                                    const MAX_INLINE_SIZE: usize = 10 * 1024; // 10KB
+                                    if file_data_len > MAX_INLINE_SIZE {
+                                        metadata.file_data.clear(); // Don't store large files in DHT record
+                                        println!("💾 Cleared file_data for large file ({} bytes)", file_data_len);
+                                    } else {
+                                        println!("💾 Keeping file_data inline ({} bytes) for fast cache retrieval", file_data_len);
+                                    }
 
                                     println!("Publishing file with root CID: {} (merkle_root: {:?})",
                                         root_cid, metadata.merkle_root);
@@ -2150,14 +1864,11 @@ async fn run_dht_node(
                                 }
 
                                 let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                                {
-                                    let mut pending = pending_heartbeat_updates.lock().await;
-                                    pending.insert(metadata.merkle_root.clone());
-                                }
-                                swarm
-                                    .behaviour_mut()
-                                    .kademlia
-                                    .get_record(record_key.clone());
+
+                                // Note: We skip the get_record heartbeat update here during initial publish
+                                // to avoid race conditions. The record doesn't exist yet, so fetching it
+                                // immediately would always fail with NotFound. Heartbeat updates will
+                                // happen on subsequent seeder refresh cycles.
 
                                 let dht_record_data = match serde_json::to_vec(&dht_metadata) {
                                     Ok(data) => data,
@@ -2180,18 +1891,18 @@ async fn run_dht_node(
                                 let connected_peers_count = connected_peers.lock().await.len();
                                 let replication_factor = 3; // Must match kad_cfg.set_replication_factor
 
-                                let quorum = if connected_peers_count >= replication_factor {
+                                let quorum = if connected_peers_count >= 10*replication_factor {
                                     // Use N(3) for better reliability - requires majority, not all
                                     // This tolerates slow/offline peers while ensuring redundancy
                                     if let Some(n) = std::num::NonZeroUsize::new(replication_factor) {
-                                        info!("Using Quorum::N({}) for file {} ({} peers available)", 
+                                        info!("Using Quorum::N({}) for file {} ({} peers available)",
                                             replication_factor, metadata.merkle_root, connected_peers_count);
                                         kad::Quorum::N(n)
                                     } else {
                                         kad::Quorum::One
                                     }
                                 } else {
-                                    info!("Using Quorum::One for file {} (only {} peers available)", 
+                                    info!("Using Quorum::One for file {} (only {} peers available)",
                                         metadata.merkle_root, connected_peers_count);
                                     kad::Quorum::One
                                 };
@@ -2227,21 +1938,26 @@ async fn run_dht_node(
                                     keywords
                                 );
                                 // Task 2: DHT Indexing
-                                // TODO: implement the "read-modify-write" logic inside this loop.
+                                // Implement the "read-modify-write" logic inside this loop.
                                 for keyword in keywords {
                                     let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
-                                    let _index_key = kad::RecordKey::new(&index_key_str);
+                                    let index_key = kad::RecordKey::new(&index_key_str);
 
-                                    // TODO: Implement the read-modify-write logic to update keyword indexes.
-                                    // 1. Call swarm.behaviour_mut().kademlia.get_record(index_key.clone())
-                                    // 2. In the KademliaEvent handler for GetRecordOk, deserialize the value (a list of hashes).
-                                    // 3. Add the new metadata.merkle_root to the list.
-                                    // 4. Serialize the updated list.
-                                    // 5. Create a new Record and call swarm.behaviour_mut().kademlia.put_record(...).
+                                    // Initiate read-modify-write: first get the existing record
+                                    let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
 
-                                    info!("TODO - Register keyword '{}' with file hash '{}'", keyword, metadata.merkle_root);
+                                    // Track this keyword index operation
+                                    pending_keyword_indexes.lock().await.insert(
+                                        query_id,
+                                        PendingKeywordIndex {
+                                            keyword: keyword.clone(),
+                                            merkle_root: metadata.merkle_root.clone(),
+                                        }
+                                    );
+
+                                    info!("Initiated keyword index update for '{}' with file hash '{}'", keyword, metadata.merkle_root);
                                 }
-                                
+
                                 // Cache the published file locally so it can be found in searches
                                 // This ensures nodes can discover their own published files
                                 file_metadata_cache.lock().await.insert(
@@ -2249,7 +1965,7 @@ async fn run_dht_node(
                                     metadata.clone()
                                 );
                                 info!("Cached published file {} locally", metadata.merkle_root);
-                                
+
                                 // notify frontend
                                 let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
                                 // store in file_uploaded_cache
@@ -2646,7 +2362,7 @@ async fn run_dht_node(
                                 let connected_peers_count = connected_peers.lock().await.len();
                                 let replication_factor = 3; // Must match kad_cfg.set_replication_factor
 
-                                let quorum = if connected_peers_count >= replication_factor {
+                                let quorum = if connected_peers_count >= 10*replication_factor {
                                     // Use N(3) for better reliability in heartbeat updates
                                     if let Some(n) = std::num::NonZeroUsize::new(replication_factor) {
                                         debug!("Using Quorum::N({}) for heartbeat update of {} ({} peers available)",
@@ -2709,11 +2425,11 @@ async fn run_dht_node(
                                 let key = kad::RecordKey::new(&file_hash.as_bytes());
                                 let record_query_id = swarm.behaviour_mut().kademlia.get_record(key.clone());
                                 info!("Searching for file metadata: {} (query: {:?})", file_hash, record_query_id);
-                                
+
                                 // Also query for providers who have announced they're seeding this file
                                 let providers_query_id = swarm.behaviour_mut().kademlia.get_providers(key);
                                 info!("Searching for file providers: {} (query: {:?})", file_hash, providers_query_id);
-                                
+
                                 // Track this providers query for timeout detection
                                 get_providers_queries.lock().await.insert(providers_query_id, (file_hash.clone(), std::time::Instant::now()));
                             }
@@ -3067,8 +2783,6 @@ async fn run_dht_node(
                                 let _ = swarm.disconnect_peer_id(peer_id.clone());
                                 proxy_mgr.lock().await.remove_all(&peer_id);
                             }
-
-
                             Some(DhtCommand::GetPeerCount(tx)) => {
                                 let count = connected_peers.lock().await.len();
                                 let _ = tx.send(count);
@@ -3097,21 +2811,6 @@ async fn run_dht_node(
                                 let id = swarm.behaviour_mut().webrtc_signaling_rr.send_request(&peer, offer_request);
                                 pending_webrtc_offers.lock().await.insert(id, sender);
                             }
-                            Some(DhtCommand::SendMessageToPeer { target_peer_id, message }) => {
-                                // TODO: Implement a proper messaging protocol
-                                // For now, we'll use the proxy protocol to send messages
-                                // In a real implementation, this could use a dedicated messaging protocol
-                                match serde_json::to_vec(&message) {
-                                    Ok(message_data) => {
-                                        // Send the message directly using the proxy protocol
-                                        let request_id = swarm.behaviour_mut().proxy_rr.send_request(&target_peer_id, EchoRequest(message_data));
-                                        info!("Sent message to peer {} with request ID {:?}", target_peer_id, request_id);
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to serialize message: {}", e);
-                                    }
-                                }
-                            }
                             Some(DhtCommand::StoreBlock { cid, data }) => {
                                 match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid, data) {
                                     Ok(_) => {
@@ -3122,8 +2821,25 @@ async fn run_dht_node(
                                     }
                                 }
                             }
-                            Some(DhtCommand::RequestFileAccess { .. }) => {
-                                todo!();
+                            Some(DhtCommand::RequestFileAccess { seeder, merkle_root, recipient_public_key, sender }) => {
+                                info!("Requesting file access from seeder {} for file {}", seeder, merkle_root);
+
+                                // Convert PublicKey to Vec<u8> for the KeyRequest
+                                let recipient_pk_bytes = recipient_public_key.to_bytes().to_vec();
+
+                                // Create the key request
+                                let key_request = KeyRequest {
+                                    merkle_root: merkle_root.clone(),
+                                    recipient_public_key: recipient_pk_bytes,
+                                };
+
+                                // Send the request using the key_request behavior
+                                let request_id = swarm.behaviour_mut().key_request.send_request(&seeder, key_request);
+
+                                // Store the pending request
+                                pending_key_requests.lock().await.insert(request_id, sender);
+
+                                info!("Sent key request to seeder {} for file {} (request_id: {:?})", seeder, merkle_root, request_id);
                             }
                             Some(DhtCommand::AnnounceTorrent { info_hash }) => {
                                 let key = kad::RecordKey::new(&info_hash);
@@ -3137,6 +2853,36 @@ async fn run_dht_node(
                                         let _ = event_tx.send(DhtEvent::Error(format!("Failed to announce torrent: {}", e))).await;
                                     }
                                 }
+                            }
+                            Some(DhtCommand::PutDhtValue { key, value, sender }) => {
+                                info!("🔑 Storing DHT value with key: {} ({} bytes)", key, value.len());
+                                let record_key = kad::RecordKey::new(&key);
+                                let record = kad::Record {
+                                    key: record_key,
+                                    value,
+                                    publisher: None,
+                                    expires: None,
+                                };
+
+                                match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
+                                    Ok(query_id) => {
+                                        info!("✅ DHT put started: key={}, query_id={:?}", key, query_id);
+                                        let _ = sender.send(Ok(()));
+                                    }
+                                    Err(e) => {
+                                        error!("❌ DHT put failed for key {}: {}", key, e);
+                                        let _ = sender.send(Err(format!("Failed to store in DHT: {}", e)));
+                                    }
+                                }
+                            }
+                            Some(DhtCommand::GetDhtValue { key, sender }) => {
+                                info!("🔍 Fetching DHT value with key: {}", key);
+                                let record_key = kad::RecordKey::new(&key);
+                                let query_id = swarm.behaviour_mut().kademlia.get_record(record_key);
+                                info!("🔍 DHT get started: key={}, query_id={:?}", key, query_id);
+
+                                // Store the sender to respond when we get the Kademlia result
+                                pending_dht_queries.lock().await.insert(query_id, sender);
                             }
                             None => {
                                 info!("DHT command channel closed; shutting down node task");
@@ -3162,6 +2908,7 @@ async fn run_dht_node(
                                     &pending_keyword_indexes,
                                     &pending_infohash_searches,
                                     &file_metadata_cache,
+                                    &pending_dht_queries,
                                 )
                                 .await;
                             }
@@ -3180,12 +2927,12 @@ async fn run_dht_node(
                                 )
                                 .await;
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) if !is_bootstrap => {
                                 if !is_bootstrap{
                                     handle_mdns_event(mdns_event, &mut swarm, &event_tx, &peer_id).await;
                                 }
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) if !is_bootstrap => {
                                 match relay_event {
                                     RelayClientEvent::ReservationReqAccepted { relay_peer_id, .. } => {
                                         info!("✅ Relay reservation accepted from {}", relay_peer_id);
@@ -3247,7 +2994,7 @@ async fn run_dht_node(
                                     }
                                 }
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(relay_server_event)) => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(relay_server_event)) if !is_bootstrap => {
                                 use relay::Event as RelayEvent;
                                 match relay_server_event {
                                     RelayEvent::ReservationReqAccepted { src_peer_id, .. } => {
@@ -3380,7 +3127,7 @@ async fn run_dht_node(
                                     _ => {}
                                 }
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) => match bitswap {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) if !is_bootstrap => match bitswap {
                                 beetswap::Event::GetQueryResponse { query_id, data } => {
                                     info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
 
@@ -3704,20 +3451,23 @@ async fn run_dht_node(
                                     }
                                 }
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatClient(ev)) => {
-                                handle_autonat_client_event(ev, &metrics, &event_tx).await;
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatClient(ev)) if !is_bootstrap => {
+                                handle_autonat_client_event(&mut swarm, ev, &metrics, &event_tx).await;
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatServer(ev)) => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatServer(ev)) if !is_bootstrap => {
                                 debug!(?ev, "AutoNAT server event");
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) if !is_bootstrap => {
                                 handle_dcutr_event(ev, &metrics, &event_tx).await;
                             }
-                            SwarmEvent::ExternalAddrConfirmed { address, .. } => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Upnp(upnp_event)) => {
+                                handle_upnp_event(upnp_event, &mut swarm, &event_tx).await;
+                            }
+                            SwarmEvent::ExternalAddrConfirmed { address, .. } if !is_bootstrap => {
                                 handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr)
                                     .await;
                             }
-                            SwarmEvent::ExternalAddrExpired { address, .. } => {
+                            SwarmEvent::ExternalAddrExpired { address, .. } if !is_bootstrap => {
                                 handle_external_addr_expired(&address, &metrics, &event_tx, &proxy_mgr)
                                     .await;
                             }
@@ -3737,17 +3487,17 @@ async fn run_dht_node(
 
                                 // Add peer to Kademlia routing table (only if reachable)
                                 // swarm.behaviour_mut().kademlia.add_address(&peer_id, endpoint.get_remote_address().clone());
-                                if ma_plausibly_reachable(&remote_addr) {
-                                    swarm
-                                        .behaviour_mut()
-                                        .kademlia
-                                        .add_address(&peer_id, remote_addr.clone());
-                                } else {
-                                    debug!(
-                                        "⏭️ Not adding unreachable address to Kademlia for {}: {}",
-                                        peer_id, remote_addr
-                                    );
-                                }
+                                // if ma_plausibly_reachable(&remote_addr) {
+                                swarm
+                                    .behaviour_mut()
+                                    .kademlia
+                                    .add_address(&peer_id, remote_addr.clone());
+                                // } else {
+                                //     debug!(
+                                //         "⏭️ Not adding unreachable address to Kademlia for {}: {}",
+                                //         peer_id, remote_addr
+                                //     );
+                                // }
 
                                 let peers_count = {
                                     let mut peers = connected_peers.lock().await;
@@ -3767,16 +3517,17 @@ async fn run_dht_node(
                                     })
                                     .await;
                             }
-                             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                            SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                                 warn!("❌ DISCONNECTED from peer: {}", peer_id);
                                 warn!("   Cause: {:?}", cause);
+                                swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
 
                                 let peers_count = {
                                     let mut peers = connected_peers.lock().await;
                                     peers.remove(&peer_id);
                                     peers.len()
                                 };
-
+                                if !is_bootstrap{
                                 // Remove proxy state
                                 proxy_mgr.lock().await.remove_all(&peer_id);
 
@@ -3880,68 +3631,48 @@ async fn run_dht_node(
                                         }
                                     }
                                 }
-                                info!("   Remaining connected peers: {}", peers_count);
                                 let _ = event_tx
                                     .send(DhtEvent::PeerDisconnected {
                                         peer_id: peer_id.to_string(),
                                     })
                                     .await;
                             }
-                            SwarmEvent::NewListenAddr { address, .. } => {
+                                info!("   Remaining connected peers: {}", peers_count);
+                        }
+                            SwarmEvent::NewListenAddr { address, .. } if !is_bootstrap => {
                                 // Always record in metrics for monitoring/debugging
-                                if let Ok(mut m) = metrics.try_lock() {
-                                    m.record_listen_addr(&address);
-                                }
 
-                                // For relay circuit addresses, always advertise them
-                                if address.iter().any(|component| matches!(component, Protocol::P2pCircuit)) {
-                                    swarm.add_external_address(address.clone());
-                                    info!("✅ Advertising relay address: {}", address);
-                                } else {
-                                    // For regular addresses, only advertise if they're plausibly reachable
-                                    // This prevents advertising localhost/private IPs to the network
-                                    if ma_plausibly_reachable(&address) {
+                                  if let Some(Protocol::Ip4(v4)) = address.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
+                                    // Reject loopback addresses - they're not reachable from remote peers
+                                    if !v4.is_loopback() && !v4.is_private(){
+                                        if let Ok(mut m) = metrics.try_lock() {
+                                            m.record_listen_addr(&address);
+                                        }
                                         swarm.add_external_address(address.clone());
                                         info!("✅ Advertising reachable address: {}", address);
-                                    } else {
-                                        debug!("⏭️  Not advertising unreachable address: {}", address);
                                     }
+                                    // Allow public addresses, reject private
                                 }
                             }
                             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                                // Check if this error is for an unreachable address before recording it
-                                let is_unreachable_addr = if let Some(pid) = peer_id {
-                                    if let Some(bad_ma) = extract_multiaddr_from_error_str(&error.to_string()) {
-                                        if !ma_plausibly_reachable(&bad_ma) {
-                                            swarm.behaviour_mut().kademlia.remove_address(&pid, &bad_ma);
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                };
-
-                                // Only record errors for reachable addresses
-                                if !is_unreachable_addr {
-                                    if let Ok(mut m) = metrics.try_lock() {
-                                        m.last_error = Some(error.to_string());
-                                        m.last_error_at = Some(SystemTime::now());
-                                        if let Some(pid) = peer_id {
-                                            if bootstrap_peer_ids.contains(&pid) {
-                                                m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
-                                            }
-                                        }
-                                    }
+                                if let Ok(mut m) = metrics.try_lock() {
+                                    m.last_error = Some(error.to_string());
+                                    m.last_error_at = Some(SystemTime::now());
+                                    m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
                                 }
-
                                 if let Some(pid) = peer_id {
+                                    swarm.behaviour_mut().kademlia.remove_peer(&pid);
                                     // Only log error for addresses that should be reachable
-                                    if !is_unreachable_addr {
-                                        error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                        // Rate limit connection errors to once every 30 seconds
+                                        let now = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as u64;
+                                        let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
+                                        if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
+                                            LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
+                                            error!("❌ Outgoing connection error to {}: {}", pid, error);
+                                        }
 
                                         let is_bootstrap = bootstrap_peer_ids.contains(&pid);
                                         if error.to_string().contains("rsa") {
@@ -3961,15 +3692,21 @@ async fn run_dht_node(
                                         } else if error.to_string().contains("Transport") {
                                             warn!("   ℹ Hint: Transport protocol negotiation failed.");
                                         }
-                                    } else {
-                                        debug!("⏭️ Skipped connection to unreachable address for {}: {}", pid, error);
-                                    }
                                 } else {
-                                    error!("❌ Outgoing connection error to unknown peer: {}", error);
+                                    // Rate limit connection errors to once every 30 seconds
+                                    let now = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                    let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
+                                    if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
+                                        LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
+                                        error!("❌ Outgoing connection error to unknown peer: {}", error);
+                                    }
                                 }
                                 let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::ProxyRr(ev)) if !is_bootstrap => {
                                 use libp2p::request_response::{Event as RREvent, Message};
                                 match ev {
                                     RREvent::Message { peer, message } => match message {
@@ -4071,7 +3808,7 @@ async fn run_dht_node(
                                     RREvent::ResponseSent { .. } => {}
                                 }
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::WebrtcSignalingRr(ev)) => {
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::WebrtcSignalingRr(ev)) if !is_bootstrap => {
                                 use libp2p::request_response::{Event as RREvent, Message};
                                 match ev {
                                     RREvent::Message { peer, message } => match message {
@@ -4128,15 +3865,111 @@ async fn run_dht_node(
                                     RREvent::ResponseSent { .. } => {}
                                 }
                             }
-                            SwarmEvent::IncomingConnectionError { error, .. } => {
-                                if let Ok(mut m) = metrics.try_lock() {
-                                    m.last_error = Some(error.to_string());
-                                    m.last_error_at = Some(SystemTime::now());
-                                    m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                            SwarmEvent::IncomingConnectionError { error, .. } if !is_bootstrap => {
+
+                                    if let Ok(mut m) = metrics.try_lock() {
+                                        m.last_error = Some(error.to_string());
+                                        m.last_error_at = Some(SystemTime::now());
+                                        m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                                    }
+                          }
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::KeyRequest(ev)) => {
+                                use libp2p::request_response::{Event as RREvent, Message};
+                                match ev {
+                                    // Incoming key request (we're the seeder)
+                                    RREvent::Message { peer, message } => match message {
+                                        Message::Request { request, channel, .. } => {
+                                            let KeyRequest { merkle_root, recipient_public_key } = request;
+                                            info!("Received key request from peer {} for file {}", peer, merkle_root);
+
+                                            // Look up file metadata in cache
+                                            let file_metadata_cache_guard = file_metadata_cache.lock().await;
+                                            let result = if let Some(metadata) = file_metadata_cache_guard.get(&merkle_root) {
+                                                // Check if file has encrypted key bundle
+                                                if let Some(key_bundle) = &metadata.encrypted_key_bundle {
+                                                    info!("Found encrypted key bundle for file {} (merkle_root: {})", metadata.file_name, merkle_root);
+                                                    Ok(KeyResponse {
+                                                        encrypted_bundle: Some(key_bundle.clone()),
+                                                        error: None,
+                                                    })
+                                                } else {
+                                                    warn!("File {} found but no encrypted key bundle available", merkle_root);
+                                                    Ok(KeyResponse {
+                                                        encrypted_bundle: None,
+                                                        error: Some("File found but no encrypted key bundle available".to_string()),
+                                                    })
+                                                }
+                                            } else {
+                                                warn!("File not found in cache for merkle_root: {}", merkle_root);
+                                                Ok(KeyResponse {
+                                                    encrypted_bundle: None,
+                                                    error: Some(format!("File not found: {}", merkle_root)),
+                                                })
+                                            };
+
+                                            drop(file_metadata_cache_guard);
+
+                                            // Send response
+                                            match result {
+                                                Ok(response) => {
+                                                    swarm.behaviour_mut().key_request
+                                                        .send_response(channel, response)
+                                                        .unwrap_or_else(|e| error!("Failed to send key response: {e:?}"));
+                                                }
+                                                Err(e) => {
+                                                    error!("Error processing key request: {}", e);
+                                                    let error_response = KeyResponse {
+                                                        encrypted_bundle: None,
+                                                        error: Some(e),
+                                                    };
+                                                    swarm.behaviour_mut().key_request
+                                                        .send_response(channel, error_response)
+                                                        .unwrap_or_else(|e| error!("Failed to send error response: {e:?}"));
+                                                }
+                                            }
+                                        }
+                                        // Key response (we're the requester)
+                                        Message::Response { request_id, response } => {
+                                            let KeyResponse { encrypted_bundle, error } = response;
+
+                                            if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
+                                                match (encrypted_bundle, error) {
+                                                    (Some(bundle), None) => {
+                                                        info!("Received encrypted key bundle for request {:?}", request_id);
+                                                        let _ = tx.send(Ok(bundle));
+                                                    }
+                                                    (None, Some(err)) => {
+                                                        warn!("Key request failed: {}", err);
+                                                        let _ = tx.send(Err(err));
+                                                    }
+                                                    (None, None) => {
+                                                        warn!("Key request returned empty response");
+                                                        let _ = tx.send(Err("Empty response from seeder".to_string()));
+                                                    }
+                                                    (Some(_), Some(err)) => {
+                                                        warn!("Key request returned both bundle and error, using error: {}", err);
+                                                        let _ = tx.send(Err(err));
+                                                    }
+                                                }
+                                            } else {
+                                                warn!("Received key response for unknown request_id {:?}", request_id);
+                                            }
+                                        }
+                                    },
+                                    RREvent::OutboundFailure { request_id, error, .. } => {
+                                        warn!("Key request outbound failure: {error:?}");
+                                        if let Some(tx) = pending_key_requests.lock().await.remove(&request_id) {
+                                            let _ = tx.send(Err(format!("Outbound failure: {error:?}")));
+                                        }
+                                    }
+                                    RREvent::InboundFailure { error, .. } => {
+                                        warn!("Key request inbound failure: {error:?}");
+                                    }
+                                    RREvent::ResponseSent { .. } => {}
                                 }
-                                error!("❌ Incoming connection error: {}", error);
                             }
-                            SwarmEvent::ListenerClosed { reason, .. } => {
+                            SwarmEvent::ListenerClosed { reason, .. } if !is_bootstrap => {
+                                if !is_bootstrap{
                                 if reason.is_ok() {
                                     trace!("ListenerClosed Ok; ignoring");
                                 } else {
@@ -4153,7 +3986,7 @@ async fn run_dht_node(
                                             }
                                         }
                                     }
-                                }
+                                }}
                             }
                             _ => {}
                         }
@@ -4169,6 +4002,337 @@ async fn run_dht_node(
     if let Some(ack) = shutdown_ack {
         let _ = ack.send(());
     }
+}
+
+// Helper function to convert Multiaddr to SocketAddr
+fn addr_to_socket_addr(addr: &libp2p::Multiaddr) -> Option<SocketAddr> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut iter = addr.iter();
+    match (iter.next(), iter.next()) {
+        (Some(Protocol::Ip4(ip)), Some(Protocol::Tcp(port))) => {
+            Some(SocketAddr::new(ip.into(), port))
+        }
+        (Some(Protocol::Ip6(ip)), Some(Protocol::Tcp(port))) => {
+            Some(SocketAddr::new(ip.into(), port))
+        }
+        _ => None,
+    }
+}
+
+pub fn build_relay_listen_addr(base: &Multiaddr) -> Option<Multiaddr> {
+    let mut out = base.clone();
+    let has_p2p = out.iter().any(|p| matches!(p, Protocol::P2p(_)));
+    if !has_p2p {
+        return None;
+    }
+    out.push(Protocol::P2pCircuit);
+    Some(out)
+}
+
+fn is_relay_candidate(peer_id: &PeerId, relay_candidates: &HashSet<String>) -> bool {
+    if relay_candidates.is_empty() {
+        return false;
+    }
+
+    let peer_str = peer_id.to_string();
+    relay_candidates.iter().any(|candidate| {
+        // Check if the candidate multiaddr contains this peer ID
+        candidate.contains(&peer_str)
+    })
+}
+
+fn peer_id_from_multiaddr_str(s: &str) -> Option<PeerId> {
+    if let Ok(ma) = s.parse::<Multiaddr>() {
+        let mut last_p2p: Option<PeerId> = None;
+        for p in ma.iter() {
+            if let Protocol::P2p(mh) = p {
+                if let Ok(pid) = PeerId::from_multihash(mh.into()) {
+                    last_p2p = Some(pid);
+                }
+            }
+        }
+        return last_p2p;
+    }
+
+    if let Ok(pid) = s.parse::<PeerId>() {
+        return Some(pid);
+    }
+    None
+}
+
+fn should_try_relay(
+    pid: &PeerId,
+    relay_candidates: &HashSet<String>,
+    blacklist: &HashSet<PeerId>,
+    cooldown: &HashMap<PeerId, Instant>,
+) -> bool {
+    // 1) Check if the peer ID is in the preferred/bootstrap candidates
+    if relay_candidates.is_empty() {
+        return false;
+    }
+    let peer_str = pid.to_string();
+    let in_candidates = relay_candidates.iter().any(|cand| cand.contains(&peer_str));
+    if !in_candidates {
+        return false;
+    }
+    // 2) Check permanent blacklist
+    if blacklist.contains(pid) {
+        tracing::debug!("skip blacklisted relay candidate {}", pid);
+        return false;
+    }
+    // 3) Check cooldown
+    if let Some(until) = cooldown.get(pid) {
+        if Instant::now() < *until {
+            tracing::debug!("skip cooldown relay candidate {} until {:?}", pid, until);
+            return false;
+        }
+    }
+    true
+}
+
+/// candidates(HashSet<String>) → (PeerId, Multiaddr)
+fn filter_relay_candidates(
+    relay_candidates: &HashSet<String>,
+    blacklist: &HashSet<PeerId>,
+    cooldown: &HashMap<PeerId, Instant>,
+) -> Vec<(PeerId, Multiaddr)> {
+    let now = Instant::now();
+    let mut out = Vec::new();
+    for cand in relay_candidates {
+        if let Ok(ma) = cand.parse::<Multiaddr>() {
+            // Skip unreachable addresses (localhost/private IPs)
+            if !ma_plausibly_reachable(&ma) {
+                tracing::debug!("Skipping unreachable relay candidate: {}", ma);
+                continue;
+            }
+
+            // PeerId extraction
+            let mut pid_opt: Option<PeerId> = None;
+            for p in ma.iter() {
+                if let Protocol::P2p(mh) = p {
+                    if let Ok(pid) = PeerId::from_multihash(mh.into()) {
+                        pid_opt = Some(pid);
+                    }
+                }
+            }
+            if let Some(pid) = pid_opt {
+                if !blacklist.contains(&pid) {
+                    if let Some(until) = cooldown.get(&pid) {
+                        if Instant::now() < *until {
+                            tracing::debug!(
+                                "skip cooldown relay candidate {} until {:?}",
+                                pid,
+                                until
+                            );
+                            continue;
+                        }
+                    }
+                    out.push((pid, ma.clone()));
+                } else {
+                    tracing::debug!("skip blacklisted relay candidate {}", pid);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut last_p2p: Option<PeerId> = None;
+    for protocol in address.iter() {
+        match protocol {
+            Protocol::P2p(peer_id) => {
+                last_p2p = Some(peer_id.clone());
+            }
+            Protocol::P2pCircuit => {
+                return last_p2p.clone();
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extracts a set of unique, searchable keywords from a filename.
+fn extract_keywords(file_name: &str) -> Vec<String> {
+    // 1. Sanitize: remove the file extension and convert to lowercase.
+    let name_without_ext = std::path::Path::new(file_name)
+        .file_stem()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or_default()
+        .to_lowercase();
+
+    // 2. Split the name into words based on common non-alphanumeric delimiters.
+    let keywords: std::collections::HashSet<String> = name_without_ext
+        .split(|c: char| !c.is_alphanumeric())
+        // 3. Filter out empty strings and common short words (e.g., "a", "of").
+        .filter(|s| !s.is_empty() && s.len() > 2)
+        .map(String::from)
+        .collect(); // Using a HashSet automatically handles duplicates.
+
+    // 4. Return the unique keywords as a Vec.
+    keywords.into_iter().collect()
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_secs()
+}
+
+fn merge_heartbeats(
+    mut a: Vec<SeederHeartbeat>,
+    mut b: Vec<SeederHeartbeat>,
+) -> Vec<SeederHeartbeat> {
+    let mut merged = Vec::new();
+    let mut seen_peers = std::collections::HashSet::new();
+    let now = unix_timestamp();
+
+    // Create sets to track which peers appear in both vectors
+    let a_peers: HashSet<String> = a.iter().map(|hb| hb.peer_id.clone()).collect();
+    let b_peers: HashSet<String> = b.iter().map(|hb| hb.peer_id.clone()).collect();
+    let common_peers: HashSet<_> = a_peers.intersection(&b_peers).cloned().collect();
+
+    // Filter and collect entries in one pass instead of using retain
+    let filtered_a: Vec<_> = a
+        .into_iter()
+        .filter(|hb| {
+            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
+            // 30s grace period
+        })
+        .collect();
+
+    let filtered_b: Vec<_> = b
+        .into_iter()
+        .filter(|hb| {
+            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
+            // 30s grace period
+        })
+        .collect();
+
+    // Now work with the filtered vectors
+    a = filtered_a;
+    b = filtered_b;
+
+    // Sort both vectors by peer_id for deterministic merging
+    a.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
+    b.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
+
+    let mut a_iter = a.into_iter();
+    let mut b_iter = b.into_iter();
+
+    let mut next_a = a_iter.next();
+    let mut next_b = b_iter.next();
+
+    while let (Some(a_entry), Some(b_entry)) = (&next_a, &next_b) {
+        match a_entry.peer_id.cmp(&b_entry.peer_id) {
+            std::cmp::Ordering::Equal => {
+                // For equal peer IDs, create a merged entry that:
+                // 1. Takes the most recent heartbeat timestamp
+                // 2. Uses the latest expiry time
+                // 3. Extends the expiry if it's an active seeder (recent heartbeat)
+                let latest_heartbeat =
+                    std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
+                let latest_expiry = std::cmp::max(a_entry.expires_at, b_entry.expires_at);
+
+                // If this is an active seeder (recent heartbeat), extend its expiry
+                let new_expiry =
+                    if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
+                        now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
+                    } else {
+                        latest_expiry
+                    };
+
+                let entry = SeederHeartbeat {
+                    peer_id: a_entry.peer_id.clone(),
+                    expires_at: new_expiry,
+                    last_heartbeat: latest_heartbeat,
+                };
+
+                if !seen_peers.contains(&entry.peer_id) {
+                    seen_peers.insert(entry.peer_id.clone());
+                    merged.push(entry);
+                }
+
+                next_a = a_iter.next();
+                next_b = b_iter.next();
+            }
+            std::cmp::Ordering::Less => {
+                if !seen_peers.contains(&a_entry.peer_id) {
+                    seen_peers.insert(a_entry.peer_id.clone());
+                    merged.push(a_entry.clone());
+                }
+                next_a = a_iter.next();
+            }
+            std::cmp::Ordering::Greater => {
+                if !seen_peers.contains(&b_entry.peer_id) {
+                    seen_peers.insert(b_entry.peer_id.clone());
+                    merged.push(b_entry.clone());
+                }
+                next_b = b_iter.next();
+            }
+        }
+    }
+
+    // Add remaining entries from a
+    while let Some(entry) = next_a {
+        if !seen_peers.contains(&entry.peer_id) {
+            seen_peers.insert(entry.peer_id.clone());
+            merged.push(entry);
+        }
+        next_a = a_iter.next();
+    }
+
+    // Add remaining entries from b
+    while let Some(entry) = next_b {
+        if !seen_peers.contains(&entry.peer_id) {
+            seen_peers.insert(entry.peer_id.clone());
+            merged.push(entry);
+        }
+        next_b = b_iter.next();
+    }
+
+    merged
+}
+
+fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHeartbeat> {
+    // Add a more generous grace period to prevent premature pruning
+    // Use 30 seconds which is between the heartbeat interval (15s) and TTL (90s)
+    let prune_threshold = now.saturating_sub(30); // 30 second grace period
+    entries.retain(|hb| hb.expires_at > prune_threshold);
+    entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
+    entries
+}
+
+fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64) {
+    let expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
+
+    // First remove any expired entries
+    entries.retain(|hb| hb.expires_at > now);
+
+    // Then update or add the new heartbeat
+    if let Some(entry) = entries.iter_mut().find(|hb| hb.peer_id == peer_id) {
+        entry.expires_at = expires_at;
+        entry.last_heartbeat = now;
+    } else {
+        entries.push(SeederHeartbeat {
+            peer_id: peer_id.to_string(),
+            expires_at,
+            last_heartbeat: now,
+        });
+    }
+
+    // Sort by peer_id for consistent ordering
+    entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
+}
+
+fn heartbeats_to_peer_list(entries: &[SeederHeartbeat]) -> Vec<String> {
+    entries.iter().map(|hb| hb.peer_id.clone()).collect()
 }
 
 fn extract_bootstrap_peer_ids(bootstrap_nodes: &[String]) -> HashSet<PeerId> {
@@ -4204,6 +4368,9 @@ async fn handle_kademlia_event(
     pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     pending_infohash_searches: &Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>>,
     file_metadata_cache: &Arc<Mutex<HashMap<String, FileMetadata>>>,
+    pending_dht_queries: &Arc<
+        Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
+    >,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -4214,23 +4381,21 @@ async fn handle_kademlia_event(
         }
         KademliaEvent::RoutablePeer { peer, address, .. } => {
             debug!("Peer {} became routable", peer);
-            if !ma_plausibly_reachable(&address) {
-                swarm
-                    .behaviour_mut()
-                    .kademlia
-                    .remove_address(&peer, &address);
-                debug!(
-                    "⏭️ Kad RoutablePeer ignored (unreachable): {} -> {}",
-                    peer, address
-                );
-            } else {
-                debug!("✅ Kad RoutablePeer accepted: {} -> {}", peer, address);
-            }
         }
         KademliaEvent::OutboundQueryProgressed { id, result, .. } => {
             match result {
                 QueryResult::GetRecord(Ok(ok)) => match ok {
                     GetRecordOk::FoundRecord(peer_record) => {
+                        // Check if this is a response to a generic DHT value query (e.g., reputation verdicts)
+                        if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
+                            info!(
+                                "✅ DHT get successful: found {} bytes",
+                                peer_record.record.value.len()
+                            );
+                            let _ = sender.send(Ok(Some(peer_record.record.value.clone())));
+                            return; // Don't process further as this was a raw DHT query
+                        }
+
                         // Try to parse DHT record as essential metadata JSON
                         if let Ok(metadata_json) =
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
@@ -4261,6 +4426,63 @@ async fn handle_kademlia_event(
                                     warn!("Failed to decode info_hash index value as string.");
                                     let _ = search.sender.send(None);
                                 }
+                                return; // End processing for this event here.
+                            }
+
+                            // Check if this is a response to a keyword index lookup (read-modify-write)
+                            if let Some(pending_index) =
+                                pending_keyword_indexes.lock().await.remove(&id)
+                            {
+                                // Deserialize the existing keyword index (list of merkle roots)
+                                let mut merkle_roots: Vec<String> = if let Ok(roots) =
+                                    serde_json::from_slice::<Vec<String>>(&peer_record.record.value)
+                                {
+                                    roots
+                                } else {
+                                    // If deserialization fails, start with empty list
+                                    warn!("Failed to deserialize keyword index for '{}', starting fresh", pending_index.keyword);
+                                    Vec::new()
+                                };
+
+                                // Add the new merkle root if not already present
+                                if !merkle_roots.contains(&pending_index.merkle_root) {
+                                    merkle_roots.push(pending_index.merkle_root.clone());
+                                }
+
+                                // Serialize the updated list
+                                if let Ok(updated_value) = serde_json::to_vec(&merkle_roots) {
+                                    // Create and put the updated record
+                                    let record = Record {
+                                        key: peer_record.record.key.clone(),
+                                        value: updated_value,
+                                        publisher: None,
+                                        expires: None,
+                                    };
+
+                                    let _put_query_id = match swarm
+                                        .behaviour_mut()
+                                        .kademlia
+                                        .put_record(record, kad::Quorum::One)
+                                    {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            error!("Failed to put keyword index record: {}", e);
+                                            return; // Exit the function instead of continue
+                                        }
+                                    };
+
+                                    info!(
+                                        "Updated keyword index '{}' with {} files",
+                                        pending_index.keyword,
+                                        merkle_roots.len()
+                                    );
+                                } else {
+                                    error!(
+                                        "Failed to serialize updated keyword index for '{}'",
+                                        pending_index.keyword
+                                    );
+                                }
+
                                 return; // End processing for this event here.
                             }
 
@@ -4514,14 +4736,14 @@ async fn handle_kademlia_event(
 
                                 let notify_metadata = metadata.clone();
                                 let file_hash = notify_metadata.merkle_root.clone();
-                                
+
                                 // Cache the discovered file so subsequent searches don't need DHT queries
-                                file_metadata_cache.lock().await.insert(
-                                    file_hash.clone(),
-                                    metadata.clone()
-                                );
+                                file_metadata_cache
+                                    .lock()
+                                    .await
+                                    .insert(file_hash.clone(), metadata.clone());
                                 info!("Cached discovered file {} from DHT", file_hash);
-                                
+
                                 info!(
                                     "File discovered: {} ({})",
                                     notify_metadata.file_name, file_hash
@@ -4543,25 +4765,126 @@ async fn handle_kademlia_event(
                         }
                     }
                     GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
-                        // No additional records; do nothing here
+                        // Check if this was an infohash search that found no record
+                        if let Some(search) = pending_infohash_searches.lock().await.remove(&id) {
+                            info!("Infohash lookup completed: no record found");
+                            let _ = search.sender.send(None);
+                            return; // End processing for this event here.
+                        }
+
+                        // Check if this was a keyword index lookup that found no existing record
+                        if let Some(pending_index) =
+                            pending_keyword_indexes.lock().await.remove(&id)
+                        {
+                            // This is the first time this keyword is being indexed - create new record
+                            let merkle_roots = vec![pending_index.merkle_root.clone()];
+
+                            if let Ok(value) = serde_json::to_vec(&merkle_roots) {
+                                // Create the record key from the keyword
+                                let index_key_str =
+                                    format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
+                                let record_key = kad::RecordKey::new(&index_key_str);
+
+                                let record = Record {
+                                    key: record_key,
+                                    value,
+                                    publisher: None,
+                                    expires: None,
+                                };
+
+                                let _put_query_id = match swarm
+                                    .behaviour_mut()
+                                    .kademlia
+                                    .put_record(record, kad::Quorum::One)
+                                {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        error!("Failed to put keyword index record: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                info!(
+                                    "Created new keyword index '{}' with first file '{}'",
+                                    pending_index.keyword, pending_index.merkle_root
+                                );
+                            } else {
+                                error!(
+                                    "Failed to serialize new keyword index for '{}'",
+                                    pending_index.keyword
+                                );
+                            }
+
+                            return; // End processing for this event here.
+                        }
+
+                        // No additional records; do nothing here for other queries
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
+                    // Check if this was a failed keyword index lookup
+                    if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
+                        // Treat GetRecord errors as "not found" - create new keyword index
+                        let merkle_roots = vec![pending_index.merkle_root.clone()];
+
+                        if let Ok(value) = serde_json::to_vec(&merkle_roots) {
+                            let index_key_str =
+                                format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
+                            let record_key = kad::RecordKey::new(&index_key_str);
+
+                            let record = Record {
+                                key: record_key,
+                                value,
+                                publisher: None,
+                                expires: None,
+                            };
+
+                            let _put_query_id = match swarm
+                                .behaviour_mut()
+                                .kademlia
+                                .put_record(record, kad::Quorum::One)
+                            {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    error!("Failed to put keyword index record: {}", e);
+                                    return;
+                                }
+                            };
+
+                            info!("Created new keyword index '{}' after GetRecord error for file '{}'", pending_index.keyword, pending_index.merkle_root);
+                        } else {
+                            error!(
+                                "Failed to serialize new keyword index for '{}' after error",
+                                pending_index.keyword
+                            );
+                        }
+
+                        return; // End processing for this event here.
+                    }
+
                     warn!("GetRecord error: {:?}", err);
+
+                    // Check if this was a failed DHT value query
+                    if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
+                        info!("❌ DHT get failed: {:?}", err);
+                        let _ = sender.send(Ok(None)); // Return None on error rather than Err
+                        return;
+                    }
+
                     // If the error includes the key, emit FileNotFound
                     if let kad::GetRecordError::NotFound { key, .. } = err {
                         let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-                        
+
                         // Also check if this was a failed info_hash lookup
                         if let Some(search) = pending_infohash_searches.lock().await.remove(&id) {
                             warn!("Infohash or subsequent merkle_root lookup failed for query {:?}: Not Found", id);
                             let _ = search.sender.send(None);
                         }
-                        
+
                         // Don't immediately emit FileNotFound - wait to see if providers query succeeds
                         // The providers query was already initiated in SearchFile command
                         info!("Metadata record not found for {}, checking if providers query will succeed", file_hash);
-                        
+
                         // Set a delayed FileNotFound emission only if providers also aren't found
                         // This is handled by a timeout mechanism in the frontend
                         tokio::spawn({
@@ -4573,16 +4896,19 @@ async fn handle_kademlia_event(
                                 // Wait for provider queries to complete before declaring not found
                                 // Kademlia queries can take up to 30s, so give providers 5s to respond
                                 tokio::time::sleep(Duration::from_secs(5)).await;
-                                
+
                                 // Check if a providers query is still pending for this file
                                 let has_pending_providers = {
                                     let queries = get_providers_queries.lock().await;
                                     queries.values().any(|(hash, _)| hash == &file_hash)
                                 };
-                                
+
                                 if !has_pending_providers {
                                     // No providers query pending, emit FileNotFound
-                                    info!("No providers found for {}, emitting FileNotFound", file_hash);
+                                    info!(
+                                        "No providers found for {}, emitting FileNotFound",
+                                        file_hash
+                                    );
                                     let _ = event_tx
                                         .send(DhtEvent::FileNotFound(file_hash.clone()))
                                         .await;
@@ -4598,10 +4924,14 @@ async fn handle_kademlia_event(
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
-                    debug!("PutRecord succeeded for key: {:?}", key);
+                    let key_str = String::from_utf8_lossy(key.as_ref());
+                    info!(
+                        "✅ PutRecord succeeded for key: {} (DHT metadata stored successfully)",
+                        key_str
+                    );
                 }
                 QueryResult::PutRecord(Err(err)) => {
-                    warn!("PutRecord error: {:?}", err);
+                    error!("❌ PutRecord failed: {:?}", err);
                     let _ = event_tx
                         .send(DhtEvent::Error(format!("PutRecord failed: {:?}", err)))
                         .await;
@@ -4698,10 +5028,10 @@ async fn handle_kademlia_event(
                 QueryResult::GetProviders(Ok(ok)) => {
                     if let kad::GetProvidersOk::FoundProviders { key, providers } = ok {
                         let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-                        
+
                         // Remove from pending queries tracking
                         get_providers_queries.lock().await.remove(&id);
-                        
+
                         info!(
                             "Found {} providers for file: {}",
                             providers.len(),
@@ -4720,41 +5050,60 @@ async fn handle_kademlia_event(
                             // This might be from a SearchFile command that also queries providers
                             // Check if we can construct minimal metadata from providers
                             if !provider_strings.is_empty() {
-                                info!("Found providers for search query, checking cache for metadata");
-                                
+                                info!(
+                                    "Found providers for search query, checking cache for metadata"
+                                );
+
                                 // First check main file metadata cache (includes locally published files)
                                 let metadata_cache = file_metadata_cache.lock().await;
-                                if let Some(mut metadata) = metadata_cache.get(&file_hash).cloned() {
+                                if let Some(mut metadata) = metadata_cache.get(&file_hash).cloned()
+                                {
                                     drop(metadata_cache); // Release lock before await
-                                    // Update seeders list with found providers
+                                                          // Update seeders list with found providers
                                     metadata.seeders = provider_strings;
                                     info!("Emitting file discovery event from provider query with file_metadata_cache");
-                                    let _ = event_tx.send(DhtEvent::FileDiscovered(metadata.clone())).await;
+                                    let _ = event_tx
+                                        .send(DhtEvent::FileDiscovered(metadata.clone()))
+                                        .await;
                                     notify_pending_searches(
                                         &pending_searches,
                                         &file_hash,
                                         SearchResponse::Found(metadata),
-                                    ).await;
+                                    )
+                                    .await;
                                 } else {
                                     drop(metadata_cache); // Release lock
-                                    // Check seeder heartbeat cache for metadata
+                                                          // Check seeder heartbeat cache for metadata
                                     let cache = seeder_heartbeats_cache.lock().await;
                                     if let Some(entry) = cache.get(&file_hash) {
                                         // We have cached metadata, emit it with the found providers
-                                        if let Ok(mut metadata_json) = serde_json::from_value::<serde_json::Value>(entry.metadata.clone()) {
+                                        if let Ok(mut metadata_json) =
+                                            serde_json::from_value::<serde_json::Value>(
+                                                entry.metadata.clone(),
+                                            )
+                                        {
                                             // Update seeders list with found providers
-                                            metadata_json["seeders"] = serde_json::json!(provider_strings);
-                                            
+                                            metadata_json["seeders"] =
+                                                serde_json::json!(provider_strings);
+
                                             if let (
                                                 Some(merkle_root),
                                                 Some(file_name),
                                                 Some(file_size),
                                                 Some(created_at),
                                             ) = (
-                                                metadata_json.get("merkle_root").and_then(|v| v.as_str()),
-                                                metadata_json.get("file_name").and_then(|v| v.as_str()),
-                                                metadata_json.get("file_size").and_then(|v| v.as_u64()),
-                                                metadata_json.get("created_at").and_then(|v| v.as_u64()),
+                                                metadata_json
+                                                    .get("merkle_root")
+                                                    .and_then(|v| v.as_str()),
+                                                metadata_json
+                                                    .get("file_name")
+                                                    .and_then(|v| v.as_str()),
+                                                metadata_json
+                                                    .get("file_size")
+                                                    .and_then(|v| v.as_u64()),
+                                                metadata_json
+                                                    .get("created_at")
+                                                    .and_then(|v| v.as_u64()),
                                             ) {
                                                 let metadata = FileMetadata {
                                                     merkle_root: merkle_root.to_string(),
@@ -4779,7 +5128,9 @@ async fn handle_kademlia_event(
                                                     ..Default::default()
                                                 };
                                                 info!("Emitting file discovery event from provider query with seeder_heartbeats_cache");
-                                                let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
+                                                let _ = event_tx
+                                                    .send(DhtEvent::FileDiscovered(metadata))
+                                                    .await;
                                             }
                                         }
                                     } else {
@@ -4789,40 +5140,67 @@ async fn handle_kademlia_event(
                             } else {
                                 // No providers found (empty list) and no pending query
                                 // This means both metadata and provider queries returned nothing
-                                info!("Provider query returned 0 providers for {}, file not found", file_hash);
-                                
+                                info!(
+                                    "Provider query returned 0 providers for {}, file not found",
+                                    file_hash
+                                );
+
                                 // Notify pending searches that the file was not found
                                 notify_pending_searches(
                                     &pending_searches,
                                     &file_hash,
                                     SearchResponse::NotFound,
-                                ).await;
-                                
+                                )
+                                .await;
+
                                 // Emit FileNotFound event
-                                let _ = event_tx.send(DhtEvent::FileNotFound(file_hash.clone())).await;
+                                let _ = event_tx
+                                    .send(DhtEvent::FileNotFound(file_hash.clone()))
+                                    .await;
                             }
                         }
                     }
                 }
                 QueryResult::GetProviders(Err(err)) => {
                     warn!("GetProviders query failed: {:?}", err);
-                    
+
                     // Extract file hash from error for proper cleanup
                     let kad::GetProvidersError::Timeout { key, .. } = &err;
                     let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-                    
+
                     // Remove from pending queries tracking
                     get_providers_queries.lock().await.remove(&id);
-                    
+
                     // Notify pending searches
-                    info!("Provider query failed for {}, notifying as not found", file_hash);
+                    info!(
+                        "Provider query failed for {}, notifying as not found",
+                        file_hash
+                    );
                     notify_pending_searches(
                         &pending_searches,
                         &file_hash,
                         SearchResponse::NotFound,
-                    ).await;
+                    )
+                    .await;
                     let _ = event_tx.send(DhtEvent::FileNotFound(file_hash)).await;
                 }
+                // QueryResult::Bootstrap(Ok(BootstrapOk {
+                //     peer,
+                //     num_remaining,
+                // })) => {
+                //     println!(
+                //         "✅ Bootstrap query succeeded. Peer: {peer}, remaining: {num_remaining}"
+                //     );
+                //     if num_remaining == 0 {
+                //         println!("🎯 Bootstrap fully complete!");
+                //     }
+                // }
+                // QueryResult::Bootstrap(Err(BootstrapError::Timeout { peer, .. })) => {
+                //     eprintln!("⏰ Bootstrap timed out; contacted peers: {:?}", peer);
+                // }
+                // QueryResult::Bootstrap(Err(e)) => {
+                //     eprintln!("❌ Bootstrap failed: {:?}", e);
+                // }
                 _ => {}
             }
         }
@@ -4843,13 +5221,34 @@ async fn handle_identify_event(
 ) {
     match event {
         IdentifyEvent::Received { peer_id, info, .. } => {
+            info!("Identified peer {}: {:?}", peer_id, info.protocol_version);
+            // Add identified peer to Kademlia routing table
+            if info.protocol_version != EXPECTED_PROTOCOL_VERSION {
+                warn!(
+                    "Peer {} has a mismatched protocol version: '{}'. Expected: '{}'. Removing peer.",
+                    peer_id,
+                    info.protocol_version,
+                    EXPECTED_PROTOCOL_VERSION
+                );
+                swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
+            } else {
+                for addr in info.listen_addrs.clone() {
+                    if not_loopback(&addr) {
+                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    }
+                }
+            }
             // Skip processing our own peer info to prevent self-connection attempts
             if &peer_id == local_peer_id {
                 return;
             }
 
             let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
-            let supports_relay = info.protocols.iter().any(|p| p.as_ref() == hop_proto);
+            let supports_relay = info
+                .protocols
+                .clone()
+                .iter()
+                .any(|p| p.as_ref() == hop_proto);
 
             if supports_relay {
                 // Store this peer as relay-capable with its listen addresses
@@ -4872,72 +5271,99 @@ async fn handle_identify_event(
                     peer_selection.lock().await.update_peer_metrics(metrics);
                 }
 
-                if !reachable_addrs.is_empty() {
-                    let mut relay_peers = relay_capable_peers.lock().await;
-                    relay_peers.insert(peer_id, reachable_addrs.clone());
-                    info!(
-                        "✅ Added {} to relay-capable peers list ({} addresses)",
-                        peer_id,
-                        reachable_addrs.len()
-                    );
-                    for (i, addr) in reachable_addrs.iter().enumerate().take(3) {
-                        info!("   Relay address {}: {}", i + 1, addr);
-                    }
-                }
-            }
+                // randomly pick a relay address to avoid stressing a single relay
+                let mut indices: Vec<usize> = (0..reachable_addrs.len()).collect();
+                indices.shuffle(&mut rand::thread_rng());
 
-            let listen_addrs = info.listen_addrs.clone();
+                let mut success = false;
 
-            // identify::Event::Received { peer_id, info, .. } => { ... }
-            // Only log and process reachable addresses (filters out localhost/private IPs)
-            for addr in info.listen_addrs.iter() {
-                if ma_plausibly_reachable(addr) {
-                    info!("  📍 Peer {} listen addr: {}", peer_id, addr);
-                    swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, addr.clone());
-                } else {
-                    debug!(
-                        "⏭️ Ignoring unreachable listen addr from {}: {}",
-                        peer_id, addr
-                    );
-                }
+                for i in indices {
+                    let addr = &reachable_addrs[i];
 
-                // Relay Setting: from candidate's "public base", create /p2p-circuit
-                if enable_autorelay && is_relay_candidate(&peer_id, relay_candidates) {
-                    if let Some(base_str) = relay_candidates
-                        .iter()
-                        .find(|s| s.contains(&peer_id.to_string()))
-                    {
-                        if let Ok(base) = base_str.parse::<Multiaddr>() {
-                            // Skip unreachable relay addresses (localhost/private IPs)
-                            if !ma_plausibly_reachable(&base) {
-                                debug!("⏭️  Skipping unreachable relay base address: {}", base);
-                            } else if let Some(relay_addr) = build_relay_listen_addr(&base) {
-                                info!(
-                                    "📡 Attempting to listen via relay {} at {}",
-                                    peer_id, relay_addr
-                                );
-                                if let Err(e) = swarm.listen_on(relay_addr.clone()) {
-                                    warn!(
-                                        "Failed to listen on relay address {}: {}",
-                                        relay_addr, e
-                                    );
-                                } else {
-                                    info!("📡 Attempting to listen via relay peer {}", peer_id);
-                                }
-                            } else {
-                                debug!("⚠️ Could not derive relay listen addr from base: {}", base);
-                            }
-                        } else {
-                            debug!("⚠️ Invalid relay base multiaddr: {}", base_str);
+                    let relay_addr = addr
+                        .clone()
+                        .with(Protocol::P2p(peer_id))
+                        .with(Protocol::P2pCircuit);
+
+                    match swarm.listen_on(relay_addr.clone()) {
+                        Ok(_) => {
+                            info!("Success: Listening on relay address {}: {}", i + 1, addr);
+
+                            // Advertise this circuit address to others
+                            swarm.add_external_address(
+                                relay_addr.with(Protocol::P2p(*local_peer_id)),
+                            );
+
+                            success = true;
+                            break; // Exit the loop immediately on success
                         }
-                    } else {
-                        debug!("⚠️ No relay base in preferred_relays for {}", peer_id);
+                        Err(e) => {
+                            // Log the failure but continue to the next iteration
+                            info!("Failed relay address {} ({}): {}", i + 1, addr, e);
+                        }
                     }
                 }
+
+                if !success {
+                    info!(
+                        "Could not listen on any addresses for relay peer {}",
+                        peer_id
+                    );
+                }
             }
+
+            // let listen_addrs = info.listen_addrs.clone();
+
+            // // identify::Event::Received { peer_id, info, .. } => { ... }
+            // // Only log and process reachable addresses (filters out localhost/private IPs)
+            // for addr in info.listen_addrs.iter() {
+            //     // if ma_plausibly_reachable(addr) {
+            //     info!("  📍 Peer {} listen addr: {}", peer_id, addr);
+            //     swarm
+            //         .behaviour_mut()
+            //         .kademlia
+            //         .add_address(&peer_id, addr.clone());
+            //     // } else {
+            //     //     debug!(
+            //     //         "⏭️ Ignoring unreachable listen addr from {}: {}",
+            //     //         peer_id, addr
+            //     //     );
+            //     // }
+
+            //     // Relay Setting: from candidate's "public base", create /p2p-circuit
+            //     if enable_autorelay && is_relay_candidate(&peer_id, relay_candidates) {
+            //         if let Some(base_str) = relay_candidates
+            //             .iter()
+            //             .find(|s| s.contains(&peer_id.to_string()))
+            //         {
+            //             if let Ok(base) = base_str.parse::<Multiaddr>() {
+            //                 // Skip unreachable relay addresses (localhost/private IPs)
+            //                 if !ma_plausibly_reachable(&base) {
+            //                     debug!("⏭️  Skipping unreachable relay base address: {}", base);
+            //                 } else if let Some(relay_addr) = build_relay_listen_addr(&base) {
+            //                     info!(
+            //                         "📡 Attempting to listen via relay {} at {}",
+            //                         peer_id, relay_addr
+            //                     );
+            //                     if let Err(e) = swarm.listen_on(relay_addr.clone()) {
+            //                         warn!(
+            //                             "Failed to listen on relay address {}: {}",
+            //                             relay_addr, e
+            //                         );
+            //                     } else {
+            //                         info!("📡 Attempting to listen via relay peer {}", peer_id);
+            //                     }
+            //                 } else {
+            //                     debug!("⚠️ Could not derive relay listen addr from base: {}", base);
+            //                 }
+            //             } else {
+            //                 debug!("⚠️ Invalid relay base multiaddr: {}", base_str);
+            //             }
+            //         } else {
+            //             debug!("⚠️ No relay base in preferred_relays for {}", peer_id);
+            //         }
+            //     }
+            // }
         }
         IdentifyEvent::Pushed { peer_id, info, .. } => {
             info!(
@@ -4945,7 +5371,7 @@ async fn handle_identify_event(
                 peer_id,
                 info.listen_addrs.len()
             );
-            record_identify_push_metrics(&metrics, &info).await;
+            // record_identify_push_metrics(&metrics, &info).await;
         }
         IdentifyEvent::Sent { peer_id, .. } => {
             debug!("Sent identify info to {}", peer_id);
@@ -4970,30 +5396,22 @@ async fn handle_mdns_event(
 ) {
     match event {
         MdnsEvent::Discovered(list) => {
-            let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
+            let discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
-                debug!("mDNS discovered peer {} at {}", peer_id, multiaddr);
-
+                info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
                 // Skip self-discoveries to prevent self-connection attempts
                 if peer_id == *local_peer_id {
                     continue;
                 }
-
-                if ma_plausibly_reachable(&multiaddr) {
-                    swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, multiaddr.clone());
-                } else {
-                    debug!(
-                        "⏭️  mDNS discovered (ignored unreachable): {} @ {}",
-                        peer_id, multiaddr
-                    );
+                match swarm.dial(multiaddr.clone()) {
+                    Ok(_) => {
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, multiaddr.clone());
+                    }
+                    Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", multiaddr, e),
                 }
-                discovered
-                    .entry(peer_id)
-                    .or_default()
-                    .push(multiaddr.to_string());
             }
             for (peer_id, addresses) in discovered {
                 let _ = event_tx
@@ -5006,7 +5424,7 @@ async fn handle_mdns_event(
         }
         MdnsEvent::Expired(list) => {
             for (peer_id, multiaddr) in list {
-                debug!("mDNS expired peer {} at {}", peer_id, multiaddr);
+                info!("mDNS expired peer {} at {}", peer_id, multiaddr);
                 swarm
                     .behaviour_mut()
                     .kademlia
@@ -5025,6 +5443,7 @@ async fn handle_ping_event(event: PingEvent) {
 }
 
 async fn handle_autonat_client_event(
+    swarm: &mut Swarm<DhtBehaviour>,
     event: v2::client::Event,
     metrics: &Arc<Mutex<DhtMetrics>>,
     event_tx: &mpsc::Sender<DhtEvent>,
@@ -5040,6 +5459,11 @@ async fn handle_autonat_client_event(
     if !metrics_guard.autonat_enabled {
         return;
     }
+    swarm.add_external_address(tested_addr.clone());
+    info!(
+        "Added {} to external address from autonat observed address.",
+        tested_addr
+    );
 
     let addr_str = tested_addr.to_string();
     let server_str = server.to_string();
@@ -5099,9 +5523,9 @@ async fn handle_dcutr_event(
     event_tx: &mpsc::Sender<DhtEvent>,
 ) {
     let mut metrics_guard = metrics.lock().await;
-    if !metrics_guard.dcutr_enabled {
-        return;
-    }
+    // if !metrics_guard.dcutr_enabled {
+    //     return;
+    // }
 
     let dcutr::Event {
         remote_peer_id,
@@ -5147,6 +5571,62 @@ async fn handle_dcutr_event(
     }
 }
 
+async fn handle_upnp_event(
+    event: upnp::Event,
+    swarm: &mut Swarm<DhtBehaviour>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+) {
+    match event {
+        upnp::Event::NewExternalAddr(addr) => {
+            info!("🌐 UPnP: Successfully mapped external address: {}", addr);
+            
+            // Add the external address to the swarm
+            swarm.add_external_address(addr.clone());
+            
+            // Notify the UI
+            let _ = event_tx
+                .send(DhtEvent::Info(format!(
+                    "✓ UPnP port mapping successful: {}",
+                    addr
+                )))
+                .await;
+        }
+        upnp::Event::ExpiredExternalAddr(addr) => {
+            warn!("⏰ UPnP: External address expired: {}", addr);
+            
+            let _ = event_tx
+                .send(DhtEvent::Warning(format!(
+                    "UPnP port mapping expired: {}",
+                    addr
+                )))
+                .await;
+        }
+        upnp::Event::GatewayNotFound => {
+            warn!("⚠️  UPnP: No UPnP gateway found on network");
+            warn!("    - Make sure your router supports UPnP/IGD");
+            warn!("    - Check if UPnP is enabled in router settings");
+            warn!("    - Falling back to relay connections");
+            
+            let _ = event_tx
+                .send(DhtEvent::Info(
+                    "UPnP not available - using relay for NAT traversal".to_string()
+                ))
+                .await;
+        }
+        upnp::Event::NonRoutableGateway => {
+            warn!("⚠️  UPnP: Gateway is not routable");
+            warn!("    - Your router may be behind another NAT (carrier-grade NAT)");
+            warn!("    - Direct connections may not be possible");
+            
+            let _ = event_tx
+                .send(DhtEvent::Warning(
+                    "UPnP gateway not routable - behind CGNAT?".to_string()
+                ))
+                .await;
+        }
+    }
+}
+
 async fn handle_external_addr_confirmed(
     swarm: &mut Swarm<DhtBehaviour>,
     addr: &Multiaddr,
@@ -5171,7 +5651,10 @@ async fn handle_external_addr_confirmed(
     // Upgrade Kademlia to Server mode now that we're publicly reachable
     // This allows other nodes to fetch DHT records from us
     swarm.behaviour_mut().kademlia.set_mode(Some(Mode::Server));
-    info!("🔄 Upgraded Kademlia to Server mode - node is publicly reachable at {}", addr);
+    info!(
+        "🔄 Upgraded Kademlia to Server mode - node is publicly reachable at {}",
+        addr
+    );
 
     if nat_enabled {
         let _ = event_tx
@@ -5389,6 +5872,11 @@ pub struct DhtService {
     pending_webrtc_offers: Arc<
         Mutex<
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<WebRTCAnswerResponse, String>>>,
+        >,
+    >,
+    pending_key_requests: Arc<
+        Mutex<
+            HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>,
         >,
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
@@ -5627,14 +6115,16 @@ impl DhtService {
         enable_autorelay: bool,
         preferred_relays: Vec<String>,
         enable_relay_server: bool,
+        enable_upnp: bool,
         blockstore_db_path: Option<&Path>,
     ) -> Result<Self, Box<dyn Error>> {
         // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
-        let mut final_enable_autorelay = enable_autorelay;
-        if is_bootstrap {
-            final_enable_autorelay = false;
-            info!("AutoRelay disabled on bootstrap (hotfix).");
-        }
+        let mut final_enable_autorelay = true; // force enable autorelay to facilitate autonat/dcutr
+        info!("FINAL ENABLE AUTORELAY {}", enable_autorelay);
+        // if is_bootstrap {
+        //     final_enable_autorelay = false;
+        //     info!("AutoRelay disabled on bootstrap (hotfix).");
+        // }
         if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
             final_enable_autorelay = false;
             info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
@@ -5681,7 +6171,7 @@ impl DhtService {
         // Create a Kademlia behaviour with tuned configuration
         let store = MemoryStore::new(local_peer_id);
         let mut kad_cfg = KademliaConfig::new(StreamProtocol::new("/chiral/kad/1.0.0"));
-        let bootstrap_interval = Duration::from_secs(30);
+        let bootstrap_interval = Duration::from_secs(1);
         if is_bootstrap {
             // These settings result in node to not provide files, only acts as a router
             kad_cfg.set_record_ttl(Some(Duration::from_secs(0)));
@@ -5707,7 +6197,7 @@ impl DhtService {
         if let Some(nz) = std::num::NonZeroUsize::new(3) {
             kad_cfg.set_replication_factor(nz);
         }
-        
+
         // CRITICAL: Set provider publication interval
         // Without this, provider records are only published ONCE and never refreshed
         // This means after ~1 hour, providers expire and files become undiscoverable
@@ -5716,14 +6206,14 @@ impl DhtService {
             kad_cfg.set_provider_publication_interval(Some(Duration::from_secs(30 * 60)));
             info!("Provider publication interval set to 30 minutes");
         }
-        
+
         let mut kademlia = Kademlia::with_config(local_peer_id, store, kad_cfg);
 
         // Start in Client mode - will switch to Server after AutoNAT confirms public reachability
         // This prevents NAT'd nodes from advertising unreachable addresses in the DHT
         // which would cause other peers to fail when trying to fetch records from them
-        kademlia.set_mode(Some(Mode::Client));
-        info!("Starting Kademlia in Client mode - will upgrade to Server if publicly reachable");
+        kademlia.set_mode(Some(Mode::Server));
+        info!("Starting Kademlia in Server mode");
 
         // Create identify behaviour with proactive push updates
         let identify_config =
@@ -5757,7 +6247,7 @@ impl DhtService {
             std::iter::once((KeyRequestProtocol, rr::ProtocolSupport::Full));
         let key_request = rr::Behaviour::new(key_request_protocols, rr_cfg);
 
-        let probe_interval = autonat_probe_interval.unwrap_or(Duration::from_secs(30));
+        let probe_interval = autonat_probe_interval.unwrap_or(Duration::from_secs(1));
         let autonat_client_behaviour = if enable_autonat {
             info!(
                 "AutoNAT enabled (probe interval: {}s)",
@@ -5783,13 +6273,13 @@ impl DhtService {
         let mdns_toggle = toggle::Toggle::from(mdns_opt);
 
         // DCUtR requires relay to be enabled
-        let dcutr_behaviour = if enable_autonat {
-            info!("DCUtR enabled (requires relay for hole-punching coordination)");
-            Some(dcutr::Behaviour::new(local_peer_id))
-        } else {
-            None
-        };
-        let dcutr_toggle = toggle::Toggle::from(dcutr_behaviour);
+        // let dcutr_behaviour = if enable_autonat {
+        //     info!("DCUtR enabled (requires relay for hole-punching coordination)");
+        //     Some(dcutr::Behaviour::new(local_peer_id))
+        // } else {
+        //     None
+        // };
+        let dcutr_toggle = toggle::Toggle::from(Some(dcutr::Behaviour::new(local_peer_id)));
 
         // Relay server configuration
         let relay_server_behaviour = if enable_relay_server {
@@ -5803,22 +6293,15 @@ impl DhtService {
         };
         let relay_server_toggle = toggle::Toggle::from(relay_server_behaviour);
 
-        let mut behaviour = Some(DhtBehaviour {
-            kademlia,
-            identify,
-            mdns: mdns_toggle,
-            bitswap,
-            ping: Ping::new(ping::Config::new()),
-            proxy_rr,
-            webrtc_signaling_rr,
-            key_request,
-            autonat_client: autonat_client_toggle,
-            autonat_server: autonat_server_toggle,
-            relay_client: relay_client_behaviour,
-            relay_server: relay_server_toggle,
-            dcutr: dcutr_toggle,
-        });
-
+        // UPnP configuration for automatic port mapping
+        let upnp_behaviour = if enable_upnp {
+            info!("🌐 UPnP enabled - attempting automatic port mapping");
+            Some(upnp::tokio::Behaviour::default())
+        } else {
+            info!("UPnP disabled");
+            None
+        };
+        let upnp_toggle = toggle::Toggle::from(upnp_behaviour);
         let bootstrap_set: HashSet<String> = bootstrap_nodes.iter().cloned().collect();
         let mut autonat_targets: HashSet<String> = if enable_autonat && !autonat_servers.is_empty()
         {
@@ -5879,29 +6362,46 @@ impl DhtService {
             HashSet::new()
         };
 
-        // Use the new relay-aware transport builder
-        let transport = build_transport_with_relay(&local_key, relay_transport, proxy_address)?;
-
-        // Extract behaviour or return error if already taken
-        let behaviour_instance = behaviour
-            .take()
-            .ok_or_else(|| Box::<dyn Error>::from("behaviour already taken"))?;
-
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
-            .with_other_transport(|_| Ok(transport))
-            .map_err(|e| format!("Failed to create libp2p transport: {}", e))?
-            .with_behaviour(move |_| behaviour_instance)?
+            .with_tcp(
+                tcp::Config::default().nodelay(true),
+                noise::Config::new,
+                yamux::Config::default,
+            )?
+            // .with_quic() seems to destablize peer connect/download, disabled for now until solution
+            .with_relay_client(noise::Config::new, yamux::Config::default)?
+            .with_behaviour(move |_, relay_client_behaviour: relay::client::Behaviour| {
+                DhtBehaviour {
+                    kademlia,
+                    identify,
+                    mdns: mdns_toggle,
+                    bitswap,
+                    ping: Ping::new(ping::Config::new()),
+                    proxy_rr,
+                    webrtc_signaling_rr,
+                    key_request,
+                    autonat_client: autonat_client_toggle,
+                    autonat_server: autonat_server_toggle,
+                    relay_client: relay_client_behaviour,
+                    relay_server: relay_server_toggle,
+                    dcutr: dcutr_toggle,
+                    upnp: upnp_toggle,
+                }
+            })?
             .with_swarm_config(
                 |c| c.with_idle_connection_timeout(Duration::from_secs(300)), // 5 minutes
             )
             .build();
 
-        // Listen on the specified port
-        let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
-        swarm.listen_on(listen_addr)?;
+        // Always listen on the specified port
+        let tcp_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
+        swarm.listen_on(tcp_addr)?;
 
+        // QUIC also bound to the same port (udp), seems to destablize peer connect/download, disabled for now until solution
+        // let quic_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", port).parse()?;
+        // swarm.listen_on(quic_addr)?;
         // Clean up any unreachable addresses from Kademlia's routing table at startup
         // This removes stale localhost/private addresses that may have been persisted
         {
@@ -5959,7 +6459,10 @@ impl DhtService {
                 // LAN Mode: allow private/loopback addresses for local development and testing
                 let wan_mode = enable_autonat || enable_autorelay;
                 if wan_mode && !ma_plausibly_reachable(&addr) {
-                    warn!("⏭️  [WAN Mode] Skipping unreachable bootstrap addr: {}", addr);
+                    warn!(
+                        "⏭️  [WAN Mode] Skipping unreachable bootstrap addr: {}",
+                        addr
+                    );
                     continue;
                 }
 
@@ -6016,9 +6519,7 @@ impl DhtService {
                     successful_connections
                 );
             } else {
-                warn!(
-                    "⚠ No bootstrap connections succeeded - cannot bootstrap DHT"
-                );
+                warn!("⚠ No bootstrap connections succeeded - cannot bootstrap DHT");
                 warn!("  Node will operate in standalone mode until peers connect");
                 warn!("  Consider checking network connectivity and bootstrap node addresses");
             }
@@ -6036,6 +6537,7 @@ impl DhtService {
         let proxy_mgr: ProxyMgr = Arc::new(Mutex::new(ProxyManager::default()));
         let peer_selection = Arc::new(Mutex::new(PeerSelectionService::new()));
         let pending_webrtc_offers = Arc::new(Mutex::new(HashMap::new()));
+        let pending_key_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> =
@@ -6057,6 +6559,9 @@ impl DhtService {
             Arc::new(Mutex::new(HashMap::new()));
         let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let pending_dht_queries: Arc<
+            Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
+        > = Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -6068,7 +6573,7 @@ impl DhtService {
         // Spawn the Dht node task
         let received_chunks_clone = Arc::new(Mutex::new(HashMap::new()));
         let bootstrap_peer_ids = extract_bootstrap_peer_ids(&bootstrap_nodes);
-        let file_metadata_cache_local: Arc<Mutex<HashMap<String, FileMetadata>>> = 
+        let file_metadata_cache_local: Arc<Mutex<HashMap<String, FileMetadata>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
         tokio::spawn(run_dht_node(
@@ -6095,6 +6600,8 @@ impl DhtService {
             pending_heartbeat_updates.clone(),
             pending_keyword_indexes.clone(),
             file_metadata_cache_local.clone(),
+            pending_dht_queries.clone(),
+            pending_key_requests.clone(),
             is_bootstrap,
             final_enable_autorelay,
             relay_candidates,
@@ -6119,6 +6626,7 @@ impl DhtService {
             file_transfer_service,
             // chunk_manager is not stored in DhtService, only passed to the task
             pending_webrtc_offers,
+            pending_key_requests,
             pending_provider_queries,
             root_query_mapping,
             active_downloads,
@@ -6393,11 +6901,14 @@ impl DhtService {
         {
             let cache = self.file_metadata_cache.lock().await;
             if let Some(metadata) = cache.get(&file_hash) {
-                info!("Found file {} in local cache, skipping DHT query", file_hash);
+                info!(
+                    "Found file {} in local cache, skipping DHT query",
+                    file_hash
+                );
                 return Ok(Some(metadata.clone()));
             }
         }
-        
+
         if timeout_ms == 0 {
             self.cmd_tx
                 .send(DhtCommand::SearchFile(file_hash))
@@ -6538,27 +7049,6 @@ impl DhtService {
 
         rx.await
             .map_err(|e| format!("Echo response error: {}", e))?
-    }
-
-    pub async fn send_message_to_peer(
-        &self,
-        peer_id: &str,
-        message: serde_json::Value,
-    ) -> Result<(), String> {
-        let target_peer_id: PeerId = peer_id
-            .parse()
-            .map_err(|e| format!("Invalid peer ID: {}", e))?;
-
-        // Send message through DHT command system
-        self.cmd_tx
-            .send(DhtCommand::SendMessageToPeer {
-                target_peer_id,
-                message,
-            })
-            .await
-            .map_err(|e| format!("Failed to send DHT command: {e}"))?;
-
-        Ok(())
     }
 
     pub async fn update_privacy_proxy_targets(&self, addresses: Vec<String>) -> Result<(), String> {
@@ -6994,18 +7484,6 @@ impl DhtService {
             trusted_count, mode
         );
 
-        // Send event to notify about privacy routing status
-        let _ = self.cmd_tx.send(DhtCommand::SendMessageToPeer {
-            target_peer_id: self
-                .peer_id
-                .parse()
-                .map_err(|e| format!("Invalid peer ID: {}", e))?,
-            message: serde_json::json!({
-                "type": "privacy_routing_enabled",
-                "trusted_proxies": trusted_count
-            }),
-        });
-
         Ok(())
     }
 
@@ -7021,17 +7499,6 @@ impl DhtService {
         proxy_mgr.manual_trusted.clear();
 
         info!("Privacy routing disabled - reverting to direct connections");
-
-        // Send event to notify about privacy routing status
-        let _ = self.cmd_tx.send(DhtCommand::SendMessageToPeer {
-            target_peer_id: self
-                .peer_id
-                .parse()
-                .map_err(|e| format!("Invalid peer ID: {}", e))?,
-            message: serde_json::json!({
-                "type": "privacy_routing_disabled"
-            }),
-        });
 
         Ok(())
     }
@@ -7167,7 +7634,7 @@ impl DhtService {
             "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
                 .parse()
                 .map_err(|e| format!("Failed to parse private key: {}", e))?;
-        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(98765u64));
+        let signer = SignerMiddleware::new(client.clone(), wallet.with_chain_id(*CHAIN_ID));
 
         // The contract address needs to be known. This would come from AppState.
         let contract_address: Address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
@@ -7240,6 +7707,26 @@ impl DhtService {
             .map_err(|e| e.to_string())?;
         receiver.await.map_err(|e| e.to_string())
     }
+
+    /// Store a value in the DHT with the given key
+    pub async fn put_dht_value(&self, key: String, value: Vec<u8>) -> Result<(), String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::PutDhtValue { key, value, sender })
+            .await
+            .map_err(|e| e.to_string())?;
+        receiver.await.map_err(|e| e.to_string())?
+    }
+
+    /// Retrieve a value from the DHT by key
+    pub async fn get_dht_value(&self, key: String) -> Result<Option<Vec<u8>>, String> {
+        let (sender, receiver) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::GetDhtValue { key, sender })
+            .await
+            .map_err(|e| e.to_string())?;
+        receiver.await.map_err(|e| e.to_string())?
+    }
 }
 
 impl DhtService {
@@ -7250,7 +7737,7 @@ impl DhtService {
             .send(DhtCommand::SearchPeersByInfohash { info_hash, sender })
             .await
             .map_err(|e| e.to_string())?;
-        
+
         // Wait for the DHT query to complete
         receiver.await.map_err(|e| e.to_string())?
     }
@@ -7682,6 +8169,7 @@ mod tests {
             false,      // enable_autorelay
             Vec::new(), // preferred_relays
             false,      // enable_relay_server
+            false,      // enable_upnp (disabled for testing)
             None,
         )
         .await
