@@ -1444,6 +1444,7 @@ async fn start_dht_node(
     let proxies_arc = state.proxies.clone();
     let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
+    let analytics_arc = state.analytics.clone();
 
     tokio::spawn(async move {
         use std::time::Duration;
@@ -1553,10 +1554,17 @@ async fn start_dht_node(
                     DhtEvent::DownloadedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("file_content", payload);
+                        // Update analytics: record download completion and bandwidth
+                        analytics_arc.record_download_completed().await;
+                        analytics_arc.record_download(metadata.file_size).await;
+                        analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("published_file", payload);
+                        // Update analytics: record upload completion
+                        analytics_arc.record_upload_completed().await;
+                        analytics_arc.decrement_active_uploads().await;
                     }
                     DhtEvent::FileDiscovered(metadata) => {
                         let payload = serde_json::json!(metadata);
@@ -3905,6 +3913,8 @@ async fn download_file_from_network(
 
                                                                 // The peer will now start sending chunks automatically
                                                                 // We don't need to request individual chunks - the WebRTC service handles this
+                                                                // Track active download now that download is confirmed to start
+                                                                state.analytics.increment_active_downloads().await;
                                                                 Ok(format!(
                                                                     "WebRTC download initiated: {} ({} bytes) from peer {}",
                                                                     metadata.file_name, metadata.file_size, selected_peer
