@@ -486,8 +486,9 @@
         // Listen for mining scan progress events (real-time incremental updates)
         const unlistenScanProgress = await listen('mining_scan_progress', (event: { payload: MiningScanProgressPayload }) => {
           // Update mining stats incrementally as blocks are discovered during scanning
+          // Only apply during non-mining periods to avoid interfering with real-time counter
           const currentWallet = get(wallet);
-          if (event.payload.address === currentWallet?.address) {
+          if (event.payload.address === currentWallet?.address && !$miningState.isMining) {
             miningState.update((state) => ({
               ...state,
               blocksFound: state.blocksFound + (event.payload.blocks_found_in_batch || 0),
