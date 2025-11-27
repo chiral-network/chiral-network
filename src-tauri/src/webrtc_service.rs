@@ -481,9 +481,10 @@ impl WebRTCService {
                                 .send(WebRTCEvent::ConnectionEstablished { peer_id })
                                 .await;
                         }
-                        RTCPeerConnectionState::Disconnected
-                        | RTCPeerConnectionState::Failed
-                        | RTCPeerConnectionState::Closed => {
+                        RTCPeerConnectionState::Failed => {
+                            error!("WebRTC connection failed for peer: {}", peer_id);
+                        }
+                        RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
                         _ => {}
@@ -1325,8 +1326,23 @@ impl WebRTCService {
                 .or_insert_with(HashMap::new);
             chunks.insert(chunk.chunk_index, chunk.clone());
 
-            // Check if we have all chunks for this file
+            // Emit progress to frontend
             if let Some(total_chunks) = chunks.values().next().map(|c| c.total_chunks) {
+                let progress_percentage = (chunks.len() as f32 / total_chunks as f32) * 100.0;
+                let bytes_received = chunks.len() as u64 * CHUNK_SIZE as u64;
+                let estimated_total_size = total_chunks as u64 * CHUNK_SIZE as u64;
+
+                if let Err(e) = app_handle.emit("webrtc_download_progress", serde_json::json!({
+                    "fileHash": chunk.file_hash,
+                    "progress": progress_percentage,
+                    "chunksReceived": chunks.len(),
+                    "totalChunks": total_chunks,
+                    "bytesReceived": bytes_received,
+                    "totalBytes": estimated_total_size,
+                })) {
+                    warn!("Failed to emit progress event: {}", e);
+                }
+
                 if chunks.len() == total_chunks as usize {
                     // Assemble file
                     Self::assemble_file_from_chunks(
@@ -1513,9 +1529,10 @@ impl WebRTCService {
                                 .send(WebRTCEvent::ConnectionEstablished { peer_id })
                                 .await;
                         }
-                        RTCPeerConnectionState::Disconnected
-                        | RTCPeerConnectionState::Failed
-                        | RTCPeerConnectionState::Closed => {
+                        RTCPeerConnectionState::Failed => {
+                            error!("WebRTC connection failed for peer: {}", peer_id);
+                        }
+                        RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
                         _ => {}
@@ -1741,9 +1758,10 @@ impl WebRTCService {
                                 .send(WebRTCEvent::ConnectionEstablished { peer_id })
                                 .await;
                         }
-                        RTCPeerConnectionState::Disconnected
-                        | RTCPeerConnectionState::Failed
-                        | RTCPeerConnectionState::Closed => {
+                        RTCPeerConnectionState::Failed => {
+                            error!("WebRTC connection failed for peer: {}", peer_id);
+                        }
+                        RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
                         _ => {}

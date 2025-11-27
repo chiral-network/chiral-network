@@ -352,6 +352,25 @@
         });
 
 
+        // Listen for WebRTC download progress
+        const unlistenWebRTCProgress = await listen('webrtc_download_progress', (event) => {
+          const data = event.payload as {
+            fileHash: string;
+            progress: number;
+            chunksReceived: number;
+            totalChunks: number;
+            bytesReceived: number;
+            totalBytes: number;
+          };
+
+          // Update file progress
+          files.update(f => f.map(file =>
+            file.hash === data.fileHash
+              ? { ...file, status: 'downloading', progress: data.progress }
+              : file
+          ));
+        });
+
         // Listen for WebRTC download completion
 const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
   const data = event.payload as {
@@ -446,6 +465,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           unlistenBitswapProgress()
           unlistenDownloadCompleted()
           unlistenDhtError()
+          unlistenWebRTCProgress()
           unlistenWebRTCComplete()
           unlistenTorrentEvent()
         }
@@ -1361,20 +1381,20 @@ async function loadAndResumeDownloads() {
           outputPath: outputPath
         });
 
-        // Update file status to completed
+        // Update file status to downloading (not completed - that happens via events)
         files.update(f => f.map(file =>
           file.id === downloadingFile.id
             ? {
                 ...file,
-                status: 'completed',
-                progress: 100,
+                status: 'downloading',
+                progress: 0,
                 downloadPath: outputPath
               }
             : file
         ));
 
-        diagnosticLogger.debug('Download', 'WebRTC download completed', { outputPath });
-        showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success');
+        diagnosticLogger.debug('Download', 'WebRTC download initiated', { outputPath });
+        showNotification(`WebRTC download started for "${downloadingFile.name}"`, 'info');
 
       } catch (error) {
         errorLogger.fileOperationError('WebRTC download', error instanceof Error ? error.message : String(error));
