@@ -2,7 +2,7 @@ use crate::transfer_events::{
     calculate_eta, calculate_progress, current_timestamp_ms, ChunkCompletedEvent,
     SourceConnectedEvent, SourceDisconnectedEvent, SourceInfo, SourceType,
     TransferCompletedEvent, TransferEventBus, TransferFailedEvent, TransferPriority,
-    TransferProgressEvent, TransferQueuedEvent, TransferStartedEvent, DisconnectReason,
+    TransferProgressEvent, TransferStartedEvent, DisconnectReason,
     ErrorCategory, SourceSummary,
 };
 use reqwest::Client;
@@ -442,7 +442,7 @@ impl HttpDownloadClient {
                 progress_tx.clone(),
                 metadata.size,
                 &config,
-                &event_bus,
+                event_bus.clone(),
                 &source_id,
                 start_time,
             )
@@ -580,7 +580,7 @@ impl HttpDownloadClient {
         progress_tx: Option<mpsc::Sender<HttpDownloadProgress>>,
         file_size: u64,
         config: &HttpDownloadConfig,
-        event_bus: &Option<TransferEventBus>,
+        event_bus: Option<TransferEventBus>,
         source_id: &str,
         start_time: Instant,
     ) -> Result<Vec<Vec<u8>>, String> {

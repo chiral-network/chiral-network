@@ -16,9 +16,9 @@ use tracing::info;
 use crate::http_download::{HttpDownloadClient, HttpDownloadProgress, DownloadStatus as HttpDownloadStatus};
 use crate::transfer_events::{
     TransferEventBus, TransferProgressEvent, TransferPausedEvent, TransferResumedEvent,
-    TransferCompletedEvent, TransferFailedEvent, TransferStartedEvent, TransferQueuedEvent,
-    PauseReason, ErrorCategory, SourceInfo, SourceType, TransferPriority,
-    current_timestamp_ms, calculate_progress, calculate_eta,
+    TransferCompletedEvent, TransferFailedEvent, TransferQueuedEvent,
+    PauseReason, ErrorCategory, TransferPriority,
+    current_timestamp_ms, calculate_progress,
 };
 
 /// Download ID type (UUID string)

@@ -8,8 +8,8 @@ use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
 use crate::transfer_events::{
     TransferEventBus, TransferStartedEvent, SourceConnectedEvent, SourceDisconnectedEvent,
     ChunkCompletedEvent, ChunkFailedEvent, TransferProgressEvent, TransferCompletedEvent,
-    TransferFailedEvent, SourceInfo, SourceType, SourceSummary, DisconnectReason, ErrorCategory,
-    current_timestamp_ms, calculate_progress, calculate_eta,
+    TransferFailedEvent, SourceInfo, SourceType, DisconnectReason, ErrorCategory,
+    current_timestamp_ms, calculate_progress,
 };
 use crate::ftp_downloader::{FtpCredentials, FtpDownloader};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};

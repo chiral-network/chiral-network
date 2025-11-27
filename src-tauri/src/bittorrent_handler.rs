@@ -1,8 +1,7 @@
 use crate::protocols::SimpleProtocolHandler;
 use crate::transfer_events::{
-    TransferEventBus, TransferProgressEvent, TransferCompletedEvent, TransferFailedEvent,
-    TransferStartedEvent, TransferPausedEvent, TransferResumedEvent,
-    SourceInfo, SourceType, SourceSummary, ErrorCategory, PauseReason,
+    TransferEventBus, TransferProgressEvent, TransferPausedEvent, TransferResumedEvent,
+    PauseReason,
     current_timestamp_ms, calculate_progress, calculate_eta,
 };
 use async_trait::async_trait;

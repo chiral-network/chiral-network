@@ -1,8 +1,8 @@
 use crate::encryption;
 use crate::transfer_events::{
-    TransferEventBus, TransferProgressEvent, TransferCompletedEvent, TransferFailedEvent,
+    TransferEventBus, TransferCompletedEvent, TransferFailedEvent,
     TransferStartedEvent, SourceInfo, SourceType, SourceSummary, ErrorCategory,
-    current_timestamp_ms, calculate_progress,
+    current_timestamp_ms,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
