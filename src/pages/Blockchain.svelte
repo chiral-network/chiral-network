@@ -21,7 +21,6 @@
     Activity,
     ChevronRight,
     Copy,
-    ExternalLink,
     AlertCircle
   } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
@@ -569,7 +568,7 @@
                   ? '0x...'
                   : 'Block number'}
               class="flex-1"
-              on:keypress={(e) => e.key === 'Enter' && performSearch()}
+              on:keydown={(e) => { const ev = (e as unknown as KeyboardEvent); if (ev.key === 'Enter') performSearch(); }}
             />
             <Button on:click={performSearch} disabled={isSearching}>
               {#if isSearching}
@@ -697,7 +696,7 @@
                 bind:value={balanceAddress}
                 placeholder="0x..."
                 class="flex-1"
-                on:keypress={(e) => e.key === 'Enter' && checkBalance()}
+                on:keydown={(e) => { const ev = (e as unknown as KeyboardEvent); if (ev.key === 'Enter') checkBalance(); }}
               />
               <Button on:click={checkBalance} disabled={isCheckingBalance}>
                 {#if isCheckingBalance}

@@ -2,8 +2,8 @@
 <script lang="ts">
   import { t } from 'svelte-i18n';
   import { 
-    Download, Upload, Wallet, Globe, BarChart3, Settings, Cpu, 
-    Star, Server, Database, Search, ArrowRight, Clock
+    Download, Upload, Wallet, Globe, BarChart3, Settings, Cpu,
+    Star, Server, Database, Search, ArrowRight
   } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   
