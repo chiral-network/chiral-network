@@ -51,6 +51,9 @@ export interface FileItem {
   totalChunks?: number;
   downloadStartTime?: number;
   price?: number; // Price in Chiral for this file
+  version?: number;
+  isDownload?: boolean;
+  isSeedingDownload?: boolean;
 }
 
 export interface ProxyNode {
@@ -174,28 +177,6 @@ export interface BlacklistEntry {
   reason: string;
   timestamp: Date;
 }
-
-// Sample dummy data
-const dummyFiles: FileItem[] = [
-  {
-    id: "0",
-    name: "Video.mp4",
-    hash: "QmZ4tDuvesekqMF",
-    size: 50331648,
-    status: "paused",
-    progress: 30,
-    visualOrder: 1,
-  },
-  {
-    id: "1",
-    name: "Document.pdf",
-    hash: "QmZ4tDuvesekqMD",
-    size: 2048576,
-    status: "completed",
-    progress: 100,
-    visualOrder: 2,
-  },
-];
 
 const dummyWallet: WalletInfo = {
   address: "",
