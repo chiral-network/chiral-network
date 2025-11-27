@@ -599,7 +599,7 @@ impl HttpDownloadClient {
             let total_chunks = ranges.len();
             let semaphore = self.download_semaphore.clone();
             let downloader_peer_id = self.downloader_peer_id.clone();
-            let event_bus = event_bus.clone();
+            let event_bus = (*event_bus).clone();
             let config = config.clone();
             let source_id = source_id.to_string();
             let completed_bytes = completed_bytes.clone();

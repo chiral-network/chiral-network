@@ -340,6 +340,7 @@ pub enum ErrorCategory {
 // ============================================================================
 
 /// The main event bus for emitting transfer events
+#[derive(Clone)]
 pub struct TransferEventBus {
     app_handle: AppHandle,
 }
