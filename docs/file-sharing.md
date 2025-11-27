@@ -72,7 +72,7 @@ Chiral Network supports downloading from multiple peers simultaneously:
 #### Multi-Peer Download Details:
 - Architecture:
   - Files are split into pieces of equal length (except for the last piece). If peer acceleration is enabled, then WebRTC or Bitswap will be used for piece exchange. When one peer downloads a piece of the file they need, it informs the rest of the peers that “I have this piece” so that the rest of the peers can start downloading from this peer who now currently has this piece. In the same way, every other peer does the same thing
-  - We will support downloading a file from its original single source, either HTTP, DTP. BitTorrent or ED2K -- and optionally accelerate the download using Chiral Network's Private Peer Protocols WebRTC or Bitswap.
+  - We will support downloading a file from its original single source, either HTTP, FTP, BitTorrent or ed2k -- and optionally accelerate the download using Chiral Network's Private Peer Protocols WebRTC or Bitswap.
   - It is important to note that multiple conventional sources are NOT combined (i.e. using more than different protocol simultaneously to download a file). Instead, the main download source is simply the original URL and peers simply assist with acceleration.
 
 - Problems: 
@@ -95,7 +95,7 @@ How to compute the rarest piece? There are two ways (borrowed from BitTorrent Pr
   - Also prioritize downloading of all the blocks in the piece before moving onto the next piece.Every peer maintains the piece availability across its peer set and uses it to compute the rarest piece.
 
 Download Flow Summary:
-1. Download begins from the original single protocol URL (HTTP, FTP, BT, or ED2K)
+1. Download begins from the original single protocol URL (HTTP, FTP, BT, or ed2k)
 2. Peers can also use WebRTC or BitSwap for acceleration
 3. Peers can exchange bitfield messages and compute the rarest piece OR peers can download pieces and send have message announcements
 

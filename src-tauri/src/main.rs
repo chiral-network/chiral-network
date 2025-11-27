@@ -16,7 +16,6 @@ pub mod http_server;
 pub mod net;
 pub mod pool;
 pub mod transaction_services;
-mod transfer_events;
 pub mod reassembly;
 
 // Re-export modules from the lib crate
@@ -72,9 +71,10 @@ use geth_downloader::GethDownloader;
 use keystore::Keystore;
 use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
+use chiral_network::transfer_events::TransferEventBus;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1025,6 +1025,12 @@ async fn start_miner(
         *miner_address = Some(address.clone());
     } // MutexGuard is dropped here
 
+    // Also store in static variable for mining monitor
+    {
+        let mut current_address = CURRENT_MINER_ADDRESS.lock().await;
+        *current_address = Some(address.clone());
+    }
+
     // Try to start mining
     match start_mining(&address, threads).await {
         Ok(_) => Ok(()),
@@ -1067,7 +1073,13 @@ async fn start_miner(
 
 #[tauri::command]
 async fn stop_miner() -> Result<(), String> {
-    stop_mining().await
+    stop_mining().await?;
+    // Clear the current mining address
+    {
+        let mut current_address = CURRENT_MINER_ADDRESS.lock().await;
+        *current_address = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1181,8 +1193,12 @@ async fn start_mining_monitor(
                             // Only trigger on "Successfully sealed new block" to avoid duplicate events
                             if line.contains("Successfully sealed new block") {
                                 // 🎉 WE MINED A BLOCK! 🎉
-                                // Simple as that - increment our counter and update frontend
-                                increment_mined_blocks().await;
+                                // Get the current mining address and increment the counter for that address
+                                if let Some(miner_address) = CURRENT_MINER_ADDRESS.lock().await.clone() {
+                                    increment_mined_blocks(miner_address).await;
+                                } else {
+                                    println!("⚠️  Block mined but no current miner address set!");
+                                }
 
                                 // Emit event to frontend - that's it!
                                 let result = app.emit("block_mined", serde_json::json!({
@@ -1216,19 +1232,22 @@ async fn start_mining_monitor(
 
 lazy_static! {
     static ref BLOCKS_CACHE: Mutex<Option<(String, u64, Instant)>> = Mutex::new(None);
-    // Simple running count of total blocks mined (since we started monitoring)
-    static ref TOTAL_MINED_BLOCKS: Mutex<u64> = Mutex::new(0);
+    // Running count of blocks mined per address
+    static ref TOTAL_MINED_BLOCKS: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
+    // Current mining address
+    static ref CURRENT_MINER_ADDRESS: Mutex<Option<String>> = Mutex::new(None);
 }
 
-async fn increment_mined_blocks() {
-    let mut count = TOTAL_MINED_BLOCKS.lock().await;
+async fn increment_mined_blocks(miner_address: String) {
+    let mut counts = TOTAL_MINED_BLOCKS.lock().await;
+    let count = counts.entry(miner_address.clone()).or_insert(0);
     *count += 1;
-    println!("🎉 Block mined! Total blocks mined: {}", *count);
+    println!("🎉 Block mined by {}! Total blocks mined by this address: {}", miner_address, *count);
 }
 
-async fn get_total_mined_blocks() -> u64 {
-    let count = TOTAL_MINED_BLOCKS.lock().await;
-    *count
+async fn get_total_mined_blocks(miner_address: &str) -> u64 {
+    let counts = TOTAL_MINED_BLOCKS.lock().await;
+    *counts.get(miner_address).unwrap_or(&0)
 }
 
 #[tauri::command]
@@ -1241,9 +1260,9 @@ async fn clear_blocks_cache() {
 }
 
 #[tauri::command]
-async fn get_blocks_mined(_app: tauri::AppHandle, _address: String) -> Result<u64, String> {
-    // Simple: return our running count
-    let count = get_total_mined_blocks().await;
+async fn get_blocks_mined(_app: tauri::AppHandle, address: String) -> Result<u64, String> {
+    // Return the running count for this address
+    let count = get_total_mined_blocks(&address).await;
     Ok(count)
 }
 #[tauri::command]
@@ -1387,7 +1406,6 @@ async fn start_dht_node(
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
         .ok_or("Failed to get project directories")?;
-    // Create the async_std::path::Path here so we can pass a reference to it.
     let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
     let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
 
@@ -2469,47 +2487,72 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
     use std::fs;
 
     // Try RAPL (Running Average Power Limit) interface on Intel systems
-    // This provides power consumption for CPU package and DRAM
+    // Read from all available RAPL domains (core, dram, etc.) and sum them
 
-    let rapl_paths = [
-        "/sys/class/powercap/intel-rapl:0/energy_uj", // CPU package
-        "/sys/class/powercap/intel-rapl/energy_uj",   // Alternative path
-    ];
+    static mut LAST_TOTAL_ENERGY: Option<(u64, Instant)> = None;
+    static mut LAST_TOTAL_POWER: f32 = 0.0;
 
-    static mut LAST_ENERGY: Option<(u64, Instant)> = None;
-    static mut LAST_POWER: f32 = 0.0;
+    // Find all RAPL energy files
+    let mut rapl_paths = Vec::new();
 
+    // Main package
+    rapl_paths.push("/sys/class/powercap/intel-rapl:0/energy_uj".to_string());
+
+    // Alternative main package path
+    rapl_paths.push("/sys/class/powercap/intel-rapl/energy_uj".to_string());
+
+    // Sub-domains (core, dram, etc.)
+    for i in 0..10 {
+        for j in 0..10 {
+            let path = format!("/sys/class/powercap/intel-rapl:{}/intel-rapl:{}:{}/energy_uj", i, i, j);
+            if std::path::Path::new(&path).exists() {
+                rapl_paths.push(path);
+            }
+        }
+    }
+
+    let mut total_energy_uj: u64 = 0;
+    let mut valid_readings = 0;
+
+    // Sum energy from all domains
     for path in &rapl_paths {
         if let Ok(energy_str) = fs::read_to_string(path) {
             if let Ok(energy_uj) = energy_str.trim().parse::<u64>() {
-                let now = Instant::now();
+                total_energy_uj += energy_uj;
+                valid_readings += 1;
+            }
+        }
+    }
 
-                unsafe {
-                    if let Some((last_energy, last_time)) = LAST_ENERGY {
-                        let time_diff = now.duration_since(last_time).as_secs_f64();
-                        if time_diff > 0.0 {
-                            let energy_diff = if energy_uj >= last_energy {
-                                energy_uj - last_energy
-                            } else {
-                                // Counter wrapped around
-                                (u64::MAX - last_energy) + energy_uj
-                            };
+    if valid_readings == 0 {
+        return None; // No RAPL sensors available
+    }
 
-                            let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+    let now = Instant::now();
 
-                            if power_watts > 0.0 && power_watts < 1000.0 {
-                                // Reasonable power range
-                                LAST_POWER = power_watts as f32;
-                                LAST_ENERGY = Some((energy_uj, now));
-                                return Some((power_watts as f32, PowerMethod::Systemstat));
-                            }
-                        }
-                    } else {
-                        // First reading, store and wait for next
-                        LAST_ENERGY = Some((energy_uj, now));
-                    }
+    unsafe {
+        if let Some((last_total_energy, last_time)) = LAST_TOTAL_ENERGY {
+            let time_diff = now.duration_since(last_time).as_secs_f64();
+            if time_diff > 0.0 {
+                let energy_diff = if total_energy_uj >= last_total_energy {
+                    total_energy_uj - last_total_energy
+                } else {
+                    // Counter wrapped around (highly unlikely for total)
+                    u64::MAX - last_total_energy + total_energy_uj
+                };
+
+                let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+
+                if power_watts > 0.0 && power_watts < 2000.0 {
+                    // Reasonable power range (allow higher for multi-domain sum)
+                    LAST_TOTAL_POWER = power_watts as f32;
+                    LAST_TOTAL_ENERGY = Some((total_energy_uj, now));
+                    return Some((power_watts as f32, PowerMethod::Systemstat));
                 }
             }
+        } else {
+            // First reading, store and wait for next
+            LAST_TOTAL_ENERGY = Some((total_energy_uj, now));
         }
     }
 
@@ -3189,10 +3232,13 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
+        // Create transfer event bus for unified event emission
+        let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
         let multi_source_service = MultiSourceDownloadService::new(
             dht_service,
             webrtc_arc.clone(),
             state.bittorrent_handler.clone(),
+            transfer_event_bus,
         );
         let multi_source_arc = Arc::new(multi_source_service);
 

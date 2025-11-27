@@ -45,8 +45,8 @@ pub async fn get_full_network_stats(app: tauri::AppHandle, address: Option<Strin
     let active_miners = peers_res.unwrap_or(1); // prevent division by zero
 
     // Optionally get blocks mined for a given address
-    let blocks_mined = if address.is_some() {
-        Some(crate::get_total_mined_blocks().await)
+    let blocks_mined = if let Some(addr) = &address {
+        Some(crate::get_total_mined_blocks(addr).await)
     } else {
         None
     };

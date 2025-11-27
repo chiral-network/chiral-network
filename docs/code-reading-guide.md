@@ -71,8 +71,9 @@ Use this when debugging the main loop of publish/search/download.
 - Session API: `send(data)` throws if channel not open; `close()` disposes channel/connection; `connectionState`/`channelState` Svelte stores mirror live states.
 
 ### src-tauri/src/dht.rs (Rust, high level)
+- Data Structures: `Ed2kSourceInfo` struct (in `dht/models.rs`) for holding ed2k link metadata.
 - Protocol definitions: `KeyRequestProtocol`, `KeyRequestCodec`, `KeyRequest/KeyResponse` for exchanging encrypted key bundles tied to a Merkle root.
 - Error handling: `Ed2kError` for validating ed2k links.
-- Core services (further in file): libp2p swarm wiring (Kademlia DHT, relay/auto-relay, identify, dcutr, ping), Bitswap-like block exchange, chunking via `ChunkManager`, peer selection metrics, and command handlers that the Tauri layer exposes to the UI.
+- Core services (further in file): libp2p swarm wiring (Kademlia DHT, relay/auto-relay, identify, dcutr, ping), Bitswap-style block exchange, chunking via `ChunkManager`, peer selection metrics, and command handlers that the Tauri layer exposes to the UI.
 
 Use this as a map while you explore; it should help you jump to the right function, trace the critical file-sharing path, and understand how data and events move through the stack.
