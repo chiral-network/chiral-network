@@ -134,9 +134,10 @@
         const unlistenCompleted = await listen('multi_source_download_completed', (event) => {
           const data = event.payload as any
 
-          // Update file status to completed
+          // Update file status to completed - only update files that are actively downloading
+          // to avoid overwriting seeding files with the same hash
           files.update(f => f.map(file => {
-            if (file.hash === data.file_hash) {
+            if (file.hash === data.file_hash && file.status === 'downloading') {
               return {
                 ...file,
                 status: 'completed' as const,
@@ -160,9 +161,10 @@
         const unlistenFailed = await listen('multi_source_download_failed', (event) => {
           const data = event.payload as any
 
-          // Update file status to failed
+          // Update file status to failed - only update files that are actively downloading
+          // to avoid overwriting seeding files with the same hash
           files.update(f => f.map(file => {
-            if (file.hash === data.file_hash) {
+            if (file.hash === data.file_hash && file.status === 'downloading') {
               return {
                 ...file,
                 status: 'failed' as const
@@ -309,9 +311,10 @@
                 }
             }
 
-            // Update file status
+            // Update file status - only update files that are actively downloading
+            // to avoid overwriting seeding files with the same hash
             files.update(f => f.map(file => {
-                if (file.hash === metadata.merkleRoot) {
+                if (file.hash === metadata.merkleRoot && file.status === 'downloading') {
                     return {
                         ...file,
                         status: 'completed' as const,
@@ -894,7 +897,9 @@ async function loadAndResumeDownloads() {
     
     diagnosticLogger.debug('Download', 'Auto-detected protocol', { protocol: detectedProtocol, hasCids });
 
-    const allFiles = [...$downloadQueue]
+    // Check both download queue and files store for duplicates
+    // This ensures we detect if user tries to download a file they're already seeding
+    const allFiles = [...$downloadQueue, ...$files]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
 
     if (existingFile) {
