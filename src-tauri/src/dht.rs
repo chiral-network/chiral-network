@@ -1299,7 +1299,7 @@ async fn run_dht_node(
                                                 info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
-                                                price: json_val.get("price").and_then(|v| v.as_f64()),
+                                                price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                 uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
@@ -3074,7 +3074,7 @@ async fn run_dht_node(
                                                 info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
-                                                price: json_val.get("price").and_then(|v| v.as_f64()),
+                                                price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                 uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
@@ -4170,7 +4170,7 @@ async fn handle_kademlia_event(
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
-                                    price: metadata_json.get("price").and_then(|v| v.as_f64()),
+                                    price: metadata_json.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                     http_sources: metadata_json.get("http_sources").and_then(|v| {
                                         serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(
                                             v.clone(),
@@ -4574,7 +4574,7 @@ async fn handle_kademlia_event(
                                                     info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     trackers: metadata_json.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                     is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
-                                                    price: metadata_json.get("price").and_then(|v| v.as_f64()),
+                                                    price: metadata_json.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                     uploader_address: metadata_json.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     http_sources: metadata_json.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                     ..Default::default()
@@ -6230,7 +6230,7 @@ impl DhtService {
         is_encrypted: bool,
         encryption_method: Option<String>,
         key_fingerprint: Option<String>,
-        price: Option<f64>,
+        price: f64,
         uploader_address: Option<String>,
     ) -> Result<FileMetadata, String> {
         Ok(FileMetadata {

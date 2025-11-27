@@ -50,7 +50,8 @@ export interface FileItem {
   downloadedChunks?: number[];
   totalChunks?: number;
   downloadStartTime?: number;
-  price?: number; // Price in Chiral for this file
+  price: number; // Price in Chiral for this file
+  protocol?: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
 }
 
 export interface ProxyNode {
@@ -174,28 +175,6 @@ export interface BlacklistEntry {
   reason: string;
   timestamp: Date;
 }
-
-// Sample dummy data
-const dummyFiles: FileItem[] = [
-  {
-    id: "0",
-    name: "Video.mp4",
-    hash: "QmZ4tDuvesekqMF",
-    size: 50331648,
-    status: "paused",
-    progress: 30,
-    visualOrder: 1,
-  },
-  {
-    id: "1",
-    name: "Document.pdf",
-    hash: "QmZ4tDuvesekqMD",
-    size: 2048576,
-    status: "completed",
-    progress: 100,
-    visualOrder: 2,
-  },
-];
 
 const dummyWallet: WalletInfo = {
   address: "",
@@ -584,7 +563,7 @@ export interface AppSettings {
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
   autoStartDHT: boolean; // Whether to automatically start DHT on app launch
-  selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | null; // Protocol selected for file uploads
+  selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol selected for file uploads
 }
 
 // Export the settings store
@@ -637,7 +616,7 @@ export const settings = writable<AppSettings>({
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
   autoStartDHT: false, // Don't auto-start DHT by default
-  selectedProtocol: "Bitswap" as "WebRTC" | "Bitswap" | "BitTorrent", // Default to Bitswap
+  selectedProtocol: "Bitswap", // Default to Bitswap
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(

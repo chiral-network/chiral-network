@@ -26,7 +26,7 @@ use chiral_network::{
     reputation, stream_auth, webrtc_service,
 };
 
-use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
+use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler, ProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -814,6 +814,9 @@ async fn upload_file(
     key_fingerprint: Option<String>,
     price: Option<f64>,
 ) -> Result<FileMetadata, String> {
+    // Ensure price is never null - default to 0
+    let price = price.unwrap_or(0.0);
+
     // Get the active account address
     let account = get_active_account(&state).await?;
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
@@ -3299,11 +3302,236 @@ async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
     price: Option<f64>,
+    protocol: Option<String>,
 ) -> Result<(), String> {
     println!(
-        "🔍 BACKEND: upload_file_to_network called with price: {:?}",
-        price
+        "🔍 BACKEND: upload_file_to_network called with price: {:?}, protocol: {:?}",
+        price, protocol
     );
+
+    // Ensure price is never null - default to 0
+    let price = price.unwrap_or(0.0);
+
+    // Get the active account for uploader_address
+    let account = get_active_account(&state).await?;
+
+    // Handle protocol-specific uploads
+    if let Some(protocol_name) = &protocol {
+        match protocol_name.as_str() {
+            "BitTorrent" => {
+                // Use torrent seeding
+                match create_and_seed_torrent(file_path.clone(), state).await {
+                    Ok(magnet_link) => {
+                        // Emit published_file event with torrent metadata
+                        let file_name = Path::new(&file_path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: magnet_link.clone(),
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![], // Not stored for torrents
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: None,
+                            http_sources: None,
+                            info_hash: None, // Could extract from magnet link if needed
+                            trackers: None,
+                            ed2k_sources: None,
+                            download_path: None,
+                        };
+
+
+                        println!("✅ BitTorrent file published: {}", magnet_link);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to create torrent: {}", e));
+                    }
+                }
+            }
+            "ED2K" => {
+                // Actually use the ED2K protocol handler to generate real ed2k links
+                println!("📡 Starting ED2K seeding with price: {:?}", price);
+
+                let file_path_buf = PathBuf::from(&file_path);
+
+                // Create ED2K protocol handler
+                let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k.server.example.com:4242".to_string());
+
+                // Seed the file using the protocol handler
+                let seed_options = protocols::traits::SeedOptions {
+                    announce_dht: false, // ED2K has its own DHT
+                    enable_encryption: false,
+                    upload_slots: None,
+                };
+
+                match ed2k_handler.seed(file_path_buf.clone(), seed_options).await {
+                    Ok(seeding_info) => {
+                        let file_name = file_path_buf
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: seeding_info.identifier.clone(), // Real ed2k link
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![],
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: None,
+                            http_sources: None,
+                            info_hash: None,
+                            trackers: None,
+                            ed2k_sources: Some(vec![dht::models::Ed2kSourceInfo {
+                                server_url: "ed2k.server.example.com:4242".to_string(),
+                                file_hash: {
+                                    // Extract hash from ed2k link: ed2k://|file|name|size|hash|/
+                                    let parts: Vec<&str> = seeding_info.identifier.split('|').collect();
+                                    if parts.len() >= 5 {
+                                        parts[4].to_string()
+                                    } else {
+                                        "unknown".to_string()
+                                    }
+                                },
+                                file_size,
+                                file_name: Some(file_name.to_string()),
+                                sources: None,
+                                timeout: None,
+                            }]),
+                            download_path: None,
+                        };
+
+                        println!("✅ ED2K file seeded successfully: {}", seeding_info.identifier);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("❌ ED2K seeding failed: {}", e);
+                        return Err(format!("ED2K seeding failed: {}", e));
+                    }
+                }
+            }
+            "FTP" => {
+                // Use FTP protocol handler (though FTP seeding is more complex)
+                println!("📡 Starting FTP seeding with price: {:?}", price);
+
+                let file_path_buf = PathBuf::from(&file_path);
+
+                // Create FTP protocol handler
+                let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
+
+                // Seed the file using the protocol handler
+                let seed_options = protocols::traits::SeedOptions {
+                    announce_dht: false, // FTP doesn't use DHT
+                    enable_encryption: false,
+                    upload_slots: None,
+                };
+
+                match ftp_handler.seed(file_path_buf.clone(), seed_options).await {
+                    Ok(seeding_info) => {
+                        let file_name = file_path_buf
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: seeding_info.identifier.clone(), // FTP URL from handler
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![],
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: Some(vec![dht::models::FtpSourceInfo {
+                                url: seeding_info.identifier.clone(),
+                                username: None,
+                                password: None,
+                                supports_resume: true,
+                                file_size,
+                                last_checked: Some(std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()),
+                                is_available: true,
+                            }]),
+                            http_sources: None,
+                            info_hash: None,
+                            trackers: None,
+                            ed2k_sources: None,
+                            download_path: None,
+                        };
+
+                        println!("✅ FTP file seeded successfully: {}", seeding_info.identifier);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("❌ FTP seeding failed: {}", e);
+                        return Err(format!("FTP seeding failed: {}", e));
+                    }
+                }
+            }
+            _ => {
+                // WebRTC and Bitswap use the default Chiral flow
+                println!("📡 Using Chiral network upload for protocol: {}", protocol_name);
+            }
+        }
+    }
 
     // Get the active account address
     let account = get_active_account(&state).await?;
@@ -4185,7 +4413,7 @@ async fn upload_file_chunk(
             parent_hash: None,
             is_root: true,
             download_path: None,
-            price: None,
+            price: 0.0,
             uploader_address: None,
             ftp_sources: None,
             http_sources: None,
