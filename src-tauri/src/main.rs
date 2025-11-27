@@ -71,7 +71,11 @@ use geth_downloader::GethDownloader;
 use keystore::Keystore;
 use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
-use chiral_network::transfer_events::TransferEventBus;
+use chiral_network::transfer_events::{
+    TransferEventBus, TransferStartedEvent, TransferCompletedEvent, TransferFailedEvent,
+    TransferProgressEvent, SourceInfo, SourceType, ErrorCategory, current_timestamp_ms,
+    calculate_progress,
+};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::{HashMap, VecDeque};
@@ -3239,6 +3243,7 @@ async fn start_file_transfer_service(
             webrtc_arc.clone(),
             state.bittorrent_handler.clone(),
             transfer_event_bus,
+            state.analytics.clone(),
         );
         let multi_source_arc = Arc::new(multi_source_service);
 
@@ -3429,6 +3434,8 @@ async fn upload_file_to_network(
 
 #[tauri::command]
 async fn start_ftp_download(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
     url: String,
     output_path: String,
     username: Option<String>,
@@ -3437,6 +3444,15 @@ async fn start_ftp_download(
     let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
     let host = parsed.host_str().ok_or("Invalid FTP URL")?;
     let path = parsed.path();
+    let file_name = path.split('/').last().unwrap_or("ftp_download").to_string();
+
+    // Generate a unique transfer ID
+    let transfer_id = format!("ftp-{}", uuid::Uuid::new_v4());
+
+    // Create transfer event bus for emitting events
+    let transfer_event_bus = TransferEventBus::new(app.clone());
+    let analytics_service = state.analytics.clone();
+    let start_time = std::time::Instant::now();
 
     // Connect to FTP
     let mut ftp = FtpStream::connect((host, 21))
@@ -3451,12 +3467,58 @@ async fn start_ftp_download(
             .map_err(|e| format!("Anonymous login failed: {}", e))?;
     }
 
+    // Get file size if possible
+    let file_size = ftp.size(path).unwrap_or(0) as u64;
+
+    // Emit started event
+    transfer_event_bus.emit_started_with_analytics(TransferStartedEvent {
+        transfer_id: transfer_id.clone(),
+        file_hash: transfer_id.clone(),
+        file_name: file_name.clone(),
+        file_size,
+        total_chunks: 1,
+        chunk_size: file_size as usize,
+        started_at: current_timestamp_ms(),
+        available_sources: vec![SourceInfo {
+            id: host.to_string(),
+            source_type: SourceType::Ftp,
+            address: url.clone(),
+            reputation: None,
+            estimated_speed_bps: None,
+            latency_ms: None,
+            location: None,
+        }],
+        selected_sources: vec![host.to_string()],
+    }, &analytics_service).await;
+
     // Create output file
     let mut file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Failed to create output file: {}", e))?;
+        .map_err(|e| {
+            // Emit failed event on file creation error
+            let event_bus = TransferEventBus::new(app.clone());
+            let analytics = analytics_service.clone();
+            let tid = transfer_id.clone();
+            tokio::spawn(async move {
+                event_bus.emit_failed_with_analytics(TransferFailedEvent {
+                    transfer_id: tid.clone(),
+                    file_hash: tid,
+                    failed_at: current_timestamp_ms(),
+                    error: format!("Failed to create output file: {}", e),
+                    error_category: ErrorCategory::Filesystem,
+                    downloaded_bytes: 0,
+                    total_bytes: file_size,
+                    retry_possible: true,
+                }, &analytics).await;
+            });
+            format!("Failed to create output file: {}", e)
+        })?;
+
+    // Track downloaded bytes for progress updates
+    let downloaded_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let downloaded_bytes_clone = downloaded_bytes.clone();
 
     // Retrieve file and stream in chunks
-    ftp.retr(path, |reader| {
+    let result = ftp.retr(path, |reader| {
         let mut buffer = [0u8; 65536]; // 64 KB
         loop {
             let bytes_read = reader
@@ -3467,14 +3529,55 @@ async fn start_ftp_download(
             }
             file.write_all(&buffer[..bytes_read])
                 .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+            downloaded_bytes_clone.fetch_add(bytes_read as u64, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
-    })
-    .map_err(|e| format!("FTP RETR failed: {}", e))?;
+    });
 
     ftp.quit().ok();
 
-    Ok(format!("Downloaded successfully to {}", output_path))
+    let total_downloaded = downloaded_bytes.load(std::sync::atomic::Ordering::Relaxed);
+    let duration = start_time.elapsed();
+    let avg_speed = if duration.as_secs_f64() > 0.0 {
+        total_downloaded as f64 / duration.as_secs_f64()
+    } else {
+        0.0
+    };
+
+    match result {
+        Ok(()) => {
+            // Emit completed event
+            transfer_event_bus.emit_completed_with_analytics(TransferCompletedEvent {
+                transfer_id: transfer_id.clone(),
+                file_hash: transfer_id,
+                file_name,
+                file_size: total_downloaded,
+                output_path: output_path.clone(),
+                completed_at: current_timestamp_ms(),
+                duration_seconds: duration.as_secs(),
+                average_speed_bps: avg_speed,
+                total_chunks: 1,
+                sources_used: Vec::new(),
+            }, &analytics_service).await;
+
+            Ok(format!("Downloaded successfully to {}", output_path))
+        }
+        Err(e) => {
+            // Emit failed event
+            transfer_event_bus.emit_failed_with_analytics(TransferFailedEvent {
+                transfer_id: transfer_id.clone(),
+                file_hash: transfer_id,
+                failed_at: current_timestamp_ms(),
+                error: format!("FTP RETR failed: {}", e),
+                error_category: ErrorCategory::Network,
+                downloaded_bytes: total_downloaded,
+                total_bytes: file_size,
+                retry_possible: true,
+            }, &analytics_service).await;
+
+            Err(format!("FTP RETR failed: {}", e))
+        }
+    }
 }
 
 #[tauri::command]
