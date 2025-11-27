@@ -149,28 +149,6 @@ export interface BlacklistEntry {
   timestamp: Date;
 }
 
-// Sample dummy data
-const dummyFiles: FileItem[] = [
-  {
-    id: "0",
-    name: "Video.mp4",
-    hash: "QmZ4tDuvesekqMF",
-    size: 50331648,
-    status: "paused",
-    progress: 30,
-    visualOrder: 1,
-  },
-  {
-    id: "1",
-    name: "Document.pdf",
-    hash: "QmZ4tDuvesekqMD",
-    size: 2048576,
-    status: "completed",
-    progress: 100,
-    visualOrder: 2,
-  },
-];
-
 const dummyWallet: WalletInfo = {
   address: "",
   balance: 0,
@@ -238,7 +216,7 @@ const dummyTransactions: Transaction[] = [
 ];
 
 // Stores
-export const files = writable<FileItem[]>(dummyFiles);
+export const files = writable<FileItem[]>([]);
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);
