@@ -8,6 +8,12 @@
   import { blockReward, miningState, type MiningHistoryPoint, wallet } from '$lib/stores';
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
+
+  // Event payload types for mining events
+  interface MiningScanProgressPayload {
+    address: string;
+    blocks_found_in_batch: number;
+  }
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { getVersion } from "@tauri-apps/api/app";
@@ -433,13 +439,16 @@
 
     await checkGethStatus()
     await updateNetworkStats()
-    
+
     // Always fetch initial mining stats (blocksFound, totalRewards) on mount
     if (isTauri) {
       // Clear any stale cache first
       await invoke('clear_blocks_cache');
       await walletService.refreshTransactions()
       await walletService.refreshBalance()
+
+      // Start power sensor detection
+      await updatePowerConsumption()
 
       // Start mining monitor for real-time updates
       try {
@@ -475,7 +484,7 @@
         });
 
         // Listen for mining scan progress events (real-time incremental updates)
-        const unlistenScanProgress = await listen('mining_scan_progress', (event) => {
+        const unlistenScanProgress = await listen('mining_scan_progress', (event: { payload: MiningScanProgressPayload }) => {
           // Update mining stats incrementally as blocks are discovered during scanning
           const currentWallet = get(wallet);
           if (event.payload.address === currentWallet?.address) {
@@ -522,8 +531,8 @@
       console.error('Failed to get current pool info:', e);
     }
     
-    // Start polling for non-mining stats (network, temperature, etc.)
-    // Mining stats now update in real-time when blocks are mined
+    // Start polling for system stats (power, temperature, network)
+    // Power usage should be shown permanently, not just when mining
     statsInterval = setInterval(async () => {
       if ($miningState.isMining) {
         // Update real-time mining stats (hashrate, etc.)
@@ -533,9 +542,9 @@
       await updateSyncStatus(); // Check blockchain sync status
       if (isTauri) {
         await updateCpuTemperature();
-        await updatePowerConsumption();
+        await updatePowerConsumption(); // Update power consumption continuously
       }
-    }, 30000) as unknown as number; // Poll every 30 seconds for other stats (reduced frequency for performance)
+    }, 10000) as unknown as number; // Poll every 10 seconds for more responsive power updates
   })  
   
   async function checkGethStatus() {

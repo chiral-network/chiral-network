@@ -1387,7 +1387,6 @@ async fn start_dht_node(
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
         .ok_or("Failed to get project directories")?;
-    // Create the async_std::path::Path here so we can pass a reference to it.
     let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
     let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
 
@@ -2469,47 +2468,72 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
     use std::fs;
 
     // Try RAPL (Running Average Power Limit) interface on Intel systems
-    // This provides power consumption for CPU package and DRAM
+    // Read from all available RAPL domains (core, dram, etc.) and sum them
 
-    let rapl_paths = [
-        "/sys/class/powercap/intel-rapl:0/energy_uj", // CPU package
-        "/sys/class/powercap/intel-rapl/energy_uj",   // Alternative path
-    ];
+    static mut LAST_TOTAL_ENERGY: Option<(u64, Instant)> = None;
+    static mut LAST_TOTAL_POWER: f32 = 0.0;
 
-    static mut LAST_ENERGY: Option<(u64, Instant)> = None;
-    static mut LAST_POWER: f32 = 0.0;
+    // Find all RAPL energy files
+    let mut rapl_paths = Vec::new();
 
+    // Main package
+    rapl_paths.push("/sys/class/powercap/intel-rapl:0/energy_uj".to_string());
+
+    // Alternative main package path
+    rapl_paths.push("/sys/class/powercap/intel-rapl/energy_uj".to_string());
+
+    // Sub-domains (core, dram, etc.)
+    for i in 0..10 {
+        for j in 0..10 {
+            let path = format!("/sys/class/powercap/intel-rapl:{}/intel-rapl:{}:{}/energy_uj", i, i, j);
+            if std::path::Path::new(&path).exists() {
+                rapl_paths.push(path);
+            }
+        }
+    }
+
+    let mut total_energy_uj: u64 = 0;
+    let mut valid_readings = 0;
+
+    // Sum energy from all domains
     for path in &rapl_paths {
         if let Ok(energy_str) = fs::read_to_string(path) {
             if let Ok(energy_uj) = energy_str.trim().parse::<u64>() {
-                let now = Instant::now();
+                total_energy_uj += energy_uj;
+                valid_readings += 1;
+            }
+        }
+    }
 
-                unsafe {
-                    if let Some((last_energy, last_time)) = LAST_ENERGY {
-                        let time_diff = now.duration_since(last_time).as_secs_f64();
-                        if time_diff > 0.0 {
-                            let energy_diff = if energy_uj >= last_energy {
-                                energy_uj - last_energy
-                            } else {
-                                // Counter wrapped around
-                                (u64::MAX - last_energy) + energy_uj
-                            };
+    if valid_readings == 0 {
+        return None; // No RAPL sensors available
+    }
 
-                            let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+    let now = Instant::now();
 
-                            if power_watts > 0.0 && power_watts < 1000.0 {
-                                // Reasonable power range
-                                LAST_POWER = power_watts as f32;
-                                LAST_ENERGY = Some((energy_uj, now));
-                                return Some((power_watts as f32, PowerMethod::Systemstat));
-                            }
-                        }
-                    } else {
-                        // First reading, store and wait for next
-                        LAST_ENERGY = Some((energy_uj, now));
-                    }
+    unsafe {
+        if let Some((last_total_energy, last_time)) = LAST_TOTAL_ENERGY {
+            let time_diff = now.duration_since(last_time).as_secs_f64();
+            if time_diff > 0.0 {
+                let energy_diff = if total_energy_uj >= last_total_energy {
+                    total_energy_uj - last_total_energy
+                } else {
+                    // Counter wrapped around (highly unlikely for total)
+                    u64::MAX - last_total_energy + total_energy_uj
+                };
+
+                let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+
+                if power_watts > 0.0 && power_watts < 2000.0 {
+                    // Reasonable power range (allow higher for multi-domain sum)
+                    LAST_TOTAL_POWER = power_watts as f32;
+                    LAST_TOTAL_ENERGY = Some((total_energy_uj, now));
+                    return Some((power_watts as f32, PowerMethod::Systemstat));
                 }
             }
+        } else {
+            // First reading, store and wait for next
+            LAST_TOTAL_ENERGY = Some((total_energy_uj, now));
         }
     }
 
