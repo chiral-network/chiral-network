@@ -102,17 +102,41 @@ impl GethProcess {
             return true;
         }
 
-        // Also check if geth is actually running on port 8545
-        // This handles cases where the app restarted but geth is still running
-        // Use TCP socket check - cross-platform and works in both sync/async contexts
+        // Check if geth is actually running by trying an RPC call
+        // This is more reliable than just checking if port 8545 is listening
         use std::net::TcpStream;
         use std::time::Duration;
 
-        // Try to connect to the Geth RPC port
-        TcpStream::connect_timeout(
+        // First check if port is listening (quick check)
+        let port_open = TcpStream::connect_timeout(
             &"127.0.0.1:8545".parse().unwrap(),
-            Duration::from_secs(1)
-        ).is_ok()
+            Duration::from_millis(500)
+        ).is_ok();
+
+        if !port_open {
+            return false;
+        }
+
+        // Port is open, now verify it's actually Geth responding correctly
+        // Try a simple RPC call with a short timeout
+        match std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-m", "1",  // 1 second timeout
+                "-X", "POST",
+                "-H", "Content-Type: application/json",
+                "--data", r#"{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}"#,
+                "http://127.0.0.1:8545"
+            ])
+            .output()
+        {
+            Ok(output) => {
+                // Check if we got a valid JSON-RPC response
+                let response = String::from_utf8_lossy(&output.stdout);
+                response.contains("\"jsonrpc\"") && response.contains("\"result\"")
+            }
+            Err(_) => false,
+        }
     }
 
     fn resolve_data_dir(&self, data_dir: &str) -> Result<PathBuf, String> {
@@ -221,8 +245,52 @@ impl GethProcess {
 
         // Resolve data directory relative to the executable dir if it's relative
         let data_path = self.resolve_data_dir(data_dir)?;
-        if !data_path.join("geth").exists() {
-            // Initialize with genesis
+
+        // Check if we need to initialize or reinitialize blockchain
+        let needs_init = !data_path.join("geth").exists();
+        let mut needs_reinit = false;
+
+        // Check for blockchain corruption by looking at recent logs
+        if !needs_init {
+            let log_path = data_path.join("geth.log");
+            if log_path.exists() {
+                // Read last 50 lines of log to check for corruption errors
+                if let Ok(file) = File::open(&log_path) {
+                    let reader = BufReader::new(file);
+                    let all_lines: Vec<String> = reader
+                        .lines()
+                        .filter_map(Result::ok)
+                        .collect();
+                    let lines: Vec<String> = all_lines.iter().rev().take(50).cloned().collect();
+
+                    // Look for signs of blockchain corruption
+                    for line in &lines {
+                        if line.contains("Truncating ancient chain")
+                            || line.contains("ERROR") && line.contains("ancient")
+                            || line.contains("Rewinding blockchain")
+                            || line.contains("database corruption") {
+                            eprintln!("⚠️  Detected corrupted blockchain, will reinitialize...");
+                            needs_reinit = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove corrupted blockchain data if needed
+        if needs_reinit {
+            let geth_dir = data_path.join("geth");
+            if geth_dir.exists() {
+                eprintln!("Removing corrupted blockchain data...");
+                std::fs::remove_dir_all(&geth_dir)
+                    .map_err(|e| format!("Failed to remove corrupted blockchain: {}", e))?;
+            }
+        }
+
+        // Initialize with genesis if needed
+        if needs_init || needs_reinit {
+            eprintln!("Initializing blockchain with genesis block...");
             let init_output = Command::new(&geth_path)
                 .arg("--datadir")
                 .arg(&data_path)
@@ -237,6 +305,8 @@ impl GethProcess {
                     String::from_utf8_lossy(&init_output.stderr)
                 ));
             }
+
+            eprintln!("✅ Blockchain initialized successfully");
         }
 
         // Bootstrap node
@@ -299,6 +369,36 @@ impl GethProcess {
             .map_err(|e| format!("Failed to start geth: {}", e))?;
 
         self.child = Some(child);
+
+        eprintln!("✅ Geth process started successfully");
+        eprintln!("    Logs: {}", log_path.display());
+        eprintln!("    RPC: http://127.0.0.1:8545");
+        eprintln!("    Waiting for RPC to be ready...");
+
+        // Give Geth a moment to start up
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Verify the process is still running (didn't crash immediately)
+        if let Some(child) = &mut self.child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // Process has already exited - something went wrong
+                    self.child = None;
+                    return Err(format!(
+                        "Geth process exited immediately with status: {}. Check logs at: {}",
+                        status, log_path.display()
+                    ));
+                }
+                Ok(None) => {
+                    // Process is still running - good!
+                    eprintln!("✅ Geth is running");
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Warning: Could not check geth process status: {}", e);
+                }
+            }
+        }
+
         Ok(())
     }
 
