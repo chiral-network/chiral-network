@@ -16,7 +16,7 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
 
 /// Default FTP connection timeout in seconds
-/// 
+///
 /// This timeout is used when connecting to FTP servers if the FtpSourceInfo
 /// does not specify a custom timeout. A 30-second timeout is chosen as a
 /// reasonable balance between:
@@ -96,8 +96,8 @@ impl FtpClient {
             .next()
             .context("No addresses found for FTP server")?;
 
-        let mut ftp_stream = FtpStream::connect_timeout(addr, timeout)
-            .context("Failed to connect to FTP server")?;
+        let mut ftp_stream =
+            FtpStream::connect_timeout(addr, timeout).context("Failed to connect to FTP server")?;
 
         // Set read/write timeout on the underlying stream
         ftp_stream
@@ -140,9 +140,7 @@ impl FtpClient {
         debug!(output = ?output_path, "File written to disk");
 
         // Quit connection
-        ftp_stream
-            .quit()
-            .context("Failed to quit FTP session")?;
+        ftp_stream.quit().context("Failed to quit FTP session")?;
 
         Ok(bytes_downloaded)
     }
@@ -173,7 +171,7 @@ impl FtpClient {
         let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
             format!("{}:{}", host, port),
             tls_connector,
-            &host
+            &host,
         )
         .context("Failed to connect to FTPS server")?;
 
@@ -220,9 +218,7 @@ impl FtpClient {
         debug!(output = ?output_path, "File written to disk");
 
         // Quit connection
-        ftp_stream
-            .quit()
-            .context("Failed to quit FTPS session")?;
+        ftp_stream.quit().context("Failed to quit FTPS session")?;
 
         Ok(bytes_downloaded)
     }
@@ -266,18 +262,20 @@ impl FtpClient {
     }
 
     /// Get FTP credentials (username and decrypted password)
-    /// 
+    ///
     /// # Arguments
     /// * `source_info` - FTP source information
     /// * `decryption_key` - Optional AES-256 key for decrypting the password
-    fn get_credentials(source_info: &FtpSourceInfo, decryption_key: Option<&[u8; 32]>) -> Result<(String, String)> {
+    fn get_credentials(
+        source_info: &FtpSourceInfo,
+        decryption_key: Option<&[u8; 32]>,
+    ) -> Result<(String, String)> {
         let username = source_info
             .username
             .clone()
             .unwrap_or_else(|| "anonymous".to_string());
 
         let password = if let Some(encrypted_password) = &source_info.encrypted_password {
-            // Decrypt password using provided key
             if let Some(key) = decryption_key {
                 match crate::encryption::FileEncryption::decrypt_string(encrypted_password, key) {
                     Ok(decrypted) => decrypted,
@@ -406,8 +404,8 @@ mod tests {
 
     #[test]
     fn test_parse_ftp_url() {
-        let (host, port, path) = FtpClient::parse_ftp_url("ftp://ftp.example.com/pub/file.tar.gz")
-            .unwrap();
+        let (host, port, path) =
+            FtpClient::parse_ftp_url("ftp://ftp.example.com/pub/file.tar.gz").unwrap();
         assert_eq!(host, "ftp.example.com");
         assert_eq!(port, 21);
         assert_eq!(path, "/pub/file.tar.gz");
@@ -415,8 +413,8 @@ mod tests {
 
     #[test]
     fn test_parse_ftp_url_with_port() {
-        let (host, port, path) = FtpClient::parse_ftp_url("ftp://ftp.example.com:2121/data/file.zip")
-            .unwrap();
+        let (host, port, path) =
+            FtpClient::parse_ftp_url("ftp://ftp.example.com:2121/data/file.zip").unwrap();
         assert_eq!(host, "ftp.example.com");
         assert_eq!(port, 2121);
         assert_eq!(path, "/data/file.zip");
@@ -424,8 +422,8 @@ mod tests {
 
     #[test]
     fn test_parse_ftps_url() {
-        let (host, port, path) = FtpClient::parse_ftp_url("ftps://secure.example.com/file.tar.gz")
-            .unwrap();
+        let (host, port, path) =
+            FtpClient::parse_ftp_url("ftps://secure.example.com/file.tar.gz").unwrap();
         assert_eq!(host, "secure.example.com");
         assert_eq!(port, 21);
         assert_eq!(path, "/file.tar.gz");
@@ -442,7 +440,8 @@ mod tests {
             timeout_secs: None,
         };
 
-        let (username, password) = FtpClient::get_credentials(&source_info, None).unwrap();
+        let (username, password) =
+            FtpClient::get_credentials(&source_info, None).unwrap();
         assert_eq!(username, "anonymous");
         assert_eq!(password, "");
     }
@@ -458,7 +457,8 @@ mod tests {
             timeout_secs: None,
         };
 
-        let (username, password) = FtpClient::get_credentials(&source_info, None).unwrap();
+        let (username, password) =
+            FtpClient::get_credentials(&source_info, None).unwrap();
         assert_eq!(username, "testuser");
         assert_eq!(password, "");
     }
