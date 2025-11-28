@@ -315,17 +315,9 @@ impl WebRTCService {
                     Self::handle_ice_candidate(&peer_id, &candidate, &connections).await;
                 }
                 WebRTCCommand::SendFileRequest { peer_id, request } => {
-                    Self::handle_file_request(
-                        &peer_id,
-                        &request,
-                        &event_tx,
-                        &file_transfer_service,
-                        &connections,
-                        &keystore,
-                        &stream_auth,
-                        &bandwidth,
-                    )
-                    .await;
+                    info!("📤 Sending file request to peer {} for file {}", peer_id, request.file_hash);
+                    // Send the file request over the data channel to the peer
+                    Self::send_file_request_to_peer(&peer_id, &request, &connections).await;
                 }
                 WebRTCCommand::SendFileChunk { peer_id, chunk } => {
                     Self::handle_send_chunk(&peer_id, &chunk, &connections, &bandwidth).await;
@@ -637,6 +629,63 @@ impl WebRTCService {
         }
     }
 
+    async fn send_file_request_to_peer(
+        peer_id: &str,
+        request: &WebRTCFileRequest,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+    ) {
+        use webrtc::data_channel::data_channel_state::RTCDataChannelState;
+
+        info!("Sending file request to peer {} for file {}", peer_id, request.file_hash);
+
+        // Wait for data channel to open (with timeout)
+        let start = Instant::now();
+        let timeout = Duration::from_secs(10);
+
+        let dc = loop {
+            let conns = connections.lock().await;
+            if let Some(connection) = conns.get(peer_id) {
+                if let Some(dc) = &connection.data_channel {
+                    let state = dc.ready_state();
+                    if state == RTCDataChannelState::Open {
+                        break dc.clone();
+                    }
+                    if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing {
+                        error!("Data channel is closed or closing for peer {}", peer_id);
+                        return;
+                    }
+                    if start.elapsed() > timeout {
+                        error!("Timeout waiting for data channel to open for peer {}", peer_id);
+                        return;
+                    }
+                } else {
+                    error!("No data channel found for peer {}", peer_id);
+                    return;
+                }
+            } else {
+                error!("Peer {} not found in connections", peer_id);
+                return;
+            }
+            drop(conns); // Release lock before sleeping
+            sleep(Duration::from_millis(50)).await;
+        };
+
+        // Serialize request and send over data channel
+        match serde_json::to_string(request) {
+            Ok(request_json) => {
+                info!("📨 Sending file request JSON to peer {}: {}", peer_id, request_json);
+                if let Err(e) = dc.send_text(request_json).await {
+                    error!("Failed to send file request over data channel: {}", e);
+                } else {
+                    info!("✅ File request sent successfully to peer {}", peer_id);
+                }
+            }
+            Err(e) => {
+                error!("Failed to serialize file request: {}", e);
+            }
+        }
+    }
+
     async fn handle_file_request(
         peer_id: &str,
         request: &WebRTCFileRequest,
@@ -648,7 +697,7 @@ impl WebRTCService {
         bandwidth: &Arc<BandwidthController>,
     ) {
         info!(
-            "Handling file request from peer {}: {}",
+            "📥 Handling file request from peer {}: {}",
             peer_id, request.file_hash
         );
 
