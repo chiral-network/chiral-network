@@ -363,7 +363,7 @@
             totalBytes: number;
           };
 
-          // Update file progress
+          // Update file progress (FileItem uses 'hash' property)
           files.update(f => f.map(file =>
             file.hash === data.fileHash
               ? { ...file, status: 'downloading', progress: data.progress }
@@ -1179,10 +1179,11 @@ async function loadAndResumeDownloads() {
       diagnosticLogger.debug('Download', 'Queue is empty');
       return
     }
-    diagnosticLogger.debug('Download', 'Next file from queue', { fileName: nextFile.name, hash: nextFile.hash });
+    diagnosticLogger.debug('Download', 'Next file from queue', { fileName: nextFile.name, hash: nextFile.fileHash || nextFile.hash });
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
     const downloadingFile = {
       ...nextFile,
+      hash: nextFile.fileHash || nextFile.hash, // Map fileHash to hash for FileItem compatibility
       status: 'downloading' as const,
       progress: 0,
       speed: '0 B/s', // Ensure speed property exists
