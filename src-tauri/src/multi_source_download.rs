@@ -1,3 +1,4 @@
+use crate::analytics::AnalyticsService;
 use crate::bittorrent_handler::BitTorrentHandler;
 use crate::dht::{DhtService, models::FileMetadata, WebRTCOfferRequest};
 use crate::download_source::{
@@ -197,6 +198,8 @@ pub struct MultiSourceDownloadService {
     ed2k_connections: Arc<Mutex<HashMap<String, Ed2kClient>>>,
     // Transfer event bus for unified event emission to frontend
     transfer_event_bus: Arc<TransferEventBus>,
+    // Analytics service for backend metrics tracking
+    analytics_service: Arc<AnalyticsService>,
 }
 
 #[derive(Debug, Serialize)]
@@ -263,6 +266,7 @@ impl MultiSourceDownloadService {
         webrtc_service: Arc<WebRTCService>,
         bittorrent_handler: Arc<BitTorrentHandler>,
         transfer_event_bus: Arc<TransferEventBus>,
+        analytics_service: Arc<AnalyticsService>,
     ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
@@ -283,6 +287,7 @@ impl MultiSourceDownloadService {
             ftp_connections: Arc::new(Mutex::new(HashMap::new())),
             ed2k_connections: Arc::new(Mutex::new(HashMap::new())),
             transfer_event_bus,
+            analytics_service,
         }
     }
 
@@ -531,7 +536,7 @@ impl MultiSourceDownloadService {
 
         let selected_source_ids: Vec<String> = selected_sources.iter().map(|s| s.identifier()).collect();
 
-        self.transfer_event_bus.emit_started(TransferStartedEvent {
+        self.transfer_event_bus.emit_started_with_analytics(TransferStartedEvent {
             transfer_id: file_hash.clone(),
             file_hash: file_hash.clone(),
             file_name: metadata.file_name.clone(),
@@ -541,7 +546,7 @@ impl MultiSourceDownloadService {
             started_at: current_timestamp_ms(),
             available_sources: available_source_infos,
             selected_sources: selected_source_ids,
-        });
+        }, &self.analytics_service).await;
 
         // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::DownloadStarted {
@@ -2561,6 +2566,7 @@ impl MultiSourceDownloadService {
         let downloads = self.active_downloads.clone();
         let event_tx = self.event_tx.clone();
         let transfer_event_bus = self.transfer_event_bus.clone();
+        let analytics_service = self.analytics_service.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -2598,8 +2604,8 @@ impl MultiSourceDownloadService {
                         // Finalize download
                         if let Err(e) = Self::finalize_download_static(&downloads, &file_hash).await
                         {
-                            // Emit failed event via TransferEventBus
-                            transfer_event_bus.emit_failed(TransferFailedEvent {
+                            // Emit failed event via TransferEventBus with analytics
+                            transfer_event_bus.emit_failed_with_analytics(TransferFailedEvent {
                                 transfer_id: file_hash.clone(),
                                 file_hash: file_hash.clone(),
                                 failed_at: current_timestamp_ms(),
@@ -2608,15 +2614,15 @@ impl MultiSourceDownloadService {
                                 downloaded_bytes: progress.downloaded_size,
                                 total_bytes: progress.total_size,
                                 retry_possible: false,
-                            });
+                            }, &analytics_service).await;
                             // Also emit legacy internal event
                             let _ = event_tx.send(MultiSourceEvent::DownloadFailed {
                                 file_hash: file_hash.clone(),
                                 error: format!("Failed to finalize download: {}", e),
                             });
                         } else {
-                            // Emit completed event via TransferEventBus
-                            transfer_event_bus.emit_completed(TransferCompletedEvent {
+                            // Emit completed event via TransferEventBus with analytics
+                            transfer_event_bus.emit_completed_with_analytics(TransferCompletedEvent {
                                 transfer_id: file_hash.clone(),
                                 file_hash: file_hash.clone(),
                                 file_name,
@@ -2627,7 +2633,7 @@ impl MultiSourceDownloadService {
                                 average_speed_bps: avg_speed,
                                 total_chunks: progress.total_chunks,
                                 sources_used: Vec::new(), // TODO: track sources
-                            });
+                            }, &analytics_service).await;
                             // Also emit legacy internal event
                             let _ = event_tx.send(MultiSourceEvent::DownloadCompleted {
                                 file_hash: file_hash.clone(),
@@ -2639,8 +2645,8 @@ impl MultiSourceDownloadService {
                         break;
                     }
 
-                    // Emit progress update via TransferEventBus
-                    transfer_event_bus.emit_progress(TransferProgressEvent {
+                    // Emit progress update via TransferEventBus with analytics
+                    transfer_event_bus.emit_progress_with_analytics(TransferProgressEvent {
                         transfer_id: file_hash.clone(),
                         downloaded_bytes: progress.downloaded_size,
                         total_bytes: progress.total_size,
@@ -2652,7 +2658,7 @@ impl MultiSourceDownloadService {
                         eta_seconds: progress.eta_seconds,
                         active_sources: progress.active_sources,
                         timestamp: current_timestamp_ms(),
-                    });
+                    }, &analytics_service).await;
 
                     // Also emit legacy internal event
                     let _ = event_tx.send(MultiSourceEvent::ProgressUpdate {

@@ -240,6 +240,46 @@ impl AnalyticsService {
         activity.completed_downloads += 1;
     }
 
+    /// Increment active downloads counter (call when download starts)
+    pub async fn increment_active_downloads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.active_downloads += 1;
+        debug!("Active downloads incremented to {}", activity.active_downloads);
+    }
+
+    /// Decrement active downloads counter (call when download completes/fails/cancels)
+    pub async fn decrement_active_downloads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.active_downloads = activity.active_downloads.saturating_sub(1);
+        debug!("Active downloads decremented to {}", activity.active_downloads);
+    }
+
+    /// Increment active uploads counter (call when upload starts)
+    pub async fn increment_active_uploads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.active_uploads += 1;
+        debug!("Active uploads incremented to {}", activity.active_uploads);
+    }
+
+    /// Decrement active uploads counter (call when upload completes/fails/cancels)
+    pub async fn decrement_active_uploads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.active_uploads = activity.active_uploads.saturating_sub(1);
+        debug!("Active uploads decremented to {}", activity.active_uploads);
+    }
+
+    /// Increment queued downloads counter
+    pub async fn increment_queued_downloads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.queued_downloads += 1;
+    }
+
+    /// Decrement queued downloads counter
+    pub async fn decrement_queued_downloads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.queued_downloads = activity.queued_downloads.saturating_sub(1);
+    }
+
     /// Record peer connection
     pub async fn record_peer_connected(&self, peer_id: String) {
         let mut peers = self.unique_peers.lock().await;
@@ -409,10 +449,13 @@ impl AnalyticsService {
                 self.handle_failed_event(failed).await;
             }
             TransferEvent::Started(_) => {
-                // Track active downloads
+                // Track active downloads - also decrement queued if it was queued before
                 let mut activity = self.network_activity.lock().await;
                 activity.active_downloads += 1;
-                debug!("Transfer started, active downloads: {}", activity.active_downloads);
+                // If there were queued downloads, one is now starting
+                activity.queued_downloads = activity.queued_downloads.saturating_sub(1);
+                debug!("Transfer started, active: {}, queued: {}",
+                    activity.active_downloads, activity.queued_downloads);
             }
             TransferEvent::Paused(_) => {
                 // Decrement active downloads when paused

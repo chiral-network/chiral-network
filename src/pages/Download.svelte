@@ -6,12 +6,12 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
-  import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
-  import { dhtService } from '$lib/dht'
-  import { paymentService } from '$lib/services/paymentService'
-  import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
-  import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte'
-  import type { FileMetadata } from '$lib/dht'
+import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
+import { dhtService } from '$lib/dht'
+import { paymentService } from '$lib/services/paymentService'
+import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
+import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte'
+import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
@@ -21,10 +21,22 @@
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
-  import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
-  import { showToast } from '$lib/toast'
-  import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
-  import DownloadRestartControls from '$lib/components/download/DownloadRestartControls.svelte'
+import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
+import { showToast } from '$lib/toast'
+import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
+import DownloadRestartControls from '$lib/components/download/DownloadRestartControls.svelte'
+// Import transfer events store for centralized transfer state management
+import {
+  transferStore,
+  activeTransfers as storeActiveTransfers,
+  completedTransfers,
+  failedTransfers,
+  queuedTransfers,
+  formatBytes,
+  formatSpeed,
+  formatETA,
+  type Transfer
+} from '$lib/stores/transferEventsStore'
 
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir } from '@tauri-apps/api/path'
@@ -123,9 +135,10 @@
         const unlistenCompleted = await listen('multi_source_download_completed', (event) => {
           const data = event.payload as any
 
-          // Update file status to completed
+          // Update file status to completed - only update files that are actively downloading
+          // to avoid overwriting seeding files with the same hash
           files.update(f => f.map(file => {
-            if (file.hash === data.file_hash) {
+            if (file.hash === data.file_hash && file.status === 'downloading') {
               return {
                 ...file,
                 status: 'completed' as const,
@@ -149,9 +162,10 @@
         const unlistenFailed = await listen('multi_source_download_failed', (event) => {
           const data = event.payload as any
 
-          // Update file status to failed
+          // Update file status to failed - only update files that are actively downloading
+          // to avoid overwriting seeding files with the same hash
           files.update(f => f.map(file => {
-            if (file.hash === data.file_hash) {
+            if (file.hash === data.file_hash && file.status === 'downloading') {
               return {
                 ...file,
                 status: 'failed' as const
@@ -298,9 +312,10 @@
                 }
             }
 
-            // Update file status
+            // Update file status - only update files that are actively downloading
+            // to avoid overwriting seeding files with the same hash
             files.update(f => f.map(file => {
-                if (file.hash === metadata.merkleRoot) {
+                if (file.hash === metadata.merkleRoot && file.status === 'downloading') {
                     return {
                         ...file,
                         status: 'completed' as const,
@@ -485,6 +500,53 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   let multiSourceProgress = new Map<string, MultiSourceProgress>()
   let multiSourceEnabled = savedSettings.multiSourceEnabled
   let maxPeersPerDownload = savedSettings.maxPeersPerDownload
+
+  // Sync transfer events store with local state
+  // This reactive block updates the multiSourceProgress map when transfer events come in
+  $: {
+    // Update multiSourceProgress from transferEventsStore for active transfers
+    for (const transfer of $storeActiveTransfers) {
+      if (!multiSourceProgress.has(transfer.fileHash)) {
+        // Create a compatible MultiSourceProgress object from the transfer event
+        const progress: MultiSourceProgress = {
+          fileHash: transfer.fileHash,
+          fileName: transfer.fileName,
+          totalSize: transfer.fileSize,
+          downloadedSize: transfer.downloadedBytes,
+          totalChunks: transfer.totalChunks,
+          completedChunks: transfer.completedChunks,
+          activeSourceCount: transfer.activeSources,
+          downloadSpeedBps: transfer.downloadSpeedBps,
+          etaSeconds: transfer.etaSeconds,
+          sourceAssignments: []
+        };
+        multiSourceProgress.set(transfer.fileHash, progress);
+        multiSourceProgress = multiSourceProgress; // Trigger reactivity
+      } else {
+        // Update existing progress
+        const existing = multiSourceProgress.get(transfer.fileHash);
+        if (existing) {
+          existing.downloadedSize = transfer.downloadedBytes;
+          existing.completedChunks = transfer.completedChunks;
+          existing.downloadSpeedBps = transfer.downloadSpeedBps;
+          existing.etaSeconds = transfer.etaSeconds;
+          existing.activeSourceCount = transfer.activeSources;
+          multiSourceProgress = multiSourceProgress; // Trigger reactivity
+        }
+      }
+    }
+
+    // Log transfer events store activity for debugging
+    if ($transferStore.lastEventTimestamp > 0 && import.meta.env.DEV) {
+      console.log('📦 Transfer store update:', {
+        active: $transferStore.activeCount,
+        queued: $transferStore.queuedCount,
+        completed: $transferStore.completedCount,
+        failed: $transferStore.failedCount,
+        totalDownloadSpeed: formatSpeed($transferStore.totalDownloadSpeed)
+      });
+    }
+  }
 
   // Add notification related variables
   let currentNotification: HTMLElement | null = null
@@ -780,7 +842,7 @@ async function loadAndResumeDownloads() {
           existing.map(file => file.id ?? file.hash ?? `${file.name}-${file.size}`)
         )
 
-        const deduped = restoredFiles.filter(file => {
+        const deduped = restoredFiles.filter((file: any) => {
           const key = file.id ?? file.hash ?? `${file.name}-${file.size}`
           if (existingKeys.has(key)) {
             return false
@@ -836,7 +898,9 @@ async function loadAndResumeDownloads() {
     
     diagnosticLogger.debug('Download', 'Auto-detected protocol', { protocol: detectedProtocol, hasCids });
 
-    const allFiles = [...$downloadQueue]
+    // Check both download queue and files store for duplicates
+    // This ensures we detect if user tries to download a file they're already seeding
+    const allFiles = [...$downloadQueue, ...$files]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
 
     if (existingFile) {
@@ -1212,7 +1276,8 @@ async function loadAndResumeDownloads() {
       isEncrypted: downloadingFile.isEncrypted || false,
       manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined,
       cids: downloadingFile.cids,
-      downloadPath: fullPath  // Pass the full path
+      downloadPath: fullPath,  // Pass the full path
+      price: downloadingFile.price ?? 0  // Add price field
     }
     
     diagnosticLogger.debug('Download', 'Calling dhtService.downloadFile', { 
@@ -1224,7 +1289,7 @@ async function loadAndResumeDownloads() {
 
     // Start the download asynchronously
     dhtService.downloadFile(metadata)
-      .then((result) => {
+      .then((_result) => {
         diagnosticLogger.debug('Download', 'Bitswap download completed', { fileName: downloadingFile.name });
         showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success')
       })
@@ -1663,7 +1728,8 @@ async function loadAndResumeDownloads() {
               fileSize: fileToDownload.size,
               seeders: seeders,
               createdAt: Date.now(),
-              isEncrypted: false
+              isEncrypted: false,
+              price: fileToDownload.price ?? 0  // Add price field
             } : null;
 
             if (!fileMetadata) {

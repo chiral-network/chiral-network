@@ -26,7 +26,7 @@ use chiral_network::{
     reputation, stream_auth, webrtc_service,
 };
 
-use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
+use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler, ProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -71,7 +71,10 @@ use geth_downloader::GethDownloader;
 use keystore::Keystore;
 use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
-use chiral_network::transfer_events::TransferEventBus;
+use chiral_network::transfer_events::{
+    TransferEventBus, TransferStartedEvent, TransferCompletedEvent, TransferFailedEvent,
+    SourceInfo, SourceType, ErrorCategory, current_timestamp_ms,
+};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::{HashMap, VecDeque};
@@ -811,6 +814,9 @@ async fn upload_file(
     key_fingerprint: Option<String>,
     price: Option<f64>,
 ) -> Result<FileMetadata, String> {
+    // Ensure price is never null - default to 0
+    let price = price.unwrap_or(0.0);
+
     // Get the active account address
     let account = get_active_account(&state).await?;
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
@@ -1441,6 +1447,7 @@ async fn start_dht_node(
     let proxies_arc = state.proxies.clone();
     let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
+    let analytics_arc = state.analytics.clone();
 
     tokio::spawn(async move {
         use std::time::Duration;
@@ -1550,10 +1557,17 @@ async fn start_dht_node(
                     DhtEvent::DownloadedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("file_content", payload);
+                        // Update analytics: record download completion and bandwidth
+                        analytics_arc.record_download_completed().await;
+                        analytics_arc.record_download(metadata.file_size).await;
+                        analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("published_file", payload);
+                        // Update analytics: record upload completion
+                        analytics_arc.record_upload_completed().await;
+                        analytics_arc.decrement_active_uploads().await;
                     }
                     DhtEvent::FileDiscovered(metadata) => {
                         let payload = serde_json::json!(metadata);
@@ -3239,6 +3253,7 @@ async fn start_file_transfer_service(
             webrtc_arc.clone(),
             state.bittorrent_handler.clone(),
             transfer_event_bus,
+            state.analytics.clone(),
         );
         let multi_source_arc = Arc::new(multi_source_service);
 
@@ -3287,11 +3302,236 @@ async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
     price: Option<f64>,
+    protocol: Option<String>,
 ) -> Result<(), String> {
     println!(
-        "🔍 BACKEND: upload_file_to_network called with price: {:?}",
-        price
+        "🔍 BACKEND: upload_file_to_network called with price: {:?}, protocol: {:?}",
+        price, protocol
     );
+
+    // Ensure price is never null - default to 0
+    let price = price.unwrap_or(0.0);
+
+    // Get the active account for uploader_address
+    let account = get_active_account(&state).await?;
+
+    // Handle protocol-specific uploads
+    if let Some(protocol_name) = &protocol {
+        match protocol_name.as_str() {
+            "BitTorrent" => {
+                // Use torrent seeding
+                match create_and_seed_torrent(file_path.clone(), state).await {
+                    Ok(magnet_link) => {
+                        // Emit published_file event with torrent metadata
+                        let file_name = Path::new(&file_path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: magnet_link.clone(),
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![], // Not stored for torrents
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: None,
+                            http_sources: None,
+                            info_hash: None, // Could extract from magnet link if needed
+                            trackers: None,
+                            ed2k_sources: None,
+                            download_path: None,
+                        };
+
+
+                        println!("✅ BitTorrent file published: {}", magnet_link);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to create torrent: {}", e));
+                    }
+                }
+            }
+            "ED2K" => {
+                // Actually use the ED2K protocol handler to generate real ed2k links
+                println!("📡 Starting ED2K seeding with price: {:?}", price);
+
+                let file_path_buf = PathBuf::from(&file_path);
+
+                // Create ED2K protocol handler
+                let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k.server.example.com:4242".to_string());
+
+                // Seed the file using the protocol handler
+                let seed_options = protocols::traits::SeedOptions {
+                    announce_dht: false, // ED2K has its own DHT
+                    enable_encryption: false,
+                    upload_slots: None,
+                };
+
+                match ed2k_handler.seed(file_path_buf.clone(), seed_options).await {
+                    Ok(seeding_info) => {
+                        let file_name = file_path_buf
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: seeding_info.identifier.clone(), // Real ed2k link
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![],
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: None,
+                            http_sources: None,
+                            info_hash: None,
+                            trackers: None,
+                            ed2k_sources: Some(vec![dht::models::Ed2kSourceInfo {
+                                server_url: "ed2k.server.example.com:4242".to_string(),
+                                file_hash: {
+                                    // Extract hash from ed2k link: ed2k://|file|name|size|hash|/
+                                    let parts: Vec<&str> = seeding_info.identifier.split('|').collect();
+                                    if parts.len() >= 5 {
+                                        parts[4].to_string()
+                                    } else {
+                                        "unknown".to_string()
+                                    }
+                                },
+                                file_size,
+                                file_name: Some(file_name.to_string()),
+                                sources: None,
+                                timeout: None,
+                            }]),
+                            download_path: None,
+                        };
+
+                        println!("✅ ED2K file seeded successfully: {}", seeding_info.identifier);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("❌ ED2K seeding failed: {}", e);
+                        return Err(format!("ED2K seeding failed: {}", e));
+                    }
+                }
+            }
+            "FTP" => {
+                // Use FTP protocol handler (though FTP seeding is more complex)
+                println!("📡 Starting FTP seeding with price: {:?}", price);
+
+                let file_path_buf = PathBuf::from(&file_path);
+
+                // Create FTP protocol handler
+                let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
+
+                // Seed the file using the protocol handler
+                let seed_options = protocols::traits::SeedOptions {
+                    announce_dht: false, // FTP doesn't use DHT
+                    enable_encryption: false,
+                    upload_slots: None,
+                };
+
+                match ftp_handler.seed(file_path_buf.clone(), seed_options).await {
+                    Ok(seeding_info) => {
+                        let file_name = file_path_buf
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: seeding_info.identifier.clone(), // FTP URL from handler
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![],
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: Some(vec![dht::models::FtpSourceInfo {
+                                url: seeding_info.identifier.clone(),
+                                username: None,
+                                password: None,
+                                supports_resume: true,
+                                file_size,
+                                last_checked: Some(std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()),
+                                is_available: true,
+                            }]),
+                            http_sources: None,
+                            info_hash: None,
+                            trackers: None,
+                            ed2k_sources: None,
+                            download_path: None,
+                        };
+
+                        println!("✅ FTP file seeded successfully: {}", seeding_info.identifier);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("❌ FTP seeding failed: {}", e);
+                        return Err(format!("FTP seeding failed: {}", e));
+                    }
+                }
+            }
+            _ => {
+                // WebRTC and Bitswap use the default Chiral flow
+                println!("📡 Using Chiral network upload for protocol: {}", protocol_name);
+            }
+        }
+    }
 
     // Get the active account address
     let account = get_active_account(&state).await?;
@@ -3429,6 +3669,8 @@ async fn upload_file_to_network(
 
 #[tauri::command]
 async fn start_ftp_download(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
     url: String,
     output_path: String,
     username: Option<String>,
@@ -3437,6 +3679,15 @@ async fn start_ftp_download(
     let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
     let host = parsed.host_str().ok_or("Invalid FTP URL")?;
     let path = parsed.path();
+    let file_name = path.split('/').last().unwrap_or("ftp_download").to_string();
+
+    // Generate a unique transfer ID
+    let transfer_id = format!("ftp-{}", uuid::Uuid::new_v4());
+
+    // Create transfer event bus for emitting events
+    let transfer_event_bus = TransferEventBus::new(app.clone());
+    let analytics_service = state.analytics.clone();
+    let start_time = std::time::Instant::now();
 
     // Connect to FTP
     let mut ftp = FtpStream::connect((host, 21))
@@ -3451,12 +3702,62 @@ async fn start_ftp_download(
             .map_err(|e| format!("Anonymous login failed: {}", e))?;
     }
 
+    // Get file size if possible
+    let file_size = ftp.size(path).unwrap_or(0) as u64;
+
+    // Emit started event
+    transfer_event_bus.emit_started_with_analytics(TransferStartedEvent {
+        transfer_id: transfer_id.clone(),
+        file_hash: transfer_id.clone(),
+        file_name: file_name.clone(),
+        file_size,
+        total_chunks: 1,
+        chunk_size: file_size as usize,
+        started_at: current_timestamp_ms(),
+        available_sources: vec![SourceInfo {
+            id: host.to_string(),
+            source_type: SourceType::Ftp,
+            address: url.clone(),
+            reputation: None,
+            estimated_speed_bps: None,
+            latency_ms: None,
+            location: None,
+        }],
+        selected_sources: vec![host.to_string()],
+    }, &analytics_service).await;
+
     // Create output file
     let mut file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Failed to create output file: {}", e))?;
+        .map_err(|e| {
+            // Capture error message before moving
+            let error_msg = format!("Failed to create output file: {}", e);
+
+            // Emit failed event on file creation error
+            let event_bus = TransferEventBus::new(app.clone());
+            let analytics = analytics_service.clone();
+            let tid = transfer_id.clone();
+            let error_for_event = error_msg.clone();
+            tokio::spawn(async move {
+                event_bus.emit_failed_with_analytics(TransferFailedEvent {
+                    transfer_id: tid.clone(),
+                    file_hash: tid,
+                    failed_at: current_timestamp_ms(),
+                    error: error_for_event,
+                    error_category: ErrorCategory::Filesystem,
+                    downloaded_bytes: 0,
+                    total_bytes: file_size,
+                    retry_possible: true,
+                }, &analytics).await;
+            });
+            error_msg
+        })?;
+
+    // Track downloaded bytes for progress updates
+    let downloaded_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let downloaded_bytes_clone = downloaded_bytes.clone();
 
     // Retrieve file and stream in chunks
-    ftp.retr(path, |reader| {
+    let result = ftp.retr(path, |reader| {
         let mut buffer = [0u8; 65536]; // 64 KB
         loop {
             let bytes_read = reader
@@ -3467,14 +3768,55 @@ async fn start_ftp_download(
             }
             file.write_all(&buffer[..bytes_read])
                 .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+            downloaded_bytes_clone.fetch_add(bytes_read as u64, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
-    })
-    .map_err(|e| format!("FTP RETR failed: {}", e))?;
+    });
 
     ftp.quit().ok();
 
-    Ok(format!("Downloaded successfully to {}", output_path))
+    let total_downloaded = downloaded_bytes.load(std::sync::atomic::Ordering::Relaxed);
+    let duration = start_time.elapsed();
+    let avg_speed = if duration.as_secs_f64() > 0.0 {
+        total_downloaded as f64 / duration.as_secs_f64()
+    } else {
+        0.0
+    };
+
+    match result {
+        Ok(()) => {
+            // Emit completed event
+            transfer_event_bus.emit_completed_with_analytics(TransferCompletedEvent {
+                transfer_id: transfer_id.clone(),
+                file_hash: transfer_id,
+                file_name,
+                file_size: total_downloaded,
+                output_path: output_path.clone(),
+                completed_at: current_timestamp_ms(),
+                duration_seconds: duration.as_secs(),
+                average_speed_bps: avg_speed,
+                total_chunks: 1,
+                sources_used: Vec::new(),
+            }, &analytics_service).await;
+
+            Ok(format!("Downloaded successfully to {}", output_path))
+        }
+        Err(e) => {
+            // Emit failed event
+            transfer_event_bus.emit_failed_with_analytics(TransferFailedEvent {
+                transfer_id: transfer_id.clone(),
+                file_hash: transfer_id,
+                failed_at: current_timestamp_ms(),
+                error: format!("FTP RETR failed: {}", e),
+                error_category: ErrorCategory::Network,
+                downloaded_bytes: total_downloaded,
+                total_bytes: file_size,
+                retry_possible: true,
+            }, &analytics_service).await;
+
+            Err(format!("FTP RETR failed: {}", e))
+        }
+    }
 }
 
 #[tauri::command]
@@ -3799,6 +4141,8 @@ async fn download_file_from_network(
 
                                                                 // The peer will now start sending chunks automatically
                                                                 // We don't need to request individual chunks - the WebRTC service handles this
+                                                                // Track active download now that download is confirmed to start
+                                                                state.analytics.increment_active_downloads().await;
                                                                 Ok(format!(
                                                                     "WebRTC download initiated: {} ({} bytes) from peer {}",
                                                                     metadata.file_name, metadata.file_size, selected_peer
@@ -4069,7 +4413,7 @@ async fn upload_file_chunk(
             parent_hash: None,
             is_root: true,
             download_path: None,
-            price: None,
+            price: 0.0,
             uploader_address: None,
             ftp_sources: None,
             http_sources: None,

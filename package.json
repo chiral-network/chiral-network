@@ -7,7 +7,7 @@
     "dev": "vite",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
