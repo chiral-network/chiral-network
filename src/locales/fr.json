@@ -581,6 +581,12 @@
       "noDetails": "Aucun détail de transaction en attente disponible.",
       "count": "{count, plural, one {# transaction en attente} other {# transactions en attente}}",
       "none": "Transactions en attente"
+    },
+    "fees": {
+      "low": "Basse",
+      "market": "Marché",
+      "fast": "Rapide",
+      "estimated": "Frais estimés"
     }
   },
   "transactions": {
@@ -1573,6 +1579,14 @@
     "blocks": {
       "latest": "Derniers blocs",
       "noBlocks": "Aucun bloc trouvé"
+    },
+    "sync": {
+      "syncing": "Synchronisation",
+      "current": "Bloc actuel",
+      "highest": "Bloc le plus élevé",
+      "remaining": "Restant",
+      "eta": "ETA",
+      "complete": "Synchronisation terminée"
     },
     "search": {
       "title": "Rechercher dans la blockchain",

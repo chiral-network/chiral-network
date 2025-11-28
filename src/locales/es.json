@@ -455,6 +455,12 @@
       "noDetails": "No hay detalles de transacciones pendientes disponibles.",
       "count": "{count} transacción{count !== 1 ? 'es' : ''} pendiente{count !== 1 ? 's' : ''}",
       "none": "Transacciones pendientes"
+    },
+    "fees": {
+      "low": "Baja",
+      "market": "Mercado",
+      "fast": "Rápida",
+      "estimated": "Tarifa estimada"
     }
   },
   "transactions": {
@@ -1440,6 +1446,14 @@
     "blocks": {
       "latest": "Bloques recientes",
       "noBlocks": "No se encontraron bloques"
+    },
+    "sync": {
+      "syncing": "Sincronizando",
+      "current": "Bloque actual",
+      "highest": "Bloque más alto",
+      "remaining": "Restante",
+      "eta": "ETA",
+      "complete": "Sincronización completa"
     },
     "search": {
       "title": "Buscar en la blockchain",

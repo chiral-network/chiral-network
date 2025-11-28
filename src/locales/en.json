@@ -590,6 +590,12 @@
       "noDetails": "No pending transaction details available.",
       "count": "{count, plural, one {# Pending Transaction} other {# Pending Transactions}}",
       "none": "Pending Transactions"
+    },
+    "fees": {
+      "low": "Low",
+      "market": "Market",
+      "fast": "Fast",
+      "estimated": "Estimated fee"
     }
   },
   "transactions": {
@@ -1587,6 +1593,14 @@
     "blocks": {
       "latest": "Latest Blocks",
       "noBlocks": "No blocks found"
+    },
+    "sync": {
+      "syncing": "Syncing",
+      "current": "Current Block",
+      "highest": "Highest Block",
+      "remaining": "Remaining",
+      "eta": "ETA",
+      "complete": "Sync Complete"
     },
     "search": {
       "title": "Search Blockchain",

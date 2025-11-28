@@ -570,6 +570,12 @@
       "noDetails": "Nenhum detalhe de transação pendente disponível.",
       "count": "{count, plural, one {# Transação Pendente} other {# Transações Pendentes}}",
       "none": "Transações Pendentes"
+    },
+    "fees": {
+      "low": "Baixa",
+      "market": "Mercado",
+      "fast": "Rápida",
+      "estimated": "Taxa estimada"
     }
   },
   "transactions": {
@@ -1562,6 +1568,14 @@
     "blocks": {
       "latest": "नवीनतम ब्लॉक",
       "noBlocks": "कोई ब्लॉक नहीं मिला"
+    },
+    "sync": {
+      "syncing": "सिंक हो रहा है",
+      "current": "वर्तमान ब्लॉक",
+      "highest": "उच्चतम ब्लॉक",
+      "remaining": "शेष",
+      "eta": "अनुमानित समय",
+      "complete": "सिंक पूरा हुआ"
     },
     "search": {
       "title": "ब्लॉकचेन में खोजें",
