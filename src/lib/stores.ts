@@ -175,7 +175,6 @@ export interface BlacklistEntry {
   reason: string;
   timestamp: Date;
 }
-
 const dummyWallet: WalletInfo = {
   address: "",
   balance: 0,

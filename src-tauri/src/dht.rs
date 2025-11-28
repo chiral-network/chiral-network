@@ -110,10 +110,6 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
-use libp2p::{
-    multiaddr::Protocol,
-    noise, tcp, yamux,
-};
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
@@ -171,6 +167,8 @@ use libp2p::{
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
+    multiaddr::Protocol,
+    noise, tcp, yamux,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
     upnp,
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
@@ -4686,7 +4684,7 @@ async fn handle_mdns_event(
 ) {
     match event {
         MdnsEvent::Discovered(list) => {
-            let discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
+            let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
                 // Skip self-discoveries to prevent self-connection attempts
@@ -4699,6 +4697,10 @@ async fn handle_mdns_event(
                             .behaviour_mut()
                             .kademlia
                             .add_address(&peer_id, multiaddr.clone());
+                        discovered
+                            .entry(peer_id)
+                            .or_insert_with(Vec::new)
+                            .push(multiaddr.to_string());
                     }
                     Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", multiaddr, e),
                 }

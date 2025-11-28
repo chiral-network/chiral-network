@@ -1,6 +1,7 @@
 // Headless mode for running as a bootstrap node on servers
 use crate::commands::bootstrap::get_bootstrap_nodes;
 use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtService};
+use crate::download_restart::{DownloadRestartService, StartDownloadRequest};
 use crate::ethereum::GethProcess;
 use crate::file_transfer::FileTransferService;
 use clap::Parser;
@@ -91,6 +92,30 @@ pub struct CliArgs {
     /// Preferred relay nodes (multiaddr form, can be specified multiple times)
     #[arg(long)]
     pub relay: Vec<String>,
+
+    /// Start a restartable HTTP download when the node boots
+    #[arg(long)]
+    pub download_url: Option<String>,
+
+    /// Destination path for the restartable download (required with --download-url)
+    #[arg(long)]
+    pub download_dest: Option<String>,
+
+    /// Optional download identifier for reuse
+    #[arg(long)]
+    pub download_id: Option<String>,
+
+    /// Optional expected SHA-256 for verification
+    #[arg(long)]
+    pub download_sha256: Option<String>,
+
+    /// Pause an active restartable download by ID
+    #[arg(long)]
+    pub pause_download: Option<String>,
+
+    /// Resume a paused restartable download by ID
+    #[arg(long)]
+    pub resume_download: Option<String>,
 }
 
 pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -108,6 +133,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
 
     info!("Starting Chiral Network in headless mode");
     info!("CLI args: {:#?}", args);
+
+    let download_restart_service = Arc::new(DownloadRestartService::new(None));
 
     // Add default bootstrap nodes if no custom ones specified
     let mut bootstrap_nodes = args.bootstrap.clone();
@@ -136,6 +163,25 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         }
     } else {
         info!("AutoNAT probes disabled via CLI");
+    }
+
+    if args.download_url.is_some()
+        || args.pause_download.is_some()
+        || args.resume_download.is_some()
+    {
+        if let Err(err) = handle_download_cli_commands(
+            download_restart_service.clone(),
+            args.download_url.as_deref(),
+            args.download_dest.as_deref(),
+            args.download_sha256.as_deref(),
+            args.download_id.as_deref(),
+            args.pause_download.as_deref(),
+            args.resume_download.as_deref(),
+        )
+        .await
+        {
+            error!("Failed to process download CLI arguments: {}", err);
+        }
     }
 
     // Optionally start local file-transfer service for metrics insight
@@ -405,4 +451,48 @@ pub fn get_local_ip() -> Option<String> {
         }
     }
     None
+}
+
+pub async fn handle_download_cli_commands(
+    download_service: Arc<DownloadRestartService>,
+    download_url: Option<&str>,
+    download_dest: Option<&str>,
+    download_sha256: Option<&str>,
+    download_id: Option<&str>,
+    pause_download: Option<&str>,
+    resume_download: Option<&str>,
+) -> Result<(), String> {
+    if let Some(url) = download_url {
+        let dest = download_dest
+            .ok_or_else(|| "Missing --download-dest when using --download-url".to_string())?;
+        let request = StartDownloadRequest {
+            download_id: download_id.map(|s| s.to_string()),
+            source_url: url.to_string(),
+            destination_path: dest.to_string(),
+            expected_sha256: download_sha256.map(|s| s.to_string()),
+        };
+        let id = download_service
+            .start_download(request)
+            .await
+            .map_err(|e| e.to_string())?;
+        info!("Started restartable download {}", id);
+    }
+
+    if let Some(id) = pause_download {
+        download_service
+            .pause_download(id)
+            .await
+            .map_err(|e| e.to_string())?;
+        info!("Paused restartable download {}", id);
+    }
+
+    if let Some(id) = resume_download {
+        download_service
+            .resume_download(id)
+            .await
+            .map_err(|e| e.to_string())?;
+        info!("Resumed restartable download {}", id);
+    }
+
+    Ok(())
 }
