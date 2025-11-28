@@ -826,8 +826,8 @@
 
   // Protocol options for dropdown
   const protocolOptions = [
-    { value: "WebRTC", label: "WebRTC" },
     { value: "Bitswap", label: "Bitswap" },
+    { value: "WebRTC", label: "WebRTC" },
     { value: "BitTorrent", label: "BitTorrent" },
     { value: "ED2K", label: "ED2K" },
     { value: "FTP", label: "FTP" },

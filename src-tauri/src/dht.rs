@@ -180,17 +180,11 @@ const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
 /// Prefix for DHT records that map a torrent info_hash to a Chiral Merkle root.
 const INFO_HASH_PREFIX: &str = "info_hash_idx::";
-/// Prefix for DHT records that map a keyword to a list of file Merkle roots.
-const KEYWORD_INDEX_PREFIX: &str = "keyword_idx::";
 pub const RAW_CODEC: u64 = 0x55;
 /// Heartbeat interval (how often we refresh our provider entry).
 const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
 /// File seeder TTL – if no heartbeat lands within this window, drop the entry.
 const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(90); // Longer TTL with grace period
-pub struct PendingKeywordIndex {
-    pub keyword: String,
-    pub merkle_root: String,
-}
 
 /// thread-safe, mutable block store
 
@@ -1126,7 +1120,6 @@ async fn run_dht_node(
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
-    pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     pending_dht_queries: Arc<
         Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
@@ -1571,27 +1564,6 @@ async fn run_dht_node(
                                         let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
                                     }
                                 }
-                                // Task 1: Keyword Extraction
-                                let keywords = extract_keywords(&metadata.file_name);
-                                // Task 2: DHT Indexing
-                                // Implement the "read-modify-write" logic inside this loop.
-                                for keyword in keywords {
-                                    let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
-                                    let index_key = kad::RecordKey::new(&index_key_str);
-
-                                    // Initiate read-modify-write: first get the existing record
-                                    let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
-
-                                    // Track this keyword index operation
-                                    pending_keyword_indexes.lock().await.insert(
-                                        query_id,
-                                        PendingKeywordIndex {
-                                            keyword: keyword.clone(),
-                                            merkle_root: metadata.merkle_root.clone(),
-                                        }
-                                    );
-                                }
-
                                 // Cache the published file locally so it can be found in searches
                                 // This ensures nodes can discover their own published files
                                 file_metadata_cache.lock().await.insert(
@@ -2424,7 +2396,6 @@ async fn run_dht_node(
                                     &get_providers_queries,
                                     &seeder_heartbeats_cache,
                                     &pending_heartbeat_updates,
-                                    &pending_keyword_indexes,
                                     &pending_infohash_searches,
                                     &file_metadata_cache,
                                     &pending_dht_queries,
@@ -3647,27 +3618,6 @@ fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
     None
 }
 
-/// Extracts a set of unique, searchable keywords from a filename.
-fn extract_keywords(file_name: &str) -> Vec<String> {
-    // 1. Sanitize: remove the file extension and convert to lowercase.
-    let name_without_ext = std::path::Path::new(file_name)
-        .file_stem()
-        .unwrap_or_default()
-        .to_str()
-        .unwrap_or_default()
-        .to_lowercase();
-
-    // 2. Split the name into words based on common non-alphanumeric delimiters.
-    let keywords: std::collections::HashSet<String> = name_without_ext
-        .split(|c: char| !c.is_alphanumeric())
-        // 3. Filter out empty strings and common short words (e.g., "a", "of").
-        .filter(|s| !s.is_empty() && s.len() > 2)
-        .map(String::from)
-        .collect(); // Using a HashSet automatically handles duplicates.
-
-    // 4. Return the unique keywords as a Vec.
-    keywords.into_iter().collect()
-}
 
 fn unix_timestamp() -> u64 {
     SystemTime::now()
@@ -3856,7 +3806,6 @@ async fn handle_kademlia_event(
     get_providers_queries: &Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: &Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: &Arc<Mutex<HashSet<String>>>,
-    pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     pending_infohash_searches: &Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>>,
     file_metadata_cache: &Arc<Mutex<HashMap<String, FileMetadata>>>,
     pending_dht_queries: &Arc<
@@ -3920,57 +3869,6 @@ async fn handle_kademlia_event(
                                 return; // End processing for this event here.
                             }
 
-                            // Check if this is a response to a keyword index lookup (read-modify-write)
-                            if let Some(pending_index) =
-                                pending_keyword_indexes.lock().await.remove(&id)
-                            {
-                                // Deserialize the existing keyword index (list of merkle roots)
-                                let mut merkle_roots: Vec<String> = if let Ok(roots) =
-                                    serde_json::from_slice::<Vec<String>>(&peer_record.record.value)
-                                {
-                                    roots
-                                } else {
-                                    // If deserialization fails, start with empty list
-                                    warn!("Failed to deserialize keyword index for '{}', starting fresh", pending_index.keyword);
-                                    Vec::new()
-                                };
-
-                                // Add the new merkle root if not already present
-                                if !merkle_roots.contains(&pending_index.merkle_root) {
-                                    merkle_roots.push(pending_index.merkle_root.clone());
-                                }
-
-                                // Serialize the updated list
-                                if let Ok(updated_value) = serde_json::to_vec(&merkle_roots) {
-                                    // Create and put the updated record
-                                    let record = Record {
-                                        key: peer_record.record.key.clone(),
-                                        value: updated_value,
-                                        publisher: None,
-                                        expires: None,
-                                    };
-
-                                    let _put_query_id = match swarm
-                                        .behaviour_mut()
-                                        .kademlia
-                                        .put_record(record, kad::Quorum::One)
-                                    {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            error!("Failed to put keyword index record: {}", e);
-                                            return; // Exit the function instead of continue
-                                        }
-                                    };
-
-                                } else {
-                                    error!(
-                                        "Failed to serialize updated keyword index for '{}'",
-                                        pending_index.keyword
-                                    );
-                                }
-
-                                return; // End processing for this event here.
-                            }
 
                             // Construct FileMetadata from the JSON
                             if let (
@@ -4258,95 +4156,11 @@ async fn handle_kademlia_event(
                             return; // End processing for this event here.
                         }
 
-                        // Check if this was a keyword index lookup that found no existing record
-                        if let Some(pending_index) =
-                            pending_keyword_indexes.lock().await.remove(&id)
-                        {
-                            // This is the first time this keyword is being indexed - create new record
-                            let merkle_roots = vec![pending_index.merkle_root.clone()];
-
-                            if let Ok(value) = serde_json::to_vec(&merkle_roots) {
-                                // Create the record key from the keyword
-                                let index_key_str =
-                                    format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
-                                let record_key = kad::RecordKey::new(&index_key_str);
-
-                                let record = Record {
-                                    key: record_key,
-                                    value,
-                                    publisher: None,
-                                    expires: None,
-                                };
-
-                                let _put_query_id = match swarm
-                                    .behaviour_mut()
-                                    .kademlia
-                                    .put_record(record, kad::Quorum::One)
-                                {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        error!("Failed to put keyword index record: {}", e);
-                                        return;
-                                    }
-                                };
-
-                                info!(
-                                    "Created new keyword index '{}' with first file '{}'",
-                                    pending_index.keyword, pending_index.merkle_root
-                                );
-                            } else {
-                                error!(
-                                    "Failed to serialize new keyword index for '{}'",
-                                    pending_index.keyword
-                                );
-                            }
-
-                            return; // End processing for this event here.
-                        }
 
                         // No additional records; do nothing here for other queries
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
-                    // Check if this was a failed keyword index lookup
-                    if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
-                        // Treat GetRecord errors as "not found" - create new keyword index
-                        let merkle_roots = vec![pending_index.merkle_root.clone()];
-
-                        if let Ok(value) = serde_json::to_vec(&merkle_roots) {
-                            let index_key_str =
-                                format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
-                            let record_key = kad::RecordKey::new(&index_key_str);
-
-                            let record = Record {
-                                key: record_key,
-                                value,
-                                publisher: None,
-                                expires: None,
-                            };
-
-                            let _put_query_id = match swarm
-                                .behaviour_mut()
-                                .kademlia
-                                .put_record(record, kad::Quorum::One)
-                            {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    error!("Failed to put keyword index record: {}", e);
-                                    return;
-                                }
-                            };
-
-                            info!("Created new keyword index '{}' after GetRecord error for file '{}'", pending_index.keyword, pending_index.merkle_root);
-                        } else {
-                            error!(
-                                "Failed to serialize new keyword index for '{}' after error",
-                                pending_index.keyword
-                            );
-                        }
-
-                        return; // End processing for this event here.
-                    }
 
                     warn!("GetRecord error: {:?}", err);
 
@@ -6020,10 +5834,6 @@ impl DhtService {
             Arc::new(Mutex::new(HashMap::new()));
         let pending_heartbeat_updates: Arc<Mutex<HashSet<String>>> =
             Arc::new(Mutex::new(HashSet::new()));
-        let pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
-            Arc::new(Mutex::new(HashMap::new()));
         let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let pending_dht_queries: Arc<
@@ -6065,7 +5875,6 @@ impl DhtService {
             get_providers_queries_local.clone(),
             seeder_heartbeats_cache.clone(),
             pending_heartbeat_updates.clone(),
-            pending_keyword_indexes.clone(),
             file_metadata_cache_local.clone(),
             pending_dht_queries.clone(),
             pending_key_requests.clone(),

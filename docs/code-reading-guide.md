@@ -61,7 +61,7 @@ Use this when debugging the main loop of publish/search/download.
 - `stop()`: Stops DHT node and clears cached peer ID.
 - `publishFileToNetwork(filePath, price?)`: Subscribes to `published_file`, invokes `upload_file_to_network`, normalizes `fileHash`/`merkleRoot`, returns metadata.
 - `downloadFile(fileMetadata)`: Resolves download path (metadata or settings), ensures directories exist, subscribes to `file_content`, prepares Bitswap metadata (`merkleRoot`, `cids`, `isRoot` fallback), then calls `download_blocks_from_network`.
-- `searchFile(fileHash)` / `searchFileByCid(cid)`: Fire-and-forget searches via backend commands.
+- `searchFile(fileHash)`: Fire-and-forget searches via backend commands.
 - `searchFileMetadata(fileHash, timeoutMs?)`: Waits for `found_file`, enriches with live seeders, normalizes hashes, enforces timeout, returns metadata or throws.
 - `connectPeer(peerAddress)`: Connects to peer multiaddr, updates reputation store on success/failure.
 - Accessors: `getPeerId()`, `getPort()`, `getMultiaddr()`, `getSeedersForFile()`, `getPeerCount()`, `getHealth()`.

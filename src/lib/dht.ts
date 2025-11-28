@@ -42,6 +42,21 @@ export interface HttpSourceInfo {
   timeoutSecs?: number;
 }
 
+export interface FtpSourceInfo {
+  url: string;
+  username?: string;
+  password?: string;
+  supportsResume: boolean;
+  fileSize?: number;
+  lastChecked?: number;
+  isAvailable: boolean;
+}
+
+export interface Ed2kSourceInfo {
+  serverUrl: string;
+  fileHash: string;
+}
+
 export interface FileMetadata {
   fileHash: string;
   fileName: string;
@@ -61,6 +76,10 @@ export interface FileMetadata {
   price: number;
   uploaderAddress?: string;
   httpSources?: HttpSourceInfo[];
+  ftpSources?: FtpSourceInfo[];
+  ed2kSources?: Ed2kSourceInfo[];
+  infoHash?: string;
+  trackers?: string[];
 }
 
 export interface DhtHealth {
@@ -369,20 +388,6 @@ export class DhtService {
       console.log("Searching for file:", fileHash);
     } catch (error) {
       console.error("Failed to search file:", error);
-      throw error;
-    }
-  }
-
-  async searchFileByCid(cid: string): Promise<void> {
-    if (!this.peerId) {
-      throw new Error("DHT not started");
-    }
-
-    try {
-      await invoke("search_file_by_cid", { cidStr: cid });
-      console.log("Searching for file by CID:", cid);
-    } catch (error) {
-      console.error("Failed to search file by CID:", error);
       throw error;
     }
   }

@@ -2,7 +2,7 @@
   import Card from '$lib/components/ui/card.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import { FileIcon, Copy, Download, Server, DollarSign, Globe, Blocks } from 'lucide-svelte';
+  import { FileIcon, Copy, Download, Server, Globe, Blocks } from 'lucide-svelte';
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
@@ -42,6 +42,73 @@
   $: createdLabel = metadata?.createdAt
     ? formatRelativeTime(new Date(metadata.createdAt * 1000))
     : null;
+
+  // Helper function to determine available protocols for a file
+  $: availableProtocols = (() => {
+    const protocols = [];
+
+    // Check for Bitswap (has CIDs) - comes first
+    if (metadata.cids && metadata.cids.length > 0) {
+      protocols.push({
+        id: 'bitswap',
+        name: 'Bitswap',
+        icon: Blocks,
+        colorClass: 'bg-purple-100 text-purple-800'
+      });
+    }
+
+    // Check for WebRTC (has seeders)
+    if (metadata.seeders && metadata.seeders.length > 0) {
+      protocols.push({
+        id: 'webrtc',
+        name: 'WebRTC',
+        icon: Globe,
+        colorClass: 'bg-blue-100 text-blue-800'
+      });
+    }
+
+    // Check for BitTorrent (has info_hash)
+    if (metadata.infoHash) {
+      protocols.push({
+        id: 'bittorrent',
+        name: 'BitTorrent',
+        icon: Server,
+        colorClass: 'bg-green-100 text-green-800'
+      });
+    }
+
+    // Check for HTTP (has HTTP sources)
+    if (metadata.httpSources && metadata.httpSources.length > 0) {
+      protocols.push({
+        id: 'http',
+        name: 'HTTP',
+        icon: Globe,
+        colorClass: 'bg-gray-100 text-gray-800'
+      });
+    }
+
+    // Check for FTP (has FTP sources)
+    if (metadata.ftpSources && metadata.ftpSources.length > 0) {
+      protocols.push({
+        id: 'ftp',
+        name: 'FTP',
+        icon: Server,
+        colorClass: 'bg-gray-100 text-gray-800'
+      });
+    }
+
+    // Check for ED2K (has ED2K sources)
+    if (metadata.ed2kSources && metadata.ed2kSources.length > 0) {
+      protocols.push({
+        id: 'ed2k',
+        name: 'ED2K',
+        icon: Server,
+        colorClass: 'bg-orange-100 text-orange-800'
+      });
+    }
+
+    return protocols;
+  })();
 
   // Check if user is already seeding this file
   $: isSeeding = !!get(files).find(f => f.hash === metadata.fileHash && f.status === 'seeding');
@@ -249,31 +316,12 @@
     </div>
 
     <div class="flex items-center gap-2 flex-wrap">
-      {#if metadata.cids && metadata.cids.length > 0}
-        <Badge class="bg-purple-500/10 text-purple-600 dark:text-purple-300 border border-purple-500/30">
-          <Blocks class="h-3.5 w-3.5 mr-1" />
-          Bitswap
+      {#each availableProtocols as protocol}
+        <Badge class={protocol.colorClass}>
+          <svelte:component this={protocol.icon} class="h-3.5 w-3.5 mr-1" />
+          {protocol.name}
         </Badge>
-      {:else}
-        <Badge class="bg-blue-500/10 text-blue-600 dark:text-blue-300 border border-blue-500/30">
-          <Globe class="h-3.5 w-3.5 mr-1" />
-          WebRTC
-        </Badge>
-      {/if}
-      <Badge class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border border-emerald-500/30">
-        <Server class="h-3.5 w-3.5 mr-1" />
-        {seederCount} {seederCount === 1 ? 'Seeder' : 'Seeders'}
-      </Badge>
-      {#if metadata.price && metadata.price > 0}
-        <Badge class="bg-blue-500/10 text-blue-600 dark:text-blue-300 border border-blue-500/30">
-          <DollarSign class="h-3.5 w-3.5 mr-1" />
-          {metadata.price} Chiral
-        </Badge>
-      {:else}
-        <Badge class="bg-gray-500/10 text-gray-600 dark:text-gray-300 border border-gray-500/30">
-          Free
-        </Badge>
-      {/if}
+      {/each}
     </div>
   </div>
 

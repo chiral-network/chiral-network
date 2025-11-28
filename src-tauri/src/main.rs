@@ -6017,6 +6017,51 @@ async fn download_file_http(
     }
 }
 
+// Protocol-specific download commands
+
+#[tauri::command]
+async fn download_ed2k(
+    link: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!("Starting ED2K download: {}", link);
+
+    // Use the protocol manager for ED2K downloads
+    use crate::protocols::traits::DownloadOptions;
+    let options = DownloadOptions {
+        output_path: std::path::PathBuf::from("./downloads"),
+        max_peers: Some(5),
+        chunk_size: Some(1024 * 1024), // 1MB chunks
+        ..Default::default()
+    };
+
+    state.protocol_manager.download(&link, options).await
+        .map_err(|e| format!("ED2K download failed: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn download_ftp(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!("Starting FTP download: {}", url);
+
+    // Use the protocol manager for FTP downloads
+    use crate::protocols::traits::DownloadOptions;
+    let options = DownloadOptions {
+        output_path: std::path::PathBuf::from("./downloads"),
+        max_peers: Some(1), // FTP typically single connection
+        ..Default::default()
+    };
+
+    state.protocol_manager.download(&url, options).await
+        .map_err(|e| format!("FTP download failed: {}", e))?;
+
+    Ok(())
+}
+
 // Download restart Tauri commands
 
 #[tauri::command]
@@ -6176,6 +6221,13 @@ fn main() {
         // Wrap the simple handler in the enhanced protocol handler
         let bittorrent_protocol_handler = BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
         manager.register(Box::new(bittorrent_protocol_handler));
+
+        // Register ED2K and FTP handlers
+        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k.server.example.com:4242".to_string());
+        manager.register(Box::new(ed2k_handler));
+
+        let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
+        manager.register(Box::new(ftp_handler));
         
         (bittorrent_handler_arc, Arc::new(manager))
     });
@@ -6477,6 +6529,8 @@ fn main() {
             publish_reputation_verdict,
             get_reputation_verdicts,
             download_file_http,
+            download_ed2k,
+            download_ftp,
             save_temp_file_for_upload,
             get_file_size,
             // Reassembly system commands
