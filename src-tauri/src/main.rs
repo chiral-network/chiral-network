@@ -64,6 +64,11 @@ use ethereum::{
     EthAccount,
     GethProcess,
     MinedBlock,
+    // Bootstrap peer management functions
+    add_peer,
+    get_peers,
+    get_node_info,
+    reconnect_to_bootstrap_if_needed,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
@@ -5042,6 +5047,44 @@ async fn check_bootstrap_health() -> Result<geth_bootstrap::BootstrapHealthRepor
     Ok(geth_bootstrap::check_all_bootstrap_nodes().await)
 }
 
+/// Get cached bootstrap health report without performing new checks
+#[tauri::command]
+async fn get_cached_bootstrap_health() -> Result<Option<geth_bootstrap::BootstrapHealthReport>, String> {
+    Ok(geth_bootstrap::get_cached_health_report().await)
+}
+
+/// Clear the bootstrap cache to force fresh health checks
+#[tauri::command]
+async fn clear_bootstrap_cache() -> Result<(), String> {
+    geth_bootstrap::clear_bootstrap_cache().await;
+    Ok(())
+}
+
+/// Reconnect to bootstrap nodes if peer count is low
+#[tauri::command]
+async fn reconnect_geth_bootstrap(min_peers: Option<u32>) -> Result<u32, String> {
+    let threshold = min_peers.unwrap_or(3);
+    reconnect_to_bootstrap_if_needed(threshold).await
+}
+
+/// Add a specific peer to Geth
+#[tauri::command]
+async fn add_geth_peer(enode: String) -> Result<bool, String> {
+    add_peer(&enode).await
+}
+
+/// Get current Geth peers
+#[tauri::command]
+async fn get_geth_peers() -> Result<Vec<serde_json::Value>, String> {
+    get_peers().await
+}
+
+/// Get Geth node info
+#[tauri::command]
+async fn get_geth_node_info() -> Result<serde_json::Value, String> {
+    get_node_info().await
+}
+
 #[tauri::command]
 async fn get_geth_status(
     state: State<'_, AppState>,
@@ -6366,6 +6409,12 @@ fn main() {
             get_geth_status,
             download_geth_binary,
             check_bootstrap_health,
+            get_cached_bootstrap_health,
+            clear_bootstrap_cache,
+            reconnect_geth_bootstrap,
+            add_geth_peer,
+            get_geth_peers,
+            get_geth_node_info,
             set_miner_address,
             start_miner,
             stop_miner,
