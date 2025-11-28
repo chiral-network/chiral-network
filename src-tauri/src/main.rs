@@ -447,10 +447,6 @@ async fn create_and_seed_torrent(
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    println!(
-        "Received create_and_seed_torrent command for: {}",
-        file_path
-    );
     // Use the BitTorrent handler directly to create and seed the torrent
     state.bittorrent_handler.seed(&file_path).await
 }
@@ -873,13 +869,6 @@ async fn upload_file(
                 encrypted: is_encrypted,
             })
             .await;
-
-        tracing::info!(
-            "Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})",
-            file_name,
-            metadata.merkle_root,
-            file_hash
-        );
 
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
@@ -3299,15 +3288,12 @@ async fn start_file_transfer_service(
 
 #[tauri::command]
 async fn upload_file_to_network(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     file_path: String,
     price: Option<f64>,
     protocol: Option<String>,
 ) -> Result<(), String> {
-    println!(
-        "🔍 BACKEND: upload_file_to_network called with price: {:?}, protocol: {:?}",
-        price, protocol
-    );
 
     // Ensure price is never null - default to 0
     let price = price.unwrap_or(0.0);
@@ -3319,6 +3305,17 @@ async fn upload_file_to_network(
     if let Some(protocol_name) = &protocol {
         match protocol_name.as_str() {
             "BitTorrent" => {
+                // Check if file exists before attempting to seed
+                if !std::path::Path::new(&file_path).exists() {
+                    error!("BitTorrent seeding failed: File does not exist: {}", file_path);
+                    return Err(format!("File does not exist: {}", file_path));
+                }
+
+                if !std::path::Path::new(&file_path).is_file() {
+                    error!("BitTorrent seeding failed: Path is not a file: {}", file_path);
+                    return Err(format!("Path is not a file: {}", file_path));
+                }
+
                 // Use torrent seeding
                 match create_and_seed_torrent(file_path.clone(), state).await {
                     Ok(magnet_link) => {
@@ -3362,7 +3359,10 @@ async fn upload_file_to_network(
                         };
 
 
-                        println!("✅ BitTorrent file published: {}", magnet_link);
+                        // Emit the published_file event to notify the frontend
+                        let payload = serde_json::json!(metadata);
+                        let _ = app.emit("published_file", payload);
+
                         return Ok(());
                     }
                     Err(e) => {
@@ -3643,13 +3643,8 @@ async fn upload_file_to_network(
                         })
                         .await;
 
-                    info!(
-                        "Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})",
-                        file_name, metadata.merkle_root, file_hash
-                    );
-
                     match dht.publish_file(metadata.clone(), None).await {
-                        Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                        Ok(_) => {},
                         Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
                     }
                 }

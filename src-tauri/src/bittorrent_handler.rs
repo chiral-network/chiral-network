@@ -5,7 +5,7 @@ use crate::transfer_events::{
     current_timestamp_ms, calculate_progress, calculate_eta,
 };
 use async_trait::async_trait;
-use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions};
+use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions, create_torrent, CreateTorrentOptions, AddTorrentOptions};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -591,8 +591,6 @@ impl SimpleProtocolHandler for BitTorrentHandler {
 
     #[instrument(skip(self), fields(protocol = "bittorrent"))]
     async fn seed(&self, file_path: &str) -> Result<String, String> {
-        info!("Starting to seed file: {}", file_path);
-
         let path = Path::new(file_path);
         if !path.exists() {
             let error = BitTorrentError::FileSystemError {
@@ -610,22 +608,43 @@ impl SimpleProtocolHandler for BitTorrentHandler {
             return Err(error.into());
         }
 
-        let add_torrent = AddTorrent::from_local_filename(file_path).map_err(|e| {
+        // Create a torrent from the file
+        let torrent = create_torrent(path, CreateTorrentOptions::default()).await.map_err(|e| {
             let error = BitTorrentError::SeedingError {
                 message: format!("Failed to create torrent from file {}: {}", file_path, e),
             };
+            error!("Torrent creation failed: {}", e);
             error!("Seeding failed: {}", error);
             String::from(error)
         })?;
 
+        // Convert the torrent to bytes and create AddTorrent
+        let torrent_bytes = torrent.as_bytes().map_err(|e| {
+            let error = BitTorrentError::SeedingError {
+                message: format!("Failed to serialize torrent for {}: {}", file_path, e),
+            };
+            error!("Torrent serialization failed: {}", e);
+            error!("Seeding failed: {}", error);
+            String::from(error)
+        })?;
+
+        let add_torrent = AddTorrent::from_bytes(torrent_bytes.clone());
+
+        // For seeding, we need to allow overwriting existing files
+        let options = AddTorrentOptions {
+            overwrite: true,
+            ..Default::default()
+        };
+
         let handle = self
             .rqbit_session
-            .add_torrent(add_torrent, None)
+            .add_torrent(add_torrent, Some(options))
             .await
             .map_err(|e| {
                 let error = BitTorrentError::SeedingError {
                     message: format!("Failed to add torrent for seeding: {}", e),
                 };
+                error!("Failed to add torrent to session: {}", e);
                 error!("Seeding failed: {}", error);
                 String::from(error)
             })?
@@ -635,8 +654,7 @@ impl SimpleProtocolHandler for BitTorrentHandler {
         // Get the info hash and construct a magnet link
         let info_hash = handle.info_hash();
         let magnet_link = format!("magnet:?xt=urn:btih:{}", hex::encode(info_hash.0));
-        
-        info!("Successfully started seeding. Magnet link: {}", magnet_link);
+
         Ok(magnet_link)
     }
 }

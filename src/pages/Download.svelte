@@ -28,13 +28,7 @@
   import {
     transferStore,
     activeTransfers as storeActiveTransfers,
-    completedTransfers,
-    failedTransfers,
-    queuedTransfers,
-    formatBytes,
-    formatSpeed,
-    formatETA,
-    type Transfer
+    formatSpeed
   } from '$lib/stores/transferEventsStore'
 
   import { invoke } from '@tauri-apps/api/core'
@@ -104,10 +98,6 @@
         }
       });
 
-      // Cleanup torrent listener
-      onDestroy(() => {
-        unlistenTorrentEvent();
-      });
       try {
         const unlistenProgress = await listen('multi_source_progress_update', (event) => {
           const progress = event.payload as MultiSourceProgress
@@ -514,7 +504,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           downloadedSize: transfer.downloadedBytes,
           totalChunks: transfer.totalChunks,
           completedChunks: transfer.completedChunks,
-          activeSourceCount: transfer.activeSources,
+          activeSources: transfer.activeSources,
           downloadSpeedBps: transfer.downloadSpeedBps,
           etaSeconds: transfer.etaSeconds,
           sourceAssignments: []
@@ -529,7 +519,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           existing.completedChunks = transfer.completedChunks;
           existing.downloadSpeedBps = transfer.downloadSpeedBps;
           existing.etaSeconds = transfer.etaSeconds;
-          existing.activeSourceCount = transfer.activeSources;
+          existing.activeSources = transfer.activeSources;
           multiSourceProgress = multiSourceProgress; // Trigger reactivity
         }
       }
@@ -796,7 +786,6 @@ async function loadAndResumeDownloads() {
   try {
     // Check if we've already restored in this session
     if (sessionStorage.getItem('downloadsRestored') === 'true') {
-      console.log('Downloads already restored in this session, skipping')
       return
     }
 

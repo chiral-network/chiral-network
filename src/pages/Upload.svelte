@@ -664,6 +664,13 @@
   }
 
   async function addFilesFromPaths(paths: string[]) {
+    // Fallback: Force reset isUploading after 30 seconds to prevent UI from being stuck
+    const forceResetTimeout = setTimeout(() => {
+      console.log(`[UPLOAD] Force resetting isUploading due to timeout`);
+      isUploading = false;
+      showToast("Upload timed out - please try again", "error");
+    }, 30000);
+
     // STEP 1: Verify backend has active account before proceeding
     if (isTauri) {
       try {
@@ -674,17 +681,21 @@
             tr('toasts.upload.loginRequired'),
             "error",
           );
+          clearTimeout(forceResetTimeout);
+          isUploading = false;
+          return;
+          }
+        } catch (error) {
+          console.error("Failed to verify account status:", error);
+          showToast(
+            // "Failed to verify account status. Please try logging in again.",
+            tr('toasts.upload.verifyAccountFailed'),
+            "error",
+          );
+          clearTimeout(forceResetTimeout);
+          isUploading = false;
           return;
         }
-      } catch (error) {
-        console.error("Failed to verify account status:", error);
-        showToast(
-          // "Failed to verify account status. Please try logging in again.",
-          tr('toasts.upload.verifyAccountFailed'),
-          "error",
-        );
-        return;
-      }
     }
 
     // STEP 2: Ensure DHT is connected before attempting upload
@@ -695,6 +706,8 @@
         tr('toasts.upload.dhtDisconnected'),
         "error",
       );
+      clearTimeout(forceResetTimeout);
+      isUploading = false;
       return;
     }
 
@@ -709,6 +722,7 @@
         // Get file size to calculate price
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
+
         const metadata = await dhtService.publishFileToNetwork(filePath, price, selectedProtocol);
 
         const newFile = {
@@ -778,7 +792,7 @@
           );
         }
       } catch (error) {
-        console.error(error);
+        console.error(`[UPLOAD] Error uploading ${filePath}:`, error);
         showToast(
           tr("upload.fileFailed", {
             values: {
@@ -801,6 +815,10 @@
     if (addedCount > 0) {
       setTimeout(() => refreshAvailableStorage(), 100);
     }
+
+    // Ensure isUploading is always reset, even if there are errors
+    clearTimeout(forceResetTimeout);
+    isUploading = false;
   }
 
   // Use centralized file size formatting for consistency
@@ -833,7 +851,6 @@
     // ed2k://|file|name|size|hash|/
     return parts.length >= 5 ? parts[4] : "unknown";
   }
-
 </script>
 
 <div class="space-y-6">

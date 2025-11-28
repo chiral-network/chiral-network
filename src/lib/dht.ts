@@ -207,6 +207,8 @@ export class DhtService {
   ): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
+      let timeoutId: NodeJS.Timeout;
+
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
@@ -218,6 +220,8 @@ export class DhtService {
             if (!metadata.fileHash && metadata.merkleRoot) {
               metadata.fileHash = metadata.merkleRoot;
             }
+            // Clear timeout on success
+            if (timeoutId) clearTimeout(timeoutId);
             resolve(metadata);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
@@ -225,14 +229,14 @@ export class DhtService {
         );
 
         // Add timeout to reject the promise if publishing takes too long
-        setTimeout(() => {
+        timeoutId = setTimeout(() => {
           reject(
             new Error(
               "File publishing timeout - no published_file event received"
             )
           );
           unlistenPromise.then((unlistenFn) => unlistenFn());
-        }, 120000); // 2 minute timeout for file publishing
+        }, 10000); // Reduce timeout to 10 seconds for debugging
       });
 
       // Trigger the backend upload with price and protocol
