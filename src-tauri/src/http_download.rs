@@ -1,9 +1,9 @@
 use crate::transfer_events::{
     calculate_eta, calculate_progress, current_timestamp_ms, ChunkCompletedEvent,
-    SourceConnectedEvent, SourceDisconnectedEvent, SourceInfo, SourceType,
-    TransferCompletedEvent, TransferEventBus, TransferFailedEvent, TransferPriority,
-    TransferProgressEvent, TransferStartedEvent, DisconnectReason,
-    ErrorCategory, SourceSummary,
+    ChunkFailedEvent, SourceConnectedEvent, SourceDisconnectedEvent, SourceInfo,
+    SourceType, TransferCompletedEvent, TransferEventBus, TransferFailedEvent,
+    TransferPriority, TransferProgressEvent, TransferResumedEvent, TransferStartedEvent,
+    DisconnectReason, ErrorCategory, SourceSummary,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -632,32 +632,98 @@ impl HttpDownloadClient {
                     request = request.header("X-Downloader-Peer-ID", peer_id);
                 }
 
-                let response = request.send().await.map_err(|e| format!("Failed to download chunk {}: {}", index, e))?;
+                let response = match request.send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let error_msg = format!("Failed to download chunk {}: {}", index, e);
+                        // Emit chunk failed event
+                        if let Some(ref bus) = event_bus {
+                            bus.emit_chunk_failed(ChunkFailedEvent {
+                                transfer_id: config.transfer_id.clone(),
+                                chunk_id: index as u32,
+                                source_id: source_id.clone(),
+                                source_type: SourceType::Http,
+                                failed_at: current_timestamp_ms(),
+                                error: error_msg.clone(),
+                                retry_count: 0,
+                                will_retry: false,
+                                next_retry_at: None,
+                            });
+                        }
+                        return Err(error_msg);
+                    }
+                };
 
                 // Verify 206 Partial Content response
                 if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                    return Err(format!(
+                    let error_msg = format!(
                         "Chunk {} request failed: expected 206 Partial Content, got {}",
                         index,
                         response.status()
-                    ));
+                    );
+                    // Emit chunk failed event
+                    if let Some(ref bus) = event_bus {
+                        bus.emit_chunk_failed(ChunkFailedEvent {
+                            transfer_id: config.transfer_id.clone(),
+                            chunk_id: index as u32,
+                            source_id: source_id.clone(),
+                            source_type: SourceType::Http,
+                            failed_at: current_timestamp_ms(),
+                            error: error_msg.clone(),
+                            retry_count: 0,
+                            will_retry: false,
+                            next_retry_at: None,
+                        });
+                    }
+                    return Err(error_msg);
                 }
 
                 // Read chunk data
-                let data = response
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("Failed to read chunk {} data: {}", index, e))?
-                    .to_vec();
+                let data = match response.bytes().await {
+                    Ok(bytes) => bytes.to_vec(),
+                    Err(e) => {
+                        let error_msg = format!("Failed to read chunk {} data: {}", index, e);
+                        // Emit chunk failed event
+                        if let Some(ref bus) = event_bus {
+                            bus.emit_chunk_failed(ChunkFailedEvent {
+                                transfer_id: config.transfer_id.clone(),
+                                chunk_id: index as u32,
+                                source_id: source_id.clone(),
+                                source_type: SourceType::Http,
+                                failed_at: current_timestamp_ms(),
+                                error: error_msg.clone(),
+                                retry_count: 0,
+                                will_retry: false,
+                                next_retry_at: None,
+                            });
+                        }
+                        return Err(error_msg);
+                    }
+                };
 
                 let expected_size = (end - start + 1) as usize;
                 if data.len() != expected_size {
-                    return Err(format!(
+                    let error_msg = format!(
                         "Chunk {} size mismatch: expected {}, got {}",
                         index,
                         expected_size,
                         data.len()
-                    ));
+                    );
+                    // Emit chunk failed event
+                    if let Some(ref bus) = event_bus {
+                        bus.emit_chunk_failed(ChunkFailedEvent {
+                            transfer_id: config.transfer_id.clone(),
+                            chunk_id: index as u32,
+                            source_id: source_id.clone(),
+                            source_type: SourceType::Http,
+                            failed_at: current_timestamp_ms(),
+                            error: error_msg.clone(),
+                            retry_count: 0,
+                            will_retry: false,
+                            next_retry_at: None,
+                        });
+                    }
+                    return Err(error_msg);
                 }
 
                 let chunk_duration_ms = chunk_start_time.elapsed().as_millis() as u64;
@@ -1124,6 +1190,288 @@ impl HttpDownloadClient {
         ).await;
 
         tracing::info!("Successfully resumed download: {}", file_hash);
+        Ok(())
+    }
+
+    /// Resume a download from a specific byte offset with full event bus integration
+    ///
+    /// This method downloads the remaining part of a file starting from `bytes_already_downloaded`
+    /// and appends to an existing file, emitting transfer events throughout.
+    ///
+    /// Events emitted:
+    /// - `TransferResumed`: When download resumes
+    /// - `SourceConnected`: When HTTP server connection is established  
+    /// - `ChunkCompleted`: For each successfully downloaded chunk
+    /// - `ChunkFailed`: For each failed chunk download
+    /// - `TransferProgress`: Periodic progress updates
+    /// - `TransferCompleted`/`TransferFailed`: On completion or failure
+    pub async fn resume_download_with_events(
+        &self,
+        seeder_url: &str,
+        file_hash: &str,
+        output_path: &Path,
+        bytes_already_downloaded: u64,
+        total_size: u64,
+        config: HttpDownloadConfig,
+        progress_tx: Option<mpsc::Sender<HttpDownloadProgress>>,
+    ) -> Result<(), String> {
+        let event_bus = self.get_event_bus();
+        let start_time = Instant::now();
+        let source_id = format!("http-{}", seeder_url);
+
+        tracing::info!(
+            "Resuming HTTP download with events: {} from {}, offset: {}/{} (transfer_id: {})",
+            file_hash,
+            seeder_url,
+            bytes_already_downloaded,
+            total_size,
+            config.transfer_id
+        );
+
+        // Calculate remaining bytes
+        let remaining_bytes = total_size.saturating_sub(bytes_already_downloaded);
+        if remaining_bytes == 0 {
+            // Already complete - emit completed event
+            if let Some(ref bus) = event_bus {
+                bus.emit_completed(TransferCompletedEvent {
+                    transfer_id: config.transfer_id.clone(),
+                    file_hash: file_hash.to_string(),
+                    file_name: config.file_name.clone(),
+                    file_size: total_size,
+                    output_path: output_path.to_string_lossy().to_string(),
+                    completed_at: current_timestamp_ms(),
+                    duration_seconds: 0,
+                    average_speed_bps: 0.0,
+                    total_chunks: (total_size / CHUNK_SIZE) as u32,
+                    sources_used: vec![],
+                });
+            }
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(HttpDownloadProgress {
+                    file_hash: file_hash.to_string(),
+                    chunks_total: (total_size / CHUNK_SIZE) as usize,
+                    chunks_downloaded: (total_size / CHUNK_SIZE) as usize,
+                    bytes_downloaded: total_size,
+                    bytes_total: total_size,
+                    status: DownloadStatus::Completed,
+                }).await;
+            }
+            return Ok(());
+        }
+
+        // Create source info for events
+        let source_info = SourceInfo {
+            id: source_id.clone(),
+            source_type: SourceType::Http,
+            address: seeder_url.to_string(),
+            reputation: None,
+            estimated_speed_bps: None,
+            latency_ms: None,
+            location: None,
+        };
+
+        // Calculate ranges starting from the resume offset
+        let ranges = self.calculate_ranges_from_offset(bytes_already_downloaded, total_size);
+        let total_chunks = ranges.len() as u32;
+        let completed_chunks_before_resume = (bytes_already_downloaded / CHUNK_SIZE) as u32;
+
+        // Emit resumed event
+        if let Some(ref bus) = event_bus {
+            bus.emit_resumed(TransferResumedEvent {
+                transfer_id: config.transfer_id.clone(),
+                resumed_at: current_timestamp_ms(),
+                downloaded_bytes: bytes_already_downloaded,
+                remaining_bytes,
+                active_sources: 1,
+            });
+
+            // Emit source connected event
+            bus.emit_source_connected(SourceConnectedEvent {
+                transfer_id: config.transfer_id.clone(),
+                source_id: source_id.clone(),
+                source_type: SourceType::Http,
+                source_info: source_info.clone(),
+                connected_at: current_timestamp_ms(),
+                assigned_chunks: ranges.iter().map(|r| r.index as u32).collect(),
+            });
+        }
+
+        // Open existing file for appending
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open(output_path)
+            .await
+        {
+            Ok(f) => f,
+            Err(e) => {
+                let error_msg = format!("Failed to open file for resume: {}", e);
+                if let Some(ref bus) = event_bus {
+                    bus.emit_failed(TransferFailedEvent {
+                        transfer_id: config.transfer_id.clone(),
+                        file_hash: file_hash.to_string(),
+                        failed_at: current_timestamp_ms(),
+                        error: error_msg.clone(),
+                        error_category: ErrorCategory::Filesystem,
+                        downloaded_bytes: bytes_already_downloaded,
+                        total_bytes: total_size,
+                        retry_possible: true,
+                    });
+                }
+                return Err(error_msg);
+            }
+        };
+
+        // Send initial progress
+        self.send_progress(
+            &progress_tx,
+            file_hash,
+            total_chunks as usize + completed_chunks_before_resume as usize,
+            completed_chunks_before_resume as usize,
+            bytes_already_downloaded,
+            total_size,
+            DownloadStatus::Downloading,
+        ).await;
+
+        // Download remaining chunks with event tracking
+        let chunks = match self
+            .download_chunks_with_events(
+                seeder_url,
+                file_hash,
+                &ranges,
+                progress_tx.clone(),
+                total_size,
+                &config,
+                event_bus.clone(),
+                &source_id,
+                start_time,
+            )
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(ref bus) = event_bus {
+                    bus.emit_failed(TransferFailedEvent {
+                        transfer_id: config.transfer_id.clone(),
+                        file_hash: file_hash.to_string(),
+                        failed_at: current_timestamp_ms(),
+                        error: e.clone(),
+                        error_category: ErrorCategory::Network,
+                        downloaded_bytes: bytes_already_downloaded,
+                        total_bytes: total_size,
+                        retry_possible: true,
+                    });
+
+                    bus.emit_source_disconnected(SourceDisconnectedEvent {
+                        transfer_id: config.transfer_id.clone(),
+                        source_id: source_id.clone(),
+                        source_type: SourceType::Http,
+                        disconnected_at: current_timestamp_ms(),
+                        reason: DisconnectReason::NetworkError,
+                        chunks_completed: 0,
+                        will_retry: false,
+                    });
+                }
+                return Err(e);
+            }
+        };
+
+        // Write chunks to file in order
+        for chunk in &chunks {
+            if let Err(e) = file.write_all(chunk).await {
+                let error_msg = format!("Failed to write chunk to file: {}", e);
+                if let Some(ref bus) = event_bus {
+                    bus.emit_failed(TransferFailedEvent {
+                        transfer_id: config.transfer_id.clone(),
+                        file_hash: file_hash.to_string(),
+                        failed_at: current_timestamp_ms(),
+                        error: error_msg.clone(),
+                        error_category: ErrorCategory::Filesystem,
+                        downloaded_bytes: bytes_already_downloaded,
+                        total_bytes: total_size,
+                        retry_possible: false,
+                    });
+                }
+                return Err(error_msg);
+            }
+        }
+
+        // Flush file
+        if let Err(e) = file.flush().await {
+            let error_msg = format!("Failed to flush file: {}", e);
+            if let Some(ref bus) = event_bus {
+                bus.emit_failed(TransferFailedEvent {
+                    transfer_id: config.transfer_id.clone(),
+                    file_hash: file_hash.to_string(),
+                    failed_at: current_timestamp_ms(),
+                    error: error_msg.clone(),
+                    error_category: ErrorCategory::Filesystem,
+                    downloaded_bytes: total_size,
+                    total_bytes: total_size,
+                    retry_possible: false,
+                });
+            }
+            return Err(error_msg);
+        }
+
+        // Calculate final stats
+        let duration_secs = start_time.elapsed().as_secs();
+        let bytes_downloaded_this_session = remaining_bytes;
+        let average_speed = if duration_secs > 0 {
+            bytes_downloaded_this_session as f64 / duration_secs as f64
+        } else {
+            bytes_downloaded_this_session as f64
+        };
+
+        // Send final progress
+        self.send_progress(
+            &progress_tx,
+            file_hash,
+            total_chunks as usize + completed_chunks_before_resume as usize,
+            total_chunks as usize + completed_chunks_before_resume as usize,
+            total_size,
+            total_size,
+            DownloadStatus::Completed,
+        ).await;
+
+        // Emit completion events
+        if let Some(ref bus) = event_bus {
+            bus.emit_source_disconnected(SourceDisconnectedEvent {
+                transfer_id: config.transfer_id.clone(),
+                source_id: source_id.clone(),
+                source_type: SourceType::Http,
+                disconnected_at: current_timestamp_ms(),
+                reason: DisconnectReason::Completed,
+                chunks_completed: total_chunks,
+                will_retry: false,
+            });
+
+            bus.emit_completed(TransferCompletedEvent {
+                transfer_id: config.transfer_id.clone(),
+                file_hash: file_hash.to_string(),
+                file_name: config.file_name.clone(),
+                file_size: total_size,
+                output_path: output_path.to_string_lossy().to_string(),
+                completed_at: current_timestamp_ms(),
+                duration_seconds: duration_secs,
+                average_speed_bps: average_speed,
+                total_chunks: total_chunks + completed_chunks_before_resume,
+                sources_used: vec![SourceSummary {
+                    source_id: source_id.clone(),
+                    source_type: SourceType::Http,
+                    chunks_provided: total_chunks,
+                    bytes_provided: bytes_downloaded_this_session,
+                    average_speed_bps: average_speed,
+                    connection_duration_seconds: duration_secs,
+                }],
+            });
+        }
+
+        tracing::info!(
+            "Successfully resumed download with events: {} in {} seconds",
+            file_hash,
+            duration_secs
+        );
         Ok(())
     }
 
