@@ -4,22 +4,24 @@
 // This module implements the download restart system as specified in docs/download-restart.md
 // Owner: Team Hawks (Nick)
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tauri::AppHandle;
-use tokio::sync::Mutex;
 use chrono::{DateTime, Utc};
-use tokio::sync::mpsc;
-use tracing::info;
-use crate::http_download::{HttpDownloadClient, HttpDownloadProgress, DownloadStatus as HttpDownloadStatus};
-use crate::transfer_events::{
-    TransferEventBus, TransferProgressEvent, TransferPausedEvent, TransferResumedEvent,
-    TransferCompletedEvent, TransferFailedEvent, TransferQueuedEvent,
-    PauseReason, ErrorCategory, TransferPriority,
-    current_timestamp_ms, calculate_progress,
-};
+use futures_util::StreamExt;
+use hex;
+use reqwest::{header, Client, StatusCode};
+use serde::{Deserialize, Serialize};
+use serde_json;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::io::SeekFrom;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
+use tokio::fs::{self, File, OpenOptions};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::Mutex;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
 
 /// Download ID type (UUID string)
 pub type DownloadId = String;
@@ -114,6 +116,8 @@ pub enum DownloadError {
     DiskFull,
     #[error("already completed")]
     AlreadyCompleted,
+    #[error("download cancelled")]
+    Cancelled,
 }
 
 impl DownloadError {
@@ -126,6 +130,7 @@ impl DownloadError {
             DownloadError::Io(_) => "IO_ERROR",
             DownloadError::DiskFull => "STORAGE_EXHAUSTED",
             DownloadError::AlreadyCompleted => "DOWNLOAD_ALREADY_COMPLETE",
+            DownloadError::Cancelled => "DOWNLOAD_CANCELLED",
         }
     }
 
@@ -136,8 +141,11 @@ impl DownloadError {
             DownloadError::Invalid(msg) => format!("Invalid request: {}", msg),
             DownloadError::Source(msg) => format!("Download source error: {}", msg),
             DownloadError::Io(msg) => format!("File system error: {}", msg),
-            DownloadError::DiskFull => "Insufficient disk space. Please free up space and try again.".to_string(),
+            DownloadError::DiskFull => {
+                "Insufficient disk space. Please free up space and try again.".to_string()
+            }
             DownloadError::AlreadyCompleted => "This download is already completed.".to_string(),
+            DownloadError::Cancelled => "Download cancelled".to_string(),
         }
     }
 }
@@ -154,6 +162,7 @@ pub struct DownloadMetadata {
     pub last_modified: Option<DateTime<Utc>>,
     pub sha256_final: Option<String>,
     pub lease_exp: Option<i64>,
+    pub expected_sha256: Option<String>,
 }
 
 impl DownloadMetadata {
@@ -172,6 +181,7 @@ impl DownloadMetadata {
             last_modified: None,
             sha256_final: None,
             lease_exp: None,
+            expected_sha256: None,
         }
     }
 
@@ -188,52 +198,346 @@ impl DownloadMetadata {
     }
 }
 
+const METADATA_FLUSH_INTERVAL_BYTES: u64 = 512 * 1024;
+const PROGRESS_EMIT_INTERVAL_MS: u64 = 750;
+
+#[derive(Clone)]
+struct RemoteHttpMetadata {
+    size: u64,
+    etag: Option<String>,
+    last_modified: Option<DateTime<Utc>>,
+}
+
 /// Download manager internal state
 struct DownloadTask {
     status: DownloadStatus,
     metadata: DownloadMetadata,
     destination_path: PathBuf,
-    /// Handle to the currently running download task for cancellation
-    active_task: Option<tokio::task::JoinHandle<()>>,
+    metadata_path: PathBuf,
+    cancel_token: CancellationToken,
 }
 
 /// Download restart service singleton
 pub struct DownloadRestartService {
     downloads: Arc<Mutex<HashMap<DownloadId, DownloadTask>>>,
-    app_handle: AppHandle,
-    event_bus: Arc<TransferEventBus>,
+    app_handle: Option<AppHandle>,
 }
 
 impl DownloadRestartService {
     /// Create new download restart service
-    pub fn new(app_handle: AppHandle) -> Self {
-        let event_bus = Arc::new(TransferEventBus::new(app_handle.clone()));
+    pub fn new(app_handle: Option<AppHandle>) -> Self {
         Self {
             downloads: Arc::new(Mutex::new(HashMap::new())),
             app_handle,
-            event_bus,
         }
     }
 
-    /// Emit progress event via TransferEventBus
-    fn emit_progress(&self, download_id: &str, status: &DownloadStatus) {
-        let downloaded = status.bytes_downloaded;
-        let total = status.expected_size.unwrap_or(0);
-        let progress_pct = calculate_progress(downloaded, total);
+    fn metadata_path_for(destination_path: &Path) -> PathBuf {
+        let file_name = destination_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("download");
+        destination_path.with_file_name(format!(".{}.chiral.meta.json", file_name))
+    }
 
-        self.event_bus.emit_progress(TransferProgressEvent {
-            transfer_id: download_id.to_string(),
-            downloaded_bytes: downloaded,
-            total_bytes: total,
-            completed_chunks: 0, // Not tracking chunks in this service
-            total_chunks: 0,
-            progress_percentage: progress_pct,
-            download_speed_bps: 0.0, // Would need speed tracking
-            upload_speed_bps: 0.0,
-            eta_seconds: None,
-            active_sources: 1,
-            timestamp: current_timestamp_ms(),
+    async fn persist_metadata(
+        metadata_path: &Path,
+        metadata: &DownloadMetadata,
+    ) -> Result<(), DownloadError> {
+        if let Some(parent) = metadata_path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| DownloadError::Io(format!("Failed to create metadata dir: {}", e)))?;
+        }
+
+        let data = serde_json::to_vec_pretty(metadata)
+            .map_err(|e| DownloadError::Io(format!("Failed to serialize metadata: {}", e)))?;
+        fs::write(metadata_path, data)
+            .await
+            .map_err(|e| DownloadError::Io(format!("Failed to persist metadata: {}", e)))
+    }
+
+    async fn remove_metadata_file(metadata_path: &Path) {
+        if let Err(e) = fs::remove_file(metadata_path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(
+                    "Failed to remove metadata file {}: {}",
+                    metadata_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    async fn set_state(
+        &self,
+        download_id: &str,
+        state: DownloadState,
+        bytes_downloaded: u64,
+        expected_size: Option<u64>,
+        etag: Option<String>,
+        last_error: Option<String>,
+        persist_metadata: bool,
+    ) -> Result<(), DownloadError> {
+        let (status, metadata, metadata_path) = {
+            let mut downloads = self.downloads.lock().await;
+            let task = downloads
+                .get_mut(download_id)
+                .ok_or(DownloadError::NotFound)?;
+            task.status.state = state;
+            task.status.bytes_downloaded = bytes_downloaded;
+            task.status.last_error = last_error.clone();
+            if let Some(expected) = expected_size {
+                task.status.expected_size = Some(expected);
+                task.metadata.expected_size = Some(expected);
+            }
+            if let Some(ref tag) = etag {
+                task.status.etag = Some(tag.clone());
+                task.metadata.etag = Some(tag.clone());
+            }
+            task.metadata.bytes_downloaded = bytes_downloaded;
+            (
+                task.status.clone(),
+                if persist_metadata {
+                    Some(task.metadata.clone())
+                } else {
+                    None
+                },
+                task.metadata_path.clone(),
+            )
+        };
+
+        if let Some(metadata) = metadata {
+            Self::persist_metadata(&metadata_path, &metadata).await?;
+        }
+
+        self.emit_status(&status).await?;
+        Ok(())
+    }
+
+    async fn update_metadata_only<F>(
+        &self,
+        download_id: &str,
+        mutator: F,
+    ) -> Result<(), DownloadError>
+    where
+        F: FnOnce(&mut DownloadMetadata),
+    {
+        let (metadata, metadata_path) = {
+            let mut downloads = self.downloads.lock().await;
+            let task = downloads
+                .get_mut(download_id)
+                .ok_or(DownloadError::NotFound)?;
+            mutator(&mut task.metadata);
+            (task.metadata.clone(), task.metadata_path.clone())
+        };
+
+        Self::persist_metadata(&metadata_path, &metadata).await
+    }
+
+    async fn persist_current_metadata(&self, download_id: &str) -> Result<(), DownloadError> {
+        let (metadata, metadata_path) = {
+            let downloads = self.downloads.lock().await;
+            let task = downloads.get(download_id).ok_or(DownloadError::NotFound)?;
+            (task.metadata.clone(), task.metadata_path.clone())
+        };
+        Self::persist_metadata(&metadata_path, &metadata).await
+    }
+
+    async fn status_snapshot(&self, download_id: &str) -> Result<DownloadStatus, DownloadError> {
+        let downloads = self.downloads.lock().await;
+        downloads
+            .get(download_id)
+            .map(|task| task.status.clone())
+            .ok_or(DownloadError::NotFound)
+    }
+
+    async fn fetch_remote_http_metadata(
+        &self,
+        client: &Client,
+        url: &str,
+    ) -> Result<RemoteHttpMetadata, DownloadError> {
+        let response = client
+            .head(url)
+            .send()
+            .await
+            .map_err(|e| DownloadError::Source(format!("HEAD request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(DownloadError::Source(format!(
+                "Metadata request failed with status {}",
+                response.status()
+            )));
+        }
+
+        let size = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .ok_or_else(|| DownloadError::Source("Missing Content-Length header".to_string()))?
+            .to_str()
+            .map_err(|e| DownloadError::Source(format!("Invalid Content-Length header: {}", e)))?
+            .parse::<u64>()
+            .map_err(|e| DownloadError::Source(format!("Invalid Content-Length value: {}", e)))?;
+
+        let etag = response
+            .headers()
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim_matches('"').to_string());
+
+        let last_modified = response
+            .headers()
+            .get(header::LAST_MODIFIED)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|value| DateTime::parse_from_rfc2822(value).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+
+        Ok(RemoteHttpMetadata {
+            size,
+            etag,
+            last_modified,
+        })
+    }
+
+    async fn prepare_destination_file(
+        &self,
+        download_id: &str,
+        destination_path: &Path,
+        remote_size: u64,
+        remote_etag: Option<String>,
+    ) -> Result<u64, DownloadError> {
+        if let Some(parent) = destination_path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| DownloadError::Io(format!("Failed to create parent dir: {}", e)))?;
+        }
+
+        let mut resume_offset = match fs::metadata(destination_path).await {
+            Ok(meta) => meta.len().min(remote_size),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => {
+                return Err(DownloadError::Io(format!(
+                    "Failed to inspect destination file: {}",
+                    e
+                )))
+            }
+        };
+
+        let should_reset = {
+            let downloads = self.downloads.lock().await;
+            downloads
+                .get(download_id)
+                .and_then(|task| task.metadata.etag.clone())
+                .zip(remote_etag.clone())
+                .map(|(existing, remote)| existing != remote)
+                .unwrap_or(false)
+        };
+
+        if should_reset && resume_offset > 0 {
+            warn!(
+                "Remote metadata changed for {}, deleting partial file",
+                download_id
+            );
+            if let Err(e) = fs::remove_file(destination_path).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(DownloadError::Io(format!(
+                        "Failed to delete old partial file: {}",
+                        e
+                    )));
+                }
+            }
+            resume_offset = 0;
+        }
+
+        Ok(resume_offset)
+    }
+
+    async fn expected_sha(&self, download_id: &str) -> Result<Option<String>, DownloadError> {
+        let downloads = self.downloads.lock().await;
+        Ok(downloads
+            .get(download_id)
+            .and_then(|task| task.metadata.expected_sha256.clone()))
+    }
+
+    async fn verify_file_hash(&self, path: &Path, expected: &str) -> Result<String, DownloadError> {
+        let mut file = File::open(path)
+            .await
+            .map_err(|e| DownloadError::Io(format!("Failed to open file for hashing: {}", e)))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0u8; 1024 * 1024];
+
+        loop {
+            let bytes_read = file.read(&mut buffer).await.map_err(|e| {
+                DownloadError::Io(format!("Failed to read file for hashing: {}", e))
+            })?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+
+        let actual = hex::encode(hasher.finalize());
+        let normalized_expected = expected.trim().to_ascii_lowercase();
+
+        if normalized_expected != actual {
+            return Err(DownloadError::Invalid(format!(
+                "SHA-256 mismatch: expected {}, got {}",
+                normalized_expected, actual
+            )));
+        }
+
+        Ok(actual)
+    }
+
+    async fn spawn_download_worker(&self, download_id: String) -> Result<(), DownloadError> {
+        let (source_url, destination_path, metadata_path, cancel_token) = {
+            let downloads = self.downloads.lock().await;
+            let task = downloads.get(&download_id).ok_or(DownloadError::NotFound)?;
+            (
+                task.metadata.url.clone(),
+                task.destination_path.clone(),
+                task.metadata_path.clone(),
+                task.cancel_token.clone(),
+            )
+        };
+
+        let service = self.clone_service();
+        tokio::spawn(async move {
+            if let Err(err) = service
+                .run_download_state_machine(
+                    download_id.clone(),
+                    source_url,
+                    destination_path,
+                    metadata_path,
+                    cancel_token,
+                )
+                .await
+            {
+                if matches!(err, DownloadError::Cancelled) {
+                    info!("Download {} paused/cancelled", download_id);
+                } else {
+                    service
+                        .update_state_with_error(
+                            &download_id,
+                            DownloadState::Failed,
+                            err.to_string(),
+                        )
+                        .await;
+                }
+            }
         });
+
+        Ok(())
+    }
+
+    /// Emit download_status event to frontend
+    async fn emit_status(&self, status: &DownloadStatus) -> Result<(), DownloadError> {
+        if let Some(handle) = &self.app_handle {
+            handle
+                .emit("download_status", status)
+                .map_err(|e| DownloadError::Io(format!("Failed to emit event: {}", e)))?;
+        }
+        Ok(())
     }
 
     /// Clone service for spawning tasks
@@ -241,7 +545,6 @@ impl DownloadRestartService {
         Self {
             downloads: self.downloads.clone(),
             app_handle: self.app_handle.clone(),
-            event_bus: self.event_bus.clone(),
         }
     }
 
@@ -250,176 +553,256 @@ impl DownloadRestartService {
         &self,
         download_id: String,
         source_url: String,
-        dest_path: String,
-        expected_sha256: Option<String>,
+        dest_path: PathBuf,
+        metadata_path: PathBuf,
+        cancel_token: CancellationToken,
     ) -> Result<(), DownloadError> {
-        use tokio::time::{sleep, Duration};
+        if !source_url.starts_with("http") {
+            return Err(DownloadError::Invalid(
+                "Restartable downloads currently support HTTP sources only".to_string(),
+            ));
+        }
 
-        // Initialize HTTP download client
-        let http_client = HttpDownloadClient::new();
-        let (progress_tx, mut progress_rx) = mpsc::channel::<HttpDownloadProgress>(32);
+        let destination_path = dest_path;
+        let client = Client::new();
 
-        // State: Handshake - Request lease from seeder
-        self.update_state(&download_id, DownloadState::Handshake, None, None).await;
+        self.set_state(
+            &download_id,
+            DownloadState::PreparingHead,
+            0,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await?;
 
-        // Simulate handshake delay
-        sleep(Duration::from_millis(500)).await;
+        let remote_meta = self
+            .fetch_remote_http_metadata(&client, &source_url)
+            .await?;
 
-        // State: PreparingHead - Fetch file metadata
-        self.update_state(&download_id, DownloadState::PreparingHead, None, Some("\"requesting-metadata\"".to_string())).await;
+        self.update_metadata_only(&download_id, |meta| {
+            meta.expected_size = Some(remote_meta.size);
+            meta.etag = remote_meta.etag.clone();
+            meta.last_modified = remote_meta.last_modified;
+        })
+        .await?;
 
-        // Simulate metadata fetch delay
-        sleep(Duration::from_millis(800)).await;
+        self.set_state(
+            &download_id,
+            DownloadState::ValidatingMetadata,
+            0,
+            Some(remote_meta.size),
+            remote_meta.etag.clone(),
+            None,
+            true,
+        )
+        .await?;
 
-        // For now, simulate metadata - in real implementation, this would come from HEAD request
-        let total_size = 10 * 1024 * 1024u64; // 10 MB
-        let etag = "\"simulated-etag-123\"".to_string();
+        let resume_offset = self
+            .prepare_destination_file(
+                &download_id,
+                &destination_path,
+                remote_meta.size,
+                remote_meta.etag.clone(),
+            )
+            .await?;
 
-        self.update_state(&download_id, DownloadState::PreparingHead, Some(total_size), Some(etag.clone())).await;
+        self.set_state(
+            &download_id,
+            DownloadState::PreflightStorage,
+            resume_offset,
+            Some(remote_meta.size),
+            remote_meta.etag.clone(),
+            None,
+            true,
+        )
+        .await?;
 
-        // State: PreflightStorage - Check disk space
-        self.update_state(&download_id, DownloadState::PreflightStorage, Some(total_size), Some(etag.clone())).await;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&destination_path)
+            .await
+            .map_err(|e| DownloadError::Io(format!("Failed to open destination: {}", e)))?;
+        file.seek(SeekFrom::Start(resume_offset))
+            .await
+            .map_err(|e| DownloadError::Io(format!("Failed to seek file: {}", e)))?;
+        if resume_offset > 0 {
+            file.set_len(resume_offset)
+                .await
+                .map_err(|e| DownloadError::Io(format!("Failed to truncate file: {}", e)))?;
+        }
 
-        // Simulate storage check
-        sleep(Duration::from_millis(200)).await;
+        self.set_state(
+            &download_id,
+            DownloadState::Downloading,
+            resume_offset,
+            Some(remote_meta.size),
+            remote_meta.etag.clone(),
+            None,
+            true,
+        )
+        .await?;
 
-        // State: ValidatingMetadata - Validate resume data if any
-        self.update_state(&download_id, DownloadState::ValidatingMetadata, Some(total_size), Some(etag.clone())).await;
+        let mut request = client.get(&source_url);
+        if resume_offset > 0 {
+            request = request.header(header::RANGE, format!("bytes={}-", resume_offset));
+        }
 
-        // Simulate validation
-        sleep(Duration::from_millis(300)).await;
+        let mut response = request
+            .send()
+            .await
+            .map_err(|e| DownloadError::Source(format!("HTTP request failed: {}", e)))?;
 
-        // State: Downloading - Start actual download
-        self.update_state(&download_id, DownloadState::Downloading, Some(total_size), Some(etag.clone())).await;
+        if resume_offset > 0 && response.status() == StatusCode::OK {
+            warn!(
+                "Server at {} ignored Range header, restarting download from scratch",
+                source_url
+            );
+            file.set_len(0)
+                .await
+                .map_err(|e| DownloadError::Io(format!("Failed to reset file: {}", e)))?;
+            self.set_state(
+                &download_id,
+                DownloadState::Restarting,
+                0,
+                Some(remote_meta.size),
+                remote_meta.etag.clone(),
+                None,
+                true,
+            )
+            .await?;
+            response = client
+                .get(&source_url)
+                .send()
+                .await
+                .map_err(|e| DownloadError::Source(format!("HTTP request failed: {}", e)))?;
+        }
 
-        // Start the actual HTTP download in a separate task
-        let (completion_tx, mut completion_rx) = mpsc::channel::<Result<(), String>>(1);
-        let progress_tx_clone = progress_tx.clone();
+        if resume_offset == 0 && response.status() != StatusCode::OK {
+            return Err(DownloadError::Source(format!(
+                "Unexpected status {} when starting download",
+                response.status()
+            )));
+        }
 
-        let task_handle = tokio::spawn(async move {
-            // Use real HTTP download with progress reporting
-            let result = http_client.download_file(
-                &source_url,
-                &expected_sha256.unwrap_or_else(|| "unknown-hash".to_string()),
-                std::path::Path::new(&dest_path),
-                Some(progress_tx),
-            ).await;
+        if resume_offset > 0 && response.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(DownloadError::Source(format!(
+                "Server does not support ranged downloads (status: {})",
+                response.status()
+            )));
+        }
 
-            // Send completion result
-            let _ = completion_tx.send(result).await;
-        });
+        let mut stream = response.bytes_stream();
+        let mut downloaded = resume_offset;
+        let mut last_emit = Instant::now();
+        let mut last_persist = resume_offset;
 
-        // Handle completion in a separate task
-        tokio::spawn(async move {
-            if let Some(result) = completion_rx.recv().await {
-                match result {
-                    Ok(_) => {
-                        // Send completion progress
-                        let _ = progress_tx_clone.send(HttpDownloadProgress {
-                            file_hash: "placeholder-hash".to_string(),
-                            chunks_total: (total_size / 256 * 1024) as usize,
-                            chunks_downloaded: (total_size / 256 * 1024) as usize,
-                            bytes_downloaded: total_size,
-                            bytes_total: total_size,
-                            status: HttpDownloadStatus::Completed,
-                        }).await;
-                    }
-                    Err(e) => {
-                        // Send failure progress
-                        let _ = progress_tx_clone.send(HttpDownloadProgress {
-                            file_hash: "placeholder-hash".to_string(),
-                            chunks_total: 0,
-                            chunks_downloaded: 0,
-                            bytes_downloaded: 0,
-                            bytes_total: total_size,
-                            status: HttpDownloadStatus::Failed,
-                        }).await;
-                        tracing::error!("HTTP download failed: {}", e);
-                    }
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                _ = cancel_token.cancelled() => {
+                    self.persist_current_metadata(&download_id).await?;
+                    return Err(DownloadError::Cancelled);
+                }
+                next = stream.next() => next
+            };
+
+            let Some(chunk) = chunk else {
+                break;
+            };
+
+            let chunk = chunk.map_err(|e| DownloadError::Source(format!("Stream error: {}", e)))?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| DownloadError::Io(format!("Failed to write chunk: {}", e)))?;
+
+            downloaded = downloaded
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| DownloadError::Io("download size overflowed".to_string()))?;
+
+            {
+                let mut downloads = self.downloads.lock().await;
+                if let Some(task) = downloads.get_mut(&download_id) {
+                    task.metadata.bytes_downloaded = downloaded;
+                    task.status.bytes_downloaded = downloaded;
+                    task.status.state = DownloadState::Downloading;
+                    task.status.last_error = None;
                 }
             }
-        });
 
-        // Store the task handle for potential cancellation
-        {
-            let mut downloads = self.downloads.lock().await;
-            if let Some(task) = downloads.get_mut(&download_id) {
-                task.active_task = Some(task_handle);
+            if downloaded.saturating_sub(last_persist) >= METADATA_FLUSH_INTERVAL_BYTES {
+                self.persist_current_metadata(&download_id).await?;
+                last_persist = downloaded;
+            }
+
+            if last_emit.elapsed().as_millis() as u64 >= PROGRESS_EMIT_INTERVAL_MS {
+                let status = self.status_snapshot(&download_id).await?;
+                self.emit_status(&status).await?;
+                last_emit = Instant::now();
             }
         }
 
-        // Monitor progress and handle state updates
-        let bytes_downloaded = 0u64;
-        let mut download_active = true;
-
-        while download_active {
-            tokio::select! {
-                // Handle progress updates from download task
-                Some(progress) = progress_rx.recv() => {
-                    match progress.status {
-                        HttpDownloadStatus::Completed => {
-                            download_active = false;
-                            self.update_state(&download_id, DownloadState::VerifyingSha, Some(total_size), Some(etag.clone())).await;
-
-                            // Simulate SHA verification
-                            sleep(Duration::from_millis(500)).await;
-
-                            self.update_state(&download_id, DownloadState::FinalizingIo, Some(total_size), Some(etag.clone())).await;
-
-                            // Simulate finalization
-                            sleep(Duration::from_millis(300)).await;
-
-                            self.update_state(&download_id, DownloadState::Completed, Some(total_size), Some(etag.clone())).await;
-                        }
-                        HttpDownloadStatus::Failed => {
-                            download_active = false;
-                            self.update_state_with_error(&download_id, DownloadState::Failed, "Download failed".to_string()).await;
-                        }
-                        _ => {
-                            // Continue downloading
-                            self.update_state(&download_id, DownloadState::Downloading, Some(total_size), Some(etag.clone())).await;
-                        }
-                    }
-                }
-
-                // Check for pause/cancel commands every 100ms
-                _ = sleep(Duration::from_millis(100)) => {
-                    let mut downloads = self.downloads.lock().await;
-                    if let Some(task) = downloads.get_mut(&download_id) {
-                        match task.status.state {
-                            DownloadState::Paused => {
-                                // Wait for resume
-                                drop(downloads);
-                                sleep(Duration::from_millis(500)).await;
-                                continue;
-                            }
-                            DownloadState::AwaitingResume => {
-                                // Resume was requested
-                                task.status.state = DownloadState::Downloading;
-                                let status = task.status.clone();
-                                drop(downloads);
-                                // Emit resumed event via TransferEventBus
-                                self.event_bus.emit_resumed(TransferResumedEvent {
-                                    transfer_id: download_id.clone(),
-                                    resumed_at: current_timestamp_ms(),
-                                    downloaded_bytes: status.bytes_downloaded,
-                                    remaining_bytes: status.expected_size.unwrap_or(0).saturating_sub(status.bytes_downloaded),
-                                    active_sources: 1,
-                                });
-                                continue;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
+        if downloaded < remote_meta.size {
+            return Err(DownloadError::Source(format!(
+                "Download ended early: expected {} bytes, got {}",
+                remote_meta.size, downloaded
+            )));
         }
 
-        // Note: Task completion is handled by the AbortHandle mechanism
+        file.flush()
+            .await
+            .map_err(|e| DownloadError::Io(format!("Failed to flush file: {}", e)))?;
+
+        self.set_state(
+            &download_id,
+            DownloadState::VerifyingSha,
+            downloaded,
+            Some(remote_meta.size),
+            remote_meta.etag.clone(),
+            None,
+            true,
+        )
+        .await?;
+
+        if let Some(expected) = self.expected_sha(&download_id).await? {
+            let actual = self.verify_file_hash(&destination_path, &expected).await?;
+            self.update_metadata_only(&download_id, |meta| {
+                meta.sha256_final = Some(actual.clone());
+            })
+            .await?;
+        }
+
+        self.set_state(
+            &download_id,
+            DownloadState::FinalizingIo,
+            downloaded,
+            Some(remote_meta.size),
+            remote_meta.etag.clone(),
+            None,
+            true,
+        )
+        .await?;
+
+        Self::remove_metadata_file(&metadata_path).await;
+
+        self.set_state(
+            &download_id,
+            DownloadState::Completed,
+            downloaded,
+            Some(remote_meta.size),
+            remote_meta.etag.clone(),
+            None,
+            false,
+        )
+        .await?;
+
         Ok(())
     }
 
-    /// Update download state with error and emit via TransferEventBus
+    /// Update download state with progress
+    /// Update download state with error
     async fn update_state_with_error(
         &self,
         download_id: &str,
@@ -428,27 +811,11 @@ impl DownloadRestartService {
     ) {
         let mut downloads = self.downloads.lock().await;
         if let Some(task) = downloads.get_mut(download_id) {
-            task.status.state = state.clone();
-            task.status.last_error = Some(error.clone());
+            task.status.state = state;
+            task.status.last_error = Some(error);
             let status = task.status.clone();
-            let file_hash = task.metadata.url.clone(); // Use URL as identifier
             drop(downloads);
-
-            // Emit failed event via TransferEventBus
-            if state == DownloadState::Failed {
-                self.event_bus.emit_failed(TransferFailedEvent {
-                    transfer_id: download_id.to_string(),
-                    file_hash,
-                    failed_at: current_timestamp_ms(),
-                    error,
-                    error_category: ErrorCategory::Unknown,
-                    downloaded_bytes: status.bytes_downloaded,
-                    total_bytes: status.expected_size.unwrap_or(0),
-                    retry_possible: true,
-                });
-            } else {
-                self.emit_progress(download_id, &status);
-            }
+            let _ = self.emit_status(&status).await;
         }
     }
 
@@ -462,15 +829,28 @@ impl DownloadRestartService {
 
         // Transition to Handshake
         sleep(Duration::from_millis(500)).await;
-        self.update_state(&download_id, DownloadState::Handshake, None, None).await;
+        self.update_state(&download_id, DownloadState::Handshake, None, None)
+            .await;
 
         // Transition to PreparingHead
         sleep(Duration::from_millis(800)).await;
-        self.update_state(&download_id, DownloadState::PreparingHead, Some(total_size), Some("\"test-etag-123\"".to_string())).await;
+        self.update_state(
+            &download_id,
+            DownloadState::PreparingHead,
+            Some(total_size),
+            Some("\"test-etag-123\"".to_string()),
+        )
+        .await;
 
         // Transition to Downloading
         sleep(Duration::from_millis(500)).await;
-        self.update_state(&download_id, DownloadState::Downloading, Some(total_size), Some("\"test-etag-123\"".to_string())).await;
+        self.update_state(
+            &download_id,
+            DownloadState::Downloading,
+            Some(total_size),
+            Some("\"test-etag-123\"".to_string()),
+        )
+        .await;
 
         // Simulate download progress (10 updates)
         for i in 1..=10 {
@@ -494,8 +874,7 @@ impl DownloadRestartService {
 
                 let status = task.status.clone();
                 drop(downloads);
-                // Emit progress via TransferEventBus
-                self.emit_progress(&download_id, &status);
+                let _ = self.emit_status(&status).await;
             } else {
                 return; // Download was deleted
             }
@@ -503,7 +882,13 @@ impl DownloadRestartService {
 
         // Transition to VerifyingSha
         sleep(Duration::from_millis(1000)).await;
-        self.update_state(&download_id, DownloadState::VerifyingSha, Some(total_size), Some("\"test-etag-123\"".to_string())).await;
+        self.update_state(
+            &download_id,
+            DownloadState::VerifyingSha,
+            Some(total_size),
+            Some("\"test-etag-123\"".to_string()),
+        )
+        .await;
 
         // Transition to Completed
         sleep(Duration::from_millis(1000)).await;
@@ -514,31 +899,22 @@ impl DownloadRestartService {
             task.metadata.sha256_final = Some("abc123def456...".to_string());
 
             let status = task.status.clone();
-            let file_name = task.metadata.url.clone();
-            let output_path = task.destination_path.to_string_lossy().to_string();
             drop(downloads);
-
-            // Emit completed event via TransferEventBus
-            self.event_bus.emit_completed(TransferCompletedEvent {
-                transfer_id: download_id.clone(),
-                file_hash: download_id,
-                file_name,
-                file_size: total_size,
-                output_path,
-                completed_at: current_timestamp_ms(),
-                duration_seconds: 0,
-                average_speed_bps: 0.0,
-                total_chunks: 0,
-                sources_used: vec![],
-            });
+            let _ = self.emit_status(&status).await;
         }
     }
 
-    /// Update download state (helper for simulation) and emit via TransferEventBus
-    async fn update_state(&self, download_id: &str, state: DownloadState, expected_size: Option<u64>, etag: Option<String>) {
+    /// Update download state (helper for simulation)
+    async fn update_state(
+        &self,
+        download_id: &str,
+        state: DownloadState,
+        expected_size: Option<u64>,
+        etag: Option<String>,
+    ) {
         let mut downloads = self.downloads.lock().await;
         if let Some(task) = downloads.get_mut(download_id) {
-            task.status.state = state.clone();
+            task.status.state = state;
             if let Some(size) = expected_size {
                 task.status.expected_size = Some(size);
                 task.metadata.expected_size = Some(size);
@@ -549,40 +925,8 @@ impl DownloadRestartService {
             }
 
             let status = task.status.clone();
-            let file_name = task.metadata.url.clone();
-            let output_path = task.destination_path.to_string_lossy().to_string();
             drop(downloads);
-
-            // Emit appropriate event based on state
-            match state {
-                DownloadState::Completed => {
-                    self.event_bus.emit_completed(TransferCompletedEvent {
-                        transfer_id: download_id.to_string(),
-                        file_hash: download_id.to_string(),
-                        file_name,
-                        file_size: status.expected_size.unwrap_or(0),
-                        output_path,
-                        completed_at: current_timestamp_ms(),
-                        duration_seconds: 0, // Would need start time tracking
-                        average_speed_bps: 0.0,
-                        total_chunks: 0,
-                        sources_used: vec![],
-                    });
-                }
-                DownloadState::Paused => {
-                    self.event_bus.emit_paused(TransferPausedEvent {
-                        transfer_id: download_id.to_string(),
-                        paused_at: current_timestamp_ms(),
-                        reason: PauseReason::UserRequested,
-                        can_resume: true,
-                        downloaded_bytes: status.bytes_downloaded,
-                        total_bytes: status.expected_size.unwrap_or(0),
-                    });
-                }
-                _ => {
-                    self.emit_progress(download_id, &status);
-                }
-            }
+            let _ = self.emit_status(&status).await;
         }
     }
 
@@ -622,7 +966,8 @@ impl DownloadRestartService {
         }
 
         // Create initial metadata
-        let metadata = DownloadMetadata::new(download_id.clone(), request.source_url.clone());
+        let mut metadata = DownloadMetadata::new(download_id.clone(), request.source_url.clone());
+        metadata.expected_sha256 = request.expected_sha256.clone();
 
         // Create initial status
         let status = DownloadStatus {
@@ -635,48 +980,28 @@ impl DownloadRestartService {
             last_error: None,
         };
 
+        let metadata_path = Self::metadata_path_for(&dest_path);
+        let cancel_token = CancellationToken::new();
+
         // Store download task
         downloads.insert(
             download_id.clone(),
             DownloadTask {
                 status: status.clone(),
-                metadata,
-                destination_path: dest_path,
-                active_task: None,
+                metadata: metadata.clone(),
+                destination_path: dest_path.clone(),
+                metadata_path: metadata_path.clone(),
+                cancel_token,
             },
         );
 
-        // Emit queued event via TransferEventBus
-        drop(downloads); // Release lock before emitting
-        self.event_bus.emit_queued(TransferQueuedEvent {
-            transfer_id: download_id.clone(),
-            file_hash: download_id.clone(),
-            file_name: request.source_url.clone(),
-            file_size: 0, // Unknown until metadata is fetched
-            output_path: request.destination_path.clone(),
-            priority: TransferPriority::Normal,
-            queued_at: current_timestamp_ms(),
-            queue_position: 0,
-            estimated_sources: 1,
-        });
+        drop(downloads); // Release lock before async work
+
+        Self::persist_metadata(&metadata_path, &metadata).await?;
+        self.emit_status(&status).await?;
 
         // Start actual download state machine in background task
-        let service = self.clone_service();
-        let download_id_clone = download_id.clone();
-        let source_url = request.source_url.clone();
-        let dest_path = request.destination_path.clone();
-        let expected_sha256 = request.expected_sha256.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = service.run_download_state_machine(
-                download_id_clone,
-                source_url,
-                dest_path,
-                expected_sha256,
-            ).await {
-                tracing::error!("Download state machine failed: {}", e);
-            }
-        });
+        self.spawn_download_worker(download_id.clone()).await?;
 
         Ok(download_id)
     }
@@ -693,9 +1018,7 @@ impl DownloadRestartService {
         }
 
         let mut downloads = self.downloads.lock().await;
-        let task = downloads
-            .get_mut(download_id)
-            .unwrap(); // Safe because we checked existence above
+        let task = downloads.get_mut(download_id).unwrap(); // Safe because we checked existence above
 
         // Only pause if currently downloading
         if task.status.state != DownloadState::Downloading
@@ -706,28 +1029,18 @@ impl DownloadRestartService {
             ));
         }
 
-        // Update state to Paused and get task handle before dropping lock
+        // Update state to Paused and get cancellation token before dropping lock
         task.status.state = DownloadState::Paused;
         let status = task.status.clone();
-        let task_handle = task.active_task.take();
+        let cancel_token = task.cancel_token.clone();
+        task.cancel_token = CancellationToken::new();
 
         drop(downloads); // Release lock before emitting
+        self.emit_status(&status).await?;
 
-        // Emit paused event via TransferEventBus
-        self.event_bus.emit_paused(TransferPausedEvent {
-            transfer_id: download_id.to_string(),
-            paused_at: current_timestamp_ms(),
-            reason: PauseReason::UserRequested,
-            can_resume: true,
-            downloaded_bytes: status.bytes_downloaded,
-            total_bytes: status.expected_size.unwrap_or(0),
-        });
-
-        // Cancel the active download task if it's running
-        if let Some(task_handle) = task_handle {
-            task_handle.abort();
-            info!("Cancelled download task for {}", download_id);
-        }
+        cancel_token.cancel();
+        self.persist_current_metadata(download_id).await?;
+        info!("Paused download {}", download_id);
 
         Ok(())
     }
@@ -744,9 +1057,7 @@ impl DownloadRestartService {
         }
 
         let mut downloads = self.downloads.lock().await;
-        let task = downloads
-            .get_mut(download_id)
-            .unwrap(); // Safe because we checked existence above
+        let task = downloads.get_mut(download_id).unwrap(); // Safe because we checked existence above
 
         // Only resume if paused or awaiting resume
         if task.status.state != DownloadState::Paused
@@ -757,60 +1068,19 @@ impl DownloadRestartService {
             ));
         }
 
-        // Extract data needed for resume before releasing lock
-        let source_url = task.metadata.url.clone();
-        let dest_path = task.destination_path.clone();
-        let expected_sha256 = task.metadata.sha256_final.clone();
-        let bytes_already_downloaded = task.status.bytes_downloaded;
-        let total_size = task.status.expected_size.unwrap_or(0);
-        let etag = task.status.etag.clone();
-
         // Update state to indicate resume is starting
         task.status.state = DownloadState::Downloading;
+        task.status.last_error = None;
+        task.cancel_token = CancellationToken::new();
         let status = task.status.clone();
 
         drop(downloads); // Release lock before emitting
+        self.emit_status(&status).await?;
 
-        // Emit resumed event via TransferEventBus
-        self.event_bus.emit_resumed(TransferResumedEvent {
-            transfer_id: download_id.to_string(),
-            resumed_at: current_timestamp_ms(),
-            downloaded_bytes: bytes_already_downloaded,
-            remaining_bytes: total_size.saturating_sub(bytes_already_downloaded),
-            active_sources: 1,
-        });
-
-        // Start the resume download task
-        let http_client = HttpDownloadClient::new();
-        let (progress_tx, progress_rx) = mpsc::channel::<HttpDownloadProgress>(32);
-
-        let task_handle = tokio::spawn(async move {
-            // Use HTTP Range requests to resume from current position
-            let result = http_client.resume_download_from_offset(
-                &source_url,
-                &expected_sha256.unwrap_or_else(|| "unknown-hash".to_string()),
-                std::path::Path::new(&dest_path),
-                bytes_already_downloaded,
-                total_size,
-                Some(progress_tx),
-            ).await;
-
-            if let Err(e) = result {
-                tracing::error!("HTTP resume failed: {}", e);
-            }
-        });
-
-        // Store the task handle
-        {
-            let mut downloads = self.downloads.lock().await;
-            if let Some(task) = downloads.get_mut(download_id) {
-                task.active_task = Some(task_handle);
-            }
-        }
+        self.spawn_download_worker(download_id.to_string()).await?;
 
         Ok(())
     }
-
 }
 
 // Note: Tauri commands are defined in main.rs to access AppState
@@ -854,11 +1124,11 @@ mod tests {
 
     #[test]
     fn test_error_codes() {
-        assert_eq!(DownloadError::NotFound.to_error_code(), "DOWNLOAD_NOT_FOUND");
         assert_eq!(
-            DownloadError::DiskFull.to_error_code(),
-            "STORAGE_EXHAUSTED"
+            DownloadError::NotFound.to_error_code(),
+            "DOWNLOAD_NOT_FOUND"
         );
+        assert_eq!(DownloadError::DiskFull.to_error_code(), "STORAGE_EXHAUSTED");
         assert_eq!(
             DownloadError::Invalid("test".to_string()).to_error_code(),
             "DOWNLOAD_INVALID_REQUEST"
@@ -867,7 +1137,8 @@ mod tests {
 
     #[test]
     fn test_metadata_version_validation() {
-        let mut metadata = DownloadMetadata::new("test-id".to_string(), "http://example.com".to_string());
+        let mut metadata =
+            DownloadMetadata::new("test-id".to_string(), "http://example.com".to_string());
         assert!(metadata.validate_version().is_ok());
 
         metadata.version = 999;
