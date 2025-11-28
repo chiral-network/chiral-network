@@ -35,6 +35,9 @@
     reachable: boolean;
     latency_ms: number | null;
     error: string | null;
+    consecutive_failures: number;
+    last_success: number | null;
+    last_checked: number | null;
   }
 
   interface BootstrapHealthReport {
@@ -42,12 +45,16 @@
     reachable_nodes: number;
     unreachable_nodes: number;
     nodes: BootstrapNodeHealth[];
+    timestamp: number;
+    healthy: boolean;
+    recommendation: string | null;
   }
 
   let bootstrapExpanded = false;
   let bootstrapHealth: BootstrapHealthReport | null = null;
   let bootstrapLoading = false;
   let bootstrapError: string | null = null;
+  let reconnecting = false;
 
   $: lastUpdatedLabel = status
     ? tr('network.geth.lastUpdated', {
@@ -107,6 +114,25 @@
       bootstrapError = String(err);
     } finally {
       bootstrapLoading = false;
+    }
+  }
+
+  async function reconnectToBootstrap() {
+    if (!isTauri) return;
+
+    reconnecting = true;
+    bootstrapError = null;
+
+    try {
+      const newPeerCount = await invoke<number>('reconnect_geth_bootstrap', { minPeers: 3 });
+      console.log('Reconnected, new peer count:', newPeerCount);
+      // Refresh health check after reconnect
+      await checkBootstrapHealth();
+    } catch (err) {
+      console.error('Failed to reconnect to bootstrap:', err);
+      bootstrapError = String(err);
+    } finally {
+      reconnecting = false;
     }
   }
 
@@ -304,11 +330,24 @@
             size="sm"
             class="flex items-center gap-2"
             on:click={checkBootstrapHealth}
-            disabled={bootstrapLoading}
+            disabled={bootstrapLoading || reconnecting}
           >
             <RefreshCw class={`h-3 w-3 ${bootstrapLoading ? 'animate-spin' : ''}`} />
             {bootstrapLoading ? tr('network.geth.bootstrap.checking') : tr('network.geth.bootstrap.checkNow')}
           </Button>
+
+          {#if status?.running}
+            <Button
+              variant="outline"
+              size="sm"
+              class="flex items-center gap-2"
+              on:click={reconnectToBootstrap}
+              disabled={bootstrapLoading || reconnecting}
+            >
+              <Wifi class={`h-3 w-3 ${reconnecting ? 'animate-pulse' : ''}`} />
+              {reconnecting ? tr('network.geth.bootstrap.reconnecting') : tr('network.geth.bootstrap.reconnect')}
+            </Button>
+          {/if}
 
           {#if bootstrapError}
             <div class="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">

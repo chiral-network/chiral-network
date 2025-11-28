@@ -94,7 +94,11 @@
         "cannotConnect": "Your Chiral node may have difficulty connecting to the blockchain network. Check your internet connection or firewall settings.",
         "someNodesDown": "Some bootstrap nodes are unreachable",
         "usingAvailable": "Your Chiral node will use the available nodes. Network connectivity should be stable.",
-        "allNodesHealthy": "All bootstrap nodes are healthy and reachable"
+        "allNodesHealthy": "All bootstrap nodes are healthy and reachable",
+        "lastChecked": "Last checked",
+        "reconnecting": "Reconnecting...",
+        "reconnect": "Reconnect to Bootstrap",
+        "consecutiveFailures": "consecutive failures"
       }
     },
     "dht": {
