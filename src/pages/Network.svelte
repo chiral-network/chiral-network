@@ -860,7 +860,10 @@
           )
         },
         onConnectionStateChange: (state) => {
-          networkLogger.statusChanged(state, 1);
+          // Only log connected/disconnected states for network logger
+          if (state === 'connected' || state === 'disconnected') {
+            networkLogger.statusChanged(state, 1);
+          }
 
           // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {

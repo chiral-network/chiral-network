@@ -29,7 +29,7 @@
   const SEARCH_TIMEOUT_MS = 40_000;
 
   let searchHash = '';
-  let searchMode = 'merkle_hash'; // 'merkle_hash', 'cid', 'magnet', or 'torrent'
+  let searchMode = 'merkle_hash'; // 'merkle_hash', 'magnet', or 'torrent'
   let isSearching = false;
   let torrentFileInput: HTMLInputElement;
   let torrentFileName: string | null = null;
@@ -208,7 +208,7 @@
             cids: undefined,
             isRoot: true,
             downloadPath: undefined,
-            price: undefined,
+            price: 0,
             uploaderAddress: undefined,
             httpSources: undefined,
           }
@@ -226,10 +226,10 @@
       return
     }
 
-    // Original DHT search logic for merkle_hash and cid
+    // Original DHT search logic for merkle_hash
     const trimmed = searchHash.trim();
     if (!trimmed) {
-      pushMessage(searchMode === 'hash' ? tr('download.notifications.enterHash') : 'Please enter a file name', 'warning');
+      pushMessage(searchMode === 'merkle_hash' ? tr('download.notifications.enterHash') : 'Please enter a file name', 'warning');
       return;
     }
 
@@ -242,54 +242,38 @@
     const startedAt = performance.now();
 
     try {
-      if (searchMode === 'cid') {
-        const entry = dhtSearchHistory.addPending(trimmed);
-        activeHistoryId = entry.id;
-        pushMessage('Searching for providers by CID...', 'info', 2000);
-        await dhtService.searchFileByCid(trimmed);
-        // The result will come via a `found_file` event, which is handled by the search history store.
-        // We just need to wait and see.
-        setTimeout(() => {
-          isSearching = false;
-        }, SEARCH_TIMEOUT_MS);
+      // Original hash search
+      const entry = dhtSearchHistory.addPending(trimmed);
+      activeHistoryId = entry.id;
+
+      pushMessage(tr('download.search.status.started'), 'info', 2000);
+      const metadata = await dhtService.searchFileMetadata(trimmed, SEARCH_TIMEOUT_MS);
+      const elapsed = Math.round(performance.now() - startedAt);
+      lastSearchDuration = elapsed;
+
+      if (metadata) {
+        metadata.fileHash = metadata.merkleRoot || "";
+        latestMetadata = metadata;
+        latestStatus = 'found';
+        dhtSearchHistory.updateEntry(entry.id, {
+          status: 'found',
+          metadata,
+          elapsedMs: elapsed,
+        });
+        pushMessage(
+          tr('download.search.status.foundNotification', { values: { name: metadata.fileName } }),
+          'success',
+        );
+        isSearching = false;
       } else {
-        // Skip local file lookup - always search DHT for peer information
-        // This ensures we get proper seeder lists for peer selection
-        console.log('🔍 Searching DHT for file hash:', trimmed);
-
-        // Original hash search
-        const entry = dhtSearchHistory.addPending(trimmed);
-        activeHistoryId = entry.id;
-
-        pushMessage(tr('download.search.status.started'), 'info', 2000);
-        const metadata = await dhtService.searchFileMetadata(trimmed, SEARCH_TIMEOUT_MS);
-        const elapsed = Math.round(performance.now() - startedAt);
-        lastSearchDuration = elapsed;
-
-        if (metadata) {
-          metadata.fileHash = metadata.merkleRoot || "";
-          latestMetadata = metadata;
-          latestStatus = 'found';
-          dhtSearchHistory.updateEntry(entry.id, {
-            status: 'found',
-            metadata,
-            elapsedMs: elapsed,
-          });
-          pushMessage(
-            tr('download.search.status.foundNotification', { values: { name: metadata.fileName } }),
-            'success',
-          );
-          isSearching = false;
-        } else {
-          latestStatus = 'not_found';
-          dhtSearchHistory.updateEntry(entry.id, {
-            status: 'not_found',
-            metadata: undefined,
-            errorMessage: undefined,
-            elapsedMs: elapsed,
-          });
-          pushMessage(tr('download.search.status.notFoundNotification'), 'warning', 6000);
-        }
+        latestStatus = 'not_found';
+        dhtSearchHistory.updateEntry(entry.id, {
+          status: 'not_found',
+          metadata: undefined,
+          errorMessage: undefined,
+          elapsedMs: elapsed,
+        });
+        pushMessage(tr('download.search.status.notFoundNotification'), 'warning', 6000);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : tr('download.search.status.unknownError');
@@ -298,7 +282,7 @@
       latestStatus = 'error';
       searchError = message;
 
-      if (searchMode === 'hash' && activeHistoryId) {
+      if (searchMode === 'merkle_hash' && activeHistoryId) {
         dhtSearchHistory.updateEntry(activeHistoryId, {
           status: 'error',
           errorMessage: message,
@@ -696,7 +680,7 @@
           status: 'completed',
           progress: 100,
           downloadPath: outputPath,
-          isEncrypted: file.isEncrypted ?? file.encrypted ?? false,
+          isEncrypted: file.isEncrypted ?? false,
           manifest: manifestData,
           cids: file.cids ?? [],
           seeders: file.seeders?.length ?? 0,
@@ -749,7 +733,6 @@
       <div class="flex gap-2 mb-3 mt-3">
         <select bind:value={searchMode} class="px-3 py-1 text-sm rounded-md border transition-colors bg-muted/50 hover:bg-muted border-border">
             <option value="merkle_hash">Search by Merkle Hash</option>
-            <option value="cid">Search by CID</option>
             <option value="magnet">Search by Magnet Link</option>
             <option value="torrent">Search by .torrent File</option>
         </select>
@@ -786,7 +769,6 @@
               bind:value={searchHash}
               placeholder={
                 searchMode === 'merkle_hash' ? 'Enter Merkle root hash (SHA-256)...' :
-                searchMode === 'cid' ? 'Enter Content Identifier (CID)...' :
                 searchMode === 'magnet' ? 'magnet:?xt=urn:btih:...' :
                 ''
               }

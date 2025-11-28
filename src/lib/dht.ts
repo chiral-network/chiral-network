@@ -58,7 +58,7 @@ export interface FileMetadata {
   manifest?: string;
   isRoot?: boolean;
   cids?: string[];
-  price?: number;
+  price: number;
   uploaderAddress?: string;
   httpSources?: HttpSourceInfo[];
 }
@@ -202,7 +202,8 @@ export class DhtService {
 
   async publishFileToNetwork(
     filePath: string,
-    price?: number
+    price?: number,
+    protocol?: string
   ): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
@@ -234,10 +235,11 @@ export class DhtService {
         }, 120000); // 2 minute timeout for file publishing
       });
 
-      // Trigger the backend upload with price
+      // Trigger the backend upload with price and protocol
       await invoke("upload_file_to_network", {
         filePath,
-        price: price ?? null,
+        price: price ?? 0, // Default to 0 instead of null
+        protocol: protocol ?? "Bitswap", // Default to Bitswap if no protocol specified
       });
 
       // Wait until the event arrives

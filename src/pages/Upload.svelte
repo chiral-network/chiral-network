@@ -1,6 +1,7 @@
 <script lang="ts">
   import Card from "$lib/components/ui/card.svelte";
   import Badge from "$lib/components/ui/badge.svelte";
+  import DropDown from "$lib/components/ui/dropDown.svelte";
   import {
     File as FileIcon,
     X,
@@ -21,6 +22,10 @@
     DollarSign,
     Copy,
     Share2,
+    Globe,
+    Blocks,
+    Network,
+    Server,
   } from "lucide-svelte";
   import { files, type FileItem } from "$lib/stores";
   import {
@@ -876,34 +881,7 @@
         // Get file size to calculate price
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
-
-        // Handle BitTorrent differently - create and seed torrent
-        if (selectedProtocol === "BitTorrent") {
-          const magnetLink = await invoke<string>('torrent_seed', { filePath, announceUrls: null });
-
-          const torrentFile = {
-            id: `torrent-${Date.now()}-${Math.random()}`,
-            name: fileName,
-            hash: magnetLink, // Use magnet link as hash for torrents
-            size: fileSize,
-            path: filePath,
-            seederAddresses: [],
-            uploadDate: new Date(),
-            seeders: 1,
-            status: "seeding" as const,
-            price: 0, // BitTorrent is free
-          };
-
-          files.update(f => [...f, torrentFile]);
-          // showToast(`${fileName} is now seeding as a torrent`, "success");
-          showToast(
-            tr('toasts.upload.torrentSeeding', { values: { name: fileName } }),
-            "success"
-          );
-          continue; // Skip the normal Chiral upload flow
-        }
-
-        const metadata = await dhtService.publishFileToNetwork(filePath, price);
+        const metadata = await dhtService.publishFileToNetwork(filePath, price, selectedProtocol);
 
         // Add WebSocket client ID to seeder addresses for WebRTC discovery
         const webrtcSeederIds = signalingService?.clientId
@@ -927,6 +905,7 @@
           uploadDate: new Date(metadata.createdAt),
           price: price,
           cids: metadata.cids,
+          protocol: selectedProtocol, // Track which protocol was used
         };
 
         let existed = false;
@@ -1016,12 +995,33 @@
   // Use centralized file size formatting for consistency
   const formatFileSize = toHumanReadableSize;
 
+  // Protocol options for dropdown
+  const protocolOptions = [
+    { value: "WebRTC", label: "WebRTC" },
+    { value: "Bitswap", label: "Bitswap" },
+    { value: "BitTorrent", label: "BitTorrent" },
+    { value: "ED2K", label: "ED2K" },
+    { value: "FTP", label: "FTP" },
+  ];
+
+
   async function handleCopy(hash: string) {
     await navigator.clipboard.writeText(hash);
     showToast(tr("upload.hashCopiedClipboard"), "success");
   }
 
-  // BitTorrent seeding functions - REMOVED: Now integrated into main upload flow
+  // Extract info hash from magnet link
+  function extractInfoHash(magnetLink: string): string {
+    const match = magnetLink.match(/xt=urn:btih:([a-fA-F0-9]{40})/);
+    return match ? match[1] : "unknown";
+  }
+
+  // Extract MD4 hash from ed2k link
+  function extractEd2kHash(ed2kLink: string): string {
+    const parts = ed2kLink.split('|');
+    // ed2k://|file|name|size|hash|/
+    return parts.length >= 5 ? parts[4] : "unknown";
+  }
 
 </script>
 
@@ -1076,6 +1076,37 @@
         <p class="text-sm text-muted-foreground">
           {$t("upload.storageMonitoringDesktopOnly")}
         </p>
+      </div>
+    </Card>
+  {/if}
+
+  <!-- Upload Protocol Selection -->
+  {#if isTauri}
+    <Card class="p-4">
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <div
+            class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20"
+          >
+            <Upload class="h-5 w-5 text-blue-600" />
+          </div>
+          <div class="text-left">
+            <h3 class="text-sm font-semibold text-foreground">
+              Upload Protocol
+            </h3>
+            <p class="text-xs text-muted-foreground">
+              Choose which protocol to use for uploading files
+            </p>
+          </div>
+        </div>
+
+        <div class="w-fit min-w-32">
+          <DropDown
+            id="upload-protocol"
+            options={protocolOptions}
+            bind:value={$settings.selectedProtocol}
+          />
+        </div>
       </div>
     </Card>
   {/if}
@@ -1366,56 +1397,117 @@
                             </div>
 
                             <div class="space-y-2 text-xs text-muted-foreground">
-                              <div class="flex items-center gap-1">
-                                <span class="opacity-60">{$t("upload.hashLabel")}</span>
-                                <code
-                                  class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono"
-                                >
-                                  {file.hash.slice(0, 8)}...{file.hash.slice(
-                                    -6,
-                                  )}
-                                </code>
-                                <button
-                                  on:click={() => handleCopy(file.hash)}
-                                  class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                  title={$t("upload.copyHash")}
-                                  aria-label="Copy file hash"
-                                >
-                                  <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
-                                </button>
-                              </div>
+                              <!-- Protocol Badge -->
+                              {#if file.protocol}
+                                <div class="flex items-center gap-2">
+                                  <Badge class={`text-xs px-2 py-0.5 ${
+                                    file.protocol === 'WebRTC' ? 'bg-blue-100 text-blue-800' :
+                                    file.protocol === 'Bitswap' ? 'bg-purple-100 text-purple-800' :
+                                    file.protocol === 'BitTorrent' ? 'bg-green-100 text-green-800' :
+                                    file.protocol === 'ED2K' ? 'bg-orange-100 text-orange-800' :
+                                    'bg-gray-100 text-gray-800'
+                                  }`}>
+                                    {#if file.protocol === 'WebRTC'}
+                                      <Globe class="h-3 w-3 mr-1" />
+                                    {:else if file.protocol === 'Bitswap'}
+                                      <Blocks class="h-3 w-3 mr-1" />
+                                    {:else if file.protocol === 'BitTorrent'}
+                                      <Share2 class="h-3 w-3 mr-1" />
+                                    {:else if file.protocol === 'ED2K'}
+                                      <Network class="h-3 w-3 mr-1" />
+                                    {:else if file.protocol === 'FTP'}
+                                      <Server class="h-3 w-3 mr-1" />
+                                    {/if}
+                                    {file.protocol}
+                                  </Badge>
+                                </div>
+                              {/if}
 
-                              {#if file.cids && file.cids.length > 0}
+                              <!-- Protocol-Specific Identifiers -->
+                              {#if file.protocol === 'WebRTC' || file.protocol === 'Bitswap'}
+                                <!-- Chiral Native Protocols: Show Merkle Hash -->
                                 <div class="flex items-center gap-1">
-                                  <span class="opacity-60">CID:</span>
-                                  <code
-                                    class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono"
-                                  >
-                                    {file.cids[0].slice(0, 8)}...{file.cids[0].slice(-6)}
+                                  <span class="opacity-60">Merkle Hash:</span>
+                                  <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono">
+                                    {file.hash.slice(0, 8)}...{file.hash.slice(-6)}
                                   </code>
                                   <button
-                                    on:click={() => handleCopy(file.cids![0])}
+                                    on:click={() => handleCopy(file.hash)}
                                     class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                    title="Copy CID"
-                                    aria-label="Copy file CID"
+                                    title="Copy Merkle Hash (use this to search and download)"
+                                    aria-label="Copy Merkle hash"
                                   >
                                     <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
                                   </button>
                                 </div>
-                              {/if}
-
-                              {#if file.hash.startsWith('magnet:')}
+                              {:else if file.protocol === 'BitTorrent'}
+                                <!-- BitTorrent: Show Magnet Link -->
+                                {#if file.hash.startsWith('magnet:')}
+                                  <div class="flex items-center gap-1">
+                                    <span class="opacity-60">Magnet Link:</span>
+                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                      magnet:?xt=urn:btih:{extractInfoHash(file.hash)}
+                                    </code>
+                                    <button
+                                      on:click={() => handleCopy(file.hash)}
+                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                      title="Copy Magnet Link"
+                                      aria-label="Copy magnet link"
+                                    >
+                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                    </button>
+                                  </div>
+                                {/if}
+                              {:else if file.protocol === 'ED2K'}
+                                <!-- ED2K: Show ed2k Link -->
+                                {#if file.hash.startsWith('ed2k://')}
+                                  <div class="flex items-center gap-1">
+                                    <span class="opacity-60">eD2k Link:</span>
+                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                      ed2k://|file|{file.name}|{file.size}|{extractEd2kHash(file.hash)}|/
+                                    </code>
+                                    <button
+                                      on:click={() => handleCopy(file.hash)}
+                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                      title="Copy eD2k Link"
+                                      aria-label="Copy eD2k link"
+                                    >
+                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                    </button>
+                                  </div>
+                                {/if}
+                              {:else if file.protocol === 'FTP'}
+                                <!-- FTP: Show FTP URL -->
+                                {#if file.hash.startsWith('ftp://')}
+                                  <div class="flex items-center gap-1">
+                                    <span class="opacity-60">FTP URL:</span>
+                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                      {file.hash}
+                                    </code>
+                                    <button
+                                      on:click={() => handleCopy(file.hash)}
+                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                      title="Copy FTP URL"
+                                      aria-label="Copy FTP URL"
+                                    >
+                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                    </button>
+                                  </div>
+                                {/if}
+                              {:else}
+                                <!-- Fallback: Show generic hash -->
                                 <div class="flex items-center gap-1">
-                                  <Badge class="bg-green-100 text-green-800 text-xs px-2 py-0.5">
-                                    <Share2 class="h-3 w-3 mr-1" />
-                                    BitTorrent
-                                  </Badge>
+                                  <span class="opacity-60">{$t("upload.hashLabel")}</span>
+                                  <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono">
+                                    {file.hash.slice(0, 8)}...{file.hash.slice(-6)}
+                                  </code>
                                   <button
                                     on:click={() => handleCopy(file.hash)}
-                                    class="text-xs text-muted-foreground hover:text-primary"
-                                    title="Copy magnet link"
+                                    class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                    title={$t("upload.copyHash")}
+                                    aria-label="Copy file hash"
                                   >
-                                    Copy Magnet Link
+                                    <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
                                   </button>
                                 </div>
                               {/if}

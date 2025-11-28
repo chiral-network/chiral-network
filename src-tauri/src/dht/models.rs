@@ -96,7 +96,7 @@ pub struct FileMetadata {
 
     /// Price in Chiral tokens set by the uploader
     #[serde(default)]
-    pub price: Option<f64>,
+    pub price: f64,
 
     /// Ethereum address of the uploader (for payment)
     #[serde(default)]

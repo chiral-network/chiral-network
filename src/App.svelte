@@ -12,7 +12,7 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
-    import BlockchainDashboard from './pages/BlockchainDashboard.svelte'
+    import Blockchain from './pages/Blockchain.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
@@ -638,7 +638,7 @@ function handleFirstRunComplete() {
     },
     {
       path: "blockchain",
-      component: BlockchainDashboard,
+      component: Blockchain,
     },
     {
       path: "account",

@@ -861,7 +861,7 @@ async function loadAndResumeDownloads() {
           existing.map(file => file.id ?? file.hash ?? `${file.name}-${file.size}`)
         )
 
-        const deduped = restoredFiles.filter(file => {
+        const deduped = restoredFiles.filter((file: any) => {
           const key = file.id ?? file.hash ?? `${file.name}-${file.size}`
           if (existingKeys.has(key)) {
             return false
@@ -1304,7 +1304,8 @@ async function loadAndResumeDownloads() {
       isEncrypted: downloadingFile.isEncrypted || false,
       manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined,
       cids: downloadingFile.cids,
-      downloadPath: fullPath  // Pass the full path
+      downloadPath: fullPath,  // Pass the full path
+      price: downloadingFile.price ?? 0  // Add price field
     }
     
     diagnosticLogger.debug('Download', 'Calling dhtService.downloadFile', { 
@@ -1316,7 +1317,7 @@ async function loadAndResumeDownloads() {
 
     // Start the download asynchronously
     dhtService.downloadFile(metadata)
-      .then((result) => {
+      .then((_result) => {
         diagnosticLogger.debug('Download', 'Bitswap download completed', { fileName: downloadingFile.name });
         showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success')
       })
@@ -1814,7 +1815,8 @@ async function loadAndResumeDownloads() {
               fileSize: fileToDownload.size,
               seeders: seeders,
               createdAt: Date.now(),
-              isEncrypted: false
+              isEncrypted: false,
+              price: fileToDownload.price ?? 0  // Add price field
             } : null;
 
             if (!fileMetadata) {
