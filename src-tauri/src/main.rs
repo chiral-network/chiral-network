@@ -6180,7 +6180,7 @@ fn main() {
 
         // Wrap the simple handler in the enhanced protocol handler
         let bittorrent_protocol_handler = BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
-        manager.register(Box::new(bittorrent_protocol_handler));
+        manager.register(Arc::new(bittorrent_protocol_handler));
         
         (bittorrent_handler_arc, Arc::new(manager))
     });

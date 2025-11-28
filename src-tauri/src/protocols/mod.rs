@@ -20,8 +20,8 @@
 //! let mut manager = ProtocolManager::new();
 //!
 //! // Register handlers
-//! manager.register(Box::new(HttpProtocolHandler::new()?));
-//! manager.register(Box::new(BitTorrentProtocolHandler::with_download_directory(dir).await?));
+//! manager.register(Arc::new(HttpProtocolHandler::new()?));
+//! manager.register(Arc::new(BitTorrentProtocolHandler::with_download_directory(dir).await?));
 //!
 //! // Download a file
 //! let handle = manager.download(
@@ -36,6 +36,7 @@ pub mod http;
 pub mod ftp;
 pub mod ed2k;
 pub mod seeding;
+pub mod detection;
 
 // Re-export commonly used types
 pub use traits::{
@@ -53,6 +54,9 @@ pub use traits::{
     SimpleProtocolHandler,
     SimpleProtocolManager,
 };
+
+// Re-export detection types
+pub use detection::{DetectionPreferences, ProtocolDetector};
 
 use crate::protocols::seeding::{SeedingEntry, SeedingRegistry};
 use sha2::{Digest, Sha256};
@@ -75,9 +79,9 @@ pub use ed2k::Ed2kProtocolHandler;
 ///
 /// Routes downloads and seeds to the appropriate handler based on the identifier.
 pub struct ProtocolManager {
-    handlers: Vec<Box<dyn ProtocolHandler>>,
+    handlers: Vec<std::sync::Arc<dyn ProtocolHandler>>,
     simple_handlers: Vec<std::sync::Arc<dyn SimpleProtocolHandler>>,
-    seeding_registry: SeedingRegistry, // <-- ADDED
+    seeding_registry: SeedingRegistry,
 }
 
 impl ProtocolManager {
@@ -86,14 +90,25 @@ impl ProtocolManager {
         Self {
             handlers: Vec::new(),
             simple_handlers: Vec::new(),
-            seeding_registry: SeedingRegistry::new(), // <-- INITIALIZED
+            seeding_registry: SeedingRegistry::new(),
         }
     }
 
     /// Registers an enhanced protocol handler
-    pub fn register(&mut self, handler: Box<dyn ProtocolHandler>) {
-        info!("Registering protocol handler: {}", handler.name()); // <-- Added logging
+    pub fn register(&mut self, handler: std::sync::Arc<dyn ProtocolHandler>) {
+        info!("Registering protocol handler: {}", handler.name());
         self.handlers.push(handler);
+    }
+
+    /// Create a protocol detector from current handlers
+    fn create_detector(&self) -> ProtocolDetector {
+        let mut detector_handlers: HashMap<String, std::sync::Arc<dyn ProtocolHandler>> = HashMap::new();
+
+        for handler in &self.handlers {
+            detector_handlers.insert(handler.name().to_string(), handler.clone());
+        }
+
+        ProtocolDetector::new(detector_handlers)
     }
 
     /// Finds a handler that supports the given identifier
@@ -315,6 +330,67 @@ impl ProtocolManager {
         let mut hasher = Sha256::new();
         hasher.update(&data);
         Ok(hex::encode(hasher.finalize()))
+    }
+
+    // =========================================================================
+    // --- Protocol Auto-Detection Methods (Task 4) ---
+    // =========================================================================
+
+    /// Detect all protocols that can handle the given identifier
+    ///
+    /// Returns a list of protocol names (e.g., "bittorrent", "http") that
+    /// support the given identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let protocols = manager.detect_protocols("magnet:?xt=urn:btih:...");
+    /// // Returns: ["bittorrent"]
+    ///
+    /// let protocols = manager.detect_protocols("https://example.com/file.zip");
+    /// // Returns: ["http"]
+    /// ```
+    pub fn detect_protocols(&self, identifier: &str) -> Vec<String> {
+        info!("Detecting protocols for identifier: {}", identifier);
+        let detector = self.create_detector();
+        detector.detect_all(identifier)
+    }
+
+    /// Detect the best protocol for the given identifier based on preferences
+    ///
+    /// This method filters protocols by user preferences (encryption, seeding support, etc.)
+    /// and returns the highest priority protocol that matches all requirements.
+    ///
+    /// # Arguments
+    ///
+    /// * `identifier` - The file identifier (URL, magnet link, ed2k link, etc.)
+    /// * `preferences` - User preferences for filtering protocols
+    ///
+    /// # Returns
+    ///
+    /// The name of the best matching protocol, or `None` if no protocol matches.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use crate::protocols::DetectionPreferences;
+    ///
+    /// let prefs = DetectionPreferences {
+    ///     require_encryption: true,
+    ///     require_seeding: false,
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let best = manager.detect_best_protocol("ed2k://|file|...", prefs);
+    /// ```
+    pub fn detect_best_protocol(
+        &self,
+        identifier: &str,
+        preferences: DetectionPreferences,
+    ) -> Option<String> {
+        info!("Detecting best protocol for identifier with preferences");
+        let detector = self.create_detector();
+        detector.detect_best(identifier, preferences)
     }
 }
 
