@@ -30,6 +30,7 @@ export interface DhtConfig {
   enableAutorelay?: boolean;
   preferredRelays?: string[];
   enableRelayServer?: boolean;
+  enableUpnp?: boolean;
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
@@ -57,32 +58,10 @@ export interface FileMetadata {
   manifest?: string;
   isRoot?: boolean;
   cids?: string[];
-  price?: number;
+  price: number;
   uploaderAddress?: string;
   httpSources?: HttpSourceInfo[];
 }
-
-export interface FileManifestForJs {
-  merkleRoot: string;
-  chunks: any[]; // Define a proper type for ChunkInfo if you can
-  encryptedKeyBundle: string; // This is the JSON string
-}
-
-export const encryptionService = {
-  async encryptFile(filePath: string): Promise<FileManifestForJs> {
-    return await invoke("encrypt_file_for_upload", { filePath });
-  },
-
-  async decryptFile(
-    manifest: FileManifestForJs,
-    outputPath: string
-  ): Promise<void> {
-    await invoke("decrypt_and_reassemble_file", {
-      manifestJs: manifest,
-      outputPath,
-    });
-  },
-};
 
 export interface DhtHealth {
   peerCount: number;
@@ -190,6 +169,9 @@ export class DhtService {
       if (typeof config?.enableRelayServer === "boolean") {
         payload.enableRelayServer = config.enableRelayServer;
       }
+      if (typeof config?.enableUpnp === "boolean") {
+        payload.enableUpnp = config.enableUpnp;
+      }
       if (
         typeof config?.relayServerAlias === "string" &&
         config.relayServerAlias.trim().length > 0
@@ -220,7 +202,8 @@ export class DhtService {
 
   async publishFileToNetwork(
     filePath: string,
-    price?: number
+    price?: number,
+    protocol?: string
   ): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
@@ -252,10 +235,11 @@ export class DhtService {
         }, 120000); // 2 minute timeout for file publishing
       });
 
-      // Trigger the backend upload with price
+      // Trigger the backend upload with price and protocol
       await invoke("upload_file_to_network", {
         filePath,
-        price: price ?? null,
+        price: price ?? 0, // Default to 0 instead of null
+        protocol: protocol ?? "Bitswap", // Default to Bitswap if no protocol specified
       });
 
       // Wait until the event arrives

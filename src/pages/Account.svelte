@@ -7,7 +7,7 @@
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist, settings } from '$lib/stores'
-  import { gethStatus, gethSyncStatus } from '$lib/services/gethService'
+  import { gethStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
   import { transactions, transactionPagination, miningPagination } from '$lib/stores';
   import { derived } from 'svelte/store'
@@ -87,6 +87,7 @@
   let hdPassphrase: string = '';
   type HDAccountItem = { index: number; change: number; address: string; label?: string; privateKeyHex?: string };
   let hdAccounts: HDAccountItem[] = [];
+  let chainId = 98765; // Default, will be fetched from backend
 
   // Transaction receipt modal state
   let selectedTransaction: any = null;
@@ -565,18 +566,29 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
-  onMount(async () => {
-    await walletService.initialize();
-    await loadKeystoreAccountsList();
+  onMount(() => {
+    // Initialize wallet service asynchronously
+    walletService.initialize().then(async () => {
+      await loadKeystoreAccountsList();
 
-    if ($etcAccount && isGethRunning) {
-      // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
-      await walletService.refreshTransactions();
-      await walletService.refreshBalance();
+      // Fetch chain ID from backend
+      if (isTauri) {
+        try {
+          chainId = await invoke<number>('get_chain_id');
+        } catch (error) {
+          console.warn('Failed to fetch chain ID from backend, using default:', error);
+        }
+      }
 
-      // Start progressive loading of all transactions in background
-      walletService.startProgressiveLoading();
-    }
+      if ($etcAccount && isGethRunning) {
+        // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
+        await walletService.refreshTransactions();
+        await walletService.refreshBalance();
+
+        // Start progressive loading of all transactions in background
+        walletService.startProgressiveLoading();
+      }
+    });
 
     // Cleanup on unmount
     return () => {
@@ -1418,7 +1430,7 @@
   }
 
   let sessionTimeout = 3600; // seconds (1 hour)
-  let sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  let sessionTimer: number | null = null;
   let sessionCleanup: (() => void) | null = null;
   let autoLockMessage = '';
 
@@ -1960,7 +1972,7 @@
               <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
             </div>
           </div>
-          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
+          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{chainId}'/0'/0/*</p>
           <AccountList
             mnemonic={hdMnemonic}
             passphrase={hdPassphrase}

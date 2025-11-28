@@ -60,7 +60,6 @@ function loadTransactionsFromStorage(): Transaction[] {
   try {
     const saved = localStorage.getItem("chiral_transactions");
     if (!saved) {
-      console.log("📭 No transactions found in localStorage");
       return [];
     }
 

@@ -21,9 +21,6 @@
     Copy,
     Download as DownloadIcon,
     Upload as UploadIcon,
-    Globe,
-    Blocks,
-    Share2
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import {open} from "@tauri-apps/plugin-dialog";
@@ -40,6 +37,7 @@
   import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
+  import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -52,7 +50,6 @@
   let privacySectionOpen = false;
   let notificationsSectionOpen = false;
   let diagnosticsSectionOpen = false;
-  let protocolSectionOpen = false;
 
   const ACCORDION_STORAGE_KEY = "settingsAccordionState";
 
@@ -66,7 +63,6 @@
     advanced: boolean;
     diagnostics: boolean;
     backupRestore: boolean;
-    protocol: boolean;
   };
 
   let accordionStateInitialized = false;
@@ -131,7 +127,7 @@
     maxLogSizeMB: 10, // MB per log file
 
     // Upload Protocol
-    selectedProtocol: "Bitswap" as "WebRTC" | "Bitswap" | "BitTorrent", // Default to Bitswap
+    selectedProtocol: "Bitswap", // Default to Bitswap
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
@@ -235,7 +231,6 @@
         if (typeof parsed.network === "boolean") networkSectionOpen = parsed.network;
         if (typeof parsed.bandwidthScheduling === "boolean") bandwidthSectionOpen = parsed.bandwidthScheduling;
         if (typeof parsed.language === "boolean") languageSectionOpen = parsed.language;
-        if (typeof parsed.protocol === "boolean") protocolSectionOpen = parsed.protocol;
         if (typeof parsed.privacy === "boolean") privacySectionOpen = parsed.privacy;
         if (typeof parsed.notifications === "boolean") notificationsSectionOpen = parsed.notifications;
         if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
@@ -243,7 +238,7 @@
         if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
       }
     } catch (error) {
-      console.warn("Failed to restore settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to restore settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     } finally {
       accordionStateInitialized = true;
     }
@@ -256,7 +251,6 @@
         network: networkSectionOpen,
         bandwidthScheduling: bandwidthSectionOpen,
         language: languageSectionOpen,
-        protocol: protocolSectionOpen,
         privacy: privacySectionOpen,
         notifications: notificationsSectionOpen,
         advanced: advancedSectionOpen,
@@ -265,7 +259,7 @@
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
-      console.warn("Failed to persist settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to persist settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -416,7 +410,7 @@
           settingsJson: JSON.stringify(localSettings),
         });
       } catch (error) {
-        console.error("Failed to save settings to app data directory:", error);
+        errorLogger.fileOperationError('Save settings', error instanceof Error ? error.message : String(error));
       }
     }
 
@@ -435,7 +429,7 @@
       // showToast("Settings Updated!");
       showToast(tr('toasts.settings.updated'));
     } catch (error) {
-      console.error("Failed to apply networking settings:", error);
+      errorLogger.networkError(`Failed to apply networking settings: ${error instanceof Error ? error.message : String(error)}`);
       // showToast("Settings saved, but networking update failed", "error");
       showToast(tr('toasts.settings.networkingError'), "error");
     }
@@ -453,7 +447,7 @@
         enabled: localSettings.enableFileLogging,
       });
     } catch (error) {
-      console.warn("Failed to update log configuration:", error);
+      diagnosticLogger.warn('Settings', 'Failed to update log configuration', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -567,7 +561,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while updating privacy settings:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while updating privacy settings', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -576,7 +570,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while turning privacy off:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while turning privacy off', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -595,7 +589,7 @@
     try {
       await invoke("stop_dht_node");
     } catch (error) {
-      console.debug("stop_dht_node failed (probably already stopped):", error);
+      diagnosticLogger.debug('Settings', 'stop_dht_node failed (probably already stopped)', { error: error instanceof Error ? error.message : String(error) });
     }
 
     // Use custom bootstrap nodes if configured, otherwise use defaults
@@ -606,7 +600,7 @@
       try {
         bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
       } catch (error) {
-        console.error("Failed to fetch bootstrap nodes:", error);
+        errorLogger.networkError(`Failed to fetch bootstrap nodes: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
       }
 
@@ -624,6 +618,7 @@
       cacheSizeMb: localSettings.cacheSize,
       enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
       enableRelayServer: localSettings.enableRelayServer,
+      enableUpnp: localSettings.enableUPnP,
     };
 
     if (localSettings.autonatServers?.length) {
@@ -705,7 +700,7 @@
           localSettings = { ...localSettings, storagePath: directoryHandle.name };
         } catch (err: any) {
           if (err.name !== "AbortError") {
-            console.error("Directory picker error:", err);
+            errorLogger.fileOperationError('Directory picker', err instanceof Error ? err.message : String(err));
           }
         }
       } else {
@@ -770,7 +765,7 @@
           type: "success",
         };
       } catch (err) {
-        console.error("Failed to import settings:", err);
+        errorLogger.fileOperationError('Import settings', err instanceof Error ? err.message : String(err));
         importExportFeedback = {
           message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
@@ -895,7 +890,7 @@
       const platformDefaultPath = await invoke<string>("get_default_storage_path");
       defaultSettings.storagePath = platformDefaultPath;
     } catch (e) {
-      console.error("Failed to get default storage path:", e);
+      errorLogger.fileOperationError('Get default storage path', e instanceof Error ? e.message : String(e));
       // Fallback to the hardcoded default if the command fails
       defaultSettings.storagePath = "~/ChiralNetwork/Storage";
     }
@@ -911,7 +906,7 @@
     localSettings = JSON.parse(JSON.stringify(get(settings)));
     savedSettings = JSON.parse(JSON.stringify(localSettings));
   } catch (e) {
-    console.error("Failed to load settings:", e);
+    errorLogger.fileOperationError('Load settings', e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -925,7 +920,7 @@ selectedLanguage = initial; // Synchronize dropdown display value
     await getVersion();
     logsDirectory = await invoke("get_logs_directory");
   } catch (error) {
-    console.error("Failed to get logs directory:", error);
+    errorLogger.fileOperationError('Get logs directory', error instanceof Error ? error.message : String(error));
   }
 
 });
@@ -1183,13 +1178,6 @@ $: sectionLabels = {
     tr("advanced.autoUpdate"),
     tr("advanced.exportSettings"),
     tr("advanced.importSettings"),
-  ],
-  protocol: [
-    "Upload Protocol",
-    "Select Protocol",
-    "WebRTC",
-    "Bitswap",
-    "BitTorrent",
   ],
 };
 
@@ -1768,82 +1756,6 @@ function sectionMatches(section: string, query: string) {
     </Expandable>
   {/if}
 
-  <!-- Upload Protocol Settings -->
-  {#if sectionMatches("protocol", search)}
-    <Expandable bind:isOpen={protocolSectionOpen}>
-      <div slot="title" class="flex items-center gap-3">
-        <UploadIcon class="h-6 w-6 text-purple-600" />
-        <h2 class="text-xl font-semibold text-black">Upload Protocol</h2>
-      </div>
-      <div class="space-y-4">
-        <p class="text-sm text-muted-foreground">Select which protocol to use for uploading files. This setting is persisted when you save.</p>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <!-- WebRTC Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'WebRTC'
-              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'WebRTC')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Globe class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("upload.webrtcDescription")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'WebRTC'}
-              <CheckCircle class="h-5 w-5 text-blue-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-
-          <!-- Bitswap Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'Bitswap'
-              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'Bitswap')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Blocks class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("upload.bitswapDescription")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'Bitswap'}
-              <CheckCircle class="h-5 w-5 text-blue-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-
-          <!-- BitTorrent Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-green-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'BitTorrent'
-              ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'BitTorrent')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-green-100 rounded-full">
-              <Share2 class="w-8 h-8 text-green-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">BitTorrent</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("torrent.seed.description")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'BitTorrent'}
-              <CheckCircle class="h-5 w-5 text-green-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-        </div>
-      </div>
-    </Expandable>
-  {/if}
 
   <!-- Privacy Settings -->
   {#if sectionMatches("privacy", search)}

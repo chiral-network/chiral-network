@@ -1,6 +1,18 @@
 import { writable, derived } from "svelte/store";
 import { normalizeRegion, GEO_REGIONS, UNKNOWN_REGION_ID } from "$lib/geo";
 
+// ============================================================================
+// Network Constants (fetched from backend)
+// ============================================================================
+
+/** Block reward in Chiral - fetched from backend on app init.
+ * Default value is used until the backend responds. */
+export const blockReward = writable<number>(2);
+
+// ============================================================================
+// Types & Interfaces
+// ============================================================================
+
 export interface FileItem {
   id: string;
   name: string;
@@ -38,7 +50,8 @@ export interface FileItem {
   downloadedChunks?: number[];
   totalChunks?: number;
   downloadStartTime?: number;
-  price?: number; // Price in Chiral for this file
+  price: number; // Price in Chiral for this file
+  protocol?: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
 }
 
 export interface ProxyNode {
@@ -162,29 +175,6 @@ export interface BlacklistEntry {
   reason: string;
   timestamp: Date;
 }
-
-// Sample dummy data
-const dummyFiles: FileItem[] = [
-  {
-    id: "0",
-    name: "Video.mp4",
-    hash: "QmZ4tDuvesekqMF",
-    size: 50331648,
-    status: "paused",
-    progress: 30,
-    visualOrder: 1,
-  },
-  {
-    id: "1",
-    name: "Document.pdf",
-    hash: "QmZ4tDuvesekqMD",
-    size: 2048576,
-    status: "completed",
-    progress: 100,
-    visualOrder: 2,
-  },
-];
-
 const dummyWallet: WalletInfo = {
   address: "",
   balance: 0,
@@ -258,9 +248,10 @@ export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);
 
 // Load pagination state from localStorage
-const storedPagination = typeof window !== 'undefined'
-  ? localStorage.getItem('transactionPagination')
-  : null;
+const storedPagination =
+  typeof window !== "undefined"
+    ? localStorage.getItem("transactionPagination")
+    : null;
 
 const initialPaginationState: TransactionPaginationState = storedPagination
   ? JSON.parse(storedPagination)
@@ -272,48 +263,60 @@ const initialPaginationState: TransactionPaginationState = storedPagination
       batchSize: 5000,
     };
 
-export const transactionPagination = writable<TransactionPaginationState>(initialPaginationState);
+export const transactionPagination = writable<TransactionPaginationState>(
+  initialPaginationState
+);
 
 // Persist pagination state to localStorage
-if (typeof window !== 'undefined') {
+if (typeof window !== "undefined") {
   transactionPagination.subscribe((state) => {
-    localStorage.setItem('transactionPagination', JSON.stringify({
-      accountAddress: state.accountAddress,
-      oldestBlockScanned: state.oldestBlockScanned,
-      hasMore: state.hasMore,
-      batchSize: state.batchSize,
-      // Don't persist isLoading state
-    }));
+    localStorage.setItem(
+      "transactionPagination",
+      JSON.stringify({
+        accountAddress: state.accountAddress,
+        oldestBlockScanned: state.oldestBlockScanned,
+        hasMore: state.hasMore,
+        batchSize: state.batchSize,
+        // Don't persist isLoading state
+      })
+    );
   });
 }
 
 // Load mining pagination state from localStorage
-const storedMiningPagination = typeof window !== 'undefined'
-  ? localStorage.getItem('miningPagination')
-  : null;
+const storedMiningPagination =
+  typeof window !== "undefined"
+    ? localStorage.getItem("miningPagination")
+    : null;
 
-const initialMiningPaginationState: MiningPaginationState = storedMiningPagination
-  ? JSON.parse(storedMiningPagination)
-  : {
-      accountAddress: null,
-      oldestBlockScanned: null,
-      isLoading: false,
-      hasMore: true,
-      batchSize: 5000,
-    };
+const initialMiningPaginationState: MiningPaginationState =
+  storedMiningPagination
+    ? JSON.parse(storedMiningPagination)
+    : {
+        accountAddress: null,
+        oldestBlockScanned: null,
+        isLoading: false,
+        hasMore: true,
+        batchSize: 5000,
+      };
 
-export const miningPagination = writable<MiningPaginationState>(initialMiningPaginationState);
+export const miningPagination = writable<MiningPaginationState>(
+  initialMiningPaginationState
+);
 
 // Persist mining pagination state to localStorage
-if (typeof window !== 'undefined') {
+if (typeof window !== "undefined") {
   miningPagination.subscribe((state) => {
-    localStorage.setItem('miningPagination', JSON.stringify({
-      accountAddress: state.accountAddress,
-      oldestBlockScanned: state.oldestBlockScanned,
-      hasMore: state.hasMore,
-      batchSize: state.batchSize,
-      // Don't persist isLoading state
-    }));
+    localStorage.setItem(
+      "miningPagination",
+      JSON.stringify({
+        accountAddress: state.accountAddress,
+        oldestBlockScanned: state.oldestBlockScanned,
+        hasMore: state.hasMore,
+        batchSize: state.batchSize,
+        // Don't persist isLoading state
+      })
+    );
   });
 }
 
@@ -448,7 +451,9 @@ export interface AccurateTotalsProgress {
 
 export const accurateTotals = writable<AccurateTotals | null>(null);
 export const isCalculatingAccurateTotals = writable<boolean>(false);
-export const accurateTotalsProgress = writable<AccurateTotalsProgress | null>(null);
+export const accurateTotalsProgress = writable<AccurateTotalsProgress | null>(
+  null
+);
 
 // Calculate total mined from loaded mining reward transactions (partial - based on loaded data)
 export const totalEarned = derived(transactions, ($txs) =>
@@ -557,7 +562,7 @@ export interface AppSettings {
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
   autoStartDHT: boolean; // Whether to automatically start DHT on app launch
-  selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | null; // Protocol selected for file uploads
+  selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol selected for file uploads
 }
 
 // Export the settings store
@@ -610,7 +615,7 @@ export const settings = writable<AppSettings>({
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
   autoStartDHT: false, // Don't auto-start DHT by default
-  selectedProtocol: "Bitswap" as "WebRTC" | "Bitswap" | "BitTorrent", // Default to Bitswap
+  selectedProtocol: "Bitswap", // Default to Bitswap
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
