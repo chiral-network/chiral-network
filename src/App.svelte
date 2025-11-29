@@ -154,13 +154,6 @@ const navigateTo = (page: string, path: string) => {
 };
 
 // First-run wizard handlers
-// function handleFirstRunComplete() {
-//   showFirstRunWizard = false;
-//   // Navigate to account page after completing wizard
-//   currentPage = 'account';
-//   goto('/account');
-// }
-// First-run wizard handlers
 function handleFirstRunComplete() {
   showFirstRunWizard = false;
   // Navigate to account page after completing wizard
@@ -478,13 +471,6 @@ function handleFirstRunComplete() {
       }
       
       // Ctrl/Cmd + D - Go to Download
-      // if ((event.ctrlKey || event.metaKey) && event.key === 'd' && !isInputField) {
-      //   event.preventDefault();
-      //   currentPage = 'download';
-      //   goto('/download');
-      //   return;
-      // }
-      // Ctrl/Cmd + D - Go to Download
       if ((event.ctrlKey || event.metaKey) && event.key === 'd' && !isInputField) {
         event.preventDefault();
         navigateTo('download', '/download');
@@ -492,13 +478,6 @@ function handleFirstRunComplete() {
       }
 
       
-      // Ctrl/Cmd + U - Go to Upload
-      // if ((event.ctrlKey || event.metaKey) && event.key === 'u' && !isInputField) {
-      //   event.preventDefault();
-      //   currentPage = 'upload';
-      //   goto('/upload');
-      //   return;
-      // }
       // Ctrl/Cmd + U - Go to Upload
       if ((event.ctrlKey || event.metaKey) && event.key === 'u' && !isInputField) {
         event.preventDefault();
@@ -508,13 +487,6 @@ function handleFirstRunComplete() {
 
       
       // Ctrl/Cmd + N - Go to Network
-      // if ((event.ctrlKey || event.metaKey) && event.key === 'n' && !isInputField) {
-      //   event.preventDefault();
-      //   currentPage = 'network';
-      //   goto('/network');
-      //   return;
-      // }
-      // Ctrl/Cmd + N - Go to Network
       if ((event.ctrlKey || event.metaKey) && event.key === 'n' && !isInputField) {
         event.preventDefault();
         navigateTo('network', '/network');
@@ -523,13 +495,6 @@ function handleFirstRunComplete() {
 
       
       // Ctrl/Cmd + M - Go to Mining
-      // if ((event.ctrlKey || event.metaKey) && event.key === 'm' && !isInputField) {
-      //   event.preventDefault();
-      //   currentPage = 'mining';
-      //   goto('/mining');
-      //   return;
-      // }
-      // Ctrl/Cmd + M - Go to Mining
       if ((event.ctrlKey || event.metaKey) && event.key === 'm' && !isInputField) {
         event.preventDefault();
         navigateTo('mining', '/mining');
@@ -537,13 +502,6 @@ function handleFirstRunComplete() {
       }
 
       
-      // Ctrl/Cmd + A - Go to Account (only if not in input field)
-      // if ((event.ctrlKey || event.metaKey) && event.key === 'a' && !isInputField) {
-      //   event.preventDefault();
-      //   currentPage = 'account';
-      //   goto('/account');
-      //   return;
-      // }
       // Ctrl/Cmd + A - Go to Account (only if not in input field)
       if ((event.ctrlKey || event.metaKey) && event.key === 'a' && !isInputField) {
         event.preventDefault();
@@ -559,13 +517,6 @@ function handleFirstRunComplete() {
         return;
       }
 
-      // Ctrl/Cmd + , - Open Settings
-      // if ((event.ctrlKey || event.metaKey) && event.key === ",") {
-      //   event.preventDefault();
-      //   currentPage = "settings";
-      //   goto("/settings");
-      //   return;
-      // }
       // Ctrl/Cmd + , - Open Settings
       if ((event.ctrlKey || event.metaKey) && event.key === ",") {
         event.preventDefault();
@@ -632,11 +583,6 @@ function handleFirstRunComplete() {
     };
   });
 
-  // setContext("navigation", {
-  //   setCurrentPage: (page: string) => {
-  //     currentPage = page;
-  //   },
-  // });
   setContext("navigation", {
     setCurrentPage: (page: string) => {
       if (page !== currentPage) {
@@ -648,18 +594,6 @@ function handleFirstRunComplete() {
   });
 
 
-  // let sidebarCollapsed = false;
-  // let sidebarMenuOpen = false;
-
-  // // Scroll to top when page changes
-  // $: if (currentPage) {
-  //   tick().then(() => {
-  //     const mainContent = document.querySelector("#main-content");
-  //     if (mainContent) {
-  //       mainContent.scrollTop = 0;
-  //     }
-  //   });
-  // }
   let sidebarCollapsed = false;
   let sidebarMenuOpen = false;
 
