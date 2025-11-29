@@ -1026,6 +1026,9 @@ impl MultiSourceDownloadService {
                         chunk.chunk_id, start_byte, size, remote_path
                     );
 
+                    // Capture start time for duration tracking
+                    let download_start_ms = current_timestamp_ms();
+
                     // Get FTP connection (we need to handle connection sharing carefully)
                     let download_result = {
                         let mut connections_guard = connections.lock().await;
@@ -1165,6 +1168,10 @@ impl MultiSourceDownloadService {
                                 chunk.chunk_id, chunk.size
                             );
 
+                            // Calculate actual download duration
+                            let completed_at = current_timestamp_ms();
+                            let download_duration_ms = completed_at.saturating_sub(download_start_ms);
+
                             // Emit chunk completed event via TransferEventBus
                             transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
                                 transfer_id: file_hash.clone(),
@@ -1172,8 +1179,8 @@ impl MultiSourceDownloadService {
                                 chunk_size: chunk.size,
                                 source_id: ftp_url.clone(),
                                 source_type: SourceType::Ftp,
-                                completed_at: current_timestamp_ms(),
-                                download_duration_ms: 0, // TODO: track actual duration
+                                completed_at,
+                                download_duration_ms,
                                 verified: true,
                             });
 
