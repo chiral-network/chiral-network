@@ -28,14 +28,7 @@ import type { FileMetadata } from '$lib/dht'
   // Import transfer events store for centralized transfer state management
   import {
     transferStore,
-    activeTransfers as storeActiveTransfers,
-    completedTransfers,
-    failedTransfers,
-    queuedTransfers,
-    formatBytes,
-    formatSpeed,
-    formatETA,
-    type Transfer
+    activeTransfers as storeActiveTransfers
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir } from '@tauri-apps/api/path'
@@ -348,6 +341,25 @@ import type { FileMetadata } from '$lib/dht'
         });
 
 
+        // Listen for WebRTC download progress
+        const unlistenWebRTCProgress = await listen('webrtc_download_progress', (event) => {
+          const data = event.payload as {
+            fileHash: string;
+            progress: number;
+            chunksReceived: number;
+            totalChunks: number;
+            bytesReceived: number;
+            totalBytes: number;
+          };
+
+          // Update file progress (FileItem uses 'hash' property)
+          files.update(f => f.map(file =>
+            file.hash === data.fileHash
+              ? { ...file, status: 'downloading', progress: data.progress }
+              : file
+          ));
+        });
+
         // Listen for WebRTC download completion
 const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
   const data = event.payload as {
@@ -442,6 +454,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           unlistenBitswapProgress()
           unlistenDownloadCompleted()
           unlistenDhtError()
+          unlistenWebRTCProgress()
           unlistenWebRTCComplete()
           unlistenTorrentEvent()
         }
@@ -538,7 +551,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         queued: $transferStore.queuedCount,
         completed: $transferStore.completedCount,
         failed: $transferStore.failedCount,
-        totalDownloadSpeed: formatSpeed($transferStore.totalDownloadSpeed)
+        totalDownloadSpeed: MultiSourceDownloadService.formatSpeed($transferStore.totalDownloadSpeed)
       });
     }
   }
@@ -883,14 +896,19 @@ async function loadAndResumeDownloads() {
     showNotification(message, type, duration)
   }
 
-  async function handleSearchDownload(metadata: FileMetadata) {
+  async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
     diagnosticLogger.debug('Download', 'handleSearchDownload called', { metadata });
 
-    // Auto-detect protocol based on file metadata
-    const hasCids = metadata.cids && metadata.cids.length > 0
-    detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
-    
-    diagnosticLogger.debug('Download', 'Auto-detected protocol', { protocol: detectedProtocol, hasCids });
+    // Use user's protocol selection if provided, otherwise auto-detect
+    if (metadata.selectedProtocol) {
+      detectedProtocol = metadata.selectedProtocol === 'webrtc' ? 'WebRTC' : 'Bitswap';
+      diagnosticLogger.debug('Download', 'Using user-selected protocol', { protocol: detectedProtocol });
+    } else {
+      // Auto-detect protocol based on file metadata
+      const hasCids = metadata.cids && metadata.cids.length > 0
+      detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
+      diagnosticLogger.debug('Download', 'Auto-detected protocol', { protocol: detectedProtocol, hasCids });
+    }
 
     // Check both download queue and files store for duplicates
     // This ensures we detect if user tries to download a file they're already seeding
@@ -943,7 +961,8 @@ async function loadAndResumeDownloads() {
       // Pass encryption info to the download item
       isEncrypted: metadata.isEncrypted,
       manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null,
-      cids: metadata.cids // IMPORTANT: Pass CIDs for Bitswap downloads
+      cids: metadata.cids, // IMPORTANT: Pass CIDs for Bitswap downloads
+      protocol: detectedProtocol // Store the selected protocol with the file
     }
 
     diagnosticLogger.debug('Download', 'Created new file for queue', { fileName: newFile.name, hash: newFile.hash });
@@ -1152,6 +1171,7 @@ async function loadAndResumeDownloads() {
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
     const downloadingFile = {
       ...nextFile,
+      hash: nextFile.hash, // Use hash property from FileItem
       status: 'downloading' as const,
       progress: 0,
       speed: '0 B/s', // Ensure speed property exists
@@ -1162,9 +1182,12 @@ async function loadAndResumeDownloads() {
     }
     diagnosticLogger.debug('Download', 'Created downloadingFile object', { fileName: downloadingFile.name });
     files.update(f => [...f, downloadingFile])
-    diagnosticLogger.debug('Download', 'Added file to files store', { fileName: downloadingFile.name, protocol: detectedProtocol });
 
-    if (detectedProtocol === "Bitswap"){
+    // Use the protocol stored with the file, or fall back to global detectedProtocol
+    const fileProtocol = downloadingFile.protocol || detectedProtocol;
+    diagnosticLogger.debug('Download', 'Added file to files store', { fileName: downloadingFile.name, protocol: fileProtocol });
+
+    if (fileProtocol === "Bitswap"){
   diagnosticLogger.debug('Download', 'Starting Bitswap download', { fileName: downloadingFile.name });
 
   // CRITICAL: Bitswap requires CIDs to download
@@ -1313,10 +1336,69 @@ async function loadAndResumeDownloads() {
     showNotification('Failed to validate download path', 'error', 6000);
     return;
   }
-} 
+}
     else {
-      diagnosticLogger.debug('Download', 'Simulating download', { fileName: downloadingFile.name });
-      simulateDownloadProgress(downloadingFile.id)
+      // WebRTC download path - Use backend Rust WebRTC (works in Tauri)
+      diagnosticLogger.debug('Download', 'Starting WebRTC download via backend', { fileName: downloadingFile.name });
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { save } = await import('@tauri-apps/plugin-dialog');
+
+        // Get download path from user
+        const outputPath = await save(buildSaveDialogOptions(downloadingFile.name));
+
+        if (!outputPath) {
+          files.update(f => f.map(file =>
+            file.id === downloadingFile.id
+              ? { ...file, status: 'failed' }
+              : file
+          ));
+          showNotification('Download cancelled by user', 'info');
+          return;
+        }
+
+        diagnosticLogger.debug('Download', 'Initiating backend WebRTC transfer', {
+          fileName: downloadingFile.name,
+          hash: downloadingFile.hash,
+          outputPath
+        });
+
+        // Call backend Rust WebRTC via Tauri command
+        // This uses the WebRTCService with webrtc-rs crate (works in Tauri)
+        await invoke('download_file_from_network', {
+          fileHash: downloadingFile.hash,
+          outputPath: outputPath
+        });
+
+        // Update file status to downloading (not completed - that happens via events)
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? {
+                ...file,
+                status: 'downloading',
+                progress: 0,
+                downloadPath: outputPath
+              }
+            : file
+        ));
+
+        diagnosticLogger.debug('Download', 'WebRTC download initiated', { outputPath });
+        showNotification(`WebRTC download started for "${downloadingFile.name}"`, 'info');
+
+      } catch (error) {
+        errorLogger.fileOperationError('WebRTC download', error instanceof Error ? error.message : String(error));
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? { ...file, status: 'failed' }
+            : file
+        ));
+        showNotification(
+          `WebRTC download failed: ${error instanceof Error ? error.message : String(error)}`,
+          'error',
+          6000
+        );
+      }
     }
   }
 

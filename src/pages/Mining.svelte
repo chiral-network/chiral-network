@@ -23,6 +23,7 @@
   import { walletService } from '$lib/wallet';
   import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte';
   import { showToast } from '$lib/toast';
+  import { gethSyncStatus } from '$lib/services/gethService';
   type TranslateParams = { values?: Record<string, unknown>; default?: string };
   // const tr = (key: string, params?: TranslateParams) => get(t)(key, params);
   const tr = (key: string, params?: TranslateParams): string =>
@@ -39,14 +40,15 @@
   let selectedThreads = Math.floor(cpuThreads / 2)
   let error = ''
 
-  // Blockchain sync status
-  let isSyncing = false
-  let syncProgress = 0
-  let syncCurrentBlock = 0
-  let syncHighestBlock = 0
-  let syncBlocksRemaining = 0
-  let syncEstimatedSecondsRemaining: number | null = null
+  // Blockchain sync status - updated from gethSyncStatus store
+  $: isSyncing = $gethSyncStatus?.syncing ?? true
+  $: syncProgress = $gethSyncStatus?.progress_percent ?? 0
+  $: syncCurrentBlock = $gethSyncStatus?.current_block ?? 0
+  $: syncHighestBlock = $gethSyncStatus?.highest_block ?? 0
+  $: syncBlocksRemaining = $gethSyncStatus?.blocks_remaining ?? 0
+  $: syncEstimatedSecondsRemaining = $gethSyncStatus?.estimated_seconds_remaining ?? null
   let lastSyncNotificationShown = false
+
 
   // Temporary account tracking
   let isTemporaryAccount = false
@@ -208,26 +210,12 @@
 
   async function updateSyncStatus() {
     try {
-      const syncStatus = await invoke('get_blockchain_sync_status') as {
-        syncing: boolean,
-        current_block: number,
-        highest_block: number,
-        progress_percent: number,
-        blocks_remaining: number,
-        estimated_seconds_remaining: number | null
-      }
-
+      // Note: Sync status is already being reactively tracked via gethSyncStatus store
+      // We only check for sync completion notification here
       const wasSyncing = isSyncing
-      isSyncing = syncStatus.syncing
-      syncProgress = syncStatus.progress_percent
-      syncCurrentBlock = syncStatus.current_block
-      syncHighestBlock = syncStatus.highest_block
-      syncBlocksRemaining = syncStatus.blocks_remaining
-      syncEstimatedSecondsRemaining = syncStatus.estimated_seconds_remaining
 
       // Show notification when sync completes
       if (wasSyncing && !isSyncing && !lastSyncNotificationShown && $miningState.isMining) {
-        // showToast('Blockchain sync complete! Mining is now active.', 'success')
         showToast(tr('toasts.mining.syncComplete'), 'success')
         lastSyncNotificationShown = true
       }
@@ -759,7 +747,13 @@
       error = $t('mining.errors.gethNotRunning')
       return
     }
-    
+
+    // Check if blockchain is still syncing
+    if (isSyncing) {
+      error = `Cannot start mining while blockchain is syncing (${syncProgress.toFixed(1)}% complete). Please wait for sync to finish.`
+      return
+    }
+
     error = ''
     validationError = null
     
@@ -1546,13 +1540,13 @@
             {$t('mining.totalHashes')}: <span class="font-medium">{formatNumber(totalHashes)}</span>
           </p>
         </div>
-        
+
         <div class="flex gap-2">
           <Button
             size="lg"
             onclick={() => $miningState.isMining ? stopMining() : startMining()}
             class="min-w-[150px]"
-            disabled={isInvalid || !isGethRunning}
+            disabled={isInvalid || !isGethRunning || isSyncing}
           >
             {#if $miningState.isMining}
               <Pause class="h-4 w-4 mr-2" />

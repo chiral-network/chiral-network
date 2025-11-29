@@ -21,7 +21,7 @@ pub mod reassembly;
 // Re-export modules from the lib crate
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, download_restart,
-    download_source, dht, ed2k_client, encryption, file_transfer,
+    dht, ed2k_client, encryption, file_transfer,
     http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
@@ -35,6 +35,7 @@ use crate::commands::auth::{
 
 use bandwidth::BandwidthController;
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
+use crate::commands::bootstrap::get_bootstrap_nodes;
 use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
@@ -97,10 +98,10 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::{io::AsyncReadExt, sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
-use webrtc_service::{WebRTCFileRequest, WebRTCService};
+use webrtc_service::{init_webrtc_service, WebRTCFileRequest, WebRTCService};
 
 use manager::ChunkManager; // Import the ChunkManager
                                   // For key encoding
@@ -303,6 +304,20 @@ pub struct StreamingUploadSession {
     pub file_data: Vec<u8>,
 }
 
+/// Session for streaming WebRTC downloads - writes chunks directly to disk
+#[derive(Debug)]
+pub struct StreamingDownloadSession {
+    pub file_hash: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub temp_path: std::path::PathBuf,
+    pub output_path: String,
+    pub received_chunks: std::collections::HashSet<u32>,
+    pub total_chunks: u32,
+    pub chunk_size: u32,
+    pub created_at: std::time::SystemTime,
+}
+
 struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
@@ -333,6 +348,9 @@ struct AppState {
 
     // New field for streaming upload sessions
     upload_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingUploadSession>>>,
+
+    // New field for streaming download sessions (WebRTC chunk streaming to disk)
+    download_sessions: Arc<Mutex<std::collections::HashMap<String, StreamingDownloadSession>>>,
 
     // Proxy authentication tokens storage
     proxy_auth_tokens: Arc<Mutex<std::collections::HashMap<String, ProxyAuthToken>>>,
@@ -878,7 +896,7 @@ async fn upload_file(
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
         if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use download_source::HttpSourceInfo;
+            use chiral_network::download_source::HttpSourceInfo;
             // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
             let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
             metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
@@ -1073,7 +1091,21 @@ async fn start_miner(
 
 #[tauri::command]
 async fn stop_miner() -> Result<(), String> {
-    stop_mining().await?;
+    // Try to stop mining, but if Geth is not running, just clear the state
+    match stop_mining().await {
+        Ok(_) => {
+            // Successfully stopped mining
+        }
+        Err(e) if e.contains("Connection refused") || e.contains("connect error") => {
+            // Geth is not running - this is okay, just clear the state
+            eprintln!("Geth not running (connection refused) - clearing mining state");
+        }
+        Err(e) => {
+            // Some other error - return it
+            return Err(e);
+        }
+    }
+
     // Clear the current mining address
     {
         let mut current_address = CURRENT_MINER_ADDRESS.lock().await;
@@ -3200,13 +3232,17 @@ async fn start_file_transfer_service(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    info!("🔧 Starting file transfer service...");
+
     {
         let ft_guard = state.file_transfer.lock().await;
         if ft_guard.is_some() {
+            warn!("File transfer service is already running");
             return Err("File transfer service is already running".to_string());
         }
     }
 
+    info!("🔧 Creating FileTransferService...");
     let file_transfer_service = FileTransferService::new_with_encryption(true)
         .await
         .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
@@ -3216,8 +3252,10 @@ async fn start_file_transfer_service(
         let mut ft_guard = state.file_transfer.lock().await;
         *ft_guard = Some(ft_arc.clone());
     }
+    info!("✅ FileTransferService created and stored in AppState");
 
     // Initialize WebRTC service with file transfer service
+    info!("🔧 Creating WebRTCService...");
     let webrtc_service = WebRTCService::new(
         app.app_handle().clone(),
         ft_arc.clone(),
@@ -3232,6 +3270,18 @@ async fn start_file_transfer_service(
         let mut webrtc_guard = state.webrtc.lock().await;
         *webrtc_guard = Some(webrtc_arc.clone());
     }
+
+    // Initialize global singleton for DHT access
+    init_webrtc_service(
+        ft_arc.clone(),
+        app.app_handle().clone(),
+        state.keystore.clone(),
+        state.bandwidth.clone(),
+    )
+    .await
+    .map_err(|e| format!("Failed to initialize WebRTC global singleton: {}", e))?;
+
+    info!("✅ WebRTCService created and stored in AppState");
 
     // Initialize multi-source download service
     let dht_arc = {
@@ -3306,6 +3356,49 @@ async fn upload_file_to_network(
     // Get the active account for uploader_address
     let account = get_active_account(&state).await?;
 
+    // Calculate file hash without loading entire file into memory
+    let mut hasher = sha2::Sha256::new();
+    let mut file = tokio::fs::File::open(&file_path).await
+        .map_err(|e| format!("Failed to open file for hashing: {}", e))?;
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB chunks for hashing
+
+    loop {
+        let bytes_read = file.read(&mut buffer).await
+            .map_err(|e| format!("Failed to read chunk for hashing: {}", e))?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let file_hash = format!("{:x}", hasher.finalize());
+    let permanent_path = state.http_server_state.storage_dir.join(&file_hash);
+
+    // Move/rename temp file to permanent storage instead of copying
+    tokio::fs::rename(&file_path, &permanent_path).await
+        .map_err(|e| format!("Failed to move file to permanent storage: {}", e))?;
+
+    // Update file_path to point to the permanent location
+    let file_path = permanent_path.to_string_lossy().to_string();
+
+    // Register with HTTP server
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+
+    let file_size = tokio::fs::metadata(&file_path).await
+        .map_err(|e| format!("Failed to get file size: {}", e))?
+        .len();
+
+    state.http_server_state.register_file(http_server::HttpFileMetadata {
+        hash: file_hash.clone(),
+        file_hash: file_hash.clone(),
+        name: file_name.to_string(),
+        size: file_size,
+        encrypted: false,
+    }).await;
+
     // Handle protocol-specific uploads
     if let Some(protocol_name) = &protocol {
         match protocol_name.as_str() {
@@ -3357,8 +3450,20 @@ async fn upload_file_to_network(
                             uploader_address: Some(account),
                             ftp_sources: None,
                             http_sources: None,
-                            info_hash: None, // Could extract from magnet link if needed
-                            trackers: None,
+                            info_hash: {
+                                // Extract info hash from magnet link
+                                if let Some(start) = magnet_link.find("urn:btih:") {
+                                    let start = start + 9;
+                                    let end = magnet_link[start..]
+                                        .find('&')
+                                        .map(|i| start + i)
+                                        .unwrap_or(magnet_link.len());
+                                    Some(magnet_link[start..end].to_lowercase())
+                                } else {
+                                    None
+                                }
+                            },
+                            trackers: Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]),
                             ed2k_sources: None,
                             download_path: None,
                         };
@@ -3531,8 +3636,102 @@ async fn upload_file_to_network(
                     }
                 }
             }
+            "Bitswap" => {
+                // Use streaming upload for Bitswap to handle large files
+                println!("📡 Using streaming Bitswap upload for protocol: {}", protocol_name);
+
+                let file_name = Path::new(&file_path)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&file_path);
+
+                // Inline streaming upload logic for Bitswap
+                use tokio::io::AsyncReadExt;
+
+                // Get file metadata without reading the entire file
+                let metadata = tokio::fs::metadata(&file_path)
+                    .await
+                    .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+                let file_size = metadata.len();
+
+                // For very large files, use a smaller chunk size to reduce memory pressure
+                let chunk_size = if file_size > 1024 * 1024 * 1024 { // > 1GB
+                    256 * 1024 // 256KB chunks
+                } else {
+                    1024 * 1024 // 1MB chunks
+                };
+
+                let total_chunks = ((file_size + chunk_size - 1) / chunk_size) as usize;
+
+                println!("📡 Starting Bitswap streaming upload: {} chunks of {} bytes each",
+                         total_chunks, chunk_size);
+
+                // Start streaming upload session
+                let upload_id = start_streaming_upload(file_name.to_string(), file_size, state.clone()).await?;
+
+                // Stream file in chunks
+                let mut file = tokio::fs::File::open(&file_path)
+                    .await
+                    .map_err(|e| format!("Failed to open file for streaming: {}", e))?;
+
+                let mut chunk_index = 0;
+                let mut buffer = vec![0u8; chunk_size as usize];
+
+                loop {
+                    let bytes_read = file.read(&mut buffer)
+                        .await
+                        .map_err(|e| format!("Failed to read chunk: {}", e))?;
+
+                    if bytes_read == 0 {
+                        break; // EOF
+                    }
+
+                    // Create chunk data (truncate if partial read)
+                    let chunk_data = if bytes_read < buffer.len() {
+                        buffer[..bytes_read].to_vec()
+                    } else {
+                        buffer.clone()
+                    };
+
+                    let is_last_chunk = chunk_index >= total_chunks - 1; // Use >= to handle edge cases
+
+                    // Send chunk
+                    let result = upload_file_chunk(
+                        upload_id.clone(),
+                        chunk_data,
+                        chunk_index as u32,
+                        is_last_chunk,
+                        state.clone()
+                    ).await?;
+
+                    // Progress logging for large files
+                    if chunk_index % 100 == 0 || is_last_chunk {
+                        println!("📊 Upload progress: {}/{} chunks ({:.1}%)",
+                                 chunk_index + 1, total_chunks,
+                                 (chunk_index + 1) as f64 / total_chunks as f64 * 100.0);
+                    }
+
+                    if is_last_chunk {
+                        if let Some(file_hash) = result {
+                            println!("✅ Bitswap streaming upload completed: {}", file_hash);
+                            return Ok(());
+                        } else {
+                            return Err("Upload completed but no file hash returned".to_string());
+                        }
+                    }
+
+                    chunk_index += 1;
+
+                    // Prevent too many concurrent operations
+                    if chunk_index % 50 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                }
+
+                return Ok(());
+            }
             _ => {
-                // WebRTC and Bitswap use the default Chiral flow
+                // WebRTC and other protocols use the default Chiral flow
                 println!("📡 Using Chiral network upload for protocol: {}", protocol_name);
             }
         }
@@ -3584,6 +3783,12 @@ async fn upload_file_to_network(
         };
 
         if let Some(dht) = dht {
+            // Create metadata manually for the catch-all protocols
+            let created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_secs();
+
             let metadata = FileMetadata {
                 merkle_root: file_hash.clone(),
                 is_root: true,
@@ -3591,10 +3796,7 @@ async fn upload_file_to_network(
                 file_size: file_data.len() as u64,
                 file_data: file_data.clone(),
                 seeders: vec![],
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
+                created_at,
                 mime_type: None,
                 is_encrypted: false,
                 encryption_method: None,
@@ -3604,58 +3806,41 @@ async fn upload_file_to_network(
                 encrypted_key_bundle: None,
                 price,
                 uploader_address: Some(account.clone()),
-                ..Default::default()
+                ftp_sources: None,
+                http_sources: None,
+                info_hash: None,
+                trackers: None,
+                ed2k_sources: None,
+                download_path: None,
             };
-            // Prepare a timestamp for metadata
-            let created_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::from_secs(0))
-                .as_secs();
 
-            // Use DHT helper to prepare file metadata
-            match dht
-                .prepare_file_metadata(
-                    file_hash.clone(),
-                    file_name.to_string(),
-                    file_data.len() as u64,
-                    file_data.clone(),
-                    created_at,
-                    None,                  // mime_type
-                    None,                  // encrypted_key_bundle
-                    false,                 // is_encrypted
-                    None,                  // encryption_method
-                    None,                  // key_fingerprint
-                    price,                 // Add price parameter
-                    Some(account.clone()), // Add uploader_address parameter
-                )
-                .await
-            {
-                Ok(metadata) => {
-                    // Store file data locally for seeding
-                    ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
-                        .await;
+            dht.publish_file(metadata.clone(), None).await?;
 
-                    // Register file with HTTP server for HTTP downloads
-                    // IMPORTANT: Use merkle_root as the key, not file_hash!
-                    state
-                        .http_server_state
-                        .register_file(http_server::HttpFileMetadata {
-                            hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
-                            file_hash: file_hash.clone(),       // Use file_hash for storage path
-                            name: file_name.to_string(),
-                            size: file_data.len() as u64,
-                            encrypted: false,
-                        })
-                        .await;
+            // Store file data locally for seeding
+            ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
+                .await;
 
-                    match dht.publish_file(metadata.clone(), None).await {
-                        Ok(_) => {},
-                        Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to prepare file metadata: {}", e);
-                }
+            // Register file with HTTP server for HTTP downloads
+            // IMPORTANT: Use merkle_root as the key, not file_hash!
+            state
+                .http_server_state
+                .register_file(http_server::HttpFileMetadata {
+                    hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
+                    file_hash: file_hash.clone(),       // Use file_hash for storage path
+                    name: file_name.to_string(),
+                    size: file_data.len() as u64,
+                    encrypted: false,
+                })
+                .await;
+
+            info!(
+                "Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})",
+                file_name, metadata.merkle_root, file_hash
+            );
+
+            match dht.publish_file(metadata.clone(), None).await {
+                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
             }
 
             Ok(())
@@ -4276,6 +4461,46 @@ async fn get_file_size(file_path: String) -> Result<u64, String> {
     Ok(metadata.len())
 }
 
+
+#[tauri::command]
+async fn create_temp_file_for_streaming(file_name: String) -> Result<String, String> {
+    let temp_dir = std::env::temp_dir().join("chiral_uploads");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp directory: {}", e))?;
+
+    // Create unique temp file path
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_nanos();
+    let temp_file_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
+
+    // Create empty file
+    fs::write(&temp_file_path, &[]).map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    Ok(temp_file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn append_chunk_to_temp_file(temp_file_path: String, chunk_data: Vec<u8>) -> Result<(), String> {
+    use tokio::fs::OpenOptions;
+    use tokio::io::AsyncWriteExt;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&temp_file_path)
+        .await
+        .map_err(|e| format!("Failed to open temp file for appending: {}", e))?;
+
+    file.write_all(&chunk_data).await
+        .map_err(|e| format!("Failed to append chunk to temp file: {}", e))?;
+
+    file.flush().await
+        .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn start_streaming_upload(
     file_name: String,
@@ -4331,9 +4556,8 @@ async fn upload_file_chunk(
         .get_mut(&upload_id)
         .ok_or_else(|| format!("Upload session {} not found", upload_id))?;
 
-    // Update hasher with chunk data and accumulate file data
+    // Update hasher with chunk data
     session.hasher.update(&chunk_data);
-    session.file_data.extend_from_slice(&chunk_data);
     session.received_chunks += 1;
 
     // Store chunk directly in Bitswap (if DHT is available)
@@ -4422,47 +4646,16 @@ async fn upload_file_chunk(
             ed2k_sources: None,
         };
 
-        // Store complete file data locally for seeding
-        let complete_file_data = session.file_data.clone();
-        let file_name_for_storage = session.file_name.clone();
-
-        // Clean up session before storing file data
+        // Clean up session - rely entirely on Bitswap for distribution
+        // No local file storage needed since chunks are stored in Bitswap
         let file_hash = root_cid.to_string();
         upload_sessions.remove(&upload_id);
-
-        // Release the upload_sessions lock before the async operation
         drop(upload_sessions);
 
-        // Store file data in FileTransferService
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await;
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name_for_storage, complete_file_data)
-                .await;
-        }
-
-        // Add HTTP source information to metadata
-        let mut metadata_with_http = metadata.clone();
-        if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use download_source::HttpSourceInfo;
-            metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
-                url: format!("http://{}", http_addr),
-                auth_header: None,
-                verify_ssl: true,
-                headers: None,
-                timeout_secs: None,
-            }]);
-            tracing::info!(
-                "Added HTTP source to streaming upload metadata: http://{}",
-                http_addr
-            );
-        }
 
         // Publish to DHT
         if let Some(dht) = dht_opt {
-            dht.publish_file(metadata_with_http.clone(), None).await?;
+            dht.publish_file(metadata.clone(), None).await?;
         } else {
             return Err("DHT not running".into());
         }
@@ -4489,6 +4682,248 @@ async fn write_file(path: String, contents: Vec<u8>) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to write file: {}", e))?;
     Ok(())
+}
+
+/// Initialize a streaming download session - creates temp file and returns session ID
+#[tauri::command]
+async fn init_streaming_download(
+    state: State<'_, AppState>,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    output_path: String,
+    total_chunks: u32,
+    chunk_size: u32,
+) -> Result<String, String> {
+    use std::time::SystemTime;
+
+    // Generate unique session ID
+    let session_id = format!("dl-{}-{}", file_hash.chars().take(8).collect::<String>(),
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis());
+
+    // Create temp file path
+    let temp_path = std::path::PathBuf::from(&output_path)
+        .with_extension("chiral_partial");
+
+    // Pre-allocate file with zeros for efficient random writes
+    let file = tokio::fs::File::create(&temp_path)
+        .await
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    file.set_len(file_size)
+        .await
+        .map_err(|e| format!("Failed to pre-allocate file: {}", e))?;
+    drop(file);
+
+    let session = StreamingDownloadSession {
+        file_hash: file_hash.clone(),
+        file_name,
+        file_size,
+        temp_path,
+        output_path,
+        received_chunks: std::collections::HashSet::new(),
+        total_chunks,
+        chunk_size,
+        created_at: SystemTime::now(),
+    };
+
+    let mut sessions = state.download_sessions.lock().await;
+    sessions.insert(session_id.clone(), session);
+
+    info!("Initialized streaming download session: {} for file {}", session_id, file_hash);
+    Ok(session_id)
+}
+
+/// Write a chunk directly to the temp file at the correct offset
+#[tauri::command]
+async fn write_download_chunk(
+    state: State<'_, AppState>,
+    session_id: String,
+    chunk_index: u32,
+    chunk_data: Vec<u8>,
+) -> Result<bool, String> {
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+    let mut sessions = state.download_sessions.lock().await;
+    let session = sessions.get_mut(&session_id)
+        .ok_or_else(|| format!("Download session not found: {}", session_id))?;
+
+    // Check if chunk already received
+    if session.received_chunks.contains(&chunk_index) {
+        return Ok(false); // Already have this chunk
+    }
+
+    // Calculate offset
+    let offset = (chunk_index as u64) * (session.chunk_size as u64);
+
+    // Write chunk to file at correct offset
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(&session.temp_path)
+        .await
+        .map_err(|e| format!("Failed to open temp file: {}", e))?;
+
+    file.seek(std::io::SeekFrom::Start(offset))
+        .await
+        .map_err(|e| format!("Failed to seek in file: {}", e))?;
+
+    file.write_all(&chunk_data)
+        .await
+        .map_err(|e| format!("Failed to write chunk: {}", e))?;
+
+    file.flush()
+        .await
+        .map_err(|e| format!("Failed to flush chunk: {}", e))?;
+
+    session.received_chunks.insert(chunk_index);
+
+    // Return true if all chunks received
+    Ok(session.received_chunks.len() as u32 >= session.total_chunks)
+}
+
+/// Get download session progress
+#[tauri::command]
+async fn get_streaming_download_progress(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(u32, u32), String> {
+    let sessions = state.download_sessions.lock().await;
+    let session = sessions.get(&session_id)
+        .ok_or_else(|| format!("Download session not found: {}", session_id))?;
+
+    Ok((session.received_chunks.len() as u32, session.total_chunks))
+}
+
+/// Finalize the download - rename temp file to final destination
+#[tauri::command]
+async fn finalize_streaming_download(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<String, String> {
+    let mut sessions = state.download_sessions.lock().await;
+    let session = sessions.remove(&session_id)
+        .ok_or_else(|| format!("Download session not found: {}", session_id))?;
+
+    // Verify all chunks received
+    if session.received_chunks.len() as u32 != session.total_chunks {
+        return Err(format!(
+            "Download incomplete: received {}/{} chunks",
+            session.received_chunks.len(),
+            session.total_chunks
+        ));
+    }
+
+    // Rename temp file to final destination
+    tokio::fs::rename(&session.temp_path, &session.output_path)
+        .await
+        .map_err(|e| format!("Failed to finalize download: {}", e))?;
+
+    info!("Finalized streaming download: {} -> {}", session_id, session.output_path);
+    Ok(session.output_path)
+}
+
+/// Cancel and cleanup a streaming download
+#[tauri::command]
+async fn cancel_streaming_download(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let mut sessions = state.download_sessions.lock().await;
+    if let Some(session) = sessions.remove(&session_id) {
+        // Delete temp file if it exists
+        let _ = tokio::fs::remove_file(&session.temp_path).await;
+        // Delete checkpoint file if exists
+        let checkpoint_path = session.temp_path.with_extension("checkpoint");
+        let _ = tokio::fs::remove_file(&checkpoint_path).await;
+        info!("Cancelled streaming download: {}", session_id);
+    }
+    Ok(())
+}
+
+/// Save checkpoint for resume support
+#[tauri::command]
+async fn save_download_checkpoint(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let sessions = state.download_sessions.lock().await;
+    let session = sessions.get(&session_id)
+        .ok_or_else(|| format!("Download session not found: {}", session_id))?;
+
+    let checkpoint = serde_json::json!({
+        "file_hash": session.file_hash,
+        "file_name": session.file_name,
+        "file_size": session.file_size,
+        "output_path": session.output_path,
+        "total_chunks": session.total_chunks,
+        "chunk_size": session.chunk_size,
+        "received_chunks": session.received_chunks.iter().collect::<Vec<_>>(),
+        "temp_path": session.temp_path.to_string_lossy(),
+    });
+
+    let checkpoint_path = session.temp_path.with_extension("checkpoint");
+    tokio::fs::write(&checkpoint_path, serde_json::to_string_pretty(&checkpoint).unwrap())
+        .await
+        .map_err(|e| format!("Failed to save checkpoint: {}", e))?;
+
+    info!("Saved checkpoint: {} chunks received", session.received_chunks.len());
+    Ok(())
+}
+
+/// Load checkpoint and resume download
+#[tauri::command]
+async fn resume_download_from_checkpoint(
+    state: State<'_, AppState>,
+    checkpoint_path: String,
+) -> Result<(String, Vec<u32>), String> {
+    let checkpoint_data = tokio::fs::read_to_string(&checkpoint_path)
+        .await
+        .map_err(|e| format!("Failed to read checkpoint: {}", e))?;
+
+    let checkpoint: serde_json::Value = serde_json::from_str(&checkpoint_data)
+        .map_err(|e| format!("Failed to parse checkpoint: {}", e))?;
+
+    let file_hash = checkpoint["file_hash"].as_str().unwrap_or("").to_string();
+    let file_name = checkpoint["file_name"].as_str().unwrap_or("").to_string();
+    let file_size = checkpoint["file_size"].as_u64().unwrap_or(0);
+    let output_path = checkpoint["output_path"].as_str().unwrap_or("").to_string();
+    let total_chunks = checkpoint["total_chunks"].as_u64().unwrap_or(0) as u32;
+    let chunk_size = checkpoint["chunk_size"].as_u64().unwrap_or(16384) as u32;
+    let temp_path_str = checkpoint["temp_path"].as_str().unwrap_or("");
+    let received_chunks: Vec<u32> = checkpoint["received_chunks"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+        .unwrap_or_default();
+
+    let session_id = format!("dl-resume-{}", std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis());
+
+    let temp_path = std::path::PathBuf::from(temp_path_str);
+
+    if !temp_path.exists() {
+        return Err("Temp file not found, cannot resume".to_string());
+    }
+
+    let session = StreamingDownloadSession {
+        file_hash: file_hash.clone(),
+        file_name,
+        file_size,
+        temp_path,
+        output_path,
+        received_chunks: received_chunks.iter().cloned().collect(),
+        total_chunks,
+        chunk_size,
+        created_at: std::time::SystemTime::now(),
+    };
+
+    let mut sessions = state.download_sessions.lock().await;
+    sessions.insert(session_id.clone(), session);
+
+    let missing_chunks: Vec<u32> = (0..total_chunks)
+        .filter(|i| !received_chunks.contains(i))
+        .collect();
+
+    info!("Resumed download: {}/{} chunks missing", missing_chunks.len(), total_chunks);
+    Ok((session_id, missing_chunks))
 }
 
 #[tauri::command]
@@ -6221,7 +6656,67 @@ fn main() {
     }
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+
+    // --- Initialize DHT Service at startup ---
+    let dht_service_arc = runtime.block_on(async {
+        // These settings can be moved to a config file later
+        let bootstrap_nodes = get_bootstrap_nodes();
+        let port = 4001; // Default port, can be configured
+        let is_bootstrap = false;
+        let enable_autonat = true;
+        let enable_autorelay = true;
+
+        let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
+            .ok_or("Failed to get project directories").unwrap();
+        let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
+        let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
+
+        let dht_service = DhtService::new(
+            port,
+            bootstrap_nodes,
+            None, // secret
+            is_bootstrap,
+            enable_autonat,
+            Some(Duration::from_secs(30)), // autonat_probe_interval
+            Vec::new(), // autonat_servers
+            None, // proxy_address
+            None, // file_transfer_service
+            None, // chunk_manager
+            None, // chunk_size_kb
+            None, // cache_size_mb
+            enable_autorelay,
+            Vec::new(), // preferred_relays
+            is_bootstrap, // enable_relay_server
+            true, // enable_upnp
+            Some(&async_blockstore_path),
+        )
+        .await
+        .expect("Failed to create DHT service at startup");
+
+        Arc::new(dht_service)
+    });
+
+    // --- Spawn DHT event pump ---
+    let app_handle_for_pump = {
+        // Create a temporary builder to get an AppHandle.
+        // This is a bit of a workaround to get the handle before the main builder is consumed.
+        let temp_app = tauri::Builder::default().build(tauri::generate_context!()).expect("Failed to build temp app");
+        temp_app.handle().clone()
+    };
+    let dht_clone_for_pump = dht_service_arc.clone();
+    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
+    let relay_reputation_arc_for_pump = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let dht_service_for_bt = dht_service_arc.clone();
+     runtime.spawn(async move {
+        pump_dht_events(
+            app_handle_for_pump,
+            dht_clone_for_pump,
+            proxies_arc_for_pump,
+            relay_reputation_arc_for_pump,
+        ).await;
+    });
+
+    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
         let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
             .ok()
@@ -6255,8 +6750,17 @@ fn main() {
 
         let base_port = 6881 + ((instance_id - 1) * 11);
         let port_range = base_port..(base_port + 10);
-        // random port fallback, npm run tauri dev seems to not work with environment var solution
-        let bittorrent_handler = create_bt_handler_with_fallback(download_dir, port_range).await;
+        
+        println!("Using BitTorrent port range: {}-{}", port_range.start, port_range.end);
+        
+        // Pass the initialized DHT service to the BitTorrent handler
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+            download_dir.clone(),
+            dht_service_for_bt,
+            Some(port_range)
+        )
+            .await
+            .expect("Failed to create BitTorrent handler");
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
         let mut manager = ProtocolManager::new();
@@ -6348,8 +6852,8 @@ fn main() {
             miner_address: Mutex::new(None),
             active_account: Arc::new(Mutex::new(None)),
             active_account_private_key: Arc::new(Mutex::new(None)),
-            rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
-            dht: Mutex::new(None),
+            rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),            
+            dht: Mutex::new(Some(dht_service_arc.clone())),
             file_transfer: Mutex::new(None),
             webrtc: Mutex::new(None),
             multi_source_download: Mutex::new(None),
@@ -6371,6 +6875,9 @@ fn main() {
 
             // Initialize upload sessions
             upload_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+
+            // Initialize download sessions (for streaming WebRTC downloads)
+            download_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Initialize proxy authentication tokens
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -6516,6 +7023,13 @@ fn main() {
             download_file_multi_source,
             get_file_transfer_events,
             write_file,
+            init_streaming_download,
+            write_download_chunk,
+            get_streaming_download_progress,
+            finalize_streaming_download,
+            cancel_streaming_download,
+            save_download_checkpoint,
+            resume_download_from_checkpoint,
             get_download_metrics,
             encrypt_file_with_password,
             decrypt_file_with_password,
@@ -6551,6 +7065,8 @@ fn main() {
             send_webrtc_file_request,
             get_webrtc_connection_status,
             disconnect_from_peer,
+            create_temp_file_for_streaming,
+            append_chunk_to_temp_file,
             start_streaming_upload,
             upload_file_chunk,
             cancel_streaming_upload,
@@ -6952,11 +7468,13 @@ fn main() {
 
 async fn create_bt_handler_with_fallback(
     download_dir: PathBuf,
+    dht_service: Arc<DhtService>,
     port_range: Range<u16>,
 ) -> bittorrent_handler::BitTorrentHandler {
     // Try the requested range first
     if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
         download_dir.clone(),
+        dht_service.clone(),
         Some(port_range.clone()),
     )
     .await
@@ -6973,6 +7491,7 @@ async fn create_bt_handler_with_fallback(
 
         if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir.clone(),
+            dht_service.clone(),
             Some(fallback),
         )
         .await
@@ -7481,3 +8000,105 @@ fn check_directory_exists(path: String) -> Result<bool, String> {
     let p = Path::new(&path);
     Ok(p.exists() && p.is_dir())
 }
+
+/// Event pump for DHT events, moved out of start_dht_node
+async fn pump_dht_events(
+    app_handle: tauri::AppHandle,
+    dht_service: Arc<DhtService>,
+    proxies_arc: Arc<Mutex<Vec<ProxyNode>>>,
+    relay_reputation_arc: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
+) {
+    loop {
+        let events = dht_service.drain_events(64).await;
+        if events.is_empty() {
+            if Arc::strong_count(&dht_service) <= 1 {
+                info!("DHT service appears to be shut down. Exiting event pump.");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            continue;
+        }
+
+        for ev in events {
+            match ev {
+                DhtEvent::PeerDiscovered { peer_id, addresses } => {
+                    let payload = serde_json::json!({ "peerId": peer_id, "addresses": addresses });
+                    let _ = app_handle.emit("dht_peer_discovered", payload);
+                }
+                DhtEvent::PeerConnected { peer_id, address } => {
+                    let payload = serde_json::json!({ "peerId": peer_id, "address": address });
+                    let _ = app_handle.emit("dht_peer_connected", payload);
+                }
+                DhtEvent::PeerDisconnected { peer_id } => {
+                    let payload = serde_json::json!({ "peerId": peer_id });
+                    let _ = app_handle.emit("dht_peer_disconnected", payload);
+                }
+                DhtEvent::ProxyStatus { id, address, status, latency_ms, error } => {
+                    let to_emit: ProxyNode = {
+                        let mut proxies = proxies_arc.lock().await;
+                        if let Some(i) = proxies.iter().position(|p| p.id == id) {
+                            let p = &mut proxies[i];
+                            if !address.is_empty() { p.address = address.clone(); }
+                            p.status = status.clone();
+                            if let Some(ms) = latency_ms { p.latency = ms as u32; }
+                            p.error = error.clone();
+                            p.clone()
+                        } else {
+                            let node = ProxyNode { id: id.clone(), address, status, latency: latency_ms.unwrap_or(0) as u32, error };
+                            proxies.push(node.clone());
+                            node
+                        }
+                    };
+                    let _ = app_handle.emit("proxy_status_update", to_emit);
+                }
+                DhtEvent::NatStatus { state, confidence, last_error, summary } => {
+                    let payload = serde_json::json!({ "state": state, "confidence": confidence, "lastError": last_error, "summary": summary });
+                    let _ = app_handle.emit("nat_status_update", payload);
+                }
+                DhtEvent::FileDiscovered(metadata) => {
+                    let _ = app_handle.emit("found_file", &metadata);
+                }
+                DhtEvent::PublishedFile(metadata) => {
+                    let _ = app_handle.emit("published_file", &metadata);
+                }
+                DhtEvent::ReputationEvent { peer_id, event_type, impact, data } => {
+                    let mut stats = relay_reputation_arc.lock().await;
+                    let entry = stats.entry(peer_id.clone()).or_insert(RelayNodeStats {
+                        peer_id: peer_id.clone(),
+                        alias: None,
+                        reputation_score: 0.0,
+                        reservations_accepted: 0,
+                        circuits_established: 0,
+                        circuits_successful: 0,
+                        total_events: 0,
+                        last_seen: 0,
+                    });
+
+                    entry.reputation_score += impact;
+                    entry.total_events += 1;
+                    entry.last_seen = data.get("timestamp").and_then(|v| v.as_u64()).unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs());
+
+                    match event_type.as_str() {
+                        "RelayReservationAccepted" => entry.reservations_accepted += 1,
+                        "RelayCircuitEstablished" => entry.circuits_established += 1,
+                        "RelayCircuitSuccessful" => entry.circuits_successful += 1,
+                        _ => {}
+                    }
+
+                    let payload = serde_json::json!({ "peerId": peer_id, "eventType": event_type, "impact": impact, "data": data });
+                    let _ = app_handle.emit("relay_reputation_event", payload);
+                }
+                DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                    let payload = serde_json::json!({ "fileHash": file_hash, "chunkIndex": chunk_index, "totalChunks": total_chunks, "chunkSize": chunk_size });
+                    let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
+                }
+                DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
+                    if let Ok(notification) = serde_json::from_value::<serde_json::Value>(payload.clone()) {
+                        let _ = app_handle.emit("seeder_payment_received", &notification);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}      
