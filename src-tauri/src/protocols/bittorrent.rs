@@ -54,7 +54,7 @@ struct DownloadState {
 }
 
 impl BitTorrentProtocolHandler {
-    /// Creates a new BitTorrent protocol handler (no event bus)
+    /// Creates a new BitTorrent protocol handler
     pub fn new(handler: Arc<BitTorrentHandler>) -> Self {
         Self {
             handler,
@@ -74,21 +74,25 @@ impl BitTorrentProtocolHandler {
         }
     }
 
-    /// Creates a new handler with a download directory (no event bus)
-    pub async fn with_download_directory(download_dir: PathBuf) -> Result<Self, ProtocolError> {
-        let handler = BitTorrentHandler::new(download_dir)
+    /// Creates a new handler with a download directory and DhtService (no event bus)
+    pub async fn with_download_directory(
+        download_dir: PathBuf,
+        dht_service: Arc<DhtService>,
+    ) -> Result<Self, ProtocolError> {
+        let handler = BitTorrentHandler::new(download_dir, dht_service)
             .await
             .map_err(|e| ProtocolError::Internal(e.to_string()))?;
 
         Ok(Self::new(Arc::new(handler)))
     }
 
-    /// Creates a new handler with a download directory and event bus
+    /// Creates a new handler with a download directory, DhtService, and event bus
     pub async fn with_download_directory_and_event_bus(
         download_dir: PathBuf,
+        dht_service: Arc<DhtService>,
         app_handle: AppHandle,
     ) -> Result<Self, ProtocolError> {
-        let handler = BitTorrentHandler::new(download_dir)
+        let handler = BitTorrentHandler::new(download_dir, dht_service)
             .await
             .map_err(|e| ProtocolError::Internal(e.to_string()))?;
 
