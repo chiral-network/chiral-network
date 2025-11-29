@@ -283,7 +283,179 @@
     }
   }
 
+  // Map to track active WebRTC sessions with downloaders
+  let activeSeederSessions = new Map<string, any>();
+  let signalingService: any = null;
+
   onMount(async () => {
+    // Initialize WebRTC seeder to accept download requests
+    try {
+      const { SignalingService } = await import('$lib/services/signalingService');
+
+      signalingService = new SignalingService({
+        preferDht: false,  // Force WebSocket instead of DHT
+        persistPeers: false  // Don't persist peers to avoid stale peer IDs
+      });
+
+      // Connect to signaling server
+      await signalingService.connect();
+      console.log('[Upload] Connected to signaling server as seeder');
+      console.log('[Upload] My client ID:', signalingService.clientId);
+
+      // Expose for debugging
+      if (typeof window !== 'undefined') {
+        (window as any).uploadSignalingService = signalingService;
+      }
+
+      // Listen for incoming WebRTC connection requests
+      // Don't use webrtcService - handle WebRTC directly to avoid handler conflicts
+      signalingService.setOnMessage(async (message: any) => {
+        console.log('[Upload] Received signaling message:', message);
+
+        if (message.type === 'offer') {
+          console.log('[Upload] Received download request from:', message.from);
+
+          // Check if we already have a session with this peer
+          if (activeSeederSessions.has(message.from)) {
+            console.log('[Upload] Already have session with peer:', message.from);
+            // Still handle the new offer - create new peer connection
+            const oldSession = activeSeederSessions.get(message.from);
+            try {
+              oldSession.pc?.close();
+            } catch (e) {
+              console.error('[Upload] Error closing old session:', e);
+            }
+            activeSeederSessions.delete(message.from);
+          }
+
+          try {
+            // Create RTCPeerConnection directly (not using webrtcService to avoid handler conflicts)
+            const pc = new RTCPeerConnection({
+              iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:global.stun.twilio.com:3478" }
+              ]
+            });
+
+            let dataChannel: RTCDataChannel | null = null;
+
+            // Handle incoming data channel (created by initiator)
+            pc.ondatachannel = (event) => {
+              console.log('[Upload] Data channel received');
+              dataChannel = event.channel;
+
+              dataChannel.onopen = () => {
+                console.log('[Upload] Data channel opened with downloader:', message.from);
+              };
+
+              dataChannel.onclose = () => {
+                console.log('[Upload] Data channel closed with downloader:', message.from);
+                activeSeederSessions.delete(message.from);
+              };
+
+              dataChannel.onerror = (e) => {
+                console.error('[Upload] Data channel error:', e);
+              };
+
+              dataChannel.onmessage = async (event) => {
+                const data = event.data;
+                console.log('[Upload] Received message from downloader:', data);
+
+                // Handle file chunk requests
+                if (typeof data === 'string') {
+                  try {
+                    const request = JSON.parse(data);
+
+                    // Handle chunk_request
+                    if (request.type === 'chunk_request') {
+                      const fileHash = request.fileHash;
+                      const chunkIndex = request.chunkIndex;
+
+                      const currentFiles = get(files);
+                      const requestedFile = currentFiles.find(f => f.hash === fileHash);
+
+                      if (requestedFile && requestedFile.path) {
+                        console.log(`[Upload] Sending chunk ${chunkIndex} for file ${requestedFile.name}`);
+
+                        try {
+                          const { readFile } = await import('@tauri-apps/plugin-fs');
+                          const fileData = await readFile(requestedFile.path);
+
+                          const CHUNK_SIZE = 16 * 1024;
+                          const start = chunkIndex * CHUNK_SIZE;
+                          const end = Math.min(start + CHUNK_SIZE, fileData.length);
+                          const chunk = fileData.slice(start, end);
+
+                          dataChannel?.send(chunk.buffer);
+                          console.log(`[Upload] Sent chunk ${chunkIndex} (${chunk.length} bytes)`);
+                        } catch (error) {
+                          console.error('[Upload] Error reading file chunk:', error);
+                        }
+                      } else {
+                        console.error('[Upload] Requested file not found or no path:', fileHash);
+                      }
+                    }
+                  } catch (e) {
+                    console.error('[Upload] Error handling message:', e);
+                  }
+                }
+              };
+            };
+
+            // Handle ICE candidates
+            pc.onicecandidate = (event) => {
+              if (event.candidate) {
+                signalingService.send({
+                  type: 'candidate',
+                  candidate: event.candidate.toJSON(),
+                  to: message.from
+                });
+              }
+            };
+
+            pc.onconnectionstatechange = () => {
+              console.log('[Upload] Connection state:', pc.connectionState);
+              if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                activeSeederSessions.delete(message.from);
+              }
+            };
+
+            // Accept the offer and create answer
+            await pc.setRemoteDescription(message.sdp);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            // Send answer
+            signalingService.send({
+              type: 'answer',
+              sdp: answer,
+              to: message.from
+            });
+            console.log('[Upload] Sent answer to:', message.from);
+
+            // Store session
+            activeSeederSessions.set(message.from, { pc, dataChannel });
+
+          } catch (error) {
+            console.error('[Upload] Failed to create WebRTC session:', error);
+          }
+        }
+        else if (message.type === 'candidate') {
+          // Handle incoming ICE candidates
+          const session = activeSeederSessions.get(message.from);
+          if (session && session.pc) {
+            try {
+              await session.pc.addIceCandidate(message.candidate);
+              console.log('[Upload] Added ICE candidate from:', message.from);
+            } catch (e) {
+              console.error('[Upload] Error adding ICE candidate:', e);
+            }
+          }
+        }
+      });
+    } catch (error) {
+      console.error('[Upload] Failed to initialize WebRTC seeder:', error);
+    }
 
     // Make storage refresh non-blocking on startup to prevent UI hanging
     setTimeout(() => refreshAvailableStorage(), 100);
@@ -711,6 +883,15 @@
         const price = await calculateFilePrice(fileSize);
         const metadata = await dhtService.publishFileToNetwork(filePath, price, selectedProtocol);
 
+        // Add WebSocket client ID to seeder addresses for WebRTC discovery
+        const webrtcSeederIds = signalingService?.clientId
+          ? [signalingService.clientId]
+          : [];
+        const allSeederAddresses = [
+          ...(metadata.seeders ?? []),
+          ...webrtcSeederIds
+        ];
+
         const newFile = {
           id: `file-${Date.now()}-${Math.random()}`,
           name: metadata.fileName,
@@ -719,7 +900,7 @@
           size: metadata.fileSize,
           status: "seeding" as const,
           seeders: metadata.seeders?.length ?? 0,
-          seederAddresses: metadata.seeders ?? [],
+          seederAddresses: allSeederAddresses,
           leechers: 0,
           uploadDate: new Date(metadata.createdAt),
           price: price,
@@ -738,13 +919,21 @@
 
           if (matchIndex !== -1) {
             const existing = f[matchIndex];
+            // Merge WebSocket client ID with existing seeder addresses
+            const webrtcSeederIds = signalingService?.clientId
+              ? [signalingService.clientId]
+              : [];
+            const mergedSeederAddresses = [
+              ...(metadata.seeders ?? existing.seederAddresses ?? []),
+              ...webrtcSeederIds
+            ];
             const updated = {
               ...existing,
               name: metadata.fileName || existing.name,
               hash: metadata.merkleRoot || existing.hash,
               size: metadata.fileSize ?? existing.size,
               seeders: metadata.seeders?.length ?? existing.seeders,
-              seederAddresses: metadata.seeders ?? existing.seederAddresses,
+              seederAddresses: mergedSeederAddresses,
               uploadDate: new Date(
                 (metadata.createdAt ??
                   existing.uploadDate?.getTime() ??

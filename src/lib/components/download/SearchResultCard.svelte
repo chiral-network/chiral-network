@@ -69,15 +69,24 @@
   async function handleDownload() {
     // Skipping payment confirmation for now
     // Always show initial download confirmation dialog first
-    // showDownloadConfirmDialog = true; 
+    // showDownloadConfirmDialog = true;
 
     const freshSeeders = await dhtService.getSeedersForFile(metadata.fileHash);
-    metadata.seeders = freshSeeders; 
-    console.log("🔍 DEBUG: Seeders fetched:", freshSeeders);
 
-    // Bitswap note: manual seeder selection was for demo purposes to show 
+    // Also check stores for WebRTC seeder addresses
+    const existingFile = get(files).find(f => f.hash === metadata.fileHash);
+    const webrtcSeeders = existingFile?.seederAddresses ?? [];
+
+    // Combine DHT seeders with WebRTC seeders
+    const allSeeders = [...new Set([...freshSeeders, ...webrtcSeeders])];
+    metadata.seeders = allSeeders;
+    console.log("🔍 DEBUG: Seeders fetched from DHT:", freshSeeders);
+    console.log("🔍 DEBUG: WebRTC seeders from store:", webrtcSeeders);
+    console.log("🔍 DEBUG: All seeders combined:", allSeeders);
+
+    // Bitswap note: manual seeder selection was for demo purposes to show
     // peer-selection capability; now switching to intelligent peer selection.
-    // showSeedersSelection = true 
+    // showSeedersSelection = true
 
     proceedWithDownload();
 
