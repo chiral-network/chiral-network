@@ -413,8 +413,8 @@
     <div class="mb-8">
       <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 class="text-3xl font-bold text-gray-900">{$t('reputation.title')}</h1>
-          <p class="mt-2 text-gray-600">{$t('reputation.subtitle')}</p>
+          <h1 class="text-3xl font-bold">{$t('reputation.title')}</h1>
+          <p class="text-muted-foreground mt-2">{$t('reputation.subtitle')}</p>
         </div>
         <div class="flex flex-wrap gap-2 sm:justify-end">
           <Button on:click={refreshData} disabled={isLoading} variant="outline" class="w-full sm:w-auto">

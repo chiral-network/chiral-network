@@ -7,7 +7,7 @@ import { files, wallet, settings } from '$lib/stores';
 import { proxyNodes } from '$lib/proxy';
 import { onMount, onDestroy } from 'svelte'
 import { t } from 'svelte-i18n'
-import { suspiciousActivity } from '$lib/stores'; // only import
+import { suspiciousActivity } from '$lib/stores';
 import type { FileItem } from '$lib/stores';
 import { toHumanReadableSize } from '$lib/utils';
 import { miningState } from '$lib/stores';

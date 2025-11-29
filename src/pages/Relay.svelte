@@ -223,10 +223,10 @@
   });
 </script>
 
-<div class="p-6 max-w-7xl mx-auto">
+<div class="space-y-6">
   <div class="mb-8">
-    <h1 class="text-3xl font-bold text-gray-900">{$t('relay.title')}</h1>
-    <p class="mt-2 text-gray-600">{$t('relay.subtitle')}</p>
+    <h1 class="text-3xl font-bold">{$t('relay.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('relay.subtitle')}</p>
   </div>
 
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">

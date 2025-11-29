@@ -80,11 +80,6 @@ impl HttpServerState {
     pub async fn register_file(&self, metadata: HttpFileMetadata) {
         let mut files = self.files.write().await;
         files.insert(metadata.hash.clone(), metadata.clone());
-        tracing::info!(
-            "Registered file for HTTP serving: {} ({})",
-            metadata.name,
-            metadata.hash
-        );
     }
 
     /// Unregister a file (e.g., when user stops seeding)

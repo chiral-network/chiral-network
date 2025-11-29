@@ -5,7 +5,7 @@ use crate::transfer_events::{
     current_timestamp_ms, calculate_progress, calculate_eta,
 };
 use async_trait::async_trait;
-use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions};
+use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions, create_torrent, CreateTorrentOptions, AddTorrentOptions};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -14,7 +14,6 @@ use tokio::sync::mpsc;
 use tokio::time::{self, Duration}; // Added for timeout in tests
 use tracing::{error, info, instrument, warn};
 use crate::dht::DhtService;
-use librqbit::AddTorrentOptions;
 use libp2p::Multiaddr;
 use thiserror::Error;
 
@@ -668,8 +667,6 @@ impl SimpleProtocolHandler for BitTorrentHandler {
 
     #[instrument(skip(self), fields(protocol = "bittorrent"))]
     async fn seed(&self, file_path: &str) -> Result<String, String> {
-        info!("Starting to seed file: {}", file_path);
-
         let path = Path::new(file_path);
         if !path.exists() {
             let error = BitTorrentError::FileSystemError {
@@ -687,22 +684,43 @@ impl SimpleProtocolHandler for BitTorrentHandler {
             return Err(error.into());
         }
 
-        let add_torrent = AddTorrent::from_local_filename(file_path).map_err(|e| {
+        // Create a torrent from the file
+        let torrent = create_torrent(path, CreateTorrentOptions::default()).await.map_err(|e| {
             let error = BitTorrentError::SeedingError {
                 message: format!("Failed to create torrent from file {}: {}", file_path, e),
             };
+            error!("Torrent creation failed: {}", e);
             error!("Seeding failed: {}", error);
             String::from(error)
         })?;
 
+        // Convert the torrent to bytes and create AddTorrent
+        let torrent_bytes = torrent.as_bytes().map_err(|e| {
+            let error = BitTorrentError::SeedingError {
+                message: format!("Failed to serialize torrent for {}: {}", file_path, e),
+            };
+            error!("Torrent serialization failed: {}", e);
+            error!("Seeding failed: {}", error);
+            String::from(error)
+        })?;
+
+        let add_torrent = AddTorrent::from_bytes(torrent_bytes.clone());
+
+        // For seeding, we need to allow overwriting existing files
+        let options = AddTorrentOptions {
+            overwrite: true,
+            ..Default::default()
+        };
+
         let handle = self
             .rqbit_session
-            .add_torrent(add_torrent, None)
+            .add_torrent(add_torrent, Some(options))
             .await
             .map_err(|e| {
                 let error = BitTorrentError::SeedingError {
                     message: format!("Failed to add torrent for seeding: {}", e),
                 };
+                error!("Failed to add torrent to session: {}", e);
                 error!("Seeding failed: {}", error);
                 String::from(error)
             })?
@@ -712,8 +730,7 @@ impl SimpleProtocolHandler for BitTorrentHandler {
         // Get the info hash and construct a magnet link
         let info_hash = handle.info_hash();
         let magnet_link = format!("magnet:?xt=urn:btih:{}", hex::encode(info_hash.0));
-        
-        info!("Successfully started seeding. Magnet link: {}", magnet_link);
+
         Ok(magnet_link)
     }
 }
@@ -967,8 +984,33 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory for download");
         let download_path = temp_dir.path().to_path_buf();
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts if other tests run in parallel
-        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), Some(31000..32000))
+        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), dht_service, Some(31000..32000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -1010,8 +1052,33 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory for download");
         let download_path = temp_dir.path().to_path_buf();
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts
-        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), Some(33000..34000))
+        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), dht_service, Some(33000..34000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -1041,8 +1108,33 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory");
         let file_path = create_test_file(temp_dir.path(), "seed_me.txt", "hello world seeding test");
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts
-        let handler = BitTorrentHandler::new_with_port_range(temp_dir.path().to_path_buf(), Some(32000..33000))
+        let handler = BitTorrentHandler::new_with_port_range(temp_dir.path().to_path_buf(), dht_service, Some(32000..33000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -1128,7 +1220,7 @@ mod tests {
         assert!(multiaddr_to_socket_addr(&multiaddr_udp).is_err());
 
         // Too short
-        let multiaddr_short: libp2p_core::Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
+        let multiaddr_short: Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
         assert!(multiaddr_to_socket_addr(&multiaddr_short).is_err());
 
         // Empty
