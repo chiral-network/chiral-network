@@ -35,6 +35,7 @@ use crate::commands::auth::{
 
 use bandwidth::BandwidthController;
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
+use crate::commands::bootstrap::get_bootstrap_nodes;
 use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
@@ -6472,7 +6473,67 @@ fn main() {
     }
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async {
+
+    // --- Initialize DHT Service at startup ---
+    let dht_service_arc = runtime.block_on(async {
+        // These settings can be moved to a config file later
+        let bootstrap_nodes = get_bootstrap_nodes();
+        let port = 4001; // Default port, can be configured
+        let is_bootstrap = false;
+        let enable_autonat = true;
+        let enable_autorelay = true;
+
+        let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
+            .ok_or("Failed to get project directories").unwrap();
+        let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
+        let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
+
+        let dht_service = DhtService::new(
+            port,
+            bootstrap_nodes,
+            None, // secret
+            is_bootstrap,
+            enable_autonat,
+            Some(Duration::from_secs(30)), // autonat_probe_interval
+            Vec::new(), // autonat_servers
+            None, // proxy_address
+            None, // file_transfer_service
+            None, // chunk_manager
+            None, // chunk_size_kb
+            None, // cache_size_mb
+            enable_autorelay,
+            Vec::new(), // preferred_relays
+            is_bootstrap, // enable_relay_server
+            true, // enable_upnp
+            Some(&async_blockstore_path),
+        )
+        .await
+        .expect("Failed to create DHT service at startup");
+
+        Arc::new(dht_service)
+    });
+
+    // --- Spawn DHT event pump ---
+    let app_handle_for_pump = {
+        // Create a temporary builder to get an AppHandle.
+        // This is a bit of a workaround to get the handle before the main builder is consumed.
+        let temp_app = tauri::Builder::default().build(tauri::generate_context!()).expect("Failed to build temp app");
+        temp_app.handle().clone()
+    };
+    let dht_clone_for_pump = dht_service_arc.clone();
+    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
+    let relay_reputation_arc_for_pump = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let dht_service_for_bt = dht_service_arc.clone();
+     runtime.spawn(async move {
+        pump_dht_events(
+            app_handle_for_pump,
+            dht_clone_for_pump,
+            proxies_arc_for_pump,
+            relay_reputation_arc_for_pump,
+        ).await;
+    });
+
+    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
         let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
             .ok()
@@ -6506,8 +6567,17 @@ fn main() {
 
         let base_port = 6881 + ((instance_id - 1) * 11);
         let port_range = base_port..(base_port + 10);
-        // random port fallback, npm run tauri dev seems to not work with environment var solution
-        let bittorrent_handler = create_bt_handler_with_fallback(download_dir, port_range).await;
+        
+        println!("Using BitTorrent port range: {}-{}", port_range.start, port_range.end);
+        
+        // Pass the initialized DHT service to the BitTorrent handler
+        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+            download_dir.clone(),
+            dht_service_for_bt,
+            Some(port_range)
+        )
+            .await
+            .expect("Failed to create BitTorrent handler");
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
         let mut manager = ProtocolManager::new();
@@ -6592,8 +6662,8 @@ fn main() {
             miner_address: Mutex::new(None),
             active_account: Arc::new(Mutex::new(None)),
             active_account_private_key: Arc::new(Mutex::new(None)),
-            rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
-            dht: Mutex::new(None),
+            rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),            
+            dht: Mutex::new(Some(dht_service_arc.clone())),
             file_transfer: Mutex::new(None),
             webrtc: Mutex::new(None),
             multi_source_download: Mutex::new(None),
@@ -7204,11 +7274,13 @@ fn main() {
 
 async fn create_bt_handler_with_fallback(
     download_dir: PathBuf,
+    dht_service: Arc<DhtService>,
     port_range: Range<u16>,
 ) -> bittorrent_handler::BitTorrentHandler {
     // Try the requested range first
     if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
         download_dir.clone(),
+        dht_service.clone(),
         Some(port_range.clone()),
     )
     .await
@@ -7225,6 +7297,7 @@ async fn create_bt_handler_with_fallback(
 
         if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir.clone(),
+            dht_service.clone(),
             Some(fallback),
         )
         .await
@@ -7733,3 +7806,105 @@ fn check_directory_exists(path: String) -> Result<bool, String> {
     let p = Path::new(&path);
     Ok(p.exists() && p.is_dir())
 }
+
+/// Event pump for DHT events, moved out of start_dht_node
+async fn pump_dht_events(
+    app_handle: tauri::AppHandle,
+    dht_service: Arc<DhtService>,
+    proxies_arc: Arc<Mutex<Vec<ProxyNode>>>,
+    relay_reputation_arc: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
+) {
+    loop {
+        let events = dht_service.drain_events(64).await;
+        if events.is_empty() {
+            if Arc::strong_count(&dht_service) <= 1 {
+                info!("DHT service appears to be shut down. Exiting event pump.");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            continue;
+        }
+
+        for ev in events {
+            match ev {
+                DhtEvent::PeerDiscovered { peer_id, addresses } => {
+                    let payload = serde_json::json!({ "peerId": peer_id, "addresses": addresses });
+                    let _ = app_handle.emit("dht_peer_discovered", payload);
+                }
+                DhtEvent::PeerConnected { peer_id, address } => {
+                    let payload = serde_json::json!({ "peerId": peer_id, "address": address });
+                    let _ = app_handle.emit("dht_peer_connected", payload);
+                }
+                DhtEvent::PeerDisconnected { peer_id } => {
+                    let payload = serde_json::json!({ "peerId": peer_id });
+                    let _ = app_handle.emit("dht_peer_disconnected", payload);
+                }
+                DhtEvent::ProxyStatus { id, address, status, latency_ms, error } => {
+                    let to_emit: ProxyNode = {
+                        let mut proxies = proxies_arc.lock().await;
+                        if let Some(i) = proxies.iter().position(|p| p.id == id) {
+                            let p = &mut proxies[i];
+                            if !address.is_empty() { p.address = address.clone(); }
+                            p.status = status.clone();
+                            if let Some(ms) = latency_ms { p.latency = ms as u32; }
+                            p.error = error.clone();
+                            p.clone()
+                        } else {
+                            let node = ProxyNode { id: id.clone(), address, status, latency: latency_ms.unwrap_or(0) as u32, error };
+                            proxies.push(node.clone());
+                            node
+                        }
+                    };
+                    let _ = app_handle.emit("proxy_status_update", to_emit);
+                }
+                DhtEvent::NatStatus { state, confidence, last_error, summary } => {
+                    let payload = serde_json::json!({ "state": state, "confidence": confidence, "lastError": last_error, "summary": summary });
+                    let _ = app_handle.emit("nat_status_update", payload);
+                }
+                DhtEvent::FileDiscovered(metadata) => {
+                    let _ = app_handle.emit("found_file", &metadata);
+                }
+                DhtEvent::PublishedFile(metadata) => {
+                    let _ = app_handle.emit("published_file", &metadata);
+                }
+                DhtEvent::ReputationEvent { peer_id, event_type, impact, data } => {
+                    let mut stats = relay_reputation_arc.lock().await;
+                    let entry = stats.entry(peer_id.clone()).or_insert(RelayNodeStats {
+                        peer_id: peer_id.clone(),
+                        alias: None,
+                        reputation_score: 0.0,
+                        reservations_accepted: 0,
+                        circuits_established: 0,
+                        circuits_successful: 0,
+                        total_events: 0,
+                        last_seen: 0,
+                    });
+
+                    entry.reputation_score += impact;
+                    entry.total_events += 1;
+                    entry.last_seen = data.get("timestamp").and_then(|v| v.as_u64()).unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs());
+
+                    match event_type.as_str() {
+                        "RelayReservationAccepted" => entry.reservations_accepted += 1,
+                        "RelayCircuitEstablished" => entry.circuits_established += 1,
+                        "RelayCircuitSuccessful" => entry.circuits_successful += 1,
+                        _ => {}
+                    }
+
+                    let payload = serde_json::json!({ "peerId": peer_id, "eventType": event_type, "impact": impact, "data": data });
+                    let _ = app_handle.emit("relay_reputation_event", payload);
+                }
+                DhtEvent::BitswapChunkDownloaded { file_hash, chunk_index, total_chunks, chunk_size } => {
+                    let payload = serde_json::json!({ "fileHash": file_hash, "chunkIndex": chunk_index, "totalChunks": total_chunks, "chunkSize": chunk_size });
+                    let _ = app_handle.emit("bitswap_chunk_downloaded", payload);
+                }
+                DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
+                    if let Ok(notification) = serde_json::from_value::<serde_json::Value>(payload.clone()) {
+                        let _ = app_handle.emit("seeder_payment_received", &notification);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}      
