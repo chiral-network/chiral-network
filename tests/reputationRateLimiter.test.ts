@@ -193,4 +193,193 @@ describe('reputationRateLimiter', () => {
     const afterDecision = reputationRateLimiter.evaluate(afterCooldown, base + 2_500);
     expect(afterDecision.allowed).toBe(true);
   });
+  it('lowers caps when adaptive caps sees repeated blocks', async () => {
+    const { reputationRateLimiter } = await loadLimiter();
+    reputationRateLimiter.setConfig({
+      ...baseConfig,
+      dailyCap: 5,
+      perTargetDailyCap: 2,
+      mode: 'enforce',
+      burst: { count: 100, intervalMs: 60_000, cooldownMs: 1_000 },
+      adaptiveCaps: {
+        enabled: true,
+        windowMs: 10_000,
+        blockThreshold: 1,
+        cooldownMs: 0,
+        dailyStep: 1,
+        perTargetStep: 1,
+        minDailyCap: 2,
+        minPerTargetCap: 1,
+        reasons: ['target_daily_cap'],
+      },
+    });
+
+    const t0 = 50_000;
+    const first = buildVerdict('peer-z', t0);
+    const d1 = reputationRateLimiter.evaluate(first, t0);
+    reputationRateLimiter.recordDecision(first, d1, { sent: d1.allowed, now: t0 });
+
+    const second = buildVerdict('peer-z', t0 + 10);
+    const d2 = reputationRateLimiter.evaluate(second, t0 + 10);
+    reputationRateLimiter.recordDecision(second, d2, { sent: d2.allowed, now: t0 + 10 });
+
+    const third = buildVerdict('peer-z', t0 + 20);
+    const d3 = reputationRateLimiter.evaluate(third, t0 + 20);
+    reputationRateLimiter.recordDecision(third, d3, { sent: false, now: t0 + 20 });
+
+    expect(d3.allowed).toBe(false);
+
+    const status = reputationRateLimiter.getStatus('peer-z');
+    expect(status.dailyCap).toBe(4);
+    expect(status.perTargetCap).toBe(1);
+    expect(status.adaptive.reductions).toBe(1);
+    expect(status.adaptive.enabled).toBe(true);
+  });
+
+  it('does not raise caps automatically after an adaptive reduction', async () => {
+    const { reputationRateLimiter } = await loadLimiter();
+    reputationRateLimiter.setConfig({
+      ...baseConfig,
+      dailyCap: 6,
+      perTargetDailyCap: 3,
+      mode: 'enforce',
+      burst: { count: 100, intervalMs: 60_000, cooldownMs: 1_000 },
+      adaptiveCaps: {
+        enabled: true,
+        windowMs: 10_000,
+        blockThreshold: 1,
+        cooldownMs: 0,
+        dailyStep: 2,
+        perTargetStep: 1,
+        minDailyCap: 2,
+        minPerTargetCap: 1,
+        reasons: ['daily_cap'],
+      },
+    });
+
+    const baseTime = 90_000;
+    for (let i = 0; i < 6; i++) {
+      const ts = baseTime + i * 100;
+      const verdict = buildVerdict(`peer-${i}`, ts);
+      const decision = reputationRateLimiter.evaluate(verdict, ts);
+      reputationRateLimiter.recordDecision(verdict, decision, { sent: decision.allowed, now: ts });
+    }
+
+    const cappedVerdict = buildVerdict('peer-over', baseTime + 700);
+    const blocked = reputationRateLimiter.evaluate(cappedVerdict, baseTime + 700);
+    reputationRateLimiter.recordDecision(cappedVerdict, blocked, { sent: false, now: baseTime + 700 });
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toBe('daily_cap');
+
+    const statusAfterDrop = reputationRateLimiter.getStatus();
+    expect(statusAfterDrop.dailyCap).toBe(4);
+
+    const later = reputationRateLimiter.getStatus();
+    expect(later.dailyCap).toBe(4);
+    expect(later.baseDailyCap).toBe(6);
+  });
+
+  it('falls back to safe mode on corrupted persisted state', async () => {
+    const badStorage = new MemoryStorage();
+    (globalThis as any).localStorage = badStorage;
+    badStorage.setItem('chiral.reputation.rateLimiter.v1', '{not-json');
+    vi.resetModules();
+    const mod = (await import('../src/lib/services/reputationRateLimiter')) as LimiterModule;
+    const status = mod.reputationRateLimiter.getStatus();
+    expect(status.health.safeMode).toBe(true);
+    expect(status.mode).toBe('log-only');
+  });
+
+  it('recovers from malformed state arrays and reports recovery', async () => {
+    const now = Date.now();
+    const badStorage = new MemoryStorage();
+    (globalThis as any).localStorage = badStorage;
+    badStorage.setItem(
+      'chiral.reputation.rateLimiter.v1',
+      JSON.stringify({
+        events: [
+          { target: 'old', ts: now - 10 * 24 * 60 * 60 * 1000 },
+          { target: 'good', ts: now, outcome: 'good' },
+          { target: null, ts: 'oops' },
+        ],
+        decisions: [{ ts: now, target: 'good', allowed: true, shadowBlocked: false, mode: 'enforce' }],
+        burstCooldownUntil: 'not-a-number',
+      })
+    );
+    vi.resetModules();
+    const mod = (await import('../src/lib/services/reputationRateLimiter')) as LimiterModule;
+    mod.reputationRateLimiter.setConfig({ ...baseConfig, mode: 'enforce' });
+    const status = mod.reputationRateLimiter.getStatus('good');
+    expect(status.dailyUsed).toBe(1);
+    expect(status.health.recoveredFromCorruption).toBe(true);
+    expect(status.health.safeMode).toBe(false);
+  });
+
+  it('allows a limited grace credit on per-target cap breach', async () => {
+    const { reputationRateLimiter } = await loadLimiter();
+    reputationRateLimiter.setConfig({
+      ...baseConfig,
+      dailyCap: 5,
+      perTargetDailyCap: 1,
+      perTargetCooldownMs: 0,
+      mode: 'enforce',
+      perTargetGrace: {
+        enabled: true,
+        creditsPerWindow: 1,
+        windowMs: 10_000,
+        allowReasons: ['target_daily_cap'],
+      },
+    });
+
+    const t0 = Date.now();
+    const first = buildVerdict('peer-grace', t0);
+    const d1 = reputationRateLimiter.evaluate(first, t0);
+    reputationRateLimiter.recordDecision(first, d1, { sent: true, now: t0 });
+    expect(d1.allowed).toBe(true);
+
+    const second = buildVerdict('peer-grace', t0 + 1);
+    const d2 = reputationRateLimiter.evaluate(second, t0 + 1);
+    reputationRateLimiter.recordDecision(second, d2, { sent: true, now: t0 + 1 });
+    expect(d2.allowed).toBe(true);
+    expect(d2.graceApplied).toBe(true);
+    expect(d2.graceRemaining).toBe(0);
+
+    const third = buildVerdict('peer-grace', t0 + 2);
+    const d3 = reputationRateLimiter.evaluate(third, t0 + 2);
+    expect(d3.allowed).toBe(false);
+    expect(d3.reason).toBe('target_daily_cap');
+  });
+
+  it('resets grace credits after the window', async () => {
+    const { reputationRateLimiter } = await loadLimiter();
+    reputationRateLimiter.setConfig({
+      ...baseConfig,
+      dailyCap: 5,
+      perTargetDailyCap: 1,
+      perTargetCooldownMs: 0,
+      mode: 'enforce',
+      perTargetGrace: {
+        enabled: true,
+        creditsPerWindow: 1,
+        windowMs: 5_000,
+        allowReasons: ['target_daily_cap'],
+      },
+    });
+
+    const t0 = 1_000_000;
+    const first = buildVerdict('peer-reset', t0);
+    const d1 = reputationRateLimiter.evaluate(first, t0);
+    reputationRateLimiter.recordDecision(first, d1, { sent: true, now: t0 });
+
+    const second = buildVerdict('peer-reset', t0 + 1);
+    const d2 = reputationRateLimiter.evaluate(second, t0 + 1);
+    reputationRateLimiter.recordDecision(second, d2, { sent: true, now: t0 + 1 });
+    expect(d2.graceApplied).toBe(true);
+
+    const afterWindow = t0 + 6_000;
+    const third = buildVerdict('peer-reset', afterWindow);
+    const d3 = reputationRateLimiter.evaluate(third, afterWindow);
+    expect(d3.allowed).toBe(true);
+    expect(d3.graceApplied).toBe(true);
+  });
 });
