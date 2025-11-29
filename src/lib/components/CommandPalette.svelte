@@ -1,9 +1,9 @@
 <!-- Command Palette - Quick Actions Menu -->
 <script lang="ts">
   import { t } from 'svelte-i18n';
-  import {
+  import { 
     Download, Upload, Wallet, Globe, BarChart3, Settings, Cpu,
-    Star, Server, Database, Search, ArrowRight, Clock
+    Star, Server, Database, Search, ArrowRight
   } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   import { getContext } from 'svelte';

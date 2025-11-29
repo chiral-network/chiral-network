@@ -12,7 +12,7 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
-    import BlockchainDashboard from './pages/BlockchainDashboard.svelte'
+    import Blockchain from './pages/Blockchain.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
@@ -33,6 +33,7 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
     import { paymentService } from '$lib/services/paymentService';
+    import { subscribeToTransferEvents, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { exit } from '@tauri-apps/plugin-process';
@@ -166,6 +167,7 @@ function handleFirstRunComplete() {
     let stopGethMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
     let unlistenTorrentPayment: (() => void) | null = null;
+    let transferEventsUnsubscribe: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
     syncBandwidthScheduler(get(settings));
@@ -173,6 +175,14 @@ function handleFirstRunComplete() {
     pushBandwidthLimits(get(activeBandwidthLimits));
 
     (async () => {
+      // Subscribe to transfer events from backend
+      try {
+        transferEventsUnsubscribe = await subscribeToTransferEvents();
+        console.log('✅ Transfer events subscription active');
+      } catch (error) {
+        console.warn('Failed to subscribe to transfer events:', error);
+      }
+
       // Initialize payment service to load wallet and transactions
       await paymentService.initialize();
 
@@ -571,6 +581,11 @@ function handleFirstRunComplete() {
       if (unlistenTorrentPayment) {
         unlistenTorrentPayment();
       }
+      if (transferEventsUnsubscribe) {
+        transferEventsUnsubscribe();
+      }
+      // Also ensure transfer events are fully unsubscribed
+      unsubscribeFromTransferEvents();
       if (unsubscribeScheduler) {
         unsubscribeScheduler();
         unsubscribeScheduler = null;
@@ -669,7 +684,7 @@ function handleFirstRunComplete() {
     },
     {
       path: "blockchain",
-      component: BlockchainDashboard,
+      component: Blockchain,
     },
     {
       path: "account",

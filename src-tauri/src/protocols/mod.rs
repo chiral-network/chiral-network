@@ -36,6 +36,7 @@ pub mod http;
 pub mod ftp;
 pub mod ed2k;
 pub mod seeding;
+pub mod detection;
 
 // Re-export commonly used types
 pub use traits::{
@@ -59,6 +60,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
+use detection::ProtocolDetector;
 
 // Re-export legacy trait with the old name for backward compatibility
 // This allows existing code like bittorrent_handler.rs to continue working
@@ -78,6 +80,7 @@ pub struct ProtocolManager {
     handlers: Vec<Box<dyn ProtocolHandler>>,
     simple_handlers: Vec<std::sync::Arc<dyn SimpleProtocolHandler>>,
     seeding_registry: SeedingRegistry, // <-- ADDED
+    detector: ProtocolDetector, // <-- ADDED
 }
 
 impl ProtocolManager {
@@ -87,6 +90,7 @@ impl ProtocolManager {
             handlers: Vec::new(),
             simple_handlers: Vec::new(),
             seeding_registry: SeedingRegistry::new(), // <-- INITIALIZED
+            detector: ProtocolDetector::new(),   // <-- ADDED
         }
     }
 
@@ -316,6 +320,27 @@ impl ProtocolManager {
         hasher.update(&data);
         Ok(hex::encode(hasher.finalize()))
     }
+
+    /// Returns all protocols that can serve the file
+    pub async fn detect_protocols(&self, file_identifier: String) -> Vec<String> {
+        let mut map: HashMap<String, &dyn ProtocolHandler> = HashMap::new();
+        for handler in &self.handlers {
+            map.insert(handler.name().to_string(), handler.as_ref());
+        }
+    
+        self.detector.detect_all(&file_identifier, &map).await
+    }
+    
+
+    /// Returns the best protocol for downloading the file
+    pub async fn detect_best_protocol(&self, file_identifier: String) -> Option<String> {
+        let mut map: HashMap<String, &dyn ProtocolHandler> = HashMap::new();
+        for handler in &self.handlers {
+            map.insert(handler.name().to_string(), handler.as_ref());
+        }
+    
+        self.detector.detect_best(&file_identifier, &map).await
+    }    
 }
 
 

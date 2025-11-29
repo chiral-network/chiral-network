@@ -21,9 +21,6 @@
     Copy,
     Download as DownloadIcon,
     Upload as UploadIcon,
-    Globe,
-    Blocks,
-    Share2
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import {open} from "@tauri-apps/plugin-dialog";
@@ -53,7 +50,6 @@
   let privacySectionOpen = false;
   let notificationsSectionOpen = false;
   let diagnosticsSectionOpen = false;
-  let protocolSectionOpen = false;
 
   const ACCORDION_STORAGE_KEY = "settingsAccordionState";
 
@@ -67,7 +63,6 @@
     advanced: boolean;
     diagnostics: boolean;
     backupRestore: boolean;
-    protocol: boolean;
   };
 
   let accordionStateInitialized = false;
@@ -132,7 +127,7 @@
     maxLogSizeMB: 10, // MB per log file
 
     // Upload Protocol
-    selectedProtocol: "Bitswap" as "WebRTC" | "Bitswap" | "BitTorrent", // Default to Bitswap
+    selectedProtocol: "Bitswap", // Default to Bitswap
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
@@ -236,7 +231,6 @@
         if (typeof parsed.network === "boolean") networkSectionOpen = parsed.network;
         if (typeof parsed.bandwidthScheduling === "boolean") bandwidthSectionOpen = parsed.bandwidthScheduling;
         if (typeof parsed.language === "boolean") languageSectionOpen = parsed.language;
-        if (typeof parsed.protocol === "boolean") protocolSectionOpen = parsed.protocol;
         if (typeof parsed.privacy === "boolean") privacySectionOpen = parsed.privacy;
         if (typeof parsed.notifications === "boolean") notificationsSectionOpen = parsed.notifications;
         if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
@@ -257,7 +251,6 @@
         network: networkSectionOpen,
         bandwidthScheduling: bandwidthSectionOpen,
         language: languageSectionOpen,
-        protocol: protocolSectionOpen,
         privacy: privacySectionOpen,
         notifications: notificationsSectionOpen,
         advanced: advancedSectionOpen,
@@ -1186,13 +1179,6 @@ $: sectionLabels = {
     tr("advanced.exportSettings"),
     tr("advanced.importSettings"),
   ],
-  protocol: [
-    "Upload Protocol",
-    "Select Protocol",
-    "WebRTC",
-    "Bitswap",
-    "BitTorrent",
-  ],
 };
 
 function sectionMatches(section: string, query: string) {
@@ -1770,82 +1756,6 @@ function sectionMatches(section: string, query: string) {
     </Expandable>
   {/if}
 
-  <!-- Upload Protocol Settings -->
-  {#if sectionMatches("protocol", search)}
-    <Expandable bind:isOpen={protocolSectionOpen}>
-      <div slot="title" class="flex items-center gap-3">
-        <UploadIcon class="h-6 w-6 text-purple-600" />
-        <h2 class="text-xl font-semibold text-black">Upload Protocol</h2>
-      </div>
-      <div class="space-y-4">
-        <p class="text-sm text-muted-foreground">Select which protocol to use for uploading files. This setting is persisted when you save.</p>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <!-- WebRTC Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'WebRTC'
-              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'WebRTC')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Globe class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("upload.webrtcDescription")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'WebRTC'}
-              <CheckCircle class="h-5 w-5 text-blue-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-
-          <!-- Bitswap Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'Bitswap'
-              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'Bitswap')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Blocks class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("upload.bitswapDescription")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'Bitswap'}
-              <CheckCircle class="h-5 w-5 text-blue-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-
-          <!-- BitTorrent Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-green-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'BitTorrent'
-              ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'BitTorrent')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-green-100 rounded-full">
-              <Share2 class="w-8 h-8 text-green-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">BitTorrent</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("torrent.seed.description")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'BitTorrent'}
-              <CheckCircle class="h-5 w-5 text-green-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-        </div>
-      </div>
-    </Expandable>
-  {/if}
 
   <!-- Privacy Settings -->
   {#if sectionMatches("privacy", search)}

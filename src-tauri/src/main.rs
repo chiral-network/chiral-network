@@ -16,7 +16,6 @@ pub mod http_server;
 pub mod net;
 pub mod pool;
 pub mod transaction_services;
-mod transfer_events;
 pub mod reassembly;
 
 // Re-export modules from the lib crate
@@ -27,7 +26,7 @@ use chiral_network::{
     reputation, stream_auth, webrtc_service,
 };
 
-use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler};
+use protocols::{BitTorrentProtocolHandler, ProtocolManager, SimpleProtocolHandler, ProtocolHandler};
 
 use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
@@ -65,6 +64,11 @@ use ethereum::{
     EthAccount,
     GethProcess,
     MinedBlock,
+    // Bootstrap peer management functions
+    add_peer,
+    get_peers,
+    get_node_info,
+    reconnect_to_bootstrap_if_needed,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
@@ -72,9 +76,13 @@ use geth_downloader::GethDownloader;
 use keystore::Keystore;
 use lazy_static::lazy_static;
 use multi_source_download::{MultiSourceDownloadService, MultiSourceEvent, MultiSourceProgress};
+use chiral_network::transfer_events::{
+    TransferEventBus, TransferStartedEvent, TransferCompletedEvent, TransferFailedEvent,
+    SourceInfo, SourceType, ErrorCategory, current_timestamp_ms,
+};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -811,6 +819,9 @@ async fn upload_file(
     key_fingerprint: Option<String>,
     price: Option<f64>,
 ) -> Result<FileMetadata, String> {
+    // Ensure price is never null - default to 0
+    let price = price.unwrap_or(0.0);
+
     // Get the active account address
     let account = get_active_account(&state).await?;
     let dht_opt = { state.dht.lock().await.as_ref().cloned() };
@@ -1025,6 +1036,12 @@ async fn start_miner(
         *miner_address = Some(address.clone());
     } // MutexGuard is dropped here
 
+    // Also store in static variable for mining monitor
+    {
+        let mut current_address = CURRENT_MINER_ADDRESS.lock().await;
+        *current_address = Some(address.clone());
+    }
+
     // Try to start mining
     match start_mining(&address, threads).await {
         Ok(_) => Ok(()),
@@ -1067,7 +1084,13 @@ async fn start_miner(
 
 #[tauri::command]
 async fn stop_miner() -> Result<(), String> {
-    stop_mining().await
+    stop_mining().await?;
+    // Clear the current mining address
+    {
+        let mut current_address = CURRENT_MINER_ADDRESS.lock().await;
+        *current_address = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1181,8 +1204,12 @@ async fn start_mining_monitor(
                             // Only trigger on "Successfully sealed new block" to avoid duplicate events
                             if line.contains("Successfully sealed new block") {
                                 // 🎉 WE MINED A BLOCK! 🎉
-                                // Simple as that - increment our counter and update frontend
-                                increment_mined_blocks().await;
+                                // Get the current mining address and increment the counter for that address
+                                if let Some(miner_address) = CURRENT_MINER_ADDRESS.lock().await.clone() {
+                                    increment_mined_blocks(miner_address).await;
+                                } else {
+                                    println!("⚠️  Block mined but no current miner address set!");
+                                }
 
                                 // Emit event to frontend - that's it!
                                 let result = app.emit("block_mined", serde_json::json!({
@@ -1216,19 +1243,22 @@ async fn start_mining_monitor(
 
 lazy_static! {
     static ref BLOCKS_CACHE: Mutex<Option<(String, u64, Instant)>> = Mutex::new(None);
-    // Simple running count of total blocks mined (since we started monitoring)
-    static ref TOTAL_MINED_BLOCKS: Mutex<u64> = Mutex::new(0);
+    // Running count of blocks mined per address
+    static ref TOTAL_MINED_BLOCKS: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
+    // Current mining address
+    static ref CURRENT_MINER_ADDRESS: Mutex<Option<String>> = Mutex::new(None);
 }
 
-async fn increment_mined_blocks() {
-    let mut count = TOTAL_MINED_BLOCKS.lock().await;
+async fn increment_mined_blocks(miner_address: String) {
+    let mut counts = TOTAL_MINED_BLOCKS.lock().await;
+    let count = counts.entry(miner_address.clone()).or_insert(0);
     *count += 1;
-    println!("🎉 Block mined! Total blocks mined: {}", *count);
+    println!("🎉 Block mined by {}! Total blocks mined by this address: {}", miner_address, *count);
 }
 
-async fn get_total_mined_blocks() -> u64 {
-    let count = TOTAL_MINED_BLOCKS.lock().await;
-    *count
+async fn get_total_mined_blocks(miner_address: &str) -> u64 {
+    let counts = TOTAL_MINED_BLOCKS.lock().await;
+    *counts.get(miner_address).unwrap_or(&0)
 }
 
 #[tauri::command]
@@ -1241,9 +1271,9 @@ async fn clear_blocks_cache() {
 }
 
 #[tauri::command]
-async fn get_blocks_mined(_app: tauri::AppHandle, _address: String) -> Result<u64, String> {
-    // Simple: return our running count
-    let count = get_total_mined_blocks().await;
+async fn get_blocks_mined(_app: tauri::AppHandle, address: String) -> Result<u64, String> {
+    // Return the running count for this address
+    let count = get_total_mined_blocks(&address).await;
     Ok(count)
 }
 #[tauri::command]
@@ -1387,7 +1417,6 @@ async fn start_dht_node(
 
     let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
         .ok_or("Failed to get project directories")?;
-    // Create the async_std::path::Path here so we can pass a reference to it.
     let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
     let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
 
@@ -1423,6 +1452,7 @@ async fn start_dht_node(
     let proxies_arc = state.proxies.clone();
     let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
+    let analytics_arc = state.analytics.clone();
 
     tokio::spawn(async move {
         use std::time::Duration;
@@ -1532,10 +1562,17 @@ async fn start_dht_node(
                     DhtEvent::DownloadedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("file_content", payload);
+                        // Update analytics: record download completion and bandwidth
+                        analytics_arc.record_download_completed().await;
+                        analytics_arc.record_download(metadata.file_size).await;
+                        analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("published_file", payload);
+                        // Update analytics: record upload completion
+                        analytics_arc.record_upload_completed().await;
+                        analytics_arc.decrement_active_uploads().await;
                     }
                     DhtEvent::FileDiscovered(metadata) => {
                         let payload = serde_json::json!(metadata);
@@ -2469,47 +2506,72 @@ fn get_linux_power() -> Option<(f32, PowerMethod)> {
     use std::fs;
 
     // Try RAPL (Running Average Power Limit) interface on Intel systems
-    // This provides power consumption for CPU package and DRAM
+    // Read from all available RAPL domains (core, dram, etc.) and sum them
 
-    let rapl_paths = [
-        "/sys/class/powercap/intel-rapl:0/energy_uj", // CPU package
-        "/sys/class/powercap/intel-rapl/energy_uj",   // Alternative path
-    ];
+    static mut LAST_TOTAL_ENERGY: Option<(u64, Instant)> = None;
+    static mut LAST_TOTAL_POWER: f32 = 0.0;
 
-    static mut LAST_ENERGY: Option<(u64, Instant)> = None;
-    static mut LAST_POWER: f32 = 0.0;
+    // Find all RAPL energy files
+    let mut rapl_paths = Vec::new();
 
+    // Main package
+    rapl_paths.push("/sys/class/powercap/intel-rapl:0/energy_uj".to_string());
+
+    // Alternative main package path
+    rapl_paths.push("/sys/class/powercap/intel-rapl/energy_uj".to_string());
+
+    // Sub-domains (core, dram, etc.)
+    for i in 0..10 {
+        for j in 0..10 {
+            let path = format!("/sys/class/powercap/intel-rapl:{}/intel-rapl:{}:{}/energy_uj", i, i, j);
+            if std::path::Path::new(&path).exists() {
+                rapl_paths.push(path);
+            }
+        }
+    }
+
+    let mut total_energy_uj: u64 = 0;
+    let mut valid_readings = 0;
+
+    // Sum energy from all domains
     for path in &rapl_paths {
         if let Ok(energy_str) = fs::read_to_string(path) {
             if let Ok(energy_uj) = energy_str.trim().parse::<u64>() {
-                let now = Instant::now();
+                total_energy_uj += energy_uj;
+                valid_readings += 1;
+            }
+        }
+    }
 
-                unsafe {
-                    if let Some((last_energy, last_time)) = LAST_ENERGY {
-                        let time_diff = now.duration_since(last_time).as_secs_f64();
-                        if time_diff > 0.0 {
-                            let energy_diff = if energy_uj >= last_energy {
-                                energy_uj - last_energy
-                            } else {
-                                // Counter wrapped around
-                                (u64::MAX - last_energy) + energy_uj
-                            };
+    if valid_readings == 0 {
+        return None; // No RAPL sensors available
+    }
 
-                            let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+    let now = Instant::now();
 
-                            if power_watts > 0.0 && power_watts < 1000.0 {
-                                // Reasonable power range
-                                LAST_POWER = power_watts as f32;
-                                LAST_ENERGY = Some((energy_uj, now));
-                                return Some((power_watts as f32, PowerMethod::Systemstat));
-                            }
-                        }
-                    } else {
-                        // First reading, store and wait for next
-                        LAST_ENERGY = Some((energy_uj, now));
-                    }
+    unsafe {
+        if let Some((last_total_energy, last_time)) = LAST_TOTAL_ENERGY {
+            let time_diff = now.duration_since(last_time).as_secs_f64();
+            if time_diff > 0.0 {
+                let energy_diff = if total_energy_uj >= last_total_energy {
+                    total_energy_uj - last_total_energy
+                } else {
+                    // Counter wrapped around (highly unlikely for total)
+                    u64::MAX - last_total_energy + total_energy_uj
+                };
+
+                let power_watts = (energy_diff as f64 / 1_000_000.0) / time_diff; // Convert µJ to J, then to W
+
+                if power_watts > 0.0 && power_watts < 2000.0 {
+                    // Reasonable power range (allow higher for multi-domain sum)
+                    LAST_TOTAL_POWER = power_watts as f32;
+                    LAST_TOTAL_ENERGY = Some((total_energy_uj, now));
+                    return Some((power_watts as f32, PowerMethod::Systemstat));
                 }
             }
+        } else {
+            // First reading, store and wait for next
+            LAST_TOTAL_ENERGY = Some((total_energy_uj, now));
         }
     }
 
@@ -3189,10 +3251,14 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
+        // Create transfer event bus for unified event emission
+        let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
         let multi_source_service = MultiSourceDownloadService::new(
             dht_service,
             webrtc_arc.clone(),
             state.bittorrent_handler.clone(),
+            transfer_event_bus,
+            state.analytics.clone(),
         );
         let multi_source_arc = Arc::new(multi_source_service);
 
@@ -3241,11 +3307,236 @@ async fn upload_file_to_network(
     state: State<'_, AppState>,
     file_path: String,
     price: Option<f64>,
+    protocol: Option<String>,
 ) -> Result<(), String> {
     println!(
-        "🔍 BACKEND: upload_file_to_network called with price: {:?}",
-        price
+        "🔍 BACKEND: upload_file_to_network called with price: {:?}, protocol: {:?}",
+        price, protocol
     );
+
+    // Ensure price is never null - default to 0
+    let price = price.unwrap_or(0.0);
+
+    // Get the active account for uploader_address
+    let account = get_active_account(&state).await?;
+
+    // Handle protocol-specific uploads
+    if let Some(protocol_name) = &protocol {
+        match protocol_name.as_str() {
+            "BitTorrent" => {
+                // Use torrent seeding
+                match create_and_seed_torrent(file_path.clone(), state).await {
+                    Ok(magnet_link) => {
+                        // Emit published_file event with torrent metadata
+                        let file_name = Path::new(&file_path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: magnet_link.clone(),
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![], // Not stored for torrents
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: None,
+                            http_sources: None,
+                            info_hash: None, // Could extract from magnet link if needed
+                            trackers: None,
+                            ed2k_sources: None,
+                            download_path: None,
+                        };
+
+
+                        println!("✅ BitTorrent file published: {}", magnet_link);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to create torrent: {}", e));
+                    }
+                }
+            }
+            "ED2K" => {
+                // Actually use the ED2K protocol handler to generate real ed2k links
+                println!("📡 Starting ED2K seeding with price: {:?}", price);
+
+                let file_path_buf = PathBuf::from(&file_path);
+
+                // Create ED2K protocol handler
+                let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k.server.example.com:4242".to_string());
+
+                // Seed the file using the protocol handler
+                let seed_options = protocols::traits::SeedOptions {
+                    announce_dht: false, // ED2K has its own DHT
+                    enable_encryption: false,
+                    upload_slots: None,
+                };
+
+                match ed2k_handler.seed(file_path_buf.clone(), seed_options).await {
+                    Ok(seeding_info) => {
+                        let file_name = file_path_buf
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: seeding_info.identifier.clone(), // Real ed2k link
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![],
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: None,
+                            http_sources: None,
+                            info_hash: None,
+                            trackers: None,
+                            ed2k_sources: Some(vec![dht::models::Ed2kSourceInfo {
+                                server_url: "ed2k.server.example.com:4242".to_string(),
+                                file_hash: {
+                                    // Extract hash from ed2k link: ed2k://|file|name|size|hash|/
+                                    let parts: Vec<&str> = seeding_info.identifier.split('|').collect();
+                                    if parts.len() >= 5 {
+                                        parts[4].to_string()
+                                    } else {
+                                        "unknown".to_string()
+                                    }
+                                },
+                                file_size,
+                                file_name: Some(file_name.to_string()),
+                                sources: None,
+                                timeout: None,
+                            }]),
+                            download_path: None,
+                        };
+
+                        println!("✅ ED2K file seeded successfully: {}", seeding_info.identifier);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("❌ ED2K seeding failed: {}", e);
+                        return Err(format!("ED2K seeding failed: {}", e));
+                    }
+                }
+            }
+            "FTP" => {
+                // Use FTP protocol handler (though FTP seeding is more complex)
+                println!("📡 Starting FTP seeding with price: {:?}", price);
+
+                let file_path_buf = PathBuf::from(&file_path);
+
+                // Create FTP protocol handler
+                let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
+
+                // Seed the file using the protocol handler
+                let seed_options = protocols::traits::SeedOptions {
+                    announce_dht: false, // FTP doesn't use DHT
+                    enable_encryption: false,
+                    upload_slots: None,
+                };
+
+                match ftp_handler.seed(file_path_buf.clone(), seed_options).await {
+                    Ok(seeding_info) => {
+                        let file_name = file_path_buf
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&file_path);
+
+                        let file_size = match tokio::fs::metadata(&file_path).await {
+                            Ok(metadata) => metadata.len(),
+                            Err(_) => 0,
+                        };
+
+                        let metadata = FileMetadata {
+                            merkle_root: seeding_info.identifier.clone(), // FTP URL from handler
+                            is_root: true,
+                            file_name: file_name.to_string(),
+                            file_size,
+                            file_data: vec![],
+                            seeders: vec![],
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            parent_hash: None,
+                            cids: None,
+                            encrypted_key_bundle: None,
+                            price,
+                            uploader_address: Some(account),
+                            ftp_sources: Some(vec![dht::models::FtpSourceInfo {
+                                url: seeding_info.identifier.clone(),
+                                username: None,
+                                password: None,
+                                supports_resume: true,
+                                file_size,
+                                last_checked: Some(std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()),
+                                is_available: true,
+                            }]),
+                            http_sources: None,
+                            info_hash: None,
+                            trackers: None,
+                            ed2k_sources: None,
+                            download_path: None,
+                        };
+
+                        println!("✅ FTP file seeded successfully: {}", seeding_info.identifier);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("❌ FTP seeding failed: {}", e);
+                        return Err(format!("FTP seeding failed: {}", e));
+                    }
+                }
+            }
+            _ => {
+                // WebRTC and Bitswap use the default Chiral flow
+                println!("📡 Using Chiral network upload for protocol: {}", protocol_name);
+            }
+        }
+    }
 
     // Get the active account address
     let account = get_active_account(&state).await?;
@@ -3383,6 +3674,8 @@ async fn upload_file_to_network(
 
 #[tauri::command]
 async fn start_ftp_download(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
     url: String,
     output_path: String,
     username: Option<String>,
@@ -3391,6 +3684,15 @@ async fn start_ftp_download(
     let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
     let host = parsed.host_str().ok_or("Invalid FTP URL")?;
     let path = parsed.path();
+    let file_name = path.split('/').last().unwrap_or("ftp_download").to_string();
+
+    // Generate a unique transfer ID
+    let transfer_id = format!("ftp-{}", uuid::Uuid::new_v4());
+
+    // Create transfer event bus for emitting events
+    let transfer_event_bus = TransferEventBus::new(app.clone());
+    let analytics_service = state.analytics.clone();
+    let start_time = std::time::Instant::now();
 
     // Connect to FTP
     let mut ftp = FtpStream::connect((host, 21))
@@ -3405,12 +3707,62 @@ async fn start_ftp_download(
             .map_err(|e| format!("Anonymous login failed: {}", e))?;
     }
 
+    // Get file size if possible
+    let file_size = ftp.size(path).unwrap_or(0) as u64;
+
+    // Emit started event
+    transfer_event_bus.emit_started_with_analytics(TransferStartedEvent {
+        transfer_id: transfer_id.clone(),
+        file_hash: transfer_id.clone(),
+        file_name: file_name.clone(),
+        file_size,
+        total_chunks: 1,
+        chunk_size: file_size as usize,
+        started_at: current_timestamp_ms(),
+        available_sources: vec![SourceInfo {
+            id: host.to_string(),
+            source_type: SourceType::Ftp,
+            address: url.clone(),
+            reputation: None,
+            estimated_speed_bps: None,
+            latency_ms: None,
+            location: None,
+        }],
+        selected_sources: vec![host.to_string()],
+    }, &analytics_service).await;
+
     // Create output file
     let mut file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Failed to create output file: {}", e))?;
+        .map_err(|e| {
+            // Capture error message before moving
+            let error_msg = format!("Failed to create output file: {}", e);
+
+            // Emit failed event on file creation error
+            let event_bus = TransferEventBus::new(app.clone());
+            let analytics = analytics_service.clone();
+            let tid = transfer_id.clone();
+            let error_for_event = error_msg.clone();
+            tokio::spawn(async move {
+                event_bus.emit_failed_with_analytics(TransferFailedEvent {
+                    transfer_id: tid.clone(),
+                    file_hash: tid,
+                    failed_at: current_timestamp_ms(),
+                    error: error_for_event,
+                    error_category: ErrorCategory::Filesystem,
+                    downloaded_bytes: 0,
+                    total_bytes: file_size,
+                    retry_possible: true,
+                }, &analytics).await;
+            });
+            error_msg
+        })?;
+
+    // Track downloaded bytes for progress updates
+    let downloaded_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let downloaded_bytes_clone = downloaded_bytes.clone();
 
     // Retrieve file and stream in chunks
-    ftp.retr(path, |reader| {
+    let result = ftp.retr(path, |reader| {
         let mut buffer = [0u8; 65536]; // 64 KB
         loop {
             let bytes_read = reader
@@ -3421,14 +3773,55 @@ async fn start_ftp_download(
             }
             file.write_all(&buffer[..bytes_read])
                 .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
+            downloaded_bytes_clone.fetch_add(bytes_read as u64, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
-    })
-    .map_err(|e| format!("FTP RETR failed: {}", e))?;
+    });
 
     ftp.quit().ok();
 
-    Ok(format!("Downloaded successfully to {}", output_path))
+    let total_downloaded = downloaded_bytes.load(std::sync::atomic::Ordering::Relaxed);
+    let duration = start_time.elapsed();
+    let avg_speed = if duration.as_secs_f64() > 0.0 {
+        total_downloaded as f64 / duration.as_secs_f64()
+    } else {
+        0.0
+    };
+
+    match result {
+        Ok(()) => {
+            // Emit completed event
+            transfer_event_bus.emit_completed_with_analytics(TransferCompletedEvent {
+                transfer_id: transfer_id.clone(),
+                file_hash: transfer_id,
+                file_name,
+                file_size: total_downloaded,
+                output_path: output_path.clone(),
+                completed_at: current_timestamp_ms(),
+                duration_seconds: duration.as_secs(),
+                average_speed_bps: avg_speed,
+                total_chunks: 1,
+                sources_used: Vec::new(),
+            }, &analytics_service).await;
+
+            Ok(format!("Downloaded successfully to {}", output_path))
+        }
+        Err(e) => {
+            // Emit failed event
+            transfer_event_bus.emit_failed_with_analytics(TransferFailedEvent {
+                transfer_id: transfer_id.clone(),
+                file_hash: transfer_id,
+                failed_at: current_timestamp_ms(),
+                error: format!("FTP RETR failed: {}", e),
+                error_category: ErrorCategory::Network,
+                downloaded_bytes: total_downloaded,
+                total_bytes: file_size,
+                retry_possible: true,
+            }, &analytics_service).await;
+
+            Err(format!("FTP RETR failed: {}", e))
+        }
+    }
 }
 
 #[tauri::command]
@@ -3753,6 +4146,8 @@ async fn download_file_from_network(
 
                                                                 // The peer will now start sending chunks automatically
                                                                 // We don't need to request individual chunks - the WebRTC service handles this
+                                                                // Track active download now that download is confirmed to start
+                                                                state.analytics.increment_active_downloads().await;
                                                                 Ok(format!(
                                                                     "WebRTC download initiated: {} ({} bytes) from peer {}",
                                                                     metadata.file_name, metadata.file_size, selected_peer
@@ -4023,7 +4418,7 @@ async fn upload_file_chunk(
             parent_hash: None,
             is_root: true,
             download_path: None,
-            price: None,
+            price: 0.0,
             uploader_address: None,
             ftp_sources: None,
             http_sources: None,
@@ -4650,6 +5045,44 @@ fn read_last_lines(path: &Path, max_lines: usize) -> Result<Vec<String>, String>
 #[tauri::command]
 async fn check_bootstrap_health() -> Result<geth_bootstrap::BootstrapHealthReport, String> {
     Ok(geth_bootstrap::check_all_bootstrap_nodes().await)
+}
+
+/// Get cached bootstrap health report without performing new checks
+#[tauri::command]
+async fn get_cached_bootstrap_health() -> Result<Option<geth_bootstrap::BootstrapHealthReport>, String> {
+    Ok(geth_bootstrap::get_cached_health_report().await)
+}
+
+/// Clear the bootstrap cache to force fresh health checks
+#[tauri::command]
+async fn clear_bootstrap_cache() -> Result<(), String> {
+    geth_bootstrap::clear_bootstrap_cache().await;
+    Ok(())
+}
+
+/// Reconnect to bootstrap nodes if peer count is low
+#[tauri::command]
+async fn reconnect_geth_bootstrap(min_peers: Option<u32>) -> Result<u32, String> {
+    let threshold = min_peers.unwrap_or(3);
+    reconnect_to_bootstrap_if_needed(threshold).await
+}
+
+/// Add a specific peer to Geth
+#[tauri::command]
+async fn add_geth_peer(enode: String) -> Result<bool, String> {
+    add_peer(&enode).await
+}
+
+/// Get current Geth peers
+#[tauri::command]
+async fn get_geth_peers() -> Result<Vec<serde_json::Value>, String> {
+    get_peers().await
+}
+
+/// Get Geth node info
+#[tauri::command]
+async fn get_geth_node_info() -> Result<serde_json::Value, String> {
+    get_node_info().await
 }
 
 #[tauri::command]
@@ -5976,6 +6409,12 @@ fn main() {
             get_geth_status,
             download_geth_binary,
             check_bootstrap_health,
+            get_cached_bootstrap_health,
+            clear_bootstrap_cache,
+            reconnect_geth_bootstrap,
+            add_geth_peer,
+            get_geth_peers,
+            get_geth_node_info,
             set_miner_address,
             start_miner,
             stop_miner,
@@ -6430,7 +6869,7 @@ fn main() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(state) = app_handle.try_state::<AppState>() {
                         let download_restart_service = Arc::new(
-                            download_restart::DownloadRestartService::new(app_handle.clone()),
+                            download_restart::DownloadRestartService::new(Some(app_handle.clone())),
                         );
                         if let Ok(mut dr_guard) = state.download_restart.try_lock() {
                             *dr_guard = Some(download_restart_service);
