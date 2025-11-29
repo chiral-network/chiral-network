@@ -1295,6 +1295,9 @@ impl MultiSourceDownloadService {
 
         // For each requested chunk, attempt HTTP download with hash verification
         for chunk_id in chunk_ids {
+            // Capture start time for duration tracking
+            let download_start_ms = current_timestamp_ms();
+
             // Find chunk info
             let chunk_info = match download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
                 Some(chunk) => chunk,
@@ -1374,7 +1377,7 @@ impl MultiSourceDownloadService {
 
             // Chunk passed verification - store it
             info!("HTTP chunk {} downloaded and verified successfully", chunk_id);
-            if let Err(e) = self.store_verified_chunk(file_hash, chunk_info, chunk_data).await {
+            if let Err(e) = self.store_verified_chunk(file_hash, chunk_info, chunk_data, download_start_ms).await {
                 let error = format!("Failed to store HTTP chunk {}: {}", chunk_id, e);
                 error!("{}", error);
                 self.on_source_failed(file_hash, &http_info.url, error).await;
@@ -1390,6 +1393,7 @@ impl MultiSourceDownloadService {
         file_hash: &str,
         chunk_info: &ChunkInfo,
         data: Vec<u8>,
+        download_start_ms: u64,
     ) -> Result<(), String> {
         let mut downloads = self.active_downloads.write().await;
         let download = downloads.get_mut(file_hash)
@@ -1404,6 +1408,10 @@ impl MultiSourceDownloadService {
         };
         download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
 
+        // Calculate actual download duration
+        let completed_at = current_timestamp_ms();
+        let download_duration_ms = completed_at.saturating_sub(download_start_ms);
+
         // Emit chunk completed event via TransferEventBus
         self.transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
             transfer_id: file_hash.to_string(),
@@ -1411,8 +1419,8 @@ impl MultiSourceDownloadService {
             chunk_size: chunk_info.size,
             source_id: "http".to_string(),
             source_type: SourceType::Http,
-            completed_at: current_timestamp_ms(),
-            download_duration_ms: 0, // TODO: track actual duration
+            completed_at,
+            download_duration_ms,
             verified: true,
         });
 
