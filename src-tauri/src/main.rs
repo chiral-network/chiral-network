@@ -21,7 +21,7 @@ pub mod reassembly;
 // Re-export modules from the lib crate
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, download_restart,
-    download_source, dht, ed2k_client, encryption, file_transfer,
+    dht, ed2k_client, encryption, file_transfer,
     http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
@@ -32,7 +32,6 @@ use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
     validate_proxy_auth_token,
 };
-use crate::download_source::HttpSourceInfo;
 
 use bandwidth::BandwidthController;
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
@@ -3336,10 +3335,6 @@ async fn upload_file_to_network(
         match protocol_name.as_str() {
             "BitTorrent" => {
                 // Use torrent seeding
-                let http_url = state.http_server_addr.lock().await.as_ref()
-                    .map(|addr| addr.to_string())
-                    .unwrap_or("127.0.0.1:8080".to_string());
-
                 match create_and_seed_torrent(file_path.clone(), state).await {
                     Ok(magnet_link) => {
                         // Emit published_file event with torrent metadata
@@ -3374,13 +3369,7 @@ async fn upload_file_to_network(
                             price,
                             uploader_address: Some(account),
                             ftp_sources: None,
-                            http_sources: Some(vec![HttpSourceInfo {
-                                url: format!("http://{}", http_url),
-                                auth_header: None,
-                                verify_ssl: true,
-                                headers: None,
-                                timeout_secs: None,
-                            }]),
+                            http_sources: None,
                             info_hash: {
                                 // Extract info hash from magnet link
                                 if let Some(start) = magnet_link.find("urn:btih:") {
@@ -3457,13 +3446,7 @@ async fn upload_file_to_network(
                             price,
                             uploader_address: Some(account),
                             ftp_sources: None,
-                            http_sources: Some(vec![HttpSourceInfo {
-                                url: format!("http://{}", state.http_server_addr.lock().await.as_ref().map(|addr| addr.to_string()).unwrap_or("127.0.0.1:8080".to_string())),
-                                auth_header: None,
-                                verify_ssl: true,
-                                headers: None,
-                                timeout_secs: None,
-                            }]),
+                            http_sources: None,
                             info_hash: None,
                             trackers: None,
                             ed2k_sources: Some(vec![dht::models::Ed2kSourceInfo {
@@ -3554,13 +3537,7 @@ async fn upload_file_to_network(
                                     .as_secs()),
                                 is_available: true,
                             }]),
-                            http_sources: Some(vec![HttpSourceInfo {
-                                url: format!("http://{}", state.http_server_addr.lock().await.as_ref().map(|addr| addr.to_string()).unwrap_or("127.0.0.1:8080".to_string())),
-                                auth_header: None,
-                                verify_ssl: true,
-                                headers: None,
-                                timeout_secs: None,
-                            }]),
+                            http_sources: None,
                             info_hash: None,
                             trackers: None,
                             ed2k_sources: None,
@@ -3723,6 +3700,12 @@ async fn upload_file_to_network(
         };
 
         if let Some(dht) = dht {
+            // Create metadata manually for the catch-all protocols
+            let created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_secs();
+
             let metadata = FileMetadata {
                 merkle_root: file_hash.clone(),
                 is_root: true,
@@ -3730,10 +3713,7 @@ async fn upload_file_to_network(
                 file_size: file_data.len() as u64,
                 file_data: file_data.clone(),
                 seeders: vec![],
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
+                created_at,
                 mime_type: None,
                 is_encrypted: false,
                 encryption_method: None,
@@ -3743,63 +3723,41 @@ async fn upload_file_to_network(
                 encrypted_key_bundle: None,
                 price,
                 uploader_address: Some(account.clone()),
-                ..Default::default()
+                ftp_sources: None,
+                http_sources: None,
+                info_hash: None,
+                trackers: None,
+                ed2k_sources: None,
+                download_path: None,
             };
-            // Prepare a timestamp for metadata
-            let created_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::from_secs(0))
-                .as_secs();
 
-            // Use DHT helper to prepare file metadata
-            match dht
-                .prepare_file_metadata(
-                    file_hash.clone(),
-                    file_name.to_string(),
-                    file_data.len() as u64,
-                    file_data.clone(),
-                    created_at,
-                    None,                  // mime_type
-                    None,                  // encrypted_key_bundle
-                    false,                 // is_encrypted
-                    None,                  // encryption_method
-                    None,                  // key_fingerprint
-                    price,                 // Add price parameter
-                    Some(account.clone()), // Add uploader_address parameter
-                )
-                .await
-            {
-                Ok(metadata) => {
-                    // Store file data locally for seeding
-                    ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
-                        .await;
+            dht.publish_file(metadata.clone(), None).await?;
 
-                    // Register file with HTTP server for HTTP downloads
-                    // IMPORTANT: Use merkle_root as the key, not file_hash!
-                    state
-                        .http_server_state
-                        .register_file(http_server::HttpFileMetadata {
-                            hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
-                            file_hash: file_hash.clone(),       // Use file_hash for storage path
-                            name: file_name.to_string(),
-                            size: file_data.len() as u64,
-                            encrypted: false,
-                        })
-                        .await;
+            // Store file data locally for seeding
+            ft.store_file_data(file_hash.clone(), file_name.to_string(), file_data.clone())
+                .await;
 
-                    info!(
-                        "Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})",
-                        file_name, metadata.merkle_root, file_hash
-                    );
+            // Register file with HTTP server for HTTP downloads
+            // IMPORTANT: Use merkle_root as the key, not file_hash!
+            state
+                .http_server_state
+                .register_file(http_server::HttpFileMetadata {
+                    hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
+                    file_hash: file_hash.clone(),       // Use file_hash for storage path
+                    name: file_name.to_string(),
+                    size: file_data.len() as u64,
+                    encrypted: false,
+                })
+                .await;
 
-                    match dht.publish_file(metadata.clone(), None).await {
-                        Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
-                        Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to prepare file metadata: {}", e);
-                }
+            info!(
+                "Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})",
+                file_name, metadata.merkle_root, file_hash
+            );
+
+            match dht.publish_file(metadata.clone(), None).await {
+                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
+                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
             }
 
             Ok(())
@@ -4599,13 +4557,7 @@ async fn upload_file_chunk(
             price: 0.0,
             uploader_address: None,
             ftp_sources: None,
-            http_sources: Some(vec![HttpSourceInfo {
-                url: format!("http://{}", state.http_server_addr.lock().await.as_ref().map(|addr| addr.to_string()).unwrap_or("127.0.0.1:8080".to_string())),
-                auth_header: None,
-                verify_ssl: true,
-                headers: None,
-                timeout_secs: None,
-            }]),
+            http_sources: None,
             info_hash: None,
             trackers: None,
             ed2k_sources: None,
