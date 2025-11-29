@@ -309,8 +309,14 @@ impl GethProcess {
             eprintln!("✅ Blockchain initialized successfully");
         }
 
-        // Bootstrap node
-        let bootstrap_enode = "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303,enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303";
+        // Get bootstrap nodes - use cached/fallback to avoid blocking startup
+        // The health check is performed asynchronously, so we use the synchronous fallback here
+        // and the async health-checked version will be used for reconnection attempts
+        let bootstrap_enode = crate::geth_bootstrap::get_all_bootstrap_enode_string();
+        
+        // Log bootstrap configuration
+        let node_count = bootstrap_enode.matches("enode://").count();
+        eprintln!("Starting Geth with {} bootstrap node(s)", node_count);
 
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")
@@ -429,10 +435,10 @@ impl GethProcess {
                 .output();
 
             match result {
-                Ok(output) => {
+                Ok(_output) => {
                     // pkill completed
                 }
-                Err(e) => {
+                Err(_e) => {
                     // Failed to run pkill
                 }
             }
@@ -448,6 +454,187 @@ impl GethProcess {
 
         Ok(())
     }
+}
+
+// ============================================================================
+// Async Geth Management Functions
+// ============================================================================
+
+/// Start Geth with health-checked bootstrap nodes
+/// 
+/// This function performs bootstrap node health checks before starting Geth,
+/// ensuring we connect to the most reliable nodes available.
+pub async fn start_geth_with_health_check(
+    geth: &mut GethProcess,
+    data_dir: &str,
+    miner_address: Option<&str>,
+) -> Result<crate::geth_bootstrap::BootstrapHealthReport, String> {
+    // First, perform health check on bootstrap nodes
+    let health_report = crate::geth_bootstrap::check_all_bootstrap_nodes().await;
+    
+    if !health_report.healthy {
+        eprintln!(
+            "Warning: Bootstrap health check failed - {} of {} nodes reachable",
+            health_report.reachable_nodes,
+            health_report.total_nodes
+        );
+        if let Some(ref recommendation) = health_report.recommendation {
+            eprintln!("Recommendation: {}", recommendation);
+        }
+    } else {
+        eprintln!(
+            "Bootstrap health OK: {} of {} nodes reachable",
+            health_report.reachable_nodes,
+            health_report.total_nodes
+        );
+    }
+    
+    // Start Geth (it will use the fallback bootstrap string if health check found issues)
+    geth.start(data_dir, miner_address)?;
+    
+    Ok(health_report)
+}
+
+/// Add a new peer to the running Geth node via admin_addPeer RPC
+pub async fn add_peer(enode: &str) -> Result<bool, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "admin_addPeer",
+        "params": [enode],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send add_peer request: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse add_peer response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error adding peer: {}", error));
+    }
+
+    Ok(json_response["result"].as_bool().unwrap_or(false))
+}
+
+/// Get list of currently connected peers
+pub async fn get_peers() -> Result<Vec<serde_json::Value>, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "admin_peers",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send get_peers request: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse get_peers response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error getting peers: {}", error));
+    }
+
+    let peers = json_response["result"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(peers)
+}
+
+/// Reconnect to bootstrap nodes if peer count is low
+/// 
+/// This function checks the current peer count and if it's below the threshold,
+/// attempts to add healthy bootstrap nodes as peers.
+pub async fn reconnect_to_bootstrap_if_needed(min_peers: u32) -> Result<u32, String> {
+    let current_peers = get_peer_count().await.unwrap_or(0);
+    
+    if current_peers >= min_peers {
+        return Ok(current_peers);
+    }
+    
+    eprintln!(
+        "Peer count ({}) below threshold ({}), attempting to reconnect to bootstrap nodes",
+        current_peers,
+        min_peers
+    );
+    
+    // Get healthy bootstrap nodes
+    let healthy_enodes = crate::geth_bootstrap::get_healthy_bootstrap_enode_string().await;
+    
+    let mut added = 0;
+    for enode in healthy_enodes.split(',') {
+        if enode.is_empty() {
+            continue;
+        }
+        
+        match add_peer(enode).await {
+            Ok(true) => {
+                eprintln!("Successfully added bootstrap peer");
+                added += 1;
+            }
+            Ok(false) => {
+                // Peer already connected or couldn't be added
+            }
+            Err(e) => {
+                eprintln!("Failed to add bootstrap peer: {}", e);
+            }
+        }
+    }
+    
+    // Give peers time to connect
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    
+    let new_peer_count = get_peer_count().await.unwrap_or(current_peers);
+    eprintln!(
+        "Peer count after reconnection attempt: {} (added {} bootstrap nodes)",
+        new_peer_count,
+        added
+    );
+    
+    Ok(new_peer_count)
+}
+
+/// Get Geth node info including enode
+pub async fn get_node_info() -> Result<serde_json::Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "admin_nodeInfo",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send nodeInfo request: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse nodeInfo response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error getting node info: {}", error));
+    }
+
+    Ok(json_response["result"].clone())
 }
 
 impl Drop for GethProcess {
@@ -2463,4 +2650,3 @@ pub async fn reset_incremental_scanning() {
     let mut counts = CUMULATIVE_COUNTS.lock().await;
     counts.clear();
 }
-

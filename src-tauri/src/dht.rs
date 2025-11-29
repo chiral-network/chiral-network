@@ -110,10 +110,6 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
-use libp2p::{
-    multiaddr::Protocol,
-    noise, tcp, yamux,
-};
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
@@ -171,6 +167,8 @@ use libp2p::{
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
+    multiaddr::Protocol,
+    noise, tcp, yamux,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
     upnp,
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
@@ -1299,7 +1297,7 @@ async fn run_dht_node(
                                                 info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
-                                                price: json_val.get("price").and_then(|v| v.as_f64()),
+                                                price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                 uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
@@ -3074,7 +3072,7 @@ async fn run_dht_node(
                                                 info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
-                                                price: json_val.get("price").and_then(|v| v.as_f64()),
+                                                price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                 uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
@@ -4170,7 +4168,7 @@ async fn handle_kademlia_event(
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
-                                    price: metadata_json.get("price").and_then(|v| v.as_f64()),
+                                    price: metadata_json.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                     http_sources: metadata_json.get("http_sources").and_then(|v| {
                                         serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(
                                             v.clone(),
@@ -4574,7 +4572,7 @@ async fn handle_kademlia_event(
                                                     info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     trackers: metadata_json.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                     is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
-                                                    price: metadata_json.get("price").and_then(|v| v.as_f64()),
+                                                    price: metadata_json.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                     uploader_address: metadata_json.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     http_sources: metadata_json.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                     ..Default::default()
@@ -4848,7 +4846,7 @@ async fn handle_mdns_event(
 ) {
     match event {
         MdnsEvent::Discovered(list) => {
-            let discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
+            let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
                 // Skip self-discoveries to prevent self-connection attempts
@@ -4861,6 +4859,10 @@ async fn handle_mdns_event(
                             .behaviour_mut()
                             .kademlia
                             .add_address(&peer_id, multiaddr.clone());
+                        discovered
+                            .entry(peer_id)
+                            .or_insert_with(Vec::new)
+                            .push(multiaddr.to_string());
                     }
                     Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", multiaddr, e),
                 }
@@ -6230,7 +6232,7 @@ impl DhtService {
         is_encrypted: bool,
         encryption_method: Option<String>,
         key_fingerprint: Option<String>,
-        price: Option<f64>,
+        price: f64,
         uploader_address: Option<String>,
     ) -> Result<FileMetadata, String> {
         Ok(FileMetadata {
