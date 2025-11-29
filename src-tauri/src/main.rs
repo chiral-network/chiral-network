@@ -4460,12 +4460,6 @@ async fn upload_file_chunk(
     session.hasher.update(&chunk_data);
     session.received_chunks += 1;
 
-    // For large files, don't accumulate file data in memory
-    // Only accumulate for files <= 100MB
-    if session.file_size <= 100 * 1024 * 1024 {
-        session.file_data.extend_from_slice(&chunk_data);
-    }
-
     // Store chunk directly in Bitswap (if DHT is available)
     if let Some(dht) = state.dht.lock().await.as_ref() {
         // Create a block from the chunk data
