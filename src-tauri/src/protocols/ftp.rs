@@ -12,8 +12,7 @@ use crate::transfer_events::{
     current_timestamp_ms, ChunkCompletedEvent, DisconnectReason, ErrorCategory,
     SourceConnectedEvent, SourceDisconnectedEvent, SourceInfo, SourceSummary,
     SourceType, TransferCanceledEvent, TransferCompletedEvent, TransferEventBus,
-    TransferFailedEvent, TransferPausedEvent, TransferProgressEvent,
-    TransferStartedEvent, PauseReason,
+    TransferFailedEvent, TransferPausedEvent, TransferStartedEvent, PauseReason,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
