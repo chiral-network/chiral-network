@@ -32,6 +32,7 @@ use crate::commands::auth::{
     cleanup_expired_proxy_auth_tokens, generate_proxy_auth_token, revoke_proxy_auth_token,
     validate_proxy_auth_token,
 };
+use crate::download_source::HttpSourceInfo;
 
 use bandwidth::BandwidthController;
 use crate::commands::bootstrap::get_bootstrap_nodes_command;
@@ -97,7 +98,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::{io::AsyncReadExt, sync::Mutex, task::JoinHandle, time::sleep};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{WebRTCFileRequest, WebRTCService};
@@ -855,27 +856,8 @@ async fn upload_file(
             )
             .await?;
 
-        // Skip local storage - rely entirely on Bitswap for distribution
-        // HTTP downloads won't work from this peer, but P2P downloads will work via Bitswap
-
-        // Add HTTP source information to metadata
-        let mut metadata_with_http = metadata.clone();
-        if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use download_source::HttpSourceInfo;
-            // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
-            let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
-            metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
-                url: url.clone(),
-                auth_header: None,
-                verify_ssl: true,
-                headers: None,
-                timeout_secs: None,
-            }]);
-            tracing::info!("Added HTTP source to metadata: {}", url);
-        }
-
-        dht.publish_file(metadata_with_http.clone(), None).await?;
-        Ok(metadata_with_http)
+        dht.publish_file(metadata.clone(), None).await?;
+        Ok(metadata)
     } else {
         Err("DHT not running".into())
     }
@@ -3306,11 +3288,58 @@ async fn upload_file_to_network(
     // Get the active account for uploader_address
     let account = get_active_account(&state).await?;
 
+    // Calculate file hash without loading entire file into memory
+    let mut hasher = sha2::Sha256::new();
+    let mut file = tokio::fs::File::open(&file_path).await
+        .map_err(|e| format!("Failed to open file for hashing: {}", e))?;
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB chunks for hashing
+
+    loop {
+        let bytes_read = file.read(&mut buffer).await
+            .map_err(|e| format!("Failed to read chunk for hashing: {}", e))?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let file_hash = format!("{:x}", hasher.finalize());
+    let permanent_path = state.http_server_state.storage_dir.join(&file_hash);
+
+    // Move/rename temp file to permanent storage instead of copying
+    tokio::fs::rename(&file_path, &permanent_path).await
+        .map_err(|e| format!("Failed to move file to permanent storage: {}", e))?;
+
+    // Update file_path to point to the permanent location
+    let file_path = permanent_path.to_string_lossy().to_string();
+
+    // Register with HTTP server
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+
+    let file_size = tokio::fs::metadata(&file_path).await
+        .map_err(|e| format!("Failed to get file size: {}", e))?
+        .len();
+
+    state.http_server_state.register_file(http_server::HttpFileMetadata {
+        hash: file_hash.clone(),
+        file_hash: file_hash.clone(),
+        name: file_name.to_string(),
+        size: file_size,
+        encrypted: false,
+    }).await;
+
     // Handle protocol-specific uploads
     if let Some(protocol_name) = &protocol {
         match protocol_name.as_str() {
             "BitTorrent" => {
                 // Use torrent seeding
+                let http_url = state.http_server_addr.lock().await.as_ref()
+                    .map(|addr| addr.to_string())
+                    .unwrap_or("127.0.0.1:8080".to_string());
+
                 match create_and_seed_torrent(file_path.clone(), state).await {
                     Ok(magnet_link) => {
                         // Emit published_file event with torrent metadata
@@ -3345,9 +3374,27 @@ async fn upload_file_to_network(
                             price,
                             uploader_address: Some(account),
                             ftp_sources: None,
-                            http_sources: None,
-                            info_hash: None, // Could extract from magnet link if needed
-                            trackers: None,
+                            http_sources: Some(vec![HttpSourceInfo {
+                                url: format!("http://{}", http_url),
+                                auth_header: None,
+                                verify_ssl: true,
+                                headers: None,
+                                timeout_secs: None,
+                            }]),
+                            info_hash: {
+                                // Extract info hash from magnet link
+                                if let Some(start) = magnet_link.find("urn:btih:") {
+                                    let start = start + 9;
+                                    let end = magnet_link[start..]
+                                        .find('&')
+                                        .map(|i| start + i)
+                                        .unwrap_or(magnet_link.len());
+                                    Some(magnet_link[start..end].to_lowercase())
+                                } else {
+                                    None
+                                }
+                            },
+                            trackers: Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]),
                             ed2k_sources: None,
                             download_path: None,
                         };
@@ -3410,7 +3457,13 @@ async fn upload_file_to_network(
                             price,
                             uploader_address: Some(account),
                             ftp_sources: None,
-                            http_sources: None,
+                            http_sources: Some(vec![HttpSourceInfo {
+                                url: format!("http://{}", state.http_server_addr.lock().await.as_ref().map(|addr| addr.to_string()).unwrap_or("127.0.0.1:8080".to_string())),
+                                auth_header: None,
+                                verify_ssl: true,
+                                headers: None,
+                                timeout_secs: None,
+                            }]),
                             info_hash: None,
                             trackers: None,
                             ed2k_sources: Some(vec![dht::models::Ed2kSourceInfo {
@@ -3501,7 +3554,13 @@ async fn upload_file_to_network(
                                     .as_secs()),
                                 is_available: true,
                             }]),
-                            http_sources: None,
+                            http_sources: Some(vec![HttpSourceInfo {
+                                url: format!("http://{}", state.http_server_addr.lock().await.as_ref().map(|addr| addr.to_string()).unwrap_or("127.0.0.1:8080".to_string())),
+                                auth_header: None,
+                                verify_ssl: true,
+                                headers: None,
+                                timeout_secs: None,
+                            }]),
                             info_hash: None,
                             trackers: None,
                             ed2k_sources: None,
@@ -4540,7 +4599,13 @@ async fn upload_file_chunk(
             price: 0.0,
             uploader_address: None,
             ftp_sources: None,
-            http_sources: None,
+            http_sources: Some(vec![HttpSourceInfo {
+                url: format!("http://{}", state.http_server_addr.lock().await.as_ref().map(|addr| addr.to_string()).unwrap_or("127.0.0.1:8080".to_string())),
+                auth_header: None,
+                verify_ssl: true,
+                headers: None,
+                timeout_secs: None,
+            }]),
             info_hash: None,
             trackers: None,
             ed2k_sources: None,
@@ -4552,26 +4617,10 @@ async fn upload_file_chunk(
         upload_sessions.remove(&upload_id);
         drop(upload_sessions);
 
-        // Add HTTP source information to metadata
-        let mut metadata_with_http = metadata.clone();
-        if let Some(http_addr) = *state.http_server_addr.lock().await {
-            use download_source::HttpSourceInfo;
-            metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
-                url: format!("http://{}", http_addr),
-                auth_header: None,
-                verify_ssl: true,
-                headers: None,
-                timeout_secs: None,
-            }]);
-            tracing::info!(
-                "Added HTTP source to streaming upload metadata: http://{}",
-                http_addr
-            );
-        }
 
         // Publish to DHT
         if let Some(dht) = dht_opt {
-            dht.publish_file(metadata_with_http.clone(), None).await?;
+            dht.publish_file(metadata.clone(), None).await?;
         } else {
             return Err("DHT not running".into());
         }
