@@ -62,7 +62,7 @@ export class SignalingService {
 
   constructor(opts: SignalingOptions = {}) {
     this.clientId = createClientId();
-    this.wsUrl = opts.url ?? "ws://localhost:9000";
+    this.wsUrl = opts.url ?? "ws://localhost:3000";
     this.preferDht = opts.preferDht ?? true;
     this.wsHeartbeatIntervalMs = opts.wsHeartbeatInterval ?? 20000; // 20s
     // connection timeout for WebSocket connect attempts
