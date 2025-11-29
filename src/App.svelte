@@ -60,6 +60,51 @@ let lastAppliedBandwidthSignature: string | null = null;
 let showFirstRunWizard = false;
 let showShortcutsPanel = false;
 let showCommandPalette = false;
+const scrollPositions: Record<string, number> = {};
+
+// Helper to get the main scroll container (if present)
+const getMainContent = () =>
+  document.querySelector("#main-content") as HTMLElement | null;
+
+// Save scroll position for the current page
+const saveScrollPosition = (page: string) => {
+  if (!page || typeof window === 'undefined') return;
+
+  const mainContent = getMainContent();
+
+  if (mainContent && mainContent.scrollHeight > mainContent.clientHeight) {
+    // App is using the #main-content div as scroll container
+    scrollPositions[page] = mainContent.scrollTop;
+  } else {
+    // Fallback to window scroll (body/document scrolling)
+    scrollPositions[page] = window.scrollY || window.pageYOffset || 0;
+  }
+};
+
+// Restore scroll position for a page
+const restoreScrollPosition = async (page: string) => {
+  if (!page || typeof window === 'undefined') return;
+
+  await tick();
+
+  const y = scrollPositions[page] ?? 0;
+  const mainContent = getMainContent();
+
+  if (mainContent && mainContent.scrollHeight > mainContent.clientHeight) {
+    mainContent.scrollTop = y;
+  } else {
+    window.scrollTo(0, y);
+  }
+};
+
+
+const navigateTo = (page: string, path: string) => {
+  if (page !== currentPage) {
+    saveScrollPosition(currentPage);
+  }
+  currentPage = page;
+  goto(path);
+};
 
   const syncBandwidthScheduler = (config: AppSettings) => {
     const enabledSchedules =
@@ -109,12 +154,19 @@ let showCommandPalette = false;
 };
 
 // First-run wizard handlers
+// function handleFirstRunComplete() {
+//   showFirstRunWizard = false;
+//   // Navigate to account page after completing wizard
+//   currentPage = 'account';
+//   goto('/account');
+// }
+// First-run wizard handlers
 function handleFirstRunComplete() {
   showFirstRunWizard = false;
   // Navigate to account page after completing wizard
-  currentPage = 'account';
-  goto('/account');
+  navigateTo('account', '/account');
 }
+
 
   onMount(() => {
     let stopNetworkMonitoring: () => void = () => {};
@@ -392,9 +444,17 @@ function handleFirstRunComplete() {
     })();
 
       // popstate - event that tracks history of current tab
-      const onPop = () => syncFromUrl();
-      window.addEventListener('popstate', onPop);
-
+      // const onPop = () => syncFromUrl();
+      // window.addEventListener('popstate', onPop);
+      // popstate - event that tracks history of current tab
+    const onPop = () => {
+      // Save where we were on the page we're leaving
+      saveScrollPosition(currentPage);
+      // Update currentPage based on URL
+      syncFromUrl();
+      // restoreScrollPosition will run via the reactive currentPage block
+    };
+    window.addEventListener('popstate', onPop);
 
 
     // keyboard shortcuts
@@ -418,44 +478,79 @@ function handleFirstRunComplete() {
       }
       
       // Ctrl/Cmd + D - Go to Download
+      // if ((event.ctrlKey || event.metaKey) && event.key === 'd' && !isInputField) {
+      //   event.preventDefault();
+      //   currentPage = 'download';
+      //   goto('/download');
+      //   return;
+      // }
+      // Ctrl/Cmd + D - Go to Download
       if ((event.ctrlKey || event.metaKey) && event.key === 'd' && !isInputField) {
         event.preventDefault();
-        currentPage = 'download';
-        goto('/download');
+        navigateTo('download', '/download');
         return;
       }
+
       
+      // Ctrl/Cmd + U - Go to Upload
+      // if ((event.ctrlKey || event.metaKey) && event.key === 'u' && !isInputField) {
+      //   event.preventDefault();
+      //   currentPage = 'upload';
+      //   goto('/upload');
+      //   return;
+      // }
       // Ctrl/Cmd + U - Go to Upload
       if ((event.ctrlKey || event.metaKey) && event.key === 'u' && !isInputField) {
         event.preventDefault();
-        currentPage = 'upload';
-        goto('/upload');
+        navigateTo('upload', '/upload');
         return;
       }
+
       
+      // Ctrl/Cmd + N - Go to Network
+      // if ((event.ctrlKey || event.metaKey) && event.key === 'n' && !isInputField) {
+      //   event.preventDefault();
+      //   currentPage = 'network';
+      //   goto('/network');
+      //   return;
+      // }
       // Ctrl/Cmd + N - Go to Network
       if ((event.ctrlKey || event.metaKey) && event.key === 'n' && !isInputField) {
         event.preventDefault();
-        currentPage = 'network';
-        goto('/network');
+        navigateTo('network', '/network');
         return;
       }
+
       
+      // Ctrl/Cmd + M - Go to Mining
+      // if ((event.ctrlKey || event.metaKey) && event.key === 'm' && !isInputField) {
+      //   event.preventDefault();
+      //   currentPage = 'mining';
+      //   goto('/mining');
+      //   return;
+      // }
       // Ctrl/Cmd + M - Go to Mining
       if ((event.ctrlKey || event.metaKey) && event.key === 'm' && !isInputField) {
         event.preventDefault();
-        currentPage = 'mining';
-        goto('/mining');
+        navigateTo('mining', '/mining');
         return;
       }
+
       
+      // Ctrl/Cmd + A - Go to Account (only if not in input field)
+      // if ((event.ctrlKey || event.metaKey) && event.key === 'a' && !isInputField) {
+      //   event.preventDefault();
+      //   currentPage = 'account';
+      //   goto('/account');
+      //   return;
+      // }
       // Ctrl/Cmd + A - Go to Account (only if not in input field)
       if ((event.ctrlKey || event.metaKey) && event.key === 'a' && !isInputField) {
         event.preventDefault();
-        currentPage = 'account';
-        goto('/account');
+        navigateTo('account', '/account');
         return;
       }
+
 
       // Ctrl/Cmd + Q - Quit application
       if ((event.ctrlKey || event.metaKey) && event.key === "q") {
@@ -465,12 +560,19 @@ function handleFirstRunComplete() {
       }
 
       // Ctrl/Cmd + , - Open Settings
+      // if ((event.ctrlKey || event.metaKey) && event.key === ",") {
+      //   event.preventDefault();
+      //   currentPage = "settings";
+      //   goto("/settings");
+      //   return;
+      // }
+      // Ctrl/Cmd + , - Open Settings
       if ((event.ctrlKey || event.metaKey) && event.key === ",") {
         event.preventDefault();
-        currentPage = "settings";
-        goto("/settings");
+        navigateTo('settings', '/settings');
         return;
       }
+
 
       // Ctrl/Cmd + R - Refresh current page
       if ((event.ctrlKey || event.metaKey) && event.key === "r") {
@@ -530,24 +632,42 @@ function handleFirstRunComplete() {
     };
   });
 
+  // setContext("navigation", {
+  //   setCurrentPage: (page: string) => {
+  //     currentPage = page;
+  //   },
+  // });
   setContext("navigation", {
     setCurrentPage: (page: string) => {
+      if (page !== currentPage) {
+        saveScrollPosition(currentPage);
+      }
       currentPage = page;
     },
+    navigateTo,
   });
 
+
+  // let sidebarCollapsed = false;
+  // let sidebarMenuOpen = false;
+
+  // // Scroll to top when page changes
+  // $: if (currentPage) {
+  //   tick().then(() => {
+  //     const mainContent = document.querySelector("#main-content");
+  //     if (mainContent) {
+  //       mainContent.scrollTop = 0;
+  //     }
+  //   });
+  // }
   let sidebarCollapsed = false;
   let sidebarMenuOpen = false;
 
-  // Scroll to top when page changes
+  // Restore the previous scroll position when page changes
   $: if (currentPage) {
-    tick().then(() => {
-      const mainContent = document.querySelector("#main-content");
-      if (mainContent) {
-        mainContent.scrollTop = 0;
-      }
-    });
+    restoreScrollPosition(currentPage);
   }
+
 
   type MenuItem = {
     id: string;
@@ -688,8 +808,7 @@ function handleFirstRunComplete() {
           <button
             on:click={() => {
               if (isBlockchainDisabled) return;
-              currentPage = item.id;
-              goto(`/${item.id}`);
+              navigateTo(item.id, `/${item.id}`);
             }}
             class="w-full group {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : ''}"
             aria-current={currentPage === item.id ? "page" : undefined}
@@ -785,8 +904,7 @@ function handleFirstRunComplete() {
             <button
               on:click={() => {
                 if (isBlockchainDisabled) return;
-                currentPage = item.id;
-                goto(`/${item.id}`);
+                navigateTo(item.id, `/${item.id}`);
                 sidebarMenuOpen = false;
               }}
               class="w-full flex items-center rounded px-4 py-3 text-lg {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-gray-100'}"
