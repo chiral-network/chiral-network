@@ -1084,7 +1084,21 @@ async fn start_miner(
 
 #[tauri::command]
 async fn stop_miner() -> Result<(), String> {
-    stop_mining().await?;
+    // Try to stop mining, but if Geth is not running, just clear the state
+    match stop_mining().await {
+        Ok(_) => {
+            // Successfully stopped mining
+        }
+        Err(e) if e.contains("Connection refused") || e.contains("connect error") => {
+            // Geth is not running - this is okay, just clear the state
+            eprintln!("Geth not running (connection refused) - clearing mining state");
+        }
+        Err(e) => {
+            // Some other error - return it
+            return Err(e);
+        }
+    }
+
     // Clear the current mining address
     {
         let mut current_address = CURRENT_MINER_ADDRESS.lock().await;

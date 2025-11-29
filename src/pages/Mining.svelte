@@ -23,6 +23,7 @@
   import { walletService } from '$lib/wallet';
   import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte';
   import { showToast } from '$lib/toast';
+  import { gethSyncStatus } from '$lib/services/gethService';
   type TranslateParams = { values?: Record<string, unknown>; default?: string };
   // const tr = (key: string, params?: TranslateParams) => get(t)(key, params);
   const tr = (key: string, params?: TranslateParams): string =>
@@ -39,13 +40,13 @@
   let selectedThreads = Math.floor(cpuThreads / 2)
   let error = ''
 
-  // Blockchain sync status
-  let isSyncing = false
-  let syncProgress = 0
-  let syncCurrentBlock = 0
-  let syncHighestBlock = 0
-  let syncBlocksRemaining = 0
-  let syncEstimatedSecondsRemaining: number | null = null
+  // Blockchain sync status - updated from gethSyncStatus store
+  $: isSyncing = $gethSyncStatus?.syncing ?? false
+  $: syncProgress = $gethSyncStatus?.progress_percent ?? 0
+  $: syncCurrentBlock = $gethSyncStatus?.current_block ?? 0
+  $: syncHighestBlock = $gethSyncStatus?.highest_block ?? 0
+  $: syncBlocksRemaining = $gethSyncStatus?.blocks_remaining ?? 0
+  $: syncEstimatedSecondsRemaining = $gethSyncStatus?.estimated_seconds_remaining ?? null
   let lastSyncNotificationShown = false
 
   // Temporary account tracking
@@ -759,7 +760,13 @@
       error = $t('mining.errors.gethNotRunning')
       return
     }
-    
+
+    // Check if blockchain is still syncing
+    if (isSyncing) {
+      error = `Cannot start mining while blockchain is syncing (${syncProgress.toFixed(1)}% complete). Please wait for sync to finish.`
+      return
+    }
+
     error = ''
     validationError = null
     
@@ -1547,12 +1554,26 @@
           </p>
         </div>
         
+        <!-- Sync Status Warning -->
+        {#if isSyncing}
+          <div class="mb-4 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg flex items-start gap-3">
+            <RefreshCw class="h-5 w-5 text-blue-500 animate-spin mt-0.5" />
+            <div class="flex-1">
+              <p class="font-medium text-blue-600 dark:text-blue-400">Blockchain Syncing</p>
+              <p class="text-sm text-muted-foreground mt-1">
+                Mining is disabled while syncing. Progress: {syncProgress.toFixed(1)}% ({syncCurrentBlock.toLocaleString()} / {syncHighestBlock.toLocaleString()})
+              </p>
+              <Progress value={syncProgress} max={100} class="h-2 mt-2 [&>div]:bg-blue-500" />
+            </div>
+          </div>
+        {/if}
+
         <div class="flex gap-2">
           <Button
             size="lg"
             onclick={() => $miningState.isMining ? stopMining() : startMining()}
             class="min-w-[150px]"
-            disabled={isInvalid || !isGethRunning}
+            disabled={isInvalid || !isGethRunning || isSyncing}
           >
             {#if $miningState.isMining}
               <Pause class="h-4 w-4 mr-2" />
