@@ -984,8 +984,33 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory for download");
         let download_path = temp_dir.path().to_path_buf();
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts if other tests run in parallel
-        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), Some(31000..32000))
+        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), dht_service, Some(31000..32000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -1027,8 +1052,33 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory for download");
         let download_path = temp_dir.path().to_path_buf();
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts
-        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), Some(33000..34000))
+        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), dht_service, Some(33000..34000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -1058,8 +1108,33 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory");
         let file_path = create_test_file(temp_dir.path(), "seed_me.txt", "hello world seeding test");
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts
-        let handler = BitTorrentHandler::new_with_port_range(temp_dir.path().to_path_buf(), Some(32000..33000))
+        let handler = BitTorrentHandler::new_with_port_range(temp_dir.path().to_path_buf(), dht_service, Some(32000..33000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -1145,7 +1220,7 @@ mod tests {
         assert!(multiaddr_to_socket_addr(&multiaddr_udp).is_err());
 
         // Too short
-        let multiaddr_short: libp2p_core::Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
+        let multiaddr_short: Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
         assert!(multiaddr_to_socket_addr(&multiaddr_short).is_err());
 
         // Empty
