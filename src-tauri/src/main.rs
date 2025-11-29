@@ -855,36 +855,8 @@ async fn upload_file(
             )
             .await?;
 
-        // Store file data locally for seeding
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await; // Store the file locally for seeding
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name.clone(), file_data.clone())
-                .await;
-        }
-
-        // Register file with HTTP server for HTTP downloads
-        // IMPORTANT: Use merkle_root as the key, not file_hash!
-        // The DHT and downloads use merkle_root as the primary identifier
-        state
-            .http_server_state
-            .register_file(http_server::HttpFileMetadata {
-                hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
-                file_hash: file_hash.clone(),       // Use file_hash for storage path
-                name: file_name.clone(),
-                size: file_data.len() as u64,
-                encrypted: is_encrypted,
-            })
-            .await;
-
-        tracing::info!(
-            "Registered file with HTTP server: {} (merkle_root: {}, file_hash: {})",
-            file_name,
-            metadata.merkle_root,
-            file_hash
-        );
+        // Skip local storage - rely entirely on Bitswap for distribution
+        // HTTP downloads won't work from this peer, but P2P downloads will work via Bitswap
 
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
@@ -3545,8 +3517,102 @@ async fn upload_file_to_network(
                     }
                 }
             }
+            "Bitswap" => {
+                // Use streaming upload for Bitswap to handle large files
+                println!("📡 Using streaming Bitswap upload for protocol: {}", protocol_name);
+
+                let file_name = Path::new(&file_path)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&file_path);
+
+                // Inline streaming upload logic for Bitswap
+                use tokio::io::AsyncReadExt;
+
+                // Get file metadata without reading the entire file
+                let metadata = tokio::fs::metadata(&file_path)
+                    .await
+                    .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+                let file_size = metadata.len();
+
+                // For very large files, use a smaller chunk size to reduce memory pressure
+                let chunk_size = if file_size > 1024 * 1024 * 1024 { // > 1GB
+                    256 * 1024 // 256KB chunks
+                } else {
+                    1024 * 1024 // 1MB chunks
+                };
+
+                let total_chunks = ((file_size + chunk_size - 1) / chunk_size) as usize;
+
+                println!("📡 Starting Bitswap streaming upload: {} chunks of {} bytes each",
+                         total_chunks, chunk_size);
+
+                // Start streaming upload session
+                let upload_id = start_streaming_upload(file_name.to_string(), file_size, state.clone()).await?;
+
+                // Stream file in chunks
+                let mut file = tokio::fs::File::open(&file_path)
+                    .await
+                    .map_err(|e| format!("Failed to open file for streaming: {}", e))?;
+
+                let mut chunk_index = 0;
+                let mut buffer = vec![0u8; chunk_size as usize];
+
+                loop {
+                    let bytes_read = file.read(&mut buffer)
+                        .await
+                        .map_err(|e| format!("Failed to read chunk: {}", e))?;
+
+                    if bytes_read == 0 {
+                        break; // EOF
+                    }
+
+                    // Create chunk data (truncate if partial read)
+                    let chunk_data = if bytes_read < buffer.len() {
+                        buffer[..bytes_read].to_vec()
+                    } else {
+                        buffer.clone()
+                    };
+
+                    let is_last_chunk = chunk_index >= total_chunks - 1; // Use >= to handle edge cases
+
+                    // Send chunk
+                    let result = upload_file_chunk(
+                        upload_id.clone(),
+                        chunk_data,
+                        chunk_index as u32,
+                        is_last_chunk,
+                        state.clone()
+                    ).await?;
+
+                    // Progress logging for large files
+                    if chunk_index % 100 == 0 || is_last_chunk {
+                        println!("📊 Upload progress: {}/{} chunks ({:.1}%)",
+                                 chunk_index + 1, total_chunks,
+                                 (chunk_index + 1) as f64 / total_chunks as f64 * 100.0);
+                    }
+
+                    if is_last_chunk {
+                        if let Some(file_hash) = result {
+                            println!("✅ Bitswap streaming upload completed: {}", file_hash);
+                            return Ok(());
+                        } else {
+                            return Err("Upload completed but no file hash returned".to_string());
+                        }
+                    }
+
+                    chunk_index += 1;
+
+                    // Prevent too many concurrent operations
+                    if chunk_index % 50 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                }
+
+                return Ok(());
+            }
             _ => {
-                // WebRTC and Bitswap use the default Chiral flow
+                // WebRTC and other protocols use the default Chiral flow
                 println!("📡 Using Chiral network upload for protocol: {}", protocol_name);
             }
         }
@@ -4295,6 +4361,46 @@ async fn get_file_size(file_path: String) -> Result<u64, String> {
     Ok(metadata.len())
 }
 
+
+#[tauri::command]
+async fn create_temp_file_for_streaming(file_name: String) -> Result<String, String> {
+    let temp_dir = std::env::temp_dir().join("chiral_uploads");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp directory: {}", e))?;
+
+    // Create unique temp file path
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_nanos();
+    let temp_file_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
+
+    // Create empty file
+    fs::write(&temp_file_path, &[]).map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    Ok(temp_file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn append_chunk_to_temp_file(temp_file_path: String, chunk_data: Vec<u8>) -> Result<(), String> {
+    use tokio::fs::OpenOptions;
+    use tokio::io::AsyncWriteExt;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&temp_file_path)
+        .await
+        .map_err(|e| format!("Failed to open temp file for appending: {}", e))?;
+
+    file.write_all(&chunk_data).await
+        .map_err(|e| format!("Failed to append chunk to temp file: {}", e))?;
+
+    file.flush().await
+        .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn start_streaming_upload(
     file_name: String,
@@ -4350,10 +4456,15 @@ async fn upload_file_chunk(
         .get_mut(&upload_id)
         .ok_or_else(|| format!("Upload session {} not found", upload_id))?;
 
-    // Update hasher with chunk data and accumulate file data
+    // Update hasher with chunk data
     session.hasher.update(&chunk_data);
-    session.file_data.extend_from_slice(&chunk_data);
     session.received_chunks += 1;
+
+    // For large files, don't accumulate file data in memory
+    // Only accumulate for files <= 100MB
+    if session.file_size <= 100 * 1024 * 1024 {
+        session.file_data.extend_from_slice(&chunk_data);
+    }
 
     // Store chunk directly in Bitswap (if DHT is available)
     if let Some(dht) = state.dht.lock().await.as_ref() {
@@ -4441,26 +4552,11 @@ async fn upload_file_chunk(
             ed2k_sources: None,
         };
 
-        // Store complete file data locally for seeding
-        let complete_file_data = session.file_data.clone();
-        let file_name_for_storage = session.file_name.clone();
-
-        // Clean up session before storing file data
+        // Clean up session - rely entirely on Bitswap for distribution
+        // No local file storage needed since chunks are stored in Bitswap
         let file_hash = root_cid.to_string();
         upload_sessions.remove(&upload_id);
-
-        // Release the upload_sessions lock before the async operation
         drop(upload_sessions);
-
-        // Store file data in FileTransferService
-        let ft = {
-            let ft_guard = state.file_transfer.lock().await;
-            ft_guard.as_ref().cloned()
-        };
-        if let Some(ft) = ft {
-            ft.store_file_data(file_hash.clone(), file_name_for_storage, complete_file_data)
-                .await;
-        }
 
         // Add HTTP source information to metadata
         let mut metadata_with_http = metadata.clone();
@@ -6518,6 +6614,8 @@ fn main() {
             send_webrtc_file_request,
             get_webrtc_connection_status,
             disconnect_from_peer,
+            create_temp_file_for_streaming,
+            append_chunk_to_temp_file,
             start_streaming_upload,
             upload_file_chunk,
             cancel_streaming_upload,
