@@ -28,14 +28,7 @@ import DownloadRestartControls from '$lib/components/download/DownloadRestartCon
 // Import transfer events store for centralized transfer state management
 import {
   transferStore,
-  activeTransfers as storeActiveTransfers,
-  completedTransfers,
-  failedTransfers,
-  queuedTransfers,
-  formatBytes,
-  formatSpeed,
-  formatETA,
-  type Transfer
+  activeTransfers as storeActiveTransfers
 } from '$lib/stores/transferEventsStore'
 
   import { invoke } from '@tauri-apps/api/core'
@@ -535,7 +528,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           downloadedSize: transfer.downloadedBytes,
           totalChunks: transfer.totalChunks,
           completedChunks: transfer.completedChunks,
-          activeSourceCount: transfer.activeSources,
+          activeSources: transfer.activeSources,
           downloadSpeedBps: transfer.downloadSpeedBps,
           etaSeconds: transfer.etaSeconds,
           sourceAssignments: []
@@ -550,7 +543,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           existing.completedChunks = transfer.completedChunks;
           existing.downloadSpeedBps = transfer.downloadSpeedBps;
           existing.etaSeconds = transfer.etaSeconds;
-          existing.activeSourceCount = transfer.activeSources;
+          existing.activeSources = transfer.activeSources;
           multiSourceProgress = multiSourceProgress; // Trigger reactivity
         }
       }
@@ -563,7 +556,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         queued: $transferStore.queuedCount,
         completed: $transferStore.completedCount,
         failed: $transferStore.failedCount,
-        totalDownloadSpeed: formatSpeed($transferStore.totalDownloadSpeed)
+        totalDownloadSpeed: MultiSourceDownloadService.formatSpeed($transferStore.totalDownloadSpeed)
       });
     }
   }

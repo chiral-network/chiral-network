@@ -167,6 +167,40 @@
   let showEncryptionOptions = false;
 
   // Calculate price using dynamic network metrics with safe fallbacks
+  async function uploadFileStreamingToDisk(file: File) {
+    const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+    try {
+      // Create a temporary file path for streaming upload to disk
+      const tempFilePath = await invoke<string>("create_temp_file_for_streaming", {
+        fileName: file.name,
+      });
+
+      // Stream file to disk in chunks
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const buffer = await chunk.arrayBuffer();
+        const chunkData = Array.from(new Uint8Array(buffer));
+
+        // Append chunk to temp file
+        await invoke("append_chunk_to_temp_file", {
+          tempFilePath,
+          chunkData,
+        });
+      }
+
+      return tempFilePath;
+    } catch (error) {
+      console.error("Streaming upload to disk failed:", error);
+      throw error;
+    }
+  }
+
+
   async function calculateFilePrice(sizeInBytes: number): Promise<number> {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
 
@@ -623,18 +657,13 @@
               }
 
               try {
-                const buffer = await file.arrayBuffer();
-                const fileData = Array.from(new Uint8Array(buffer));
-                const tempFilePath = await invoke<string>(
-                  "save_temp_file_for_upload",
-                  {
-                    fileName: file.name,
-                    fileData,
-                  },
-                );
+                let metadata;
                 const filePrice = await calculateFilePrice(file.size);
 
-                const metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice);
+                // Use streaming upload for all protocols to avoid memory issues with large files
+                // All protocol handlers read from file paths on disk
+                const tempFilePath = await uploadFileStreamingToDisk(file);
+                metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice, selectedProtocol);
 
                 if (get(files).some((f) => f.hash === metadata.merkleRoot)) {
                   duplicateCount++;
