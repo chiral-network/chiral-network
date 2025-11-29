@@ -6213,6 +6213,7 @@ fn main() {
             enable_autorelay,
             Vec::new(), // preferred_relays
             is_bootstrap, // enable_relay_server
+            true, // enable_upnp
             Some(&async_blockstore_path),
         )
         .await

@@ -7,6 +7,7 @@ use super::traits::{
     ProtocolCapabilities, ProtocolError, ProtocolHandler, SeedOptions, SeedingInfo,
     SimpleProtocolHandler,
 };
+use crate::dht::DhtService;
 use crate::bittorrent_handler::BitTorrentHandler;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -39,21 +40,12 @@ struct DownloadState {
 
 impl BitTorrentProtocolHandler {
     /// Creates a new BitTorrent protocol handler
-    pub fn new(handler: Arc<BitTorrentHandler>) -> Self {
+    pub fn new(handler: Arc<BitTorrentHandler>) -> Self { // The handler is now passed in from main.rs
         Self {
             handler,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             seeding_files: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    /// Creates a new handler with a download directory
-    pub async fn with_download_directory(download_dir: PathBuf) -> Result<Self, ProtocolError> {
-        let handler = BitTorrentHandler::new(download_dir)
-            .await
-            .map_err(|e| ProtocolError::Internal(e.to_string()))?;
-
-        Ok(Self::new(Arc::new(handler)))
     }
 
     /// Extract info hash from magnet link

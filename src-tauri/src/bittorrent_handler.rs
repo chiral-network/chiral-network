@@ -229,20 +229,22 @@ impl BitTorrentHandler {
         dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
     ) -> Result<Self, BitTorrentError> {
-        Self::new_with_port_range_and_app_handle(download_directory, listen_port_range, None).await
+        Self::new_with_port_range_and_app_handle(download_directory, dht_service, listen_port_range, None).await
     }
 
     /// Creates a new BitTorrentHandler with AppHandle for TransferEventBus integration.
     pub async fn new_with_app_handle(
         download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
         app_handle: AppHandle,
     ) -> Result<Self, BitTorrentError> {
-        Self::new_with_port_range_and_app_handle(download_directory, None, Some(app_handle)).await
+        Self::new_with_port_range_and_app_handle(download_directory, dht_service, None, Some(app_handle)).await
     }
 
     /// Creates a new BitTorrentHandler with all options.
     pub async fn new_with_port_range_and_app_handle(
         download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
         app_handle: Option<AppHandle>,
     ) -> Result<Self, BitTorrentError> {
@@ -289,15 +291,14 @@ impl BitTorrentHandler {
 
         let handler = Self {
             rqbit_session: session.clone(),
-            dht_service: dht_service.clone(),
+            dht_service,
             download_directory: download_directory.clone(),
             active_torrents: Default::default(),
             peer_states: Default::default(),
             app_handle,
             event_bus,
         };
-
-
+        
         // Spawn the background task for statistics polling.
         handler.spawn_stats_poller();
 
@@ -305,14 +306,7 @@ impl BitTorrentHandler {
             "Initializing BitTorrentHandler with download directory: {:?}",
             handler.download_directory
         );
-        Ok(Self {
-            rqbit_session: session,
-            dht_service,
-            download_directory, // This was missing fields
-            active_torrents: Default::default(),
-            peer_states: Default::default(),
-            app_handle: None,
-        })
+        Ok(handler)
     }
 
     /// Spawns a background task to periodically poll for and process per-peer statistics.
@@ -435,7 +429,7 @@ impl BitTorrentHandler {
             })?
         };
 
-        let mut add_opts = AddTorrentOptions::default();
+        let add_opts = AddTorrentOptions::default();
 
         if let Some(hash) = info_hash {
             info!("Searching for Chiral peers for info_hash: {}", hash);
