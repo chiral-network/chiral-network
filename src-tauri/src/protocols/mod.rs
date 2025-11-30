@@ -20,8 +20,8 @@
 //! let mut manager = ProtocolManager::new();
 //!
 //! // Register handlers
-//! manager.register(Arc::new(HttpProtocolHandler::new()?));
-//! manager.register(Arc::new(BitTorrentProtocolHandler::with_download_directory(dir).await?));
+//! manager.register(Box::new(HttpProtocolHandler::new()?));
+//! manager.register(Box::new(BitTorrentProtocolHandler::with_download_directory(dir).await?));
 //!
 //! // Download a file
 //! let handle = manager.download(
@@ -55,14 +55,12 @@ pub use traits::{
     SimpleProtocolManager,
 };
 
-// Re-export detection types
-pub use detection::{DetectionPreferences, ProtocolDetector};
-
 use crate::protocols::seeding::{SeedingEntry, SeedingRegistry};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
+use detection::ProtocolDetector;
 
 // Re-export legacy trait with the old name for backward compatibility
 // This allows existing code like bittorrent_handler.rs to continue working
@@ -79,9 +77,10 @@ pub use ed2k::Ed2kProtocolHandler;
 ///
 /// Routes downloads and seeds to the appropriate handler based on the identifier.
 pub struct ProtocolManager {
-    handlers: Vec<std::sync::Arc<dyn ProtocolHandler>>,
+    handlers: Vec<Box<dyn ProtocolHandler>>,
     simple_handlers: Vec<std::sync::Arc<dyn SimpleProtocolHandler>>,
-    seeding_registry: SeedingRegistry,
+    seeding_registry: SeedingRegistry, // <-- ADDED
+    detector: ProtocolDetector, // <-- ADDED
 }
 
 impl ProtocolManager {
@@ -90,25 +89,15 @@ impl ProtocolManager {
         Self {
             handlers: Vec::new(),
             simple_handlers: Vec::new(),
-            seeding_registry: SeedingRegistry::new(),
+            seeding_registry: SeedingRegistry::new(), // <-- INITIALIZED
+            detector: ProtocolDetector::new(),   // <-- ADDED
         }
     }
 
     /// Registers an enhanced protocol handler
-    pub fn register(&mut self, handler: std::sync::Arc<dyn ProtocolHandler>) {
-        info!("Registering protocol handler: {}", handler.name());
+    pub fn register(&mut self, handler: Box<dyn ProtocolHandler>) {
+        info!("Registering protocol handler: {}", handler.name()); // <-- Added logging
         self.handlers.push(handler);
-    }
-
-    /// Create a protocol detector from current handlers
-    fn create_detector(&self) -> ProtocolDetector {
-        let mut detector_handlers: HashMap<String, std::sync::Arc<dyn ProtocolHandler>> = HashMap::new();
-
-        for handler in &self.handlers {
-            detector_handlers.insert(handler.name().to_string(), handler.clone());
-        }
-
-        ProtocolDetector::new(detector_handlers)
     }
 
     /// Finds a handler that supports the given identifier
@@ -332,66 +321,26 @@ impl ProtocolManager {
         Ok(hex::encode(hasher.finalize()))
     }
 
-    // =========================================================================
-    // --- Protocol Auto-Detection Methods (Task 4) ---
-    // =========================================================================
-
-    /// Detect all protocols that can handle the given identifier
-    ///
-    /// Returns a list of protocol names (e.g., "bittorrent", "http") that
-    /// support the given identifier.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let protocols = manager.detect_protocols("magnet:?xt=urn:btih:...");
-    /// // Returns: ["bittorrent"]
-    ///
-    /// let protocols = manager.detect_protocols("https://example.com/file.zip");
-    /// // Returns: ["http"]
-    /// ```
-    pub fn detect_protocols(&self, identifier: &str) -> Vec<String> {
-        info!("Detecting protocols for identifier: {}", identifier);
-        let detector = self.create_detector();
-        detector.detect_all(identifier)
+    /// Returns all protocols that can serve the file
+    pub async fn detect_protocols(&self, file_identifier: String) -> Vec<String> {
+        let mut map: HashMap<String, &dyn ProtocolHandler> = HashMap::new();
+        for handler in &self.handlers {
+            map.insert(handler.name().to_string(), handler.as_ref());
+        }
+    
+        self.detector.detect_all(&file_identifier, &map).await
     }
+    
 
-    /// Detect the best protocol for the given identifier based on preferences
-    ///
-    /// This method filters protocols by user preferences (encryption, seeding support, etc.)
-    /// and returns the highest priority protocol that matches all requirements.
-    ///
-    /// # Arguments
-    ///
-    /// * `identifier` - The file identifier (URL, magnet link, ed2k link, etc.)
-    /// * `preferences` - User preferences for filtering protocols
-    ///
-    /// # Returns
-    ///
-    /// The name of the best matching protocol, or `None` if no protocol matches.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use crate::protocols::DetectionPreferences;
-    ///
-    /// let prefs = DetectionPreferences {
-    ///     require_encryption: true,
-    ///     require_seeding: false,
-    ///     ..Default::default()
-    /// };
-    ///
-    /// let best = manager.detect_best_protocol("ed2k://|file|...", prefs);
-    /// ```
-    pub fn detect_best_protocol(
-        &self,
-        identifier: &str,
-        preferences: DetectionPreferences,
-    ) -> Option<String> {
-        info!("Detecting best protocol for identifier with preferences");
-        let detector = self.create_detector();
-        detector.detect_best(identifier, preferences)
-    }
+    /// Returns the best protocol for downloading the file
+    pub async fn detect_best_protocol(&self, file_identifier: String) -> Option<String> {
+        let mut map: HashMap<String, &dyn ProtocolHandler> = HashMap::new();
+        for handler in &self.handlers {
+            map.insert(handler.name().to_string(), handler.as_ref());
+        }
+    
+        self.detector.detect_best(&file_identifier, &map).await
+    }    
 }
 
 
