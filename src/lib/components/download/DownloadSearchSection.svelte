@@ -197,7 +197,7 @@
           try {
             // For now, we'll search using a placeholder - ideally we'd parse the torrent
             // to extract the info hash and search DHT. For simplicity, fall back to placeholder.
-            identifier = torrentFileName
+          identifier = torrentFileName
           } catch (error) {
             console.log('Failed to parse torrent file:', error)
             identifier = torrentFileName

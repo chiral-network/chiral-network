@@ -3485,13 +3485,23 @@ async fn upload_file_to_network(
                             }
                         };
 
+                        // Get the local peer ID to add as a seeder
+                        let local_peer_id = {
+                            let dht_guard = state.dht.lock().await;
+                            if let Some(dht) = dht_guard.as_ref() {
+                                Some(dht.get_peer_id().await)
+                            } else {
+                                None
+                            }
+                        };
+
                         let metadata = FileMetadata {
                             merkle_root: info_hash.clone().unwrap_or_else(|| file_hash.clone()), // Use info_hash as key for magnet link searches
                             is_root: true,
                             file_name: original_file_name.clone(),
                             file_size,
                             file_data: vec![], // Not stored for torrents
-                            seeders: vec![],
+                            seeders: local_peer_id.clone().map_or(vec![], |id| vec![id]),
                             created_at: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -3525,10 +3535,6 @@ async fn upload_file_to_network(
                                 // Don't fail the upload, just log the warning
                             }
                         }
-
-                        // Emit the published_file event to notify the frontend
-                        let payload = serde_json::json!(metadata);
-                        let _ = app.emit("published_file", payload);
 
                         return Ok(());
                     }
@@ -3570,13 +3576,23 @@ async fn upload_file_to_network(
                             }
                         };
 
+                        // Get the local peer ID to add as a seeder
+                        let local_peer_id = {
+                            let dht_guard = state.dht.lock().await;
+                            if let Some(dht) = dht_guard.as_ref() {
+                                Some(dht.get_peer_id().await)
+                            } else {
+                                None
+                            }
+                        };
+
                         let metadata = FileMetadata {
                             merkle_root: ed2k_hash.clone().unwrap_or_else(|| file_hash.clone()), // Use ED2K hash as key for ED2K link searches
                             is_root: true,
                             file_name: original_file_name.clone(),
                             file_size,
                             file_data: vec![],
-                            seeders: vec![],
+                            seeders: local_peer_id.clone().map_or(vec![], |id| vec![id]),
                             created_at: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -3617,11 +3633,6 @@ async fn upload_file_to_network(
                                 // Don't fail the upload, just log the warning
                             }
                         }
-
-
-                        // Emit the published_file event to notify the frontend
-                        let payload = serde_json::json!(metadata);
-                        let _ = app.emit("published_file", payload);
 
                         return Ok(());
                     }
@@ -3705,10 +3716,6 @@ async fn upload_file_to_network(
                                 // Don't fail the upload, just log the warning
                             }
                         }
-
-                        // Emit the published_file event to notify the frontend
-                        let payload = serde_json::json!(metadata);
-                        let _ = app.emit("published_file", payload);
 
                         return Ok(());
                     }

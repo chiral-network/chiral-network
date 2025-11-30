@@ -1396,11 +1396,9 @@
                       $coalescedFiles.reduce((sum, f) => sum + f.size, 0),
                     )}
                     {$t("upload.total")}
-                    {#if $coalescedFiles.some((f) => f.totalSeeders > 0)}
-                      <span class="text-green-600 font-medium">
-                        ({$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0)} {$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0) === 1 ? "seeder" : "seeders"})
-                      </span>
-                    {/if}
+                    <span class="text-green-600 font-medium">
+                      ({$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0)} {$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0) === 1 ? "seeder" : "seeders"})
+                    </span>
                   </p>
                   <p class="text-xs text-muted-foreground mt-1">
                     {$t("upload.tip")}
