@@ -67,9 +67,6 @@ pub struct FileMetadata {
     pub key_fingerprint: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<u32>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_hash: Option<String>,
 
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
