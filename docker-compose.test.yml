@@ -1,0 +1,147 @@
+version: '3.8'
+
+# Multi-peer test environment for E2E P2P file transfer validation
+# Simulates 3 network topologies:
+# 1. Public bootstrap node (relay server)
+# 2. Seeder behind NAT (uses AutoRelay)
+# 3. Downloader behind different NAT (uses AutoRelay + DCUtR)
+
+services:
+  # Bootstrap node - acts as public relay server
+  bootstrap:
+    build: .
+    container_name: chiral-bootstrap
+    environment:
+      - IS_BOOTSTRAP=true
+      - RUST_LOG=info,chiral_network=debug
+    command: >
+      /usr/local/bin/chiral-network
+      --headless
+      --dht-port 4001
+      --show-multiaddr
+      --is-bootstrap
+      --enable-relay-server
+      --relay-server-alias "DockerTestRelay"
+    networks:
+      public_net:
+        ipv4_address: 172.20.0.10
+    ports:
+      - "4001:4001"
+      - "8545:8545"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4001"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - bootstrap_data:/root/.chiral
+
+  # Seeder node - behind NAT, publishes files
+  seeder:
+    build: .
+    container_name: chiral-seeder
+    environment:
+      - RUST_LOG=info,chiral_network=debug
+      - SEEDER_MODE=true
+    command: >
+      /bin/sh -c "
+      sleep 5 &&
+      /usr/local/bin/chiral-network
+      --headless
+      --dht-port 4002
+      --show-multiaddr
+      --enable-autorelay
+      --preferred-relays /ip4/172.20.0.10/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE
+      "
+    networks:
+      nat_network_a:
+        ipv4_address: 172.21.0.11
+      public_net: # Need access to bootstrap
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    volumes:
+      - seeder_data:/root/.chiral
+      - ./test-files:/test-files:ro
+
+  # Downloader node - behind different NAT, downloads files
+  downloader:
+    build: .
+    container_name: chiral-downloader
+    environment:
+      - RUST_LOG=info,chiral_network=debug
+      - DOWNLOADER_MODE=true
+    command: >
+      /bin/sh -c "
+      sleep 8 &&
+      /usr/local/bin/chiral-network
+      --headless
+      --dht-port 4003
+      --show-multiaddr
+      --enable-autorelay
+      --preferred-relays /ip4/172.20.0.10/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE
+      "
+    networks:
+      nat_network_b:
+        ipv4_address: 172.22.0.12
+      public_net: # Need access to bootstrap
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    volumes:
+      - downloader_data:/root/.chiral
+      - ./downloads:/downloads
+
+  # Test orchestrator - runs automated E2E tests
+  test-runner:
+    image: curlimages/curl:latest
+    container_name: chiral-test-runner
+    networks:
+      - public_net
+    depends_on:
+      - bootstrap
+      - seeder
+      - downloader
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./test-results:/test-results
+    command: >
+      /bin/sh -c "
+      echo 'Waiting for network to stabilize...' &&
+      sleep 15 &&
+      /scripts/run-e2e-tests.sh
+      "
+
+networks:
+  public_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+    driver_opts:
+      com.docker.network.bridge.name: chiral_public
+
+  # Simulates NAT network A (seeder's network)
+  nat_network_a:
+    driver: bridge
+    internal: false  # Can reach public_net but not exposed externally
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+    driver_opts:
+      com.docker.network.bridge.name: chiral_nat_a
+
+  # Simulates NAT network B (downloader's network)
+  nat_network_b:
+    driver: bridge
+    internal: false
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+    driver_opts:
+      com.docker.network.bridge.name: chiral_nat_b
+
+volumes:
+  bootstrap_data:
+  seeder_data:
+  downloader_data:

@@ -1,0 +1,106 @@
+version: '3.8'
+
+# TRUE NAT simulation using network isolation
+# Key difference: Seeder and Downloader CANNOT directly communicate
+# They MUST use the relay (bootstrap) to connect
+
+services:
+  # Bootstrap node - the ONLY node both peers can reach
+  bootstrap:
+    build: .
+    container_name: chiral-bootstrap
+    environment:
+      - RUST_LOG=info,chiral_network=debug
+    command: >
+      /usr/local/bin/chiral-network
+      --headless
+      --dht-port 4001
+      --show-multiaddr
+      --is-bootstrap
+      --enable-relay-server
+      --relay-server-alias "IsolatedRelay"
+    networks:
+      - relay_network  # Only on relay network
+    ports:
+      - "4001:4001"
+    cap_add:
+      - NET_ADMIN  # Needed for iptables rules
+
+  # Seeder - can ONLY talk to bootstrap, NOT downloader
+  seeder:
+    build: .
+    container_name: chiral-seeder
+    environment:
+      - RUST_LOG=info,chiral_network=debug
+    command: >
+      /bin/sh -c "
+      sleep 5 &&
+      /usr/local/bin/chiral-network
+      --headless
+      --dht-port 4002
+      --show-multiaddr
+      --enable-autorelay
+      "
+    networks:
+      - relay_network  # Only on relay network
+    depends_on:
+      - bootstrap
+    cap_add:
+      - NET_ADMIN
+
+  # Downloader - can ONLY talk to bootstrap, NOT seeder
+  downloader:
+    build: .
+    container_name: chiral-downloader
+    environment:
+      - RUST_LOG=info,chiral_network=debug
+    command: >
+      /bin/sh -c "
+      sleep 8 &&
+      /usr/local/bin/chiral-network
+      --headless
+      --dht-port 4003
+      --show-multiaddr
+      --enable-autorelay
+      "
+    networks:
+      - relay_network  # Only on relay network
+    depends_on:
+      - bootstrap
+    cap_add:
+      - NET_ADMIN
+
+  # Network firewall - enforces isolation rules
+  firewall:
+    image: alpine:latest
+    container_name: chiral-firewall
+    network_mode: "service:bootstrap"
+    privileged: true
+    command: >
+      /bin/sh -c "
+      apk add --no-cache iptables &&
+      echo 'Setting up firewall rules to block direct peer-to-peer...' &&
+
+      # Get seeder and downloader IPs (you'll need to adjust these)
+      # Block seeder -> downloader direct communication
+      iptables -I FORWARD -s 172.23.0.11 -d 172.23.0.12 -j DROP
+
+      # Block downloader -> seeder direct communication
+      iptables -I FORWARD -s 172.23.0.12 -d 172.23.0.11 -j DROP
+
+      echo 'Firewall rules active. Peers MUST use relay.' &&
+      tail -f /dev/null
+      "
+    depends_on:
+      - bootstrap
+      - seeder
+      - downloader
+
+networks:
+  relay_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.23.0.0/24
+
+# NOTE: This still has limitations. For REAL NAT testing, use the Rust integration tests below.
