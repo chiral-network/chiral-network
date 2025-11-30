@@ -8,6 +8,7 @@ use super::traits::{
     SimpleProtocolHandler,
 };
 use crate::dht::DhtService;
+use crate::dht::DhtService;
 use crate::bittorrent_handler::BitTorrentHandler;
 use async_trait::async_trait;
 use std::collections::HashMap;
