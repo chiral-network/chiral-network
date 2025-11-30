@@ -157,148 +157,168 @@ export class P2PFileTransferService {
   private async tryConnectToSeeder(
     transfer: P2PTransfer,
     metadata: FileMetadata,
-    maxRetries: number = 3
+    maxRetries: number = 3,
+    preferredSeeders?: string[]
   ): Promise<void> {
-    // For WebRTC, we need to find the correct seeder from the file metadata
+    // For WebRTC, we need to find the correct seeders from the file metadata
     // metadata.seeders contains both libp2p peer IDs and WebSocket client IDs
-    // We need to find which one is a WebSocket client ID by checking if it's in the connected peers list
-    const availablePeers = this.signalingService.peers;
-    let peersList: string[] = [];
+    // We need to find which ones are WebSocket client IDs by checking if they're in the connected peers list
+    let availableSeeders = preferredSeeders;
 
-    // Subscribe to peers list
-    const unsubscribe = availablePeers.subscribe(peers => {
-      peersList = peers;
-    });
+    if (!availableSeeders) {
+      const availablePeers = this.signalingService.peers;
+      let peersList: string[] = [];
 
-    // Find a seeder that is currently connected via WebSocket
-    const seederId = metadata.seeders?.find(seeder => peersList.includes(seeder));
+      // Subscribe to peers list
+      const unsubscribe = availablePeers.subscribe((peers) => {
+        peersList = peers;
+      });
+
+      // Filter seeders that are currently connected via WebSocket
+      availableSeeders =
+        metadata.seeders?.filter((seeder) => peersList.includes(seeder)) || [];
+
+      unsubscribe();
+    }
 
     // If no matching seeder found in connected peers, fail immediately
-    if (!seederId) {
-      unsubscribe();
+    if (!availableSeeders || availableSeeders.length === 0) {
       transfer.status = "failed";
-      transfer.error = `No WebRTC seeder online for this file. File seeders: ${metadata.seeders?.join(', ') || 'none'}. Connected peers: ${peersList.join(', ') || 'none'}`;
+      const connectedPeersMessage = preferredSeeders?.length
+        ? preferredSeeders.join(", ")
+        : "none";
+      transfer.error = `No WebRTC seeder online for this file. File seeders: ${metadata.seeders?.join(', ') || 'none'}. Connected peers: ${connectedPeersMessage}`;
       this.notifyProgress(transfer);
       return;
     }
 
-    console.log(`Found WebRTC seeder for file ${metadata.fileHash}: ${seederId}`);
-    unsubscribe();
+    transfer.currentSeederIndex = transfer.currentSeederIndex ?? 0;
+    transfer.retryCount = transfer.retryCount ?? 0;
 
-    const maxSeederIndex = 1; // We'll only try the first peer for now
+    const maxSeeders = availableSeeders.length;
+    const seederId = availableSeeders[transfer.currentSeederIndex % maxSeeders];
 
-    while (
-      transfer.currentSeederIndex! < maxSeederIndex &&
-      transfer.retryCount! < maxRetries
-    ) {
+    console.log(
+      `Attempting WebRTC connection to seeder ${seederId} (index ${transfer.currentSeederIndex! + 1}/${maxSeeders})`
+    );
 
-      try {
-        transfer.status = "connecting";
-        transfer.lastError = undefined;
-        this.notifyProgress(transfer);
+    try {
+      transfer.status = "connecting";
+      transfer.lastError = undefined;
+      this.notifyProgress(transfer);
 
-        // Create WebRTC session for this seeder
-        const webrtcSession = createWebRTCSession({
-          isInitiator: true,
-          peerId: seederId,
-          onLocalIceCandidate: (_candidate) => {
-            // ICE candidates are handled by the backend WebRTC coordination
-            console.log("ICE candidate generated for peer:", seederId);
-          },
-          signaling: this.signalingService,
-          onConnectionStateChange: (state) => {
-            if (state === "connected") {
-              transfer.status = "transferring";
-              transfer.retryCount = 0; // Reset retry count on successful connection
-              this.notifyProgress(transfer);
-              this.startFileTransfer(transfer, metadata);
-            } else if (state === "failed" || state === "disconnected") {
-              this.handleConnectionFailure(
-                transfer,
-                metadata,
-                `WebRTC connection ${state}`
-              );
-            }
-          },
-          onDataChannelOpen: () => {},
-          onMessage: async (data) => {
-            await this.handleIncomingChunk(transfer, data);
-          },
-          onError: (error) => {
-            console.error("WebRTC error:", error);
+      // Create WebRTC session for this seeder
+      const webrtcSession = createWebRTCSession({
+        isInitiator: true,
+        peerId: seederId,
+        onLocalIceCandidate: (_candidate) => {
+          // ICE candidates are handled by the backend WebRTC coordination
+          console.log("ICE candidate generated for peer:", seederId);
+        },
+        signaling: this.signalingService,
+        onConnectionStateChange: (state) => {
+          if (state === "connected") {
+            transfer.status = "transferring";
+            transfer.retryCount = 0; // Reset retry count on successful connection
+            this.notifyProgress(transfer);
+            this.startFileTransfer(transfer, metadata);
+          } else if (state === "failed" || state === "disconnected") {
             this.handleConnectionFailure(
               transfer,
               metadata,
-              "WebRTC connection error"
-            );
-          },
-        });
-
-        transfer.webrtcSession = webrtcSession;
-        this.webrtcSessions.set(seederId, webrtcSession);
-
-        // Create offer - signaling service will automatically send it to the peer
-        try {
-          // createOffer() both creates and sends the offer via signaling
-          await Promise.race([
-            webrtcSession.createOffer(),
-            this.createTimeoutPromise(10000, "WebRTC offer creation timeout"),
-          ]);
-
-          console.log("Created and sent WebRTC offer to seeder:", seederId);
-          console.log("Waiting for answer via signaling...");
-
-          // Wait for connection to establish via signaling (answer will come back automatically)
-          await Promise.race([
-            this.waitForConnection(webrtcSession, 15000),
-            this.createTimeoutPromise(
-              15000,
-              "WebRTC connection establishment timeout"
-            ),
-          ]);
-
-          console.log("WebRTC connection established with peer:", seederId);
-        } catch (error) {
-          console.error(
-            `Failed to establish WebRTC connection with ${seederId}:`,
-            error
-          );
-          webrtcSession.close();
-          this.webrtcSessions.delete(seederId);
-
-          if (
-            error === "WebRTC offer creation timeout" ||
-            error === "WebRTC connection establishment timeout"
-          ) {
-            this.handleConnectionFailure(transfer, metadata, error as string);
-          } else {
-            this.handleConnectionFailure(
-              transfer,
-              metadata,
-              `WebRTC setup failed: ${error}`
+              `WebRTC connection ${state}`,
+              availableSeeders,
+              maxRetries
             );
           }
-        }
-      } catch (error) {
-        console.error(`Failed to connect to seeder ${seederId}:`, error);
-        this.handleConnectionFailure(
-          transfer,
-          metadata,
-          `Connection failed: ${error}`
-        );
-      }
-    }
+        },
+        onDataChannelOpen: () => {},
+        onMessage: async (data) => {
+          await this.handleIncomingChunk(transfer, data);
+        },
+        onError: (error) => {
+          console.error("WebRTC error:", error);
+          this.handleConnectionFailure(
+            transfer,
+            metadata,
+            "WebRTC connection error",
+            availableSeeders,
+            maxRetries
+          );
+        },
+      });
 
-    // No seeders connected successfully
-    transfer.status = "failed";
-    transfer.error = "Could not connect to any seeders after retries";
-    this.notifyProgress(transfer);
+      transfer.webrtcSession = webrtcSession;
+      this.webrtcSessions.set(seederId, webrtcSession);
+
+      // Create offer - signaling service will automatically send it to the peer
+      try {
+        // createOffer() both creates and sends the offer via signaling
+        await Promise.race([
+          webrtcSession.createOffer(),
+          this.createTimeoutPromise(10000, "WebRTC offer creation timeout"),
+        ]);
+
+        console.log("Created and sent WebRTC offer to seeder:", seederId);
+        console.log("Waiting for answer via signaling...");
+
+        // Wait for connection to establish via signaling (answer will come back automatically)
+        await Promise.race([
+          this.waitForConnection(webrtcSession, 15000),
+          this.createTimeoutPromise(
+            15000,
+            "WebRTC connection establishment timeout"
+          ),
+        ]);
+
+        console.log("WebRTC connection established with peer:", seederId);
+      } catch (error) {
+        console.error(
+          `Failed to establish WebRTC connection with ${seederId}:`,
+          error
+        );
+        webrtcSession.close();
+        this.webrtcSessions.delete(seederId);
+
+        if (
+          error === "WebRTC offer creation timeout" ||
+          error === "WebRTC connection establishment timeout"
+        ) {
+          this.handleConnectionFailure(
+            transfer,
+            metadata,
+            error as string,
+            availableSeeders,
+            maxRetries
+          );
+        } else {
+          this.handleConnectionFailure(
+            transfer,
+            metadata,
+            `WebRTC setup failed: ${error}`,
+            availableSeeders,
+            maxRetries
+          );
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to connect to seeder ${seederId}:`, error);
+      this.handleConnectionFailure(
+        transfer,
+        metadata,
+        `Connection failed: ${error}`,
+        availableSeeders,
+        maxRetries
+      );
+    }
   }
 
   private handleConnectionFailure(
     transfer: P2PTransfer,
     metadata: FileMetadata,
-    error: string
+    error: string,
+    availableSeeders?: string[],
+    maxRetries: number = 5
   ): void {
     transfer.lastError = error;
     transfer.retryCount = (transfer.retryCount || 0) + 1;
@@ -322,15 +342,21 @@ export class P2PFileTransferService {
     // Try next seeder
     transfer.currentSeederIndex = (transfer.currentSeederIndex || 0) + 1;
 
-    const maxRetries = 5; // Increased from 3
-    const maxSeeders = transfer.seeders.length;
+    const maxSeeders = availableSeeders?.length || transfer.seeders.length;
 
     if (transfer.currentSeederIndex! < maxSeeders) {
       // Continue trying other seeders
-      console.log(`Trying next seeder (${transfer.currentSeederIndex}/${maxSeeders})`);
+      console.log(
+        `Trying next seeder (${transfer.currentSeederIndex}/${maxSeeders})`
+      );
       transfer.status = "retrying";
       this.notifyProgress(transfer);
-      this.tryConnectToSeeder(transfer, metadata);
+      this.tryConnectToSeeder(
+        transfer,
+        metadata,
+        maxRetries,
+        availableSeeders
+      );
     } else if (transfer.retryCount! < maxRetries) {
       // Reset to first seeder and retry
       transfer.currentSeederIndex = 0;
