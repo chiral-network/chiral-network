@@ -52,6 +52,9 @@ export interface FileItem {
   totalChunks?: number;
   downloadStartTime?: number;
   price: number; // Price in Chiral for this file
+  version?: number;
+  isDownload?: boolean;
+  isSeedingDownload?: boolean;
   protocol?: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
 }
 

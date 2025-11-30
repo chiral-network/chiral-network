@@ -325,11 +325,31 @@ export class WalletService {
             timestamp: number;
             status: string;
             tx_type: string;
-            gas_used: string | null;
-            gas_price: string | null;
-          }>
-        >,
+          gas_used: string | null;
+          gas_price: string | null;
+        }>
+      >,
       ]);
+
+      // If backend returns no history but we already have imported history, keep existing
+      const existingTxs = get(transactions);
+      if (txHistory.length === 0 && blocks.length === 0 && existingTxs.length > 0) {
+        transactionPagination.update((state) => ({
+          ...state,
+          accountAddress,
+          oldestBlockScanned: currentBlock,
+          hasMore: true,
+          isLoading: false,
+        }));
+        miningPagination.update((state) => ({
+          ...state,
+          accountAddress,
+          oldestBlockScanned: currentBlock,
+          hasMore: true,
+          isLoading: false,
+        }));
+        return;
+      }
 
       // Update total count AND rewards together to keep them consistent
       // During active mining, don't override with potentially inconsistent scan data
@@ -533,7 +553,17 @@ export class WalletService {
         .filter((tx) => tx.status === "pending" && tx.type === "sent")
         .reduce((sum, tx) => sum + tx.amount, 0);
 
-      // Use real balance from Geth (no fallback - if Geth says 0, show 0)
+      const prevWallet = get(wallet);
+
+      // If geth returns zero but we already have a non-zero balance and history,
+      // avoid clobbering the imported snapshot until real data is available.
+      // If geth returns zero but we already have a non-zero balance (e.g., from an imported snapshot),
+      // avoid clobbering it until real data is available.
+      if (realBalance === 0 && prevWallet.actualBalance > 0) {
+        return;
+      }
+
+      // Use real balance from Geth (no fallback - if Geth says 0, show 0 unless guarded above)
       const actualBalance = realBalance;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
       wallet.update((current) => ({
