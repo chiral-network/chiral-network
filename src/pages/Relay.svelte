@@ -220,7 +220,9 @@
         await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
 
         // Attempt to connect to best relay if AutoRelay is enabled
-        if (autoRelayEnabled && dhtIsRunning) {
+        const stats = get(relayErrorService.relayStats);
+        const hasRelays = stats.totalRelays > 0;
+        if (autoRelayEnabled && dhtIsRunning && hasRelays) {
           try {
             const result = await relayErrorService.connectToRelay();
             if (result.success) {
@@ -231,6 +233,8 @@
           } catch (error) {
             console.error('Error connecting to relay:', error);
           }
+        } else if (autoRelayEnabled && !hasRelays) {
+          console.info('AutoRelay enabled but no preferred relays configured; skipping relay connection attempt.');
         }
       }
     })();
