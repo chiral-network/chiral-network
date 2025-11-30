@@ -77,6 +77,9 @@ pub struct BootstrapNodeHealth {
     pub reachable: bool,
     pub latency_ms: Option<u64>,
     pub error: Option<String>,
+    pub consecutive_failures: u32,    // NEW: Track failure streaks
+    pub last_success: Option<u64>,    // NEW: Timestamp of last successful check
+    pub last_checked: Option<u64>,    // NEW: Timestamp of last check attempt
 }
 
 pub struct BootstrapHealthReport {
@@ -84,6 +87,17 @@ pub struct BootstrapHealthReport {
     pub reachable_nodes: usize,
     pub unreachable_nodes: usize,
     pub nodes: Vec<BootstrapNodeHealth>,
+    pub healthy: bool,                 // NEW: Overall health flag
+    pub recommendation: String,        // NEW: Human-readable recommendation
+    pub timestamp: u64,                // NEW: Report generation timestamp
+}
+
+/// Configuration for retry behavior
+pub struct RetryConfig {
+    pub max_attempts: u32,
+    pub initial_delay_ms: u64,
+    pub max_delay_ms: u64,
+    pub backoff_multiplier: f64,
 }
 ```
 
@@ -93,6 +107,46 @@ pub struct BootstrapHealthReport {
 - `check_bootstrap_node_health()` - TCP health check with 5s timeout
 - `check_all_bootstrap_nodes()` - Parallel health check of all nodes
 - `get_healthy_bootstrap_enode_string()` - Returns comma-separated healthy enodes
+- `start_bootstrap_monitor()` - **NEW**: Starts background health monitoring task
+- `get_cached_health_report()` - **NEW**: Returns cached health report without re-checking
+- `clear_bootstrap_cache()` - **NEW**: Clears the cached health report
+
+**Environment Variable Override**:
+
+You can override the default bootstrap nodes using the `CHIRAL_BOOTSTRAP_NODES` environment variable:
+
+```bash
+# Set custom bootstrap nodes (comma-separated enode URLs)
+export CHIRAL_BOOTSTRAP_NODES="enode://abc123...@192.168.1.100:30303,enode://def456...@192.168.1.101:30303"
+```
+
+**Background Health Monitoring**:
+
+The `start_bootstrap_monitor()` function starts a background task that periodically checks bootstrap node health:
+
+```rust
+// Start background monitoring (checks every 30 seconds by default)
+let monitor_handle = start_bootstrap_monitor(30).await;
+
+// Get the latest cached report without triggering a new check
+let report = get_cached_health_report().await;
+
+// Clear cache to force fresh check on next request
+clear_bootstrap_cache().await;
+```
+
+**Retry Logic**:
+
+Health checks now include configurable retry logic with exponential backoff:
+
+```rust
+let retry_config = RetryConfig {
+    max_attempts: 3,
+    initial_delay_ms: 1000,
+    max_delay_ms: 5000,
+    backoff_multiplier: 2.0,
+};
+```
 
 **Health Check Algorithm**:
 1. Parse enode to extract IP:port
