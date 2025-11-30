@@ -27,8 +27,8 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
     import KeyboardShortcutsPanel from './lib/components/KeyboardShortcutsPanel.svelte';
     import CommandPalette from './lib/components/CommandPalette.svelte';
-    import { startNetworkMonitoring } from './lib/services/networkService';
-    import { startGethMonitoring, gethStatus } from './lib/services/gethService';
+import { startNetworkMonitoring } from './lib/services/networkService';
+import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
@@ -169,6 +169,7 @@ function handleFirstRunComplete() {
     let unlistenSeederPayment: (() => void) | null = null;
     let unlistenTorrentPayment: (() => void) | null = null;
     let transferEventsUnsubscribe: (() => void) | null = null;
+    let unsubscribeGethStatus: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
     syncBandwidthScheduler(get(settings));
@@ -187,6 +188,22 @@ function handleFirstRunComplete() {
       await paymentService.initialize();
       // Initialize wallet service early so imports/polls populate balance/tx history
       await walletService.initialize();
+
+      // When geth starts running, immediately sync wallet state (balance + txs)
+      unsubscribeGethStatus = gethStatus.subscribe(async (status) => {
+        if (status === 'running') {
+          try {
+            const hasAccount = await invoke<boolean>('has_active_account');
+            if (hasAccount) {
+              await walletService.refreshTransactions();
+              await walletService.refreshBalance();
+              walletService.startProgressiveLoading();
+            }
+          } catch (err) {
+            console.warn('Failed to sync wallet after geth start:', err);
+          }
+        }
+      });
 
       // Listen for payment notifications from backend
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
@@ -336,6 +353,7 @@ function handleFirstRunComplete() {
                   // Now sync from blockchain
                   await walletService.refreshTransactions();
                   await walletService.refreshBalance();
+                  walletService.startProgressiveLoading();
                 } catch (error) {
                   console.error('Failed to restore account from backend:', error);
                 }
@@ -579,6 +597,9 @@ function handleFirstRunComplete() {
       window.removeEventListener("keydown", handleKeyDown);
       stopNetworkMonitoring();
       stopGethMonitoring();
+      if (unsubscribeGethStatus) {
+        unsubscribeGethStatus();
+      }
       if (schedulerRunning) {
         bandwidthScheduler.stop();
         schedulerRunning = false;

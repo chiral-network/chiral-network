@@ -3,7 +3,7 @@
   import Button from '$lib/components/ui/button.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import MnemonicWizard from './MnemonicWizard.svelte'
-  import { etcAccount, wallet, miningState } from '$lib/stores'
+  import { etcAccount, wallet, miningState, transactions } from '$lib/stores'
   import { showToast } from '$lib/toast'
   import { t } from 'svelte-i18n'
   import { onMount } from 'svelte'
@@ -17,6 +17,7 @@
   let activeCard: 'create' | 'import' = 'create'
   let importPrivateKey = ''
   let isImportingAccount = false
+  let importedSnapshot: any = null
 
   onMount(() => {
     // Wizard initialization
@@ -77,6 +78,11 @@
     mode = 'welcome'
   }
 
+  const msg = (key: string, fallback: string) => {
+    const val = $t(key);
+    return val === key ? fallback : val;
+  }
+
   async function loadPrivateKeyFromFile() {
     try {
       const fileInput = document.createElement('input')
@@ -94,15 +100,28 @@
           const extractedPrivateKey = accountData.privateKey ?? accountData.private_key
 
           if (!extractedPrivateKey) {
-            showToast($t('account.firstRun.importFileInvalid') ?? 'Invalid wallet file (missing privateKey)', 'error')
+            showToast(msg('account.firstRun.importFileInvalid', 'Invalid wallet file (missing private key)'), 'error')
             return
           }
 
           importPrivateKey = extractedPrivateKey
-          showToast($t('account.firstRun.importFileLoaded') ?? 'Loaded private key from file', 'success')
+          importedSnapshot = accountData
+          // If the export contains prior balance/tx info, hydrate UI immediately
+          if (typeof accountData.balance === 'number') {
+            wallet.update(w => ({ ...w, balance: accountData.balance, actualBalance: accountData.balance }))
+          }
+          if (Array.isArray(accountData.transactions)) {
+            const hydrated = accountData.transactions.map((tx: any) => ({
+              ...tx,
+              date: tx.date ? new Date(tx.date) : new Date()
+            }))
+            transactions.set(hydrated)
+          }
+
+          showToast(msg('account.firstRun.importFileLoaded', 'Wallet file loaded. Ready to import.'), 'success')
         } catch (error) {
           console.error('Error reading wallet file', error)
-          showToast($t('account.firstRun.importFileError') ?? `Error reading file: ${String(error)}`, 'error')
+          showToast(msg('account.firstRun.importFileError', `Error reading wallet file: ${String(error)}`), 'error')
         }
       }
 
@@ -133,6 +152,19 @@
         ? importPrivateKey.trim()
         : `0x${importPrivateKey.trim()}`
       const account = await walletService.importAccount(normalized)
+      // If we loaded a snapshot from file, hydrate wallet/txs immediately
+      if (importedSnapshot) {
+        if (typeof importedSnapshot.balance === 'number') {
+          wallet.update(w => ({ ...w, balance: importedSnapshot.balance, actualBalance: importedSnapshot.balance }))
+        }
+        if (Array.isArray(importedSnapshot.transactions)) {
+          const hydrated = importedSnapshot.transactions.map((tx: any) => ({
+            ...tx,
+            date: tx.date ? new Date(tx.date) : new Date()
+          }))
+          transactions.set(hydrated)
+        }
+      }
       wallet.update(w => ({
         ...w,
         address: account.address,
@@ -143,12 +175,13 @@
       await walletService.refreshBalance()
       walletService.startProgressiveLoading()
       importPrivateKey = ''
-      showToast($t('account.firstRun.importSuccess') ?? 'Wallet imported successfully', 'success')
+      importedSnapshot = null
+      showToast(msg('account.firstRun.importSuccess', 'Wallet imported successfully'), 'success')
       activeCard = 'create'
       onComplete()
     } catch (error) {
       console.error('Failed to import wallet', error)
-      showToast($t('account.firstRun.importError') ?? 'Failed to import wallet', 'error')
+      showToast(msg('account.firstRun.importError', 'Failed to import wallet'), 'error')
     } finally {
       isImportingAccount = false
     }
