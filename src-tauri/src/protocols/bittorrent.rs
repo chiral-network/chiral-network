@@ -9,6 +9,7 @@ use super::traits::{
     SimpleProtocolHandler,
 };
 use crate::bittorrent_handler::BitTorrentHandler;
+use crate::dht::DhtService;
 use crate::transfer_events::{
     current_timestamp_ms, DisconnectReason, ErrorCategory, PauseReason,
     SourceConnectedEvent, SourceDisconnectedEvent, SourceInfo, SourceSummary,
