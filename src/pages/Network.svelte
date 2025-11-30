@@ -1676,12 +1676,12 @@
                   <div class="mt-2 flex flex-wrap gap-2">
                     {#each dhtHealth.observedAddrs as addr}
                       <button
-                        class="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-mono hover:bg-muted/80"
+                        class="inline-flex max-w-full items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-mono hover:bg-muted/80"
                         on:click={() => copyObservedAddr(addr)}
                         type="button"
                       >
-                        {addr}
-                        <Clipboard class="h-3 w-3" />
+                        <span class="break-all text-left">{addr}</span>
+                        <Clipboard class="h-3 w-3 flex-shrink-0" />
                       </button>
                     {/each}
                   </div>
@@ -1691,7 +1691,7 @@
               </div>
               <div>
                 <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.lastError')}</p>
-                <p class="mt-2 text-sm text-muted-foreground">{dhtHealth?.lastReachabilityError ?? tr('network.dht.health.none')}</p>
+                <p class="mt-2 break-all text-sm text-muted-foreground">{dhtHealth?.lastReachabilityError ?? tr('network.dht.health.none')}</p>
               </div>
             </div>
 
@@ -1712,7 +1712,7 @@
                         <tr class="border-t border-muted/30">
                           <td class="px-3 py-2">{formatNatTimestamp(item.timestamp)}</td>
                           <td class="px-3 py-2">{formatReachabilityState(item.state)}</td>
-                          <td class="px-3 py-2 text-muted-foreground">{item.summary ?? '—'}</td>
+                          <td class="px-3 py-2 break-words text-muted-foreground">{item.summary ?? '—'}</td>
                         </tr>
                       {/each}
                     </tbody>
@@ -2498,4 +2498,3 @@
     </div>
   </Card>
 </div>
-
