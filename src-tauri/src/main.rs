@@ -4502,6 +4502,35 @@ async fn append_chunk_to_temp_file(temp_file_path: String, chunk_data: Vec<u8>) 
 }
 
 #[tauri::command]
+async fn copy_file_to_temp(file_path: String) -> Result<String, String> {
+    use std::path::Path;
+    use tokio::fs;
+
+    let temp_dir = std::env::temp_dir().join("chiral_uploads");
+    fs::create_dir_all(&temp_dir).await
+        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+
+    // Get original file name
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+
+    // Create unique temp file path
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_nanos();
+    let temp_file_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
+
+    // Copy the original file to temp location
+    fs::copy(&file_path, &temp_file_path).await
+        .map_err(|e| format!("Failed to copy file to temp location: {}", e))?;
+
+    Ok(temp_file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 async fn start_streaming_upload(
     file_name: String,
     file_size: u64,
@@ -7050,6 +7079,7 @@ fn main() {
             disconnect_from_peer,
             create_temp_file_for_streaming,
             append_chunk_to_temp_file,
+            copy_file_to_temp,
             start_streaming_upload,
             upload_file_chunk,
             cancel_streaming_upload,
