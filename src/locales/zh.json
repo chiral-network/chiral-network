@@ -455,6 +455,12 @@
       "noDetails": "没有可用的待处理交易详情。",
       "count": "{count} 笔待处理交易",
       "none": "无待处理交易"
+    },
+    "fees": {
+      "low": "低",
+      "market": "市场",
+      "fast": "快",
+      "estimated": "预估费用"
     }
   },
   "transactions": {
@@ -1456,6 +1462,14 @@
     "blocks": {
       "latest": "最新区块",
       "noBlocks": "未找到区块"
+    },
+    "sync": {
+      "syncing": "同步中",
+      "current": "当前区块",
+      "highest": "最高区块",
+      "remaining": "剩余",
+      "eta": "预计时间",
+      "complete": "同步完成"
     },
     "search": {
       "title": "搜索区块链",

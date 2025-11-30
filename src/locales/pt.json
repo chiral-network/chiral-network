@@ -570,6 +570,12 @@
       "noDetails": "Nenhum detalhe de transação pendente disponível.",
       "count": "{count, plural, one {# Transação Pendente} other {# Transações Pendentes}}",
       "none": "Transações Pendentes"
+    },
+    "fees": {
+      "low": "Baixa",
+      "market": "Mercado",
+      "fast": "Rápida",
+      "estimated": "Taxa estimada"
     }
   },
   "transactions": {
@@ -1562,6 +1568,14 @@
     "blocks": {
       "latest": "Blocos recentes",
       "noBlocks": "Nenhum bloco encontrado"
+    },
+    "sync": {
+      "syncing": "Sincronizando",
+      "current": "Bloco atual",
+      "highest": "Bloco mais alto",
+      "remaining": "Restante",
+      "eta": "ETA",
+      "complete": "Sincronização completa"
     },
     "search": {
       "title": "Pesquisar na blockchain",

@@ -23,7 +23,7 @@
   import { walletService } from '$lib/wallet';
   import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte';
   import { showToast } from '$lib/toast';
-  import { gethSyncStatus, updateSyncStatus as updateGethSyncStatus } from '$lib/services/gethService';
+  import { gethSyncStatus } from '$lib/services/gethService';
   type TranslateParams = { values?: Record<string, unknown>; default?: string };
   // const tr = (key: string, params?: TranslateParams) => get(t)(key, params);
   const tr = (key: string, params?: TranslateParams): string =>

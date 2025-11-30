@@ -178,7 +178,6 @@ function handleFirstRunComplete() {
       // Subscribe to transfer events from backend
       try {
         transferEventsUnsubscribe = await subscribeToTransferEvents();
-        console.log('✅ Transfer events subscription active');
       } catch (error) {
         console.warn('Failed to subscribe to transfer events:', error);
       }

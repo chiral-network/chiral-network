@@ -569,6 +569,12 @@
       "noDetails": "কোনো অপেক্ষমাণ লেনদেনের বিস্তারিত নেই।",
       "count": "{count, plural, one {# Pending Transaction} other {# Pending Transactions}}",
       "none": "Pending Transactions"
+    },
+    "fees": {
+      "low": "কম",
+      "market": "বাজার",
+      "fast": "দ্রুত",
+      "estimated": "আনুমানিক ফি"
     }
   },
   "transactions": {
@@ -1561,6 +1567,14 @@
     "blocks": {
       "latest": "সর্বশেষ ব্লক",
       "noBlocks": "কোনো ব্লক পাওয়া যায়নি"
+    },
+    "sync": {
+      "syncing": "সিঙ্ক হচ্ছে",
+      "current": "বর্তমান ব্লক",
+      "highest": "সর্বোচ্চ ব্লক",
+      "remaining": "অবশিষ্ট",
+      "eta": "আনুমানিক সময়",
+      "complete": "সিঙ্ক সম্পন্ন"
     },
     "search": {
       "title": "ব্লকচেইনে অনুসন্ধান করুন",

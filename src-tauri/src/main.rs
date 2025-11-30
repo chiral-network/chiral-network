@@ -470,10 +470,6 @@ async fn create_and_seed_torrent(
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    println!(
-        "Received create_and_seed_torrent command for: {}",
-        file_path
-    );
     // Use the BitTorrent handler directly to create and seed the torrent
     state.bittorrent_handler.seed(&file_path).await
 }
@@ -873,8 +869,48 @@ async fn upload_file(
             )
             .await?;
 
-        dht.publish_file(metadata.clone(), None).await?;
-        Ok(metadata)
+        // Store file data locally for seeding
+        let ft = {
+            let ft_guard = state.file_transfer.lock().await; // Store the file locally for seeding
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = ft {
+            ft.store_file_data(file_hash.clone(), file_name.clone(), file_data.clone())
+                .await;
+        }
+
+        // Register file with HTTP server for HTTP downloads
+        // IMPORTANT: Use merkle_root as the key, not file_hash!
+        // The DHT and downloads use merkle_root as the primary identifier
+        state
+            .http_server_state
+            .register_file(http_server::HttpFileMetadata {
+                hash: metadata.merkle_root.clone(), // Use merkle_root for lookups
+                file_hash: file_hash.clone(),       // Use file_hash for storage path
+                name: file_name.clone(),
+                size: file_data.len() as u64,
+                encrypted: is_encrypted,
+            })
+            .await;
+
+        // Add HTTP source information to metadata
+        let mut metadata_with_http = metadata.clone();
+        if let Some(http_addr) = *state.http_server_addr.lock().await {
+            use chiral_network::download_source::HttpSourceInfo;
+            // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
+            let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
+            metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
+                url: url.clone(),
+                auth_header: None,
+                verify_ssl: true,
+                headers: None,
+                timeout_secs: None,
+            }]);
+            tracing::info!("Added HTTP source to metadata: {}", url);
+        }
+
+        dht.publish_file(metadata_with_http.clone(), None).await?;
+        Ok(metadata_with_http)
     } else {
         Err("DHT not running".into())
     }
@@ -3307,15 +3343,12 @@ async fn start_file_transfer_service(
 
 #[tauri::command]
 async fn upload_file_to_network(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     file_path: String,
     price: Option<f64>,
     protocol: Option<String>,
 ) -> Result<(), String> {
-    println!(
-        "🔍 BACKEND: upload_file_to_network called with price: {:?}, protocol: {:?}",
-        price, protocol
-    );
 
     // Ensure price is never null - default to 0
     let price = price.unwrap_or(0.0);
@@ -3370,6 +3403,17 @@ async fn upload_file_to_network(
     if let Some(protocol_name) = &protocol {
         match protocol_name.as_str() {
             "BitTorrent" => {
+                // Check if file exists before attempting to seed
+                if !std::path::Path::new(&file_path).exists() {
+                    error!("BitTorrent seeding failed: File does not exist: {}", file_path);
+                    return Err(format!("File does not exist: {}", file_path));
+                }
+
+                if !std::path::Path::new(&file_path).is_file() {
+                    error!("BitTorrent seeding failed: Path is not a file: {}", file_path);
+                    return Err(format!("Path is not a file: {}", file_path));
+                }
+
                 // Use torrent seeding
                 match create_and_seed_torrent(file_path.clone(), state).await {
                     Ok(magnet_link) => {
@@ -3425,7 +3469,10 @@ async fn upload_file_to_network(
                         };
 
 
-                        println!("✅ BitTorrent file published: {}", magnet_link);
+                        // Emit the published_file event to notify the frontend
+                        let payload = serde_json::json!(metadata);
+                        let _ = app.emit("published_file", payload);
+
                         return Ok(());
                     }
                     Err(e) => {
@@ -6448,6 +6495,51 @@ async fn download_file_http(
     }
 }
 
+// Protocol-specific download commands
+
+#[tauri::command]
+async fn download_ed2k(
+    link: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!("Starting ED2K download: {}", link);
+
+    // Use the protocol manager for ED2K downloads
+    use crate::protocols::traits::DownloadOptions;
+    let options = DownloadOptions {
+        output_path: std::path::PathBuf::from("./downloads"),
+        max_peers: Some(5),
+        chunk_size: Some(1024 * 1024), // 1MB chunks
+        ..Default::default()
+    };
+
+    state.protocol_manager.download(&link, options).await
+        .map_err(|e| format!("ED2K download failed: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn download_ftp(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!("Starting FTP download: {}", url);
+
+    // Use the protocol manager for FTP downloads
+    use crate::protocols::traits::DownloadOptions;
+    let options = DownloadOptions {
+        output_path: std::path::PathBuf::from("./downloads"),
+        max_peers: Some(1), // FTP typically single connection
+        ..Default::default()
+    };
+
+    state.protocol_manager.download(&url, options).await
+        .map_err(|e| format!("FTP download failed: {}", e))?;
+
+    Ok(())
+}
+
 // Download restart Tauri commands
 
 #[tauri::command]
@@ -6676,6 +6768,13 @@ fn main() {
         // Wrap the simple handler in the enhanced protocol handler
         let bittorrent_protocol_handler = BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
         manager.register(Box::new(bittorrent_protocol_handler));
+
+        // Register ED2K and FTP handlers
+        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k.server.example.com:4242".to_string());
+        manager.register(Box::new(ed2k_handler));
+
+        let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
+        manager.register(Box::new(ftp_handler));
         
         (bittorrent_handler_arc, Arc::new(manager))
     });
@@ -6995,6 +7094,8 @@ fn main() {
             publish_reputation_verdict,
             get_reputation_verdicts,
             download_file_http,
+            download_ed2k,
+            download_ftp,
             save_temp_file_for_upload,
             get_file_size,
             // Reassembly system commands

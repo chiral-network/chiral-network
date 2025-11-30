@@ -443,7 +443,6 @@ impl FileTransferService {
                                 file_name: file_name.clone(),
                             })
                             .await;
-                        info!("File uploaded successfully: {} -> {}", file_name, file_hash);
                     }
                     Err(e) => {
                         let error_msg = format!("Upload failed: {}", e);
