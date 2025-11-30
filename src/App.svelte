@@ -182,6 +182,11 @@ function handleFirstRunComplete() {
       try {
         transferEventsUnsubscribe = await subscribeToTransferEvents();
         transferStoreUnsubscribe = transferStore.subscribe(($store) => {
+
+          if (!$store || !$store.transfers) {
+            return;
+          }
+
           for (const [transferId, transfer] of $store.transfers.entries()) {
             if (transfer.status === 'completed') {
               // First time we see this transfer as completed → fire toast
