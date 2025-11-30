@@ -34,10 +34,13 @@
   onMount(async () => {
     try {
       if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-        currentBlockNumber = await invoke<number>('get_current_block');
+        // Check if Geth is running before trying to query blockchain
+        const isRunning = await invoke<boolean>('is_geth_running');
+        if (isRunning) {
+          currentBlockNumber = await invoke<number>('get_current_block');
+        }
       }
     } catch (error) {
-      console.error('Failed to get current block:', error);
     }
   });
 

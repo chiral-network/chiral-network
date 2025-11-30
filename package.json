@@ -13,7 +13,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "signaling-server": "node src/lib/services/server/signalingServer.js"
   },
   "dependencies": {
     "@mateothegreat/svelte5-router": "^2.16.19",

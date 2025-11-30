@@ -430,12 +430,11 @@ function handleFirstRunComplete() {
           // Only start file transfer service, not DHT
           await invoke("start_file_transfer_service");
         }
-        console.log("✅ File transfer and WebRTC services started successfully");
       } catch (error) {
         // Only ignore "already running" errors - this is normal during hot reload
         const errorMessage = error instanceof Error ? error.message : String(error);
         if (errorMessage.includes("already running") || errorMessage.includes("already initialized")) {
-          console.log("ℹ️ Services already running (hot reload)");
+          // Services already running (hot reload) - no need to log
         } else {
           // Log other errors - these might indicate real problems
           console.error("⚠️ Failed to start services:", errorMessage);

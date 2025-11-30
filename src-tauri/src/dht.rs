@@ -1444,12 +1444,13 @@ async fn run_dht_node(
                                                 parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                info_hash: json_val.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                 price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                 uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                ed2k_sources: json_val.get("ed2k_sources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
                                             };
                                             let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -1585,6 +1586,7 @@ async fn run_dht_node(
                                     "price": metadata.price,
                                     "uploader_address": metadata.uploader_address,
                                     "http_sources": metadata.http_sources,
+                                    "ed2k_sources": metadata.ed2k_sources,
                                 });
 
                                 let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
@@ -3283,12 +3285,13 @@ async fn run_dht_node(
                                                 parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                info_hash: json_val.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                 price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                 uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                ed2k_sources: json_val.get("ed2k_sources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
                                             };
                                             let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
@@ -4293,7 +4296,7 @@ async fn handle_kademlia_event(
                                             .unwrap_or(None)
                                         }),
                                     info_hash: metadata_json
-                                        .get("infoHash")
+                                        .get("info_hash")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
                                     trackers: metadata_json.get("trackers").and_then(|v| {
@@ -4311,6 +4314,12 @@ async fn handle_kademlia_event(
                                         )
                                         .unwrap_or(None)
                                     }),
+                                    ed2k_sources: metadata_json.get("ed2k_sources").and_then(|v| {
+                                        serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(
+                                            v.clone(),
+                                        )
+                                        .unwrap_or(None)
+                                    }),
                                     uploader_address: metadata_json
                                         .get("uploader_address")
                                         .and_then(|v| v.as_str())
@@ -4318,17 +4327,23 @@ async fn handle_kademlia_event(
                                     ..Default::default()
                                 };
 
-                                println!("🔎 DHT: Retrieved metadata from DHT - price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
 
                                 let notify_metadata = metadata.clone();
                                 let file_hash = notify_metadata.merkle_root.clone();
 
                                 // Cache the discovered file so subsequent searches don't need DHT queries
-                                file_metadata_cache
-                                    .lock()
-                                    .await
-                                    .insert(file_hash.clone(), metadata.clone());
-                                info!("Cached discovered file {} from DHT", file_hash);
+                                // DHT data is authoritative - always update cache with latest network state
+                                let mut cache = file_metadata_cache.lock().await;
+                                if let Some(existing) = cache.get(&file_hash) {
+                                    // Merge if both exist to preserve any local-only fields
+                                    let merged = merge_file_metadata(existing.clone(), metadata.clone());
+                                    cache.insert(file_hash.clone(), merged);
+                                    info!("Merged DHT discovery with existing cache for file {}", file_hash);
+                                } else {
+                                    // No existing cache entry, just store DHT data
+                                    cache.insert(file_hash.clone(), metadata.clone());
+                                    info!("Cached discovered file {} from DHT", file_hash);
+                                }
 
                                 info!(
                                     "File discovered: {} ({})",
@@ -4617,7 +4632,7 @@ async fn handle_kademlia_event(
                                                     parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     cids: metadata_json.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                     encrypted_key_bundle: metadata_json.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                    info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                    info_hash: metadata_json.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     trackers: metadata_json.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                     is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                     price: metadata_json.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -6223,6 +6238,12 @@ impl DhtService {
             metadata.ftp_sources = Some(sources.into_iter().map(|s| s.for_dht_storage()).collect());
         }
 
+        // Cache the full metadata immediately before any DHT operations
+        // This ensures local files have complete metadata even if DHT discovery happens first
+        let mut cache = self.file_metadata_cache.lock().await;
+        cache.insert(metadata.merkle_root.clone(), metadata.clone());
+        drop(cache);
+
         let (response_tx, response_rx) = oneshot::channel();
 
         self.cmd_tx
@@ -6234,8 +6255,6 @@ impl DhtService {
             .map_err(|e| e.to_string())?;
 
         let cid_populated_metadata = response_rx.await.map_err(|e| e.to_string())?;
-
-        self.cache_remote_file(&cid_populated_metadata).await;
         self.start_file_heartbeat(&cid_populated_metadata.merkle_root)
             .await?;
         Ok(())
@@ -6376,10 +6395,7 @@ impl DhtService {
         {
             let cache = self.file_metadata_cache.lock().await;
             if let Some(metadata) = cache.get(&file_hash) {
-                info!(
-                    "Found file {} in local cache, skipping DHT query",
-                    file_hash
-                );
+                info!("Found file {} in local cache, skipping DHT query", file_hash);
                 return Ok(Some(metadata.clone()));
             }
         }

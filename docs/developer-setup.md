@@ -142,11 +142,17 @@ npm run dev
 #### Tauri Development (Full Desktop App)
 
 ```bash
+# Start the WebRTC signaling server (required for WebRTC connections)
+npm run signaling-server
+
+# In a separate terminal, start the application
 npm run tauri:dev
 # Builds frontend + Rust backend
 # Opens desktop application
 # Hot reload for frontend
 ```
+
+**Note**: The WebRTC signaling server must be running on port 3000 for WebRTC peer connections to work. Start it with `npm run signaling-server` before running the application.
 
 ### Development Workflow
 

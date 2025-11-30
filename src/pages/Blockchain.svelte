@@ -71,6 +71,14 @@
   async function fetchLatestBlocks() {
     isLoadingBlocks = true;
     try {
+      // Check if Geth is running before making blockchain calls
+      const gethRunning = await invoke<boolean>('is_geth_running');
+      if (!gethRunning) {
+        console.log('Geth is not running, skipping blockchain queries');
+        latestBlocks = [];
+        return;
+      }
+
       // Get current block number
       console.log('Fetching current block number...');
       currentBlockNumber = await invoke<number>('get_current_block');

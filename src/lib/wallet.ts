@@ -293,9 +293,6 @@ export class WalletService {
       const currentBlock = await invoke<number>("get_current_block");
 
       // Get data in parallel: mining blocks AND transaction history
-      console.log(
-        `[Wallet] Calling get_blocks_mined for address: ${accountAddress}`
-      );
       const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
           address: accountAddress,

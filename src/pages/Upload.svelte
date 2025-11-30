@@ -332,8 +332,6 @@
 
       // Connect to signaling server
       await signalingService.connect();
-      console.log('[Upload] Connected to signaling server as seeder');
-      console.log('[Upload] My client ID:', signalingService.clientId);
 
       // Expose for debugging
       if (typeof window !== 'undefined') {
@@ -864,7 +862,6 @@
       for (const file of filesToRemove) {
         try {
           await invoke("stop_publishing_file", { fileHash: file.hash });
-          console.log("File unpublished from DHT:", file.hash, "protocol:", file.protocol);
         } catch (unpublishError) {
           console.warn("Failed to unpublish file from DHT:", unpublishError);
         }
@@ -977,7 +974,7 @@
         } else if (selectedProtocol === "ED2K" && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
           // Use the first ED2K source
           const ed2kSource = metadata.ed2kSources[0];
-          protocolHash = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.fileHash}|/`;
+          protocolHash = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`;
         } else if (selectedProtocol === "FTP" && metadata.ftpSources && metadata.ftpSources.length > 0) {
           // Use the first FTP source
           protocolHash = metadata.ftpSources[0].url;
@@ -1399,11 +1396,9 @@
                       $coalescedFiles.reduce((sum, f) => sum + f.size, 0),
                     )}
                     {$t("upload.total")}
-                    {#if $coalescedFiles.some((f) => f.totalSeeders > 0)}
-                      <span class="text-green-600 font-medium">
-                        ({$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0)} {$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0) === 1 ? "seeder" : "seeders"})
-                      </span>
-                    {/if}
+                    <span class="text-green-600 font-medium">
+                      ({$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0)} {$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0) === 1 ? "seeder" : "seeders"})
+                    </span>
                   </p>
                   <p class="text-xs text-muted-foreground mt-1">
                     {$t("upload.tip")}
@@ -1580,7 +1575,7 @@
                               <div class="space-y-1">
                                 {#each coalescedFile.protocols as protocolEntry}
                                   <div class="text-xs opacity-70">
-                                    <span>{protocolEntry.protocol} Seeders: {protocolEntry.technicalInfo.seederCount || 0}</span>
+                                    <span>{coalescedFile.protocols.length > 1 ? protocolEntry.protocol + ' ' : ''}Seeders: {protocolEntry.technicalInfo.seederCount || 0}</span>
                                   </div>
                                 {/each}
                               </div>

@@ -467,6 +467,15 @@ async fn seed(file_path: String, state: State<'_, AppState>) -> Result<String, S
     state.protocol_manager.seed_simple(&file_path).await
 }
 
+/// Helper function to create and seed a BitTorrent file.
+/// It takes a local file path and handler, creates a torrent, starts seeding, and returns a magnet link.
+async fn create_and_seed_torrent_internal(
+    file_path: String,
+    handler: Arc<bittorrent_handler::BitTorrentHandler>,
+) -> Result<String, String> {
+    handler.seed(&file_path).await
+}
+
 /// Tauri command to create and seed a BitTorrent file.
 /// It takes a local file path, creates a torrent, starts seeding, and returns a magnet link.
 #[tauri::command]
@@ -475,7 +484,8 @@ async fn create_and_seed_torrent(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // Use the BitTorrent handler directly to create and seed the torrent
-    state.bittorrent_handler.seed(&file_path).await
+    let handler = state.bittorrent_handler.clone();
+    create_and_seed_torrent_internal(file_path, handler).await
 }
 
 #[tauri::command]
@@ -999,7 +1009,6 @@ async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json:
         if let Ok(json) = response.json::<serde_json::Value>().await {
             if let Some(result) = json.get("result").and_then(|r| r.as_str()) {
                 if let Ok(current_block) = u64::from_str_radix(&result[2..], 16) {
-                    println!("DEBUG: Current block is {}", current_block);
 
                     // Check last 5 blocks
                     for block_num in (current_block.saturating_sub(4)..=current_block).rev() {
@@ -1015,7 +1024,6 @@ async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json:
                                 if let Some(block) = block_json.get("result") {
                                     if let Some(miner) = block.get("miner").and_then(|m| m.as_str()) {
                                         recent_miners.insert(format!("{}", block_num), serde_json::Value::String(miner.to_string()));
-                                        println!("DEBUG: Block {} mined by: {}", block_num, miner);
                                     }
                                 }
                             }
@@ -3454,7 +3462,8 @@ async fn upload_file_to_network(
                 }
 
                 // Use torrent seeding
-                match create_and_seed_torrent(file_path.clone(), state).await {
+                let handler = state.bittorrent_handler.clone();
+                match create_and_seed_torrent_internal(file_path.clone(), handler).await {
                     Ok(magnet_link) => {
                         // Emit published_file event with torrent metadata
                         let file_size = match tokio::fs::metadata(&file_path).await {
@@ -3462,13 +3471,37 @@ async fn upload_file_to_network(
                             Err(_) => 0,
                         };
 
+                        let info_hash = {
+                            // Extract info hash from magnet link
+                            if let Some(start) = magnet_link.find("urn:btih:") {
+                                let start = start + 9;
+                                let end = magnet_link[start..]
+                                    .find('&')
+                                    .map(|i| start + i)
+                                    .unwrap_or(magnet_link.len());
+                                Some(magnet_link[start..end].to_lowercase())
+                            } else {
+                                None
+                            }
+                        };
+
+                        // Get the local peer ID to add as a seeder
+                        let local_peer_id = {
+                            let dht_guard = state.dht.lock().await;
+                            if let Some(dht) = dht_guard.as_ref() {
+                                Some(dht.get_peer_id().await)
+                            } else {
+                                None
+                            }
+                        };
+
                         let metadata = FileMetadata {
-                            merkle_root: file_hash.clone(), // Use content hash for consistency
+                            merkle_root: info_hash.clone().unwrap_or_else(|| file_hash.clone()), // Use info_hash as key for magnet link searches
                             is_root: true,
                             file_name: original_file_name.clone(),
                             file_size,
                             file_data: vec![], // Not stored for torrents
-                            seeders: vec![],
+                            seeders: local_peer_id.clone().map_or(vec![], |id| vec![id]),
                             created_at: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -3484,28 +3517,24 @@ async fn upload_file_to_network(
                             uploader_address: Some(account),
                             ftp_sources: None,
                             http_sources: None,
-                            info_hash: {
-                                // Extract info hash from magnet link
-                                if let Some(start) = magnet_link.find("urn:btih:") {
-                                    let start = start + 9;
-                                    let end = magnet_link[start..]
-                                        .find('&')
-                                        .map(|i| start + i)
-                                        .unwrap_or(magnet_link.len());
-                                    Some(magnet_link[start..end].to_lowercase())
-                                } else {
-                                    None
-                                }
-                            },
+                            info_hash,
                             trackers: Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]),
                             ed2k_sources: None,
                             download_path: None,
                         };
 
+                        // Publish metadata to DHT for discoverability
+                        let dht = {
+                            let dht_guard = state.dht.lock().await;
+                            dht_guard.as_ref().cloned()
+                        };
 
-                        // Emit the published_file event to notify the frontend
-                        let payload = serde_json::json!(metadata);
-                        let _ = app.emit("published_file", payload);
+                        if let Some(dht) = dht {
+                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                                warn!("Failed to publish BitTorrent file metadata to DHT: {}", e);
+                                // Don't fail the upload, just log the warning
+                            }
+                        }
 
                         return Ok(());
                     }
@@ -3516,12 +3545,12 @@ async fn upload_file_to_network(
             }
             "ED2K" => {
                 // Actually use the ED2K protocol handler to generate real ed2k links
-                println!("📡 Starting ED2K seeding with price: {:?}", price);
 
                 let file_path_buf = PathBuf::from(&file_path);
 
-                // Create ED2K protocol handler
-                let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k.server.example.com:4242".to_string());
+                // Create ED2K protocol handler with an active server URL
+                // ED2K now works in decentralized P2P mode with DHT support
+                let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
 
                 // Seed the file using the protocol handler
                 let seed_options = protocols::traits::SeedOptions {
@@ -3537,13 +3566,33 @@ async fn upload_file_to_network(
                             Err(_) => 0,
                         };
 
+                        let ed2k_hash = {
+                            // Extract hash from ed2k link: ed2k://|file|name|size|hash|/
+                            let parts: Vec<&str> = seeding_info.identifier.split('|').collect();
+                            if parts.len() >= 5 {
+                                Some(parts[4].to_string())
+                            } else {
+                                None
+                            }
+                        };
+
+                        // Get the local peer ID to add as a seeder
+                        let local_peer_id = {
+                            let dht_guard = state.dht.lock().await;
+                            if let Some(dht) = dht_guard.as_ref() {
+                                Some(dht.get_peer_id().await)
+                            } else {
+                                None
+                            }
+                        };
+
                         let metadata = FileMetadata {
-                            merkle_root: file_hash.clone(), // Use content hash for consistency
+                            merkle_root: ed2k_hash.clone().unwrap_or_else(|| file_hash.clone()), // Use ED2K hash as key for ED2K link searches
                             is_root: true,
                             file_name: original_file_name.clone(),
                             file_size,
                             file_data: vec![],
-                            seeders: vec![],
+                            seeders: local_peer_id.clone().map_or(vec![], |id| vec![id]),
                             created_at: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -3562,16 +3611,8 @@ async fn upload_file_to_network(
                             info_hash: None,
                             trackers: None,
                             ed2k_sources: Some(vec![dht::models::Ed2kSourceInfo {
-                                server_url: "ed2k.server.example.com:4242".to_string(),
-                                file_hash: {
-                                    // Extract hash from ed2k link: ed2k://|file|name|size|hash|/
-                                    let parts: Vec<&str> = seeding_info.identifier.split('|').collect();
-                                    if parts.len() >= 5 {
-                                        parts[4].to_string()
-                                    } else {
-                                        "unknown".to_string()
-                                    }
-                                },
+                                server_url: "ed2k://|server|45.82.80.155|5687|/".to_string(),
+                                file_hash: ed2k_hash.clone().unwrap_or_else(|| "unknown".to_string()),
                                 file_size,
                                 file_name: Some(original_file_name.clone()),
                                 sources: None,
@@ -3580,7 +3621,19 @@ async fn upload_file_to_network(
                             download_path: None,
                         };
 
-                        println!("✅ ED2K file seeded successfully: {}", seeding_info.identifier);
+                        // Publish metadata to DHT for discoverability
+                        let dht = {
+                            let dht_guard = state.dht.lock().await;
+                            dht_guard.as_ref().cloned()
+                        };
+
+                        if let Some(dht) = dht {
+                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                                warn!("Failed to publish ED2K file metadata to DHT: {}", e);
+                                // Don't fail the upload, just log the warning
+                            }
+                        }
+
                         return Ok(());
                     }
                     Err(e) => {
@@ -3591,7 +3644,6 @@ async fn upload_file_to_network(
             }
             "FTP" => {
                 // Use FTP protocol handler (though FTP seeding is more complex)
-                println!("📡 Starting FTP seeding with price: {:?}", price);
 
                 let file_path_buf = PathBuf::from(&file_path);
 
@@ -3651,7 +3703,20 @@ async fn upload_file_to_network(
                             download_path: None,
                         };
 
-                        println!("✅ FTP file seeded successfully: {}", seeding_info.identifier);
+
+                        // Publish metadata to DHT for discoverability
+                        let dht = {
+                            let dht_guard = state.dht.lock().await;
+                            dht_guard.as_ref().cloned()
+                        };
+
+                        if let Some(dht) = dht {
+                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                                warn!("Failed to publish FTP file metadata to DHT: {}", e);
+                                // Don't fail the upload, just log the warning
+                            }
+                        }
+
                         return Ok(());
                     }
                     Err(e) => {
@@ -3813,7 +3878,7 @@ async fn upload_file_to_network(
                 is_root: true,
                 file_name: original_file_name.clone(),
                 file_size: file_data.len() as u64,
-                file_data: file_data.clone(),
+                file_data: vec![], // Don't store file data in DHT for WebRTC uploads - it's stored locally
                 seeders: vec![],
                 created_at,
                 mime_type: None,
@@ -3821,7 +3886,7 @@ async fn upload_file_to_network(
                 encryption_method: None,
                 key_fingerprint: None,
                 parent_hash: None,
-                cids: None,
+                cids: None, // WebRTC uploads don't create BitSwap chunks
                 encrypted_key_bundle: None,
                 price,
                 uploader_address: Some(account.clone()),
@@ -4114,7 +4179,7 @@ async fn search_ed2k_file(
     query: String,
     server_url: Option<String>,
 ) -> Result<Vec<Ed2kSearchResult>, String> {
-    let server = server_url.unwrap_or_else(|| "ed2k://|server|176.103.48.36|4661|/".to_string());
+    let server = server_url.unwrap_or_else(|| "ed2k://|server|45.82.80.155|5687|/".to_string());
     let mut client = Ed2kClient::new(server);
 
     client.connect().await.map_err(|e| e.to_string())?;
@@ -6803,7 +6868,7 @@ fn main() {
         manager.register(Box::new(bittorrent_protocol_handler));
 
         // Register ED2K and FTP handlers
-        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k.server.example.com:4242".to_string());
+        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
         manager.register(Box::new(ed2k_handler));
 
         let ftp_handler = protocols::ftp::FtpProtocolHandler::new();

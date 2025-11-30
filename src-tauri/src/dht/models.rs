@@ -35,11 +35,15 @@ impl std::error::Error for Ed2kError {}
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
     /// The Merkle root of the original file chunks, used as the primary identifier for integrity.
+    #[serde(rename = "merkleRoot")]
     pub merkle_root: String,
+
+    #[serde(rename = "fileName")]
     pub file_name: String,
+
+    #[serde(rename = "fileSize")]
     pub file_size: u64,
 
     #[serde(skip)]
@@ -48,25 +52,25 @@ pub struct FileMetadata {
     #[serde(default)]
     pub seeders: Vec<String>,
 
-    #[serde(default)]
+    #[serde(default, rename = "createdAt")]
     pub created_at: u64,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "mimeType")]
     pub mime_type: Option<String>,
 
     /// Whether the file is encrypted
-    #[serde(default)]
+    #[serde(default, rename = "isEncrypted")]
     pub is_encrypted: bool,
 
     /// The encryption method used (e.g., "AES-256-GCM")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "encryptionMethod")]
     pub encryption_method: Option<String>,
 
     /// Fingerprint of the encryption key for identification.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "keyFingerprint")]
     pub key_fingerprint: Option<String>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "parentHash")]
     pub parent_hash: Option<String>,
 
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
@@ -74,18 +78,18 @@ pub struct FileMetadata {
     pub cids: Option<Vec<Cid>>,
 
     /// For encrypted files, this contains the encrypted AES key and other info.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "encryptedKeyBundle")]
     pub encrypted_key_bundle: Option<EncryptedAesKeyBundle>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ftpSources")]
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
 
     // ed2k sources for downloading the file
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ed2kSources")]
     pub ed2k_sources: Option<Vec<Ed2kSourceInfo>>,
 
     /// HTTP sources for downloading the file (HTTP Range request endpoints)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "httpSources")]
     pub http_sources: Option<Vec<HttpSourceInfo>>,
 
     #[serde(default)]
@@ -103,7 +107,7 @@ pub struct FileMetadata {
     pub uploader_address: Option<String>,
 
     /// The SHA-1 info hash for BitTorrent compatibility.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "infoHash")]
     pub info_hash: Option<String>,
 
     /// A list of BitTorrent tracker URLs.
