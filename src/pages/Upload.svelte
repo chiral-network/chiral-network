@@ -332,8 +332,6 @@
 
       // Connect to signaling server
       await signalingService.connect();
-      console.log('[Upload] Connected to signaling server as seeder');
-      console.log('[Upload] My client ID:', signalingService.clientId);
 
       // Expose for debugging
       if (typeof window !== 'undefined') {
@@ -864,7 +862,6 @@
       for (const file of filesToRemove) {
         try {
           await invoke("stop_publishing_file", { fileHash: file.hash });
-          console.log("File unpublished from DHT:", file.hash, "protocol:", file.protocol);
         } catch (unpublishError) {
           console.warn("Failed to unpublish file from DHT:", unpublishError);
         }
@@ -1580,7 +1577,7 @@
                               <div class="space-y-1">
                                 {#each coalescedFile.protocols as protocolEntry}
                                   <div class="text-xs opacity-70">
-                                    <span>{protocolEntry.protocol} Seeders: {protocolEntry.technicalInfo.seederCount || 0}</span>
+                                    <span>{coalescedFile.protocols.length > 1 ? protocolEntry.protocol + ' ' : ''}Seeders: {protocolEntry.technicalInfo.seederCount || 0}</span>
                                   </div>
                                 {/each}
                               </div>

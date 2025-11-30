@@ -157,6 +157,29 @@
           pushMessage('Please enter a magnet link', 'warning')
           return
         }
+
+        // For magnet links, extract info_hash and search DHT directly
+        const urlParams = new URLSearchParams(identifier.split('?')[1])
+        const infoHash = urlParams.get('xt')?.replace('urn:btih:', '')
+        if (infoHash) {
+          try {
+            // Search DHT using the info_hash as the key (BitTorrent files are stored with info_hash as merkle_root)
+            const metadata = await dhtService.searchFileMetadata(infoHash, SEARCH_TIMEOUT_MS)
+            if (metadata) {
+              // Found the file! Show it instead of the placeholder
+              metadata.fileHash = metadata.merkleRoot || ""
+              latestMetadata = metadata
+              latestStatus = 'found'
+              hasSearched = true
+              pushMessage(`Found file: ${metadata.fileName}`, 'success')
+              return
+            }
+          } catch (error) {
+            console.log('DHT search failed, falling back to magnet download:', error)
+          }
+        }
+
+        // If not found in DHT or no info_hash, proceed with magnet download
       } else if (searchMode === 'torrent') {
         if (!torrentFileName) {
           pushMessage('Please select a .torrent file', 'warning')
@@ -325,7 +348,6 @@
       // Ensure isSearching is always set to false
       setTimeout(() => {
         isSearching = false;
-        console.log('🔒 Forced isSearching to false');
       }, 100);
     }
   }

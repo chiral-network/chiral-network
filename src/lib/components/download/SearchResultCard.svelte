@@ -296,8 +296,6 @@
 
   // Check balance when component mounts
   onMount(() => {
-    console.log("💰 SearchResultCard metadata:", metadata);
-    console.log("💰 Price from metadata:", metadata.price);
     checkBalance();
   });
 </script>

@@ -1444,7 +1444,7 @@ async fn run_dht_node(
                                                 parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                info_hash: json_val.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                 price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -3283,7 +3283,7 @@ async fn run_dht_node(
                                                 parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                info_hash: json_val.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                 price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -4293,7 +4293,7 @@ async fn handle_kademlia_event(
                                             .unwrap_or(None)
                                         }),
                                     info_hash: metadata_json
-                                        .get("infoHash")
+                                        .get("info_hash")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
                                     trackers: metadata_json.get("trackers").and_then(|v| {
@@ -4617,7 +4617,7 @@ async fn handle_kademlia_event(
                                                     parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     cids: metadata_json.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                     encrypted_key_bundle: metadata_json.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                    info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                    info_hash: metadata_json.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     trackers: metadata_json.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                     is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                     price: metadata_json.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
