@@ -250,9 +250,17 @@
           </h3>
           {#if report.recommendation}
             <p class="text-sm text-muted-foreground">{report.recommendation}</p>
-          {:else}
+          {:else if report.reachable_nodes === report.total_nodes}
             <p class="text-sm text-muted-foreground">
               All bootstrap nodes are reachable. Network connectivity is good.
+            </p>
+          {:else if report.reachable_nodes > 0}
+            <p class="text-sm text-muted-foreground">
+              {report.reachable_nodes} of {report.total_nodes} bootstrap nodes are reachable. Connection available but some nodes are down.
+            </p>
+          {:else}
+            <p class="text-sm text-muted-foreground">
+              No bootstrap nodes are reachable. Network connectivity may be impaired.
             </p>
           {/if}
           {#if !report.healthy}
