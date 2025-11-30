@@ -1,17 +1,25 @@
 //! HTTP Protocol Handler
 //!
 //! Wraps the existing HTTP download functionality to implement the enhanced ProtocolHandler trait.
+//! Supports TransferEventBus integration for UI progress tracking.
 
 use super::traits::{
     DownloadHandle, DownloadOptions, DownloadProgress, DownloadStatus,
     ProtocolCapabilities, ProtocolError, ProtocolHandler, SeedOptions, SeedingInfo,
+};
+use crate::transfer_events::{
+    current_timestamp_ms, DisconnectReason, ErrorCategory,
+    SourceConnectedEvent, SourceDisconnectedEvent, SourceInfo, SourceSummary,
+    SourceType, TransferCanceledEvent, TransferCompletedEvent, TransferEventBus,
+    TransferFailedEvent, TransferProgressEvent, TransferStartedEvent,
 };
 use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::AppHandle;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -25,6 +33,8 @@ pub struct HttpProtocolHandler {
     active_downloads: Arc<Mutex<HashMap<String, HttpDownloadState>>>,
     /// Track download progress
     download_progress: Arc<Mutex<HashMap<String, DownloadProgress>>>,
+    /// Optional event bus for emitting transfer events to frontend
+    event_bus: Option<Arc<TransferEventBus>>,
 }
 
 /// Internal state for an HTTP download
@@ -34,10 +44,14 @@ struct HttpDownloadState {
     started_at: u64,
     status: DownloadStatus,
     cancel_token: tokio::sync::watch::Sender<bool>,
+    /// File name extracted from URL
+    file_name: String,
+    /// Total file size (if known)
+    total_bytes: u64,
 }
 
 impl HttpProtocolHandler {
-    /// Creates a new HTTP protocol handler
+    /// Creates a new HTTP protocol handler (no event bus)
     pub fn new() -> Result<Self, ProtocolError> {
         let client = Client::builder()
             .user_agent("Chiral-Network/1.0")
@@ -49,10 +63,11 @@ impl HttpProtocolHandler {
             client,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: None,
         })
     }
 
-    /// Creates a handler with custom timeout
+    /// Creates a handler with custom timeout (no event bus)
     pub fn with_timeout(timeout_secs: u64) -> Result<Self, ProtocolError> {
         let client = Client::builder()
             .user_agent("Chiral-Network/1.0")
@@ -64,6 +79,39 @@ impl HttpProtocolHandler {
             client,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: None,
+        })
+    }
+
+    /// Creates a handler with event bus for UI integration
+    pub fn with_event_bus(app_handle: AppHandle) -> Result<Self, ProtocolError> {
+        let client = Client::builder()
+            .user_agent("Chiral-Network/1.0")
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+
+        Ok(Self {
+            client,
+            active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            download_progress: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
+        })
+    }
+
+    /// Creates a handler with custom timeout and event bus
+    pub fn with_timeout_and_event_bus(timeout_secs: u64, app_handle: AppHandle) -> Result<Self, ProtocolError> {
+        let client = Client::builder()
+            .user_agent("Chiral-Network/1.0")
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+
+        Ok(Self {
+            client,
+            active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            download_progress: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
         })
     }
 
@@ -75,6 +123,11 @@ impl HttpProtocolHandler {
             .as_secs()
     }
 
+    /// Get current timestamp in milliseconds
+    fn now_ms() -> u64 {
+        current_timestamp_ms()
+    }
+
     /// Generate a unique ID for tracking downloads
     fn generate_id(url: &str) -> String {
         use std::hash::{Hash, Hasher};
@@ -83,21 +136,50 @@ impl HttpProtocolHandler {
         format!("http-{:x}", hasher.finish())
     }
 
-    /// Download file with progress tracking
+    /// Extract file name from URL
+    fn extract_file_name(url: &str) -> String {
+        url.rsplit('/')
+            .next()
+            .and_then(|s| s.split('?').next())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("download")
+            .to_string()
+    }
+
+    /// Download file with progress tracking and event emission
     async fn download_with_progress(
         client: Client,
         url: String,
         output_path: PathBuf,
         progress: Arc<Mutex<HashMap<String, DownloadProgress>>>,
+        active_downloads: Arc<Mutex<HashMap<String, HttpDownloadState>>>,
         download_id: String,
         mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+        event_bus: Option<Arc<TransferEventBus>>,
+        file_name: String,
     ) -> Result<(), ProtocolError> {
+        let start_time = Instant::now();
+        let source_id = format!("http-{}", url.split('/').nth(2).unwrap_or("unknown"));
+
         // Initial HEAD request to get content length
-        let head_response = client
-            .head(&url)
-            .send()
-            .await
-            .map_err(|e| ProtocolError::NetworkError(e.to_string()))?;
+        let head_response = match client.head(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(ref bus) = event_bus {
+                    bus.emit_failed(TransferFailedEvent {
+                        transfer_id: download_id.clone(),
+                        file_hash: download_id.clone(),
+                        failed_at: current_timestamp_ms(),
+                        error: format!("Failed to connect: {}", e),
+                        error_category: ErrorCategory::Network,
+                        downloaded_bytes: 0,
+                        total_bytes: 0,
+                        retry_possible: true,
+                    });
+                }
+                return Err(ProtocolError::NetworkError(e.to_string()));
+            }
+        };
 
         let total_bytes = head_response
             .headers()
@@ -115,27 +197,109 @@ impl HttpProtocolHandler {
             }
         }
 
+        // Update state with total size
+        {
+            let mut downloads = active_downloads.lock().await;
+            if let Some(state) = downloads.get_mut(&download_id) {
+                state.total_bytes = total_bytes;
+            }
+        }
+
+        // Create source info
+        let source_info = SourceInfo {
+            id: source_id.clone(),
+            source_type: SourceType::Http,
+            address: url.clone(),
+            reputation: None,
+            estimated_speed_bps: None,
+            latency_ms: None,
+            location: None,
+        };
+
+        // Emit started and source connected events
+        if let Some(ref bus) = event_bus {
+            bus.emit_started(TransferStartedEvent {
+                transfer_id: download_id.clone(),
+                file_hash: download_id.clone(),
+                file_name: file_name.clone(),
+                file_size: total_bytes,
+                total_chunks: 1,
+                chunk_size: total_bytes as usize,
+                started_at: current_timestamp_ms(),
+                available_sources: vec![source_info.clone()],
+                selected_sources: vec![source_id.clone()],
+            });
+
+            bus.emit_source_connected(SourceConnectedEvent {
+                transfer_id: download_id.clone(),
+                source_id: source_id.clone(),
+                source_type: SourceType::Http,
+                source_info,
+                connected_at: current_timestamp_ms(),
+                assigned_chunks: vec![0],
+            });
+        }
+
         // Start download
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| ProtocolError::NetworkError(e.to_string()))?;
+        let response = match client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(ref bus) = event_bus {
+                    bus.emit_failed(TransferFailedEvent {
+                        transfer_id: download_id.clone(),
+                        file_hash: download_id.clone(),
+                        failed_at: current_timestamp_ms(),
+                        error: format!("Download request failed: {}", e),
+                        error_category: ErrorCategory::Network,
+                        downloaded_bytes: 0,
+                        total_bytes,
+                        retry_possible: true,
+                    });
+                }
+                return Err(ProtocolError::NetworkError(e.to_string()));
+            }
+        };
 
         if !response.status().is_success() {
-            return Err(ProtocolError::NetworkError(
-                format!("HTTP {} for {}", response.status(), url)
-            ));
+            let error_msg = format!("HTTP {} for {}", response.status(), url);
+            if let Some(ref bus) = event_bus {
+                bus.emit_failed(TransferFailedEvent {
+                    transfer_id: download_id.clone(),
+                    file_hash: download_id.clone(),
+                    failed_at: current_timestamp_ms(),
+                    error: error_msg.clone(),
+                    error_category: ErrorCategory::Network,
+                    downloaded_bytes: 0,
+                    total_bytes,
+                    retry_possible: true,
+                });
+            }
+            return Err(ProtocolError::NetworkError(error_msg));
         }
 
         // Create output file
-        let mut file = File::create(&output_path)
-            .await
-            .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+        let mut file = match File::create(&output_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                if let Some(ref bus) = event_bus {
+                    bus.emit_failed(TransferFailedEvent {
+                        transfer_id: download_id.clone(),
+                        file_hash: download_id.clone(),
+                        failed_at: current_timestamp_ms(),
+                        error: format!("Failed to create file: {}", e),
+                        error_category: ErrorCategory::Filesystem,
+                        downloaded_bytes: 0,
+                        total_bytes,
+                        retry_possible: false,
+                    });
+                }
+                return Err(ProtocolError::Internal(e.to_string()));
+            }
+        };
 
         let mut downloaded_bytes: u64 = 0;
         let mut stream = response.bytes_stream();
-        let start_time = std::time::Instant::now();
+        let mut last_progress_event: u64 = 0;
 
         use futures::StreamExt;
 
@@ -149,6 +313,15 @@ impl HttpProtocolHandler {
                         if let Some(p) = prog.get_mut(&download_id) {
                             p.status = DownloadStatus::Cancelled;
                         }
+                        if let Some(ref bus) = event_bus {
+                            bus.emit_canceled(TransferCanceledEvent {
+                                transfer_id: download_id.clone(),
+                                canceled_at: current_timestamp_ms(),
+                                downloaded_bytes,
+                                total_bytes,
+                                keep_partial: false,
+                            });
+                        }
                         return Err(ProtocolError::Internal("Download cancelled".to_string()));
                     }
                 }
@@ -156,9 +329,21 @@ impl HttpProtocolHandler {
                 chunk = stream.next() => {
                     match chunk {
                         Some(Ok(bytes)) => {
-                            file.write_all(&bytes)
-                                .await
-                                .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+                            if let Err(e) = file.write_all(&bytes).await {
+                                if let Some(ref bus) = event_bus {
+                                    bus.emit_failed(TransferFailedEvent {
+                                        transfer_id: download_id.clone(),
+                                        file_hash: download_id.clone(),
+                                        failed_at: current_timestamp_ms(),
+                                        error: format!("Failed to write: {}", e),
+                                        error_category: ErrorCategory::Filesystem,
+                                        downloaded_bytes,
+                                        total_bytes,
+                                        retry_possible: false,
+                                    });
+                                }
+                                return Err(ProtocolError::Internal(e.to_string()));
+                            }
 
                             downloaded_bytes += bytes.len() as u64;
 
@@ -176,17 +361,58 @@ impl HttpProtocolHandler {
                                 None
                             };
 
+                            let now_ms = current_timestamp_ms();
+
                             let mut prog = progress.lock().await;
                             if let Some(p) = prog.get_mut(&download_id) {
                                 p.downloaded_bytes = downloaded_bytes;
                                 p.download_speed = speed;
                                 p.eta_seconds = eta;
                             }
+                            drop(prog);
+
+                            // Emit progress event (throttled to every 2 seconds)
+                            if let Some(ref bus) = event_bus {
+                                if now_ms - last_progress_event >= 2000 {
+                                    last_progress_event = now_ms;
+                                    let progress_pct = if total_bytes > 0 {
+                                        (downloaded_bytes as f64 / total_bytes as f64) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+
+                                    bus.emit_progress(TransferProgressEvent {
+                                        transfer_id: download_id.clone(),
+                                        downloaded_bytes,
+                                        total_bytes,
+                                        completed_chunks: 0,
+                                        total_chunks: 1,
+                                        progress_percentage: progress_pct,
+                                        download_speed_bps: speed,
+                                        upload_speed_bps: 0.0,
+                                        eta_seconds: eta.map(|e| e as u32),
+                                        active_sources: 1,
+                                        timestamp: now_ms,
+                                    });
+                                }
+                            }
                         }
                         Some(Err(e)) => {
                             let mut prog = progress.lock().await;
                             if let Some(p) = prog.get_mut(&download_id) {
                                 p.status = DownloadStatus::Failed;
+                            }
+                            if let Some(ref bus) = event_bus {
+                                bus.emit_failed(TransferFailedEvent {
+                                    transfer_id: download_id.clone(),
+                                    file_hash: download_id.clone(),
+                                    failed_at: current_timestamp_ms(),
+                                    error: format!("Network error: {}", e),
+                                    error_category: ErrorCategory::Network,
+                                    downloaded_bytes,
+                                    total_bytes,
+                                    retry_possible: true,
+                                });
                             }
                             return Err(ProtocolError::NetworkError(e.to_string()));
                         }
@@ -204,13 +430,54 @@ impl HttpProtocolHandler {
             .map_err(|e| ProtocolError::Internal(e.to_string()))?;
 
         // Mark as completed
+        let duration_secs = start_time.elapsed().as_secs();
+        let avg_speed = if duration_secs > 0 {
+            downloaded_bytes as f64 / duration_secs as f64
+        } else {
+            downloaded_bytes as f64
+        };
+
         let mut prog = progress.lock().await;
         if let Some(p) = prog.get_mut(&download_id) {
             p.status = DownloadStatus::Completed;
             p.downloaded_bytes = downloaded_bytes;
         }
+        drop(prog);
 
-        info!("HTTP: Download completed: {} bytes", downloaded_bytes);
+        // Emit completion events
+        if let Some(ref bus) = event_bus {
+            bus.emit_source_disconnected(SourceDisconnectedEvent {
+                transfer_id: download_id.clone(),
+                source_id: source_id.clone(),
+                source_type: SourceType::Http,
+                disconnected_at: current_timestamp_ms(),
+                reason: DisconnectReason::Completed,
+                chunks_completed: 1,
+                will_retry: false,
+            });
+
+            bus.emit_completed(TransferCompletedEvent {
+                transfer_id: download_id.clone(),
+                file_hash: download_id.clone(),
+                file_name,
+                file_size: downloaded_bytes,
+                output_path: output_path.to_string_lossy().to_string(),
+                completed_at: current_timestamp_ms(),
+                duration_seconds: duration_secs,
+                average_speed_bps: avg_speed,
+                total_chunks: 1,
+                sources_used: vec![SourceSummary {
+                    source_id,
+                    source_type: SourceType::Http,
+                    chunks_provided: 1,
+                    bytes_provided: downloaded_bytes,
+                    average_speed_bps: avg_speed,
+                    connection_duration_seconds: duration_secs,
+                }],
+            });
+        }
+
+        info!("HTTP: Download completed: {} bytes in {} seconds", downloaded_bytes, duration_secs);
         Ok(())
     }
 }
@@ -239,6 +506,7 @@ impl ProtocolHandler for HttpProtocolHandler {
         info!("HTTP: Starting download for {}", identifier);
 
         let download_id = Self::generate_id(identifier);
+        let file_name = Self::extract_file_name(identifier);
 
         // Check if already downloading
         {
@@ -275,6 +543,8 @@ impl ProtocolHandler for HttpProtocolHandler {
                 started_at,
                 status: DownloadStatus::Downloading,
                 cancel_token: cancel_tx,
+                file_name: file_name.clone(),
+                total_bytes: 0,
             });
         }
 
@@ -283,7 +553,9 @@ impl ProtocolHandler for HttpProtocolHandler {
         let url = identifier.to_string();
         let output_path = options.output_path;
         let progress = self.download_progress.clone();
+        let active_downloads = self.active_downloads.clone();
         let id = download_id.clone();
+        let event_bus = self.event_bus.clone();
 
         tokio::spawn(async move {
             if let Err(e) = Self::download_with_progress(
@@ -291,8 +563,11 @@ impl ProtocolHandler for HttpProtocolHandler {
                 url,
                 output_path,
                 progress,
+                active_downloads,
                 id,
                 cancel_rx,
+                event_bus,
+                file_name,
             ).await {
                 error!("HTTP download failed: {}", e);
             }
@@ -340,6 +615,18 @@ impl ProtocolHandler for HttpProtocolHandler {
         if let Some(state) = downloads.remove(identifier) {
             // Signal cancellation
             let _ = state.cancel_token.send(true);
+
+            // Emit canceled event
+            if let Some(ref bus) = self.event_bus {
+                bus.emit_canceled(TransferCanceledEvent {
+                    transfer_id: identifier.to_string(),
+                    canceled_at: Self::now_ms(),
+                    downloaded_bytes: 0, // Will be updated by download task
+                    total_bytes: state.total_bytes,
+                    keep_partial: false,
+                });
+            }
+
             Ok(())
         } else {
             Err(ProtocolError::DownloadNotFound(identifier.to_string()))

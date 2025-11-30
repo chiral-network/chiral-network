@@ -1909,11 +1909,11 @@
           <!-- Fee selector (UI stub) -->
           <div class="mt-3">
             <div class="inline-flex rounded-md border overflow-hidden">
-              <button type="button" class="px-3 py-1 text-xs {feePreset === 'low' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'low'}>{$t('fees.low')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'market' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'market'}>{$t('fees.market')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'fast' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'fast'}>{$t('fees.fast')}</button>
+              <button type="button" class="px-3 py-1 text-xs {feePreset === 'low' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'low'}>{$t('transfer.fees.low')}</button>
+              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'market' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'market'}>{$t('transfer.fees.market')}</button>
+              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'fast' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'fast'}>{$t('transfer.fees.fast')}</button>
             </div>
-            <p class="text-xs text-muted-foreground mt-2">{$t('fees.estimated')}: {estimatedFeeDisplay}</p>
+            <p class="text-xs text-muted-foreground mt-2">{$t('transfer.fees.estimated')}: {estimatedFeeDisplay}</p>
           </div>
         
         </div>

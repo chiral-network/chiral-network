@@ -21,16 +21,15 @@ import type { FileMetadata } from '$lib/dht'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
-import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
-import { showToast } from '$lib/toast'
-import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
-import DownloadRestartControls from '$lib/components/download/DownloadRestartControls.svelte'
-// Import transfer events store for centralized transfer state management
-import {
-  transferStore,
-  activeTransfers as storeActiveTransfers
-} from '$lib/stores/transferEventsStore'
-
+  import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
+  import { showToast } from '$lib/toast'
+  import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
+  import DownloadRestartControls from '$lib/components/download/DownloadRestartControls.svelte'
+  // Import transfer events store for centralized transfer state management
+  import {
+    transferStore,
+    activeTransfers as storeActiveTransfers
+  } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir } from '@tauri-apps/api/path'
 
@@ -98,10 +97,6 @@ import {
         }
       });
 
-      // Cleanup torrent listener
-      onDestroy(() => {
-        unlistenTorrentEvent();
-      });
       try {
         const unlistenProgress = await listen('multi_source_progress_update', (event) => {
           const progress = event.payload as MultiSourceProgress
@@ -810,7 +805,6 @@ async function loadAndResumeDownloads() {
   try {
     // Check if we've already restored in this session
     if (sessionStorage.getItem('downloadsRestored') === 'true') {
-      console.log('Downloads already restored in this session, skipping')
       return
     }
 
@@ -1173,11 +1167,11 @@ async function loadAndResumeDownloads() {
       diagnosticLogger.debug('Download', 'Queue is empty');
       return
     }
-    diagnosticLogger.debug('Download', 'Next file from queue', { fileName: nextFile.name, hash: nextFile.fileHash || nextFile.hash });
+    diagnosticLogger.debug('Download', 'Next file from queue', { fileName: nextFile.name, hash: nextFile.hash });
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
     const downloadingFile = {
       ...nextFile,
-      hash: nextFile.fileHash || nextFile.hash, // Map fileHash to hash for FileItem compatibility
+      hash: nextFile.hash, // Use hash property from FileItem
       status: 'downloading' as const,
       progress: 0,
       speed: '0 B/s', // Ensure speed property exists

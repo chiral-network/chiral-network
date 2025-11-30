@@ -291,14 +291,14 @@
   });
 </script>
 
-<div class="flex flex-col h-full gap-6 p-6 overflow-auto">
+<div class="space-y-6">
   <!-- Header -->
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold text-black">
+      <h1 class="text-3xl font-bold">
         {tr('blockchain.title')}
       </h1>
-      <p class="text-gray-700 mt-1">
+      <p class="text-muted-foreground mt-2">
         {tr('blockchain.subtitle')}
       </p>
     </div>
