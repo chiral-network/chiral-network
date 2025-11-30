@@ -924,7 +924,12 @@
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
 
-        const metadata = await dhtService.publishFileToNetwork(filePath, price, selectedProtocol);
+        // Copy file to temp location to prevent original file from being moved
+        const tempFilePath = await invoke<string>("copy_file_to_temp", {
+          filePath,
+        });
+
+        const metadata = await dhtService.publishFileToNetwork(tempFilePath, price, selectedProtocol);
 
         // Add WebSocket client ID to seeder addresses for WebRTC discovery
         const webrtcSeederIds = signalingService?.clientId
