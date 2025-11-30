@@ -1751,6 +1751,30 @@
               {/if}
             </div>
 
+            {#if dhtHealth}
+              <div class="bg-muted/40 rounded-lg p-3 border border-dashed border-muted/60">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.timeline')}</p>
+                <div class="mt-2 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <p class="text-xs text-muted-foreground">{$t('network.dht.relay.enabledAt')}</p>
+                    <p class="text-sm font-medium">
+                      {dhtHealth.lastAutorelayEnabledAt
+                        ? formatHealthTimestamp(dhtHealth.lastAutorelayEnabledAt)
+                        : $t('network.dht.relay.neverEnabled')}
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-xs text-muted-foreground">{$t('network.dht.relay.disabledAt')}</p>
+                    <p class="text-sm font-medium">
+                      {dhtHealth.lastAutorelayDisabledAt
+                        ? formatHealthTimestamp(dhtHealth.lastAutorelayDisabledAt)
+                        : $t('network.dht.relay.neverDisabled')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            {/if}
+
             {#if dhtHealth?.autorelayEnabled}
               <div class="grid gap-3 md:grid-cols-2">
                 <div class="bg-muted/40 rounded-lg p-3">

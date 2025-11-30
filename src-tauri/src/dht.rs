@@ -9,6 +9,88 @@ use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
 use x25519_dalek::PublicKey;
+
+/// Merges two FileMetadata instances for the same file uploaded via different protocols.
+/// This preserves all protocol-specific information while keeping the most recent common fields.
+fn merge_file_metadata(existing: crate::dht::models::FileMetadata, new: crate::dht::models::FileMetadata) -> crate::dht::models::FileMetadata {
+
+    // Keep the most recent metadata as base, but merge protocol-specific fields
+    let mut merged = new.clone();
+
+    // Merge seeders (combine unique addresses)
+    let mut all_seeders = existing.seeders.clone();
+    all_seeders.extend(new.seeders.clone());
+    all_seeders.sort();
+    all_seeders.dedup();
+    merged.seeders = all_seeders;
+
+    // Merge FTP sources (if any)
+    if let (Some(existing_ftp), Some(new_ftp)) = (&existing.ftp_sources, &new.ftp_sources) {
+        let mut merged_ftp = existing_ftp.clone();
+        merged_ftp.extend(new_ftp.clone());
+        // Remove duplicates based on URL
+        merged_ftp.sort_by(|a, b| a.url.cmp(&b.url));
+        merged_ftp.dedup_by(|a, b| a.url == b.url);
+        merged.ftp_sources = Some(merged_ftp);
+    } else if existing.ftp_sources.is_some() {
+        merged.ftp_sources = existing.ftp_sources.clone();
+    }
+    // If new has FTP sources, they're already in merged (since we cloned new)
+
+    // Merge ED2K sources (if any)
+    if let (Some(existing_ed2k), Some(new_ed2k)) = (&existing.ed2k_sources, &new.ed2k_sources) {
+        let mut merged_ed2k = existing_ed2k.clone();
+        merged_ed2k.extend(new_ed2k.clone());
+        // Remove duplicates based on server_url and file_hash
+        merged_ed2k.sort_by(|a, b| {
+            match a.server_url.cmp(&b.server_url) {
+                std::cmp::Ordering::Equal => a.file_hash.cmp(&b.file_hash),
+                other => other,
+            }
+        });
+        merged_ed2k.dedup_by(|a, b| a.server_url == b.server_url && a.file_hash == b.file_hash);
+        merged.ed2k_sources = Some(merged_ed2k);
+    } else if existing.ed2k_sources.is_some() {
+        merged.ed2k_sources = existing.ed2k_sources.clone();
+    }
+
+    // Merge HTTP sources (if any)
+    if let (Some(existing_http), Some(new_http)) = (&existing.http_sources, &new.http_sources) {
+        let mut merged_http = existing_http.clone();
+        merged_http.extend(new_http.clone());
+        // Remove duplicates based on URL
+        merged_http.sort_by(|a, b| a.url.cmp(&b.url));
+        merged_http.dedup_by(|a, b| a.url == b.url);
+        merged.http_sources = Some(merged_http);
+    } else if existing.http_sources.is_some() {
+        merged.http_sources = existing.http_sources.clone();
+    }
+
+    // Merge CIDs (IPFS content identifiers)
+    if let (Some(existing_cids), Some(new_cids)) = (&existing.cids, &new.cids) {
+        let mut merged_cids = existing_cids.clone();
+        merged_cids.extend(new_cids.clone());
+        merged_cids.sort();
+        merged_cids.dedup();
+        merged.cids = Some(merged_cids);
+    } else if existing.cids.is_some() {
+        merged.cids = existing.cids.clone();
+    }
+
+    // Keep BitTorrent-specific fields from whichever has them (prefer new)
+    if existing.info_hash.is_some() && new.info_hash.is_none() {
+        merged.info_hash = existing.info_hash.clone();
+    }
+    if existing.trackers.is_some() && new.trackers.is_none() {
+        merged.trackers = existing.trackers.clone();
+    }
+
+    // For other fields, we keep the new values (most recent upload)
+    // This includes: file_name, file_size, created_at, price, uploader_address, etc.
+
+    merged
+}
+
 // ------ Key Request Protocol Implementation ------
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyRequestProtocol;
@@ -927,6 +1009,8 @@ impl DhtMetricsSnapshot {
             autonat_enabled,
             // AutoRelay metrics
             autorelay_enabled,
+            last_autorelay_enabled_at,
+            last_autorelay_disabled_at,
             active_relay_peer_id,
             relay_reservation_status,
             last_reservation_success,
@@ -984,6 +1068,8 @@ impl DhtMetricsSnapshot {
             autonat_enabled,
             // AutoRelay metrics
             autorelay_enabled,
+            last_autorelay_enabled_at: last_autorelay_enabled_at.and_then(to_secs),
+            last_autorelay_disabled_at: last_autorelay_disabled_at.and_then(to_secs),
             active_relay_peer_id,
             relay_reservation_status,
             last_reservation_success: last_reservation_success.and_then(to_secs),
@@ -1586,10 +1672,16 @@ async fn run_dht_node(
                                 }
                                 // Cache the published file locally so it can be found in searches
                                 // This ensures nodes can discover their own published files
-                                file_metadata_cache.lock().await.insert(
-                                    metadata.merkle_root.clone(),
-                                    metadata.clone()
-                                );
+                                // Merge with existing metadata if it exists (for multi-protocol support)
+                                {
+                                    let mut cache = file_metadata_cache.lock().await;
+                                    let merged_metadata = if let Some(existing) = cache.get(&metadata.merkle_root) {
+                                        merge_file_metadata(existing.clone(), metadata.clone())
+                                    } else {
+                                        metadata.clone()
+                                    };
+                                    cache.insert(metadata.merkle_root.clone(), merged_metadata);
+                                }
 
                                 // notify frontend
                                 let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
@@ -1709,10 +1801,16 @@ async fn run_dht_node(
                                 }
 
                                 // Cache the published encrypted file locally
-                                file_metadata_cache.lock().await.insert(
-                                    metadata.merkle_root.clone(),
-                                    metadata.clone()
-                                );
+                                // Merge with existing metadata if it exists (for multi-protocol support)
+                                {
+                                    let mut cache = file_metadata_cache.lock().await;
+                                    let merged_metadata = if let Some(existing) = cache.get(&metadata.merkle_root) {
+                                        merge_file_metadata(existing.clone(), metadata.clone())
+                                    } else {
+                                        metadata.clone()
+                                    };
+                                    cache.insert(metadata.merkle_root.clone(), merged_metadata);
+                                }
                                 info!("Cached published encrypted file {} locally", metadata.merkle_root);
 
                                 info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
@@ -5506,6 +5604,8 @@ impl DhtService {
         enable_relay_server: bool,
         enable_upnp: bool,
         blockstore_db_path: Option<&Path>,
+        last_autorelay_enabled_at: Option<SystemTime>,
+        last_autorelay_disabled_at: Option<SystemTime>,
     ) -> Result<Self, Box<dyn Error>> {
         // Respect user-configured AutoRelay preference (allow env to force-disable)
         let mut final_enable_autorelay = enable_autorelay;
@@ -5949,7 +6049,16 @@ impl DhtService {
             let mut guard = metrics.lock().await;
             guard.autonat_enabled = enable_autonat;
             guard.autorelay_enabled = final_enable_autorelay;
+            guard.last_autorelay_enabled_at = last_autorelay_enabled_at;
+            guard.last_autorelay_disabled_at = last_autorelay_disabled_at;
             guard.dcutr_enabled = enable_autonat; // DCUtR enabled when AutoNAT is enabled
+            let now = SystemTime::now();
+            if final_enable_autorelay {
+                // Always record a fresh enable time when AutoRelay is turned on
+                guard.last_autorelay_enabled_at = Some(now);
+            } else {
+                guard.last_autorelay_disabled_at = Some(now);
+            }
         }
 
         // Spawn the Dht node task
@@ -6680,6 +6789,16 @@ impl DhtService {
         let metrics = self.metrics.lock().await.clone();
         let peer_count = self.connected_peers.lock().await.len();
         DhtMetricsSnapshot::from(metrics, peer_count)
+    }
+
+    pub async fn autorelay_history(
+        &self,
+    ) -> (Option<SystemTime>, Option<SystemTime>) {
+        let metrics = self.metrics.lock().await;
+        (
+            metrics.last_autorelay_enabled_at.clone(),
+            metrics.last_autorelay_disabled_at.clone(),
+        )
     }
 
     pub async fn store_block(&self, cid: Cid, data: Vec<u8>) -> Result<(), String> {
@@ -7641,6 +7760,8 @@ mod tests {
             Vec::new(), // preferred_relays
             false,      // enable_relay_server
             false,      // enable_upnp (disabled for testing)
+            None,
+            None,
             None,
         )
         .await

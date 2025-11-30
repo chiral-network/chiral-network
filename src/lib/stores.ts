@@ -16,7 +16,8 @@ export const blockReward = writable<number>(2);
 export interface FileItem {
   id: string;
   name: string;
-  hash: string;
+  hash: string; // Content hash (Merkle root) for grouping
+  protocolHash?: string; // Protocol-specific hash/link (magnet, ed2k, ftp url, etc.)
   size: number;
   status:
     | "downloading"
@@ -52,6 +53,33 @@ export interface FileItem {
   downloadStartTime?: number;
   price: number; // Price in Chiral for this file
   protocol?: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
+}
+
+export interface ProtocolEntry {
+  protocol: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP";
+  hash: string; // Protocol-specific hash (Merkle, magnet, ed2k, etc.)
+  fileItem: FileItem; // Reference to the original file item
+  technicalInfo: {
+    seederCount?: number;
+    leechers?: number;
+    uploadDate: Date;
+    price: number;
+    status: string;
+  };
+}
+
+export interface CoalescedFileItem {
+  contentHash: string; // Merkle hash that identifies the content
+  name: string;
+  size: number;
+  protocols: ProtocolEntry[]; // All protocols this content is available on
+  totalSeeders: number;
+  totalLeechers: number;
+  earliestUploadDate: Date;
+  latestUploadDate: Date;
+  averagePrice: number;
+  isSeeding: boolean; // True if at least one protocol is seeding
+  primaryProtocol?: ProtocolEntry; // The first/most recent protocol entry
 }
 
 export interface ProxyNode {
@@ -243,6 +271,101 @@ const dummyTransactions: Transaction[] = [
 
 // Stores
 export const files = writable<FileItem[]>([]);
+
+// Coalesced files view - groups files by content hash and shows all protocols
+export const coalescedFiles = derived(files, ($files): CoalescedFileItem[] => {
+  const fileGroups = new Map<string, FileItem[]>();
+
+  // Group files by their content hash (Merkle hash)
+  $files
+    .filter((f) => f.status === "seeding" || f.status === "uploaded")
+    .forEach((file) => {
+      if (!file.hash) return; // Skip files without hash
+
+      if (!fileGroups.has(file.hash)) {
+        fileGroups.set(file.hash, []);
+      }
+      fileGroups.get(file.hash)!.push(file);
+    });
+
+  // Convert groups to coalesced file items
+  const coalescedItems: CoalescedFileItem[] = [];
+
+  for (const [contentHash, fileItems] of fileGroups.entries()) {
+    if (fileItems.length === 0) continue;
+
+    // Sort by upload date (most recent first)
+    fileItems.sort((a, b) => {
+      const dateA = a.uploadDate?.getTime() || 0;
+      const dateB = b.uploadDate?.getTime() || 0;
+      return dateB - dateA;
+    });
+
+    const primaryFile = fileItems[0];
+    const uploadDates = fileItems
+      .map((f) => f.uploadDate?.getTime() || 0)
+      .filter((d) => d > 0)
+      .sort((a, b) => a - b);
+
+    // Create protocol entries
+    const protocols: ProtocolEntry[] = fileItems.map((file) => ({
+      protocol: file.protocol || "Bitswap", // Default to Bitswap if not specified
+      hash: file.protocolHash || file.hash, // Use protocol-specific hash if available, otherwise content hash
+      fileItem: file,
+      technicalInfo: {
+        seederCount: file.seeders || 0,
+        leechers: file.leechers || 0,
+        uploadDate: file.uploadDate || new Date(),
+        price: file.price || 0,
+        status: file.status,
+      },
+    }));
+
+    // Calculate aggregate stats
+    const totalSeeders = protocols.reduce(
+      (sum, p) => sum + (p.technicalInfo.seederCount || 0),
+      0
+    );
+    const totalLeechers = protocols.reduce(
+      (sum, p) => sum + (p.technicalInfo.leechers || 0),
+      0
+    );
+    const totalPrice = protocols.reduce(
+      (sum, p) => sum + p.technicalInfo.price,
+      0
+    );
+    const averagePrice =
+      protocols.length > 0 ? totalPrice / protocols.length : 0;
+    const isSeeding = protocols.some(
+      (p) => p.technicalInfo.status === "seeding"
+    );
+
+    coalescedItems.push({
+      contentHash,
+      name: primaryFile.name,
+      size: primaryFile.size,
+      protocols,
+      totalSeeders,
+      totalLeechers,
+      earliestUploadDate:
+        uploadDates.length > 0 ? new Date(uploadDates[0]) : new Date(),
+      latestUploadDate:
+        uploadDates.length > 0
+          ? new Date(uploadDates[uploadDates.length - 1])
+          : new Date(),
+      averagePrice,
+      isSeeding,
+      primaryProtocol: protocols[0],
+    });
+  }
+
+  // Sort by latest upload date (most recent first)
+  coalescedItems.sort(
+    (a, b) => b.latestUploadDate.getTime() - a.latestUploadDate.getTime()
+  );
+
+  return coalescedItems;
+});
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);

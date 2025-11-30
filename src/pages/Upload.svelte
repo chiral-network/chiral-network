@@ -27,7 +27,7 @@
     Network,
     Server,
   } from "lucide-svelte";
-  import { files, type FileItem } from "$lib/stores";
+  import { files, coalescedFiles, type FileItem } from "$lib/stores";
   import {
     loadSeedList,
     saveSeedList,
@@ -199,7 +199,6 @@
       throw error;
     }
   }
-
 
   async function calculateFilePrice(sizeInBytes: number): Promise<number> {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
@@ -663,11 +662,24 @@
                 // Use streaming upload for all protocols to avoid memory issues with large files
                 // All protocol handlers read from file paths on disk
                 const tempFilePath = await uploadFileStreamingToDisk(file);
-                metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice, selectedProtocol);
+                metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice, selectedProtocol, file.name);
 
-                if (get(files).some((f) => f.hash === metadata.merkleRoot)) {
+                // Check for same content + same protocol (true duplicate)
+                if (get(files).some((f) => f.hash === metadata.merkleRoot && f.protocol === selectedProtocol)) {
                   duplicateCount++;
+                  showToast(
+                    tr('upload.duplicateSkipped', { values: { count: 1 } }),
+                    "warning"
+                  );
                   continue;
+                }
+
+                // Construct protocol-specific hash for display
+                let protocolHash = metadata.merkleRoot || "";
+                if (selectedProtocol === "BitTorrent" && metadata.infoHash) {
+                  // Construct magnet link for BitTorrent
+                  const trackers = metadata.trackers ? metadata.trackers.join('&tr=') : 'udp://tracker.openbittorrent.com:80';
+                  protocolHash = `magnet:?xt=urn:btih:${metadata.infoHash}&tr=${trackers}`;
                 }
 
                 const newFile = {
@@ -675,6 +687,7 @@
                   name: metadata.fileName,
                   path: file.name,
                   hash: metadata.merkleRoot || "",
+                  protocolHash,
                   size: metadata.fileSize,
                   status: "seeding" as const,
                   seeders: metadata.seeders?.length ?? 0,
@@ -683,11 +696,11 @@
                   uploadDate: new Date(metadata.createdAt),
                   price: filePrice,
                   cids: metadata.cids,
+                  protocol: selectedProtocol,
                 };
 
                 files.update((currentFiles) => [...currentFiles, newFile]);
                 addedCount++;
-                // showToast(`${file.name} uploaded successfully`, "success");
                 showToast(
                   tr('toasts.upload.fileSuccess', { values: { name: file.name } }),
                   "success"
@@ -835,7 +848,7 @@
     }
   }
 
-  async function removeFile(fileHash: string) {
+  async function removeFile(contentHash: string) {
     if (!isTauri) {
       showToast(
         tr("upload.fileManagementDesktopOnly"),
@@ -845,19 +858,31 @@
     }
 
     try {
-      try {
-        await invoke("stop_publishing_file", { fileHash });
-        console.log("File unpublished from DHT:", fileHash);
-      } catch (unpublishError) {
-        console.warn("Failed to unpublish file from DHT:", unpublishError);
+      // Find all files with this content hash and stop publishing each one
+      const filesToRemove = get(files).filter((file) => file.hash === contentHash);
+
+      for (const file of filesToRemove) {
+        try {
+          await invoke("stop_publishing_file", { fileHash: file.hash });
+          console.log("File unpublished from DHT:", file.hash, "protocol:", file.protocol);
+        } catch (unpublishError) {
+          console.warn("Failed to unpublish file from DHT:", unpublishError);
+        }
       }
 
-      files.update((f) => f.filter((file) => file.hash !== fileHash));
+      // Remove all files with this content hash from the store
+      files.update((f) => f.filter((file) => file.hash !== contentHash));
+
+      const protocolCount = filesToRemove.length;
+      showToast(
+        `Stopped sharing file on ${protocolCount} protocol${protocolCount > 1 ? 's' : ''}`,
+        "success"
+      );
     } catch (error) {
       console.error(error);
       showToast(
         tr("upload.fileFailed", {
-          values: { name: fileHash, error: String(error) },
+          values: { name: contentHash.slice(0, 8) + "...", error: String(error) },
         }),
         "error",
       );
@@ -929,7 +954,10 @@
           filePath,
         });
 
-        const metadata = await dhtService.publishFileToNetwork(tempFilePath, price, selectedProtocol);
+        // Extract original filename from the file path
+        const originalFileName = filePath.split(/[/\\]/).pop() || filePath;
+
+        const metadata = await dhtService.publishFileToNetwork(tempFilePath, price, selectedProtocol, originalFileName);
 
         // Add WebSocket client ID to seeder addresses for WebRTC discovery
         const webrtcSeederIds = signalingService?.clientId
@@ -940,11 +968,27 @@
           ...webrtcSeederIds
         ];
 
+        // Construct protocol-specific hash for display
+        let protocolHash = metadata.merkleRoot || "";
+        if (selectedProtocol === "BitTorrent" && metadata.infoHash) {
+          // Construct magnet link for BitTorrent
+          const trackers = metadata.trackers ? metadata.trackers.join('&tr=') : 'udp://tracker.openbittorrent.com:80';
+          protocolHash = `magnet:?xt=urn:btih:${metadata.infoHash}&tr=${trackers}`;
+        } else if (selectedProtocol === "ED2K" && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
+          // Use the first ED2K source
+          const ed2kSource = metadata.ed2kSources[0];
+          protocolHash = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.fileHash}|/`;
+        } else if (selectedProtocol === "FTP" && metadata.ftpSources && metadata.ftpSources.length > 0) {
+          // Use the first FTP source
+          protocolHash = metadata.ftpSources[0].url;
+        }
+
         const newFile = {
           id: `file-${Date.now()}-${Math.random()}`,
           name: metadata.fileName,
           path: filePath,
           hash: metadata.merkleRoot || "",
+          protocolHash,
           size: metadata.fileSize,
           status: "seeding" as const,
           seeders: metadata.seeders?.length ?? 0,
@@ -960,9 +1004,7 @@
         files.update((f) => {
           const matchIndex = f.findIndex(
             (item) =>
-              (metadata.merkleRoot && item.hash === metadata.merkleRoot) ||
-              (item.name === metadata.fileName &&
-                item.size === metadata.fileSize),
+              metadata.merkleRoot && item.hash === metadata.merkleRoot && item.protocol === selectedProtocol,
           );
 
           if (matchIndex !== -1) {
@@ -1351,24 +1393,15 @@
                     {$t("upload.sharedFiles")}
                   </h2>
                   <p class="text-sm text-muted-foreground mt-1">
-                    {$files.filter(
-                      (f) => f.status === "seeding" || f.status === "uploaded",
-                    ).length}
-                    {$files.filter(
-                      (f) => f.status === "seeding" || f.status === "uploaded",
-                    ).length === 1 ? $t("upload.file") : $t("upload.files")} •
+                    {$coalescedFiles.length}
+                    {$coalescedFiles.length === 1 ? $t("upload.file") : $t("upload.files")} •
                     {formatFileSize(
-                      $files
-                        .filter(
-                          (f) =>
-                            f.status === "seeding" || f.status === "uploaded",
-                        )
-                        .reduce((sum, f) => sum + f.size, 0),
+                      $coalescedFiles.reduce((sum, f) => sum + f.size, 0),
                     )}
                     {$t("upload.total")}
-                    {#if $files.filter((f) => f.status === "seeding").length > 0}
+                    {#if $coalescedFiles.some((f) => f.totalSeeders > 0)}
                       <span class="text-green-600 font-medium">
-                        ({$files.filter((f) => f.status === "seeding").length} {$files.filter((f) => f.status === "seeding").length === 1 ? "seeding" : "seeding"})
+                        ({$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0)} {$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0) === 1 ? "seeder" : "seeders"})
                       </span>
                     {/if}
                   </p>
@@ -1398,9 +1431,9 @@
               </div>
 
               <!-- File List -->
-              {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length > 0}
+              {#if $coalescedFiles.length > 0}
                 <div class="space-y-3 relative px-4">
-                  {#each $files.filter((f) => f.status === "seeding" || f.status === "uploaded") as file}
+                  {#each $coalescedFiles as coalescedFile}
                     <div
                       class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 overflow-hidden mb-3"
                     >
@@ -1421,8 +1454,8 @@
                               class="relative flex items-center justify-center w-12 h-12 bg-gradient-to-br from-primary/10 to-primary/5 rounded-lg border border-primary/20"
                             >
                               <svelte:component
-                                this={getFileIcon(file.name)}
-                                class="h-6 w-6 {getFileColor(file.name)}"
+                                this={getFileIcon(coalescedFile.name)}
+                                class="h-6 w-6 {getFileColor(coalescedFile.name)}"
                               />
                             </div>
                           </div>
@@ -1433,10 +1466,10 @@
                               <p
                                 class="text-sm font-semibold truncate text-foreground"
                               >
-                                {file.name}
+                                {coalescedFile.name || 'Unnamed File'}
                               </p>
 
-                              {#if file.isEncrypted}
+                              {#if coalescedFile.primaryProtocol?.fileItem.isEncrypted}
                                 <Badge
                                   class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5 flex items-center gap-1"
                                   title={$t("upload.encryptedEndToEnd")}
@@ -1448,42 +1481,42 @@
                             </div>
 
                             <div class="space-y-2 text-xs text-muted-foreground">
-                              <!-- Protocol Badge -->
-                              {#if file.protocol}
-                                <div class="flex items-center gap-2">
+                              <!-- Protocol Badges -->
+                              <div class="flex items-center gap-2 flex-wrap">
+                                {#each coalescedFile.protocols as protocolEntry}
                                   <Badge class={`text-xs px-2 py-0.5 ${
-                                    file.protocol === 'WebRTC' ? 'bg-blue-100 text-blue-800' :
-                                    file.protocol === 'Bitswap' ? 'bg-purple-100 text-purple-800' :
-                                    file.protocol === 'BitTorrent' ? 'bg-green-100 text-green-800' :
-                                    file.protocol === 'ED2K' ? 'bg-orange-100 text-orange-800' :
+                                    protocolEntry.protocol === 'WebRTC' ? 'bg-blue-100 text-blue-800' :
+                                    protocolEntry.protocol === 'Bitswap' ? 'bg-purple-100 text-purple-800' :
+                                    protocolEntry.protocol === 'BitTorrent' ? 'bg-green-100 text-green-800' :
+                                    protocolEntry.protocol === 'ED2K' ? 'bg-orange-100 text-orange-800' :
                                     'bg-gray-100 text-gray-800'
                                   }`}>
-                                    {#if file.protocol === 'WebRTC'}
+                                    {#if protocolEntry.protocol === 'WebRTC'}
                                       <Globe class="h-3 w-3 mr-1" />
-                                    {:else if file.protocol === 'Bitswap'}
+                                    {:else if protocolEntry.protocol === 'Bitswap'}
                                       <Blocks class="h-3 w-3 mr-1" />
-                                    {:else if file.protocol === 'BitTorrent'}
+                                    {:else if protocolEntry.protocol === 'BitTorrent'}
                                       <Share2 class="h-3 w-3 mr-1" />
-                                    {:else if file.protocol === 'ED2K'}
+                                    {:else if protocolEntry.protocol === 'ED2K'}
                                       <Network class="h-3 w-3 mr-1" />
-                                    {:else if file.protocol === 'FTP'}
+                                    {:else if protocolEntry.protocol === 'FTP'}
                                       <Server class="h-3 w-3 mr-1" />
                                     {/if}
-                                    {file.protocol}
+                                    {protocolEntry.protocol}
                                   </Badge>
-                                </div>
-                              {/if}
+                                {/each}
+                              </div>
 
-                              <!-- Protocol-Specific Identifiers -->
-                              {#if file.protocol === 'WebRTC' || file.protocol === 'Bitswap'}
-                                <!-- Chiral Native Protocols: Show Merkle Hash -->
+                              <!-- All Identifiers/Links at the top -->
+                              <div class="space-y-1 mb-3">
+                                <!-- Merkle Hash -->
                                 <div class="flex items-center gap-1">
-                                  <span class="opacity-60">Merkle Hash:</span>
+                                  <span class="text-xs opacity-70">Merkle Hash:</span>
                                   <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono">
-                                    {file.hash.slice(0, 8)}...{file.hash.slice(-6)}
+                                    {coalescedFile.contentHash.slice(0, 8)}...{coalescedFile.contentHash.slice(-6)}
                                   </code>
                                   <button
-                                    on:click={() => handleCopy(file.hash)}
+                                    on:click={() => handleCopy(coalescedFile.contentHash)}
                                     class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
                                     title="Copy Merkle Hash (use this to search and download)"
                                     aria-label="Copy Merkle hash"
@@ -1491,97 +1524,86 @@
                                     <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
                                   </button>
                                 </div>
-                              {:else if file.protocol === 'BitTorrent'}
-                                <!-- BitTorrent: Show Magnet Link -->
-                                {#if file.hash.startsWith('magnet:')}
-                                  <div class="flex items-center gap-1">
-                                    <span class="opacity-60">Magnet Link:</span>
-                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
-                                      magnet:?xt=urn:btih:{extractInfoHash(file.hash)}
-                                    </code>
-                                    <button
-                                      on:click={() => handleCopy(file.hash)}
-                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                      title="Copy Magnet Link"
-                                      aria-label="Copy magnet link"
-                                    >
-                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
-                                    </button>
+
+                                <!-- Protocol-Specific Links -->
+                                {#each coalescedFile.protocols as protocolEntry}
+                                  {#if protocolEntry.protocol === 'BitTorrent' && protocolEntry.hash.startsWith('magnet:')}
+                                    <div class="flex items-center gap-1">
+                                      <span class="text-xs opacity-70">Magnet Link:</span>
+                                      <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                        magnet:?xt=urn:btih:{extractInfoHash(protocolEntry.hash)}
+                                      </code>
+                                      <button
+                                        on:click={() => handleCopy(protocolEntry.hash)}
+                                        class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                        title="Copy Magnet Link"
+                                        aria-label="Copy magnet link"
+                                      >
+                                        <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                      </button>
+                                    </div>
+                                  {:else if protocolEntry.protocol === 'ED2K' && protocolEntry.hash.startsWith('ed2k://')}
+                                    <div class="flex items-center gap-1">
+                                      <span class="text-xs opacity-70">eD2k Link:</span>
+                                      <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                        ed2k://|file|{coalescedFile.name}|{coalescedFile.size}|{extractEd2kHash(protocolEntry.hash)}|/
+                                      </code>
+                                      <button
+                                        on:click={() => handleCopy(protocolEntry.hash)}
+                                        class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                        title="Copy eD2k Link"
+                                        aria-label="Copy eD2k link"
+                                      >
+                                        <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                      </button>
+                                    </div>
+                                  {:else if protocolEntry.protocol === 'FTP' && protocolEntry.hash.startsWith('ftp://')}
+                                    <div class="flex items-center gap-1">
+                                      <span class="text-xs opacity-70">FTP URL:</span>
+                                      <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                        {protocolEntry.hash}
+                                      </code>
+                                      <button
+                                        on:click={() => handleCopy(protocolEntry.hash)}
+                                        class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                        title="Copy FTP URL"
+                                        aria-label="Copy FTP URL"
+                                      >
+                                        <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                      </button>
+                                    </div>
+                                  {/if}
+                                {/each}
+                              </div>
+
+                              <!-- Protocol Seeder Status -->
+                              <div class="space-y-1">
+                                {#each coalescedFile.protocols as protocolEntry}
+                                  <div class="text-xs opacity-70">
+                                    <span>{protocolEntry.protocol} Seeders: {protocolEntry.technicalInfo.seederCount || 0}</span>
                                   </div>
-                                {/if}
-                              {:else if file.protocol === 'ED2K'}
-                                <!-- ED2K: Show ed2k Link -->
-                                {#if file.hash.startsWith('ed2k://')}
-                                  <div class="flex items-center gap-1">
-                                    <span class="opacity-60">eD2k Link:</span>
-                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
-                                      ed2k://|file|{file.name}|{file.size}|{extractEd2kHash(file.hash)}|/
-                                    </code>
-                                    <button
-                                      on:click={() => handleCopy(file.hash)}
-                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                      title="Copy eD2k Link"
-                                      aria-label="Copy eD2k link"
-                                    >
-                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
-                                    </button>
-                                  </div>
-                                {/if}
-                              {:else if file.protocol === 'FTP'}
-                                <!-- FTP: Show FTP URL -->
-                                {#if file.hash.startsWith('ftp://')}
-                                  <div class="flex items-center gap-1">
-                                    <span class="opacity-60">FTP URL:</span>
-                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
-                                      {file.hash}
-                                    </code>
-                                    <button
-                                      on:click={() => handleCopy(file.hash)}
-                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                      title="Copy FTP URL"
-                                      aria-label="Copy FTP URL"
-                                    >
-                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
-                                    </button>
-                                  </div>
-                                {/if}
-                              {:else}
-                                <!-- Fallback: Show generic hash -->
-                                <div class="flex items-center gap-1">
-                                  <span class="opacity-60">{$t("upload.hashLabel")}</span>
-                                  <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono">
-                                    {file.hash.slice(0, 8)}...{file.hash.slice(-6)}
-                                  </code>
-                                  <button
-                                    on:click={() => handleCopy(file.hash)}
-                                    class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                    title={$t("upload.copyHash")}
-                                    aria-label="Copy file hash"
-                                  >
-                                    <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
-                                  </button>
-                                </div>
-                              {/if}
+                                {/each}
+                              </div>
 
                               <div class="flex items-center gap-3">
                                 <span class="font-medium"
-                                  >{formatFileSize(file.size)}</span
+                                  >{formatFileSize(coalescedFile.size)}</span
                                 >
 
-                                {#if file.seeders !== undefined}
+                                {#if coalescedFile.totalSeeders > 0}
                                   <div class="flex items-center gap-1">
                                     <Upload class="h-3 w-3 text-green-500" />
                                     <span class="text-green-600 font-medium"
-                                      >{file.seeders || 1}</span
+                                      >{coalescedFile.totalSeeders}</span
                                     >
                                   </div>
                                 {/if}
 
-                                {#if file.leechers && file.leechers > 0}
+                                {#if coalescedFile.totalLeechers > 0}
                                   <div class="flex items-center gap-1">
                                     <Download class="h-3 w-3 text-orange-500" />
                                     <span class="text-orange-600 font-medium"
-                                      >{file.leechers}</span
+                                      >{coalescedFile.totalLeechers}</span
                                     >
                                   </div>
                                 {/if}
@@ -1593,23 +1615,23 @@
                         <!-- Price and Actions -->
                         <div class="flex items-center gap-2">
                           <!-- Price Badge -->
-                          {#if file.price !== undefined && file.price !== null}
+                          {#if coalescedFile.averagePrice > 0}
                             <div
                               class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
-                              title={$t("upload.priceTooltip")}
+                              title={`Average price across ${coalescedFile.protocols.length} protocol${coalescedFile.protocols.length > 1 ? 's' : ''}`}
                             >
                               <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
-                                >{file.price.toFixed(8)} Chiral</span
+                                >{coalescedFile.averagePrice.toFixed(8)} Chiral</span
                               >
                             </div>
                           {/if}
 
                           {#if isTauri}
                             <button
-                              on:click={() => removeFile(file.hash)}
+                              on:click={() => removeFile(coalescedFile.contentHash)}
                               class="group/btn p-2 hover:bg-destructive/10 rounded-lg transition-all duration-200 hover:scale-110"
-                              title={$t("upload.stopSharing")}
+                              title={`Stop sharing this file on all ${coalescedFile.protocols.length} protocol${coalescedFile.protocols.length > 1 ? 's' : ''}`}
                               aria-label="Stop sharing file"
                             >
                               <X

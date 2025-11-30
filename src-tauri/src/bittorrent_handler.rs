@@ -1004,6 +1004,8 @@ mod tests {
                 false,                        // enable_relay_server
                 false,                        // enable_upnp
                 None,                         // blockstore_db_path
+                None,
+                None,
             )
             .await
             .expect("Failed to create DHT service for test"),
@@ -1072,6 +1074,8 @@ mod tests {
                 false,                        // enable_relay_server
                 false,                        // enable_upnp
                 None,                         // blockstore_db_path
+                None,
+                None,
             )
             .await
             .expect("Failed to create DHT service for test"),
@@ -1128,6 +1132,8 @@ mod tests {
                 false,                        // enable_relay_server
                 false,                        // enable_upnp
                 None,                         // blockstore_db_path
+                None,
+                None,
             )
             .await
             .expect("Failed to create DHT service for test"),
