@@ -1,6 +1,10 @@
 pub mod models;
 // pub mod protocol;
-use self::models::*;
+pub use self::models::{
+    DhtMetrics, DhtMetricsSnapshot, Ed2kDownloadStatus, Ed2kError, Ed2kSourceInfo, FileHeartbeatCacheEntry,
+    FileMetadata, FtpSourceInfo, MagnetData, NatConfidence, NatHistoryItem, NatReachabilityState,
+    ReachabilityRecord, SeederHeartbeat,
+};
 use rand::seq::SliceRandom;
 
 // use self::protocol::*;
@@ -289,227 +293,6 @@ fn extract_keywords(file_name: &str) -> Vec<String> {
     keywords.into_iter().collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct FileMetadata {
-    // !IMPORTANT: Please make use of serde(default) and ..Default::default() for backwards/forwards compatability
-    /// The Merkle root of the original file chunks, used as the primary identifier for integrity.
-    pub merkle_root: String,
-    pub file_name: String,
-    pub file_size: u64,
-    #[serde(skip)]
-    pub file_data: Vec<u8>, // holds the actual file data
-    #[serde(default)]
-    pub seeders: Vec<String>,
-    #[serde(default)]
-    pub created_at: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mime_type: Option<String>,
-    /// Whether the file is encrypted
-    #[serde(default)]
-    pub is_encrypted: bool,
-    /// The encryption method used (e.g., "AES-256-GCM")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub encryption_method: Option<String>,
-    /// Fingerprint of the encryption key for identification.
-    /// This is now deprecated in favor of the merkle_root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_fingerprint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_hash: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    /// The root CID(s) for retrieving the file from Bitswap. Usually one.
-    pub cids: Option<Vec<Cid>>,
-    /// For encrypted files, this contains the encrypted AES key and other info.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub encrypted_key_bundle: Option<crate::encryption::EncryptedAesKeyBundle>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ftp_sources: Option<Vec<FtpSourceInfo>>,
-    // ed2k HTTP sources for downloading the file
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ed2k_sources: Option<Vec<Ed2kSourceInfo>>,
-    /// HTTP sources for downloading the file (HTTP Range request endpoints)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub http_sources: Option<Vec<HttpSourceInfo>>,
-    #[serde(default)]
-    pub is_root: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub download_path: Option<String>,
-    /// Price in Chiral tokens set by the uploader
-    #[serde(default)]
-    pub price: Option<f64>,
-    /// Ethereum address of the uploader (for payment)
-    #[serde(default)]
-    pub uploader_address: Option<String>,
-    /// The SHA-1 info hash for BitTorrent compatibility.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub info_hash: Option<String>,
-    /// A list of BitTorrent tracker URLs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trackers: Option<Vec<String>>,
-}
-
-/// FTP source information for a file
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FtpSourceInfo {
-    /// Full FTP URL (e.g., "ftp://ftp.example.com/path/to/file.bin")
-    pub url: String,
-    /// Optional username (None means anonymous)
-    pub username: Option<String>,
-    /// Optional password (stored temporarily, not persisted to DHT for security)
-    /// This should be provided at download time, not stored in DHT
-    #[serde(skip_serializing, skip_deserializing)]
-    pub password: Option<String>,
-    /// Whether this FTP server supports resume (REST command)
-    pub supports_resume: bool,
-    /// Last known file size on this FTP server
-    pub file_size: u64,
-    /// Server availability (updated based on connection attempts)
-    pub last_checked: Option<u64>, // Unix timestamp
-    pub is_available: bool,
-}
-
-impl FtpSourceInfo {
-    /// Creates a copy of the struct suitable for DHT storage, stripping the password.
-    pub fn for_dht_storage(&self) -> Self {
-        Self {
-            url: self.url.clone(),
-            username: self.username.clone(),
-            password: None, // Always None for DHT storage
-            supports_resume: self.supports_resume,
-            file_size: self.file_size,
-            last_checked: self.last_checked,
-            is_available: self.is_available,
-        }
-    }
-}
-
-/// ed2k (eDonkey2000) source information for a file
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Ed2kSourceInfo {
-    /// ed2k server URL (e.g., "ed2k://|server|1.2.3.4|4661|/")
-    pub server_url: String,
-
-    /// ed2k file hash (MD4 hash in hex)
-    pub file_hash: String,
-
-    /// File size in bytes
-    pub file_size: u64,
-
-    /// Optional file name
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_name: Option<String>,
-
-    /// List of known sources (IP:Port pairs)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sources: Option<Vec<String>>,
-
-    /// Optional timeout in seconds
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<u64>,
-}
-
-// ed2k Link Parsing
-impl Ed2kSourceInfo {
-    /// Parse ed2k:// link
-    /// Format (File): ed2k://|file|filename.ext|size|hash|/
-    /// Format (Server): ed2k://|server|ip|port|/
-    pub fn from_ed2k_link(link: &str) -> Result<Self, Ed2kError> {
-        let Some(parts_str) = link.strip_prefix("ed2k://|") else {
-            return Err(Ed2kError::InvalidLink(link.to_string()));
-        };
-
-        // Remove trailing characters like '/'
-        // Trim both trailing '/' and '|' to correctly handle split
-        let clean_parts_str = parts_str.trim_end_matches(&['/', '|']);
-        let parts: Vec<&str> = clean_parts_str.split('|').collect();
-
-        if parts.is_empty() {
-            return Err(Ed2kError::InvalidLink(link.to_string()));
-        }
-
-        match parts[0] {
-            "file" => {
-                // ed2k://|file|filename.ext|size|hash|/
-                if parts.len() < 4 {
-                    return Err(Ed2kError::MissingPart(
-                        "File link requires name, size, and hash",
-                    ));
-                }
-
-                let file_name = parts[1].to_string();
-                let file_size_str = parts[2];
-                let file_hash = parts[3].to_string();
-
-                let file_size = file_size_str
-                    .parse::<u64>()
-                    .map_err(|_| Ed2kError::InvalidFileSize(file_size_str.to_string()))?;
-
-                Ok(Self {
-                    // Per spec contradiction: File link has no server. Set to empty.
-                    // This will be populated by the application logic later.
-                    server_url: String::new(),
-                    file_hash,
-                    file_size,
-                    file_name: Some(file_name),
-                    sources: None,
-                    timeout: None,
-                })
-            }
-            "server" => {
-                // ed2k://|server|ip|port|/
-                if parts.len() < 3 {
-                    return Err(Ed2kError::MissingPart("Server link requires ip and port"));
-                }
-
-                let ip = parts[1];
-                let port = parts[2];
-                // Reconstruct the server_url from the parts
-                let server_url = format!("ed2k://|server|{}|{}|/", ip, port);
-
-                Ok(Self {
-                    server_url,
-                    // Per spec contradiction: Struct requires file info. Set to defaults.
-                    file_hash: String::new(),
-                    file_size: 0,
-                    file_name: None,
-                    sources: None,
-                    timeout: None,
-                })
-            }
-            _ => Err(Ed2kError::InvalidLink(format!(
-                "Unknown link type: {}",
-                parts[0]
-            ))),
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct Ed2kDownloadStatus {
-    pub progress: f32,
-    pub downloaded_bytes: u64,
-    pub total_bytes: u64,
-    pub state: String,
-}
-
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SeederHeartbeat {
-    peer_id: String,
-    expires_at: u64,
-    last_heartbeat: u64,
-}
-
-#[derive(Debug, Clone)]
-struct FileHeartbeatCacheEntry {
-    heartbeats: Vec<SeederHeartbeat>,
-    metadata: serde_json::Value,
-}
-
 fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -665,51 +448,6 @@ fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64)
 
 fn heartbeats_to_peer_list(entries: &[SeederHeartbeat]) -> Vec<String> {
     entries.iter().map(|hb| hb.peer_id.clone()).collect()
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum NatReachabilityState {
-    Unknown,
-    Public,
-    Private,
-}
-
-impl Default for NatReachabilityState {
-    fn default() -> Self {
-        NatReachabilityState::Unknown
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum NatConfidence {
-    Low,
-    Medium,
-    High,
-}
-
-impl Default for NatConfidence {
-    fn default() -> Self {
-        NatConfidence::Low
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NatHistoryItem {
-    pub state: NatReachabilityState,
-    pub confidence: NatConfidence,
-    pub timestamp: u64,
-    pub summary: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct ReachabilityRecord {
-    state: NatReachabilityState,
-    confidence: NatConfidence,
-    timestamp: SystemTime,
-    summary: Option<String>,
 }
 /// thread-safe, mutable block store
 
@@ -2347,7 +2085,6 @@ async fn run_dht_node(
                             "is_encrypted": metadata.is_encrypted,
                             "encryption_method": metadata.encryption_method,
                             "key_fingerprint": metadata.key_fingerprint,
-                            "version": metadata.version,
                             "parent_hash": metadata.parent_hash,
                             "cids": metadata.cids,
                             "encrypted_key_bundle": metadata.encrypted_key_bundle,
@@ -4418,164 +4155,6 @@ fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
         }
     }
     None
-}
-
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_secs()
-}
-
-fn merge_heartbeats(
-    mut a: Vec<SeederHeartbeat>,
-    mut b: Vec<SeederHeartbeat>,
-) -> Vec<SeederHeartbeat> {
-    let mut merged = Vec::new();
-    let mut seen_peers = std::collections::HashSet::new();
-    let now = unix_timestamp();
-
-    // Create sets to track which peers appear in both vectors
-    let a_peers: HashSet<String> = a.iter().map(|hb| hb.peer_id.clone()).collect();
-    let b_peers: HashSet<String> = b.iter().map(|hb| hb.peer_id.clone()).collect();
-    let common_peers: HashSet<_> = a_peers.intersection(&b_peers).cloned().collect();
-
-    // Filter and collect entries in one pass instead of using retain
-    let filtered_a: Vec<_> = a
-        .into_iter()
-        .filter(|hb| {
-            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
-            // 30s grace period
-        })
-        .collect();
-
-    let filtered_b: Vec<_> = b
-        .into_iter()
-        .filter(|hb| {
-            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
-            // 30s grace period
-        })
-        .collect();
-
-    // Now work with the filtered vectors
-    a = filtered_a;
-    b = filtered_b;
-
-    // Sort both vectors by peer_id for deterministic merging
-    a.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
-    b.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
-
-    let mut a_iter = a.into_iter();
-    let mut b_iter = b.into_iter();
-
-    let mut next_a = a_iter.next();
-    let mut next_b = b_iter.next();
-
-    while let (Some(a_entry), Some(b_entry)) = (&next_a, &next_b) {
-        match a_entry.peer_id.cmp(&b_entry.peer_id) {
-            std::cmp::Ordering::Equal => {
-                // For equal peer IDs, create a merged entry that:
-                // 1. Takes the most recent heartbeat timestamp
-                // 2. Uses the latest expiry time
-                // 3. Extends the expiry if it's an active seeder (recent heartbeat)
-                let latest_heartbeat =
-                    std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
-                let latest_expiry = std::cmp::max(a_entry.expires_at, b_entry.expires_at);
-
-                // If this is an active seeder (recent heartbeat), extend its expiry
-                let new_expiry =
-                    if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
-                        now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
-                    } else {
-                        latest_expiry
-                    };
-
-                let entry = SeederHeartbeat {
-                    peer_id: a_entry.peer_id.clone(),
-                    expires_at: new_expiry,
-                    last_heartbeat: latest_heartbeat,
-                };
-
-                if !seen_peers.contains(&entry.peer_id) {
-                    seen_peers.insert(entry.peer_id.clone());
-                    merged.push(entry);
-                }
-
-                next_a = a_iter.next();
-                next_b = b_iter.next();
-            }
-            std::cmp::Ordering::Less => {
-                if !seen_peers.contains(&a_entry.peer_id) {
-                    seen_peers.insert(a_entry.peer_id.clone());
-                    merged.push(a_entry.clone());
-                }
-                next_a = a_iter.next();
-            }
-            std::cmp::Ordering::Greater => {
-                if !seen_peers.contains(&b_entry.peer_id) {
-                    seen_peers.insert(b_entry.peer_id.clone());
-                    merged.push(b_entry.clone());
-                }
-                next_b = b_iter.next();
-            }
-        }
-    }
-
-    // Add remaining entries from a
-    while let Some(entry) = next_a {
-        if !seen_peers.contains(&entry.peer_id) {
-            seen_peers.insert(entry.peer_id.clone());
-            merged.push(entry);
-        }
-        next_a = a_iter.next();
-    }
-
-    // Add remaining entries from b
-    while let Some(entry) = next_b {
-        if !seen_peers.contains(&entry.peer_id) {
-            seen_peers.insert(entry.peer_id.clone());
-            merged.push(entry);
-        }
-        next_b = b_iter.next();
-    }
-
-    merged
-}
-
-fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHeartbeat> {
-    // Add a more generous grace period to prevent premature pruning
-    // Use 30 seconds which is between the heartbeat interval (15s) and TTL (90s)
-    let prune_threshold = now.saturating_sub(30); // 30 second grace period
-    entries.retain(|hb| hb.expires_at > prune_threshold);
-    entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
-    entries
-}
-
-fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64) {
-    let expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
-
-    // First remove any expired entries
-    entries.retain(|hb| hb.expires_at > now);
-
-    // Then update or add the new heartbeat
-    if let Some(entry) = entries.iter_mut().find(|hb| hb.peer_id == peer_id) {
-        entry.expires_at = expires_at;
-        entry.last_heartbeat = now;
-    } else {
-        entries.push(SeederHeartbeat {
-            peer_id: peer_id.to_string(),
-            expires_at,
-            last_heartbeat: now,
-        });
-    }
-
-    // Sort by peer_id for consistent ordering
-    entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
-}
-
-fn heartbeats_to_peer_list(entries: &[SeederHeartbeat]) -> Vec<String> {
-    entries.iter().map(|hb| hb.peer_id.clone()).collect()
 }
 
 fn extract_bootstrap_peer_ids(bootstrap_nodes: &[String]) -> HashSet<PeerId> {
@@ -6900,7 +6479,6 @@ impl DhtService {
             is_encrypted,
             encryption_method,
             key_fingerprint,
-            version: None,
             encrypted_key_bundle: None,
             parent_hash: None,
             cids: None,
@@ -8222,14 +7800,6 @@ async fn get_available_download_path(path: PathBuf) -> PathBuf {
 
         counter += 1;
     }
-}
-
-/// Represents the data parsed from a magnet URI.
-#[derive(Debug, PartialEq, Eq)]
-pub struct MagnetData {
-    pub info_hash: String,
-    pub display_name: Option<String>,
-    pub trackers: Vec<String>,
 }
 
 /// Parses a magnet URI string into a `MagnetData` struct.

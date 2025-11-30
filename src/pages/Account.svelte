@@ -924,6 +924,8 @@
 
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
 
+            // The wallet service already sets etcAccount and clears transactions;
+            // ensure the UI store mirrors the loaded address.
             wallet.update(w => ({
                 ...w,
                 address: account.address
@@ -932,8 +934,11 @@
             // Clear sensitive data
             loadKeystorePassword = '';
 
+            // After loading the keystore, fetch the full state so balances and history populate.
             if (isGethRunning) {
+                await walletService.refreshTransactions();
                 await walletService.refreshBalance();
+                walletService.startProgressiveLoading();
             }
 
             keystoreLoadMessage = tr('keystore.load.success');

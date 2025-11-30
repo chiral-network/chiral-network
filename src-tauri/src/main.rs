@@ -1609,6 +1609,8 @@ async fn start_dht_node(
                         let payload = serde_json::json!(metadata.clone());
                         let _ = app_handle.emit("file_content", payload);
 
+                        let file_size = metadata.file_size;
+
                         if let Err(err) =
                             dht_clone_for_pump.promote_downloaded_file(metadata).await
                         {
@@ -1616,7 +1618,7 @@ async fn start_dht_node(
                         }
                         // Update analytics: record download completion and bandwidth
                         analytics_arc.record_download_completed().await;
-                        analytics_arc.record_download(metadata.file_size).await;
+                        analytics_arc.record_download(file_size).await;
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
@@ -4686,7 +4688,6 @@ async fn upload_file_chunk(
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
-            version: None,
             cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
             encrypted_key_bundle: None,
             parent_hash: None,

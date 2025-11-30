@@ -32,8 +32,9 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
-    import { paymentService } from '$lib/services/paymentService';
-    import { subscribeToTransferEvents, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+import { paymentService } from '$lib/services/paymentService';
+import { subscribeToTransferEvents, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+import { walletService } from '$lib/wallet';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { exit } from '@tauri-apps/plugin-process';
@@ -184,6 +185,8 @@ function handleFirstRunComplete() {
 
       // Initialize payment service to load wallet and transactions
       await paymentService.initialize();
+      // Initialize wallet service early so imports/polls populate balance/tx history
+      await walletService.initialize();
 
       // Listen for payment notifications from backend
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {

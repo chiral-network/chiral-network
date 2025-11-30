@@ -138,8 +138,10 @@
         address: account.address,
         pendingTransactions: 0
       }))
+      // Mirror the keystore load flow: refresh transactions/balance and start progressive loading
       await walletService.refreshTransactions()
       await walletService.refreshBalance()
+      walletService.startProgressiveLoading()
       importPrivateKey = ''
       showToast($t('account.firstRun.importSuccess') ?? 'Wallet imported successfully', 'success')
       activeCard = 'create'

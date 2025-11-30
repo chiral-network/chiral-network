@@ -20,8 +20,8 @@
     Lock,
     Key,
     DollarSign,
-    Copy,
-    Share2,,
+     Copy,
+     Share2,
     Globe,
     Blocks,
     Network,
@@ -40,7 +40,6 @@
   import { showToast } from "$lib/toast";
   import { getStorageStatus } from "$lib/uploadHelpers";
   import { fileService } from "$lib/services/fileService";
-  import { toHumanReadableSize } from "$lib/utils";
   import { toHumanReadableSize } from "$lib/utils";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
@@ -976,7 +975,6 @@
           continue; // Skip the normal Chiral upload flow
         }
 
-        const metadata = await dhtService.publishFileToNetwork(filePath, price);
         // Copy file to temp location to prevent original file from being moved
         const tempFilePath = await invoke<string>("copy_file_to_temp", {
           filePath,
@@ -1108,12 +1106,6 @@
     if (addedCount > 0) {
       setTimeout(() => refreshAvailableStorage(), 100);
     }
-  }
-
-  // Use centralized file size formatting for consistency
-  const formatFileSize = toHumanReadableSize;
-
-    // Ensure isUploading is always reset, even if there are errors
     clearTimeout(forceResetTimeout);
     isUploading = false;
   }
