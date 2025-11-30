@@ -208,6 +208,29 @@
     return value ?? tr('network.dht.health.none')
   }
 
+  function formatPeerDate(date: Date | string | number | null | undefined): string {
+    if (!date) {
+      return tr('network.connectedPeers.unknown')
+    }
+    try {
+      const d = new Date(date)
+      if (isNaN(d.getTime())) return tr('network.connectedPeers.unknown')
+      
+      // Show year only if different from current year
+      const showYear = d.getFullYear() !== new Date().getFullYear()
+      
+      return d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: showYear ? 'numeric' : undefined,
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+    } catch (e) {
+      return tr('network.connectedPeers.unknown')
+    }
+  }
+
   function formatReachabilityState(state?: NatReachabilityState | null): string {
     switch (state) {
       case 'public':
@@ -2476,7 +2499,7 @@
             </div>
             <div>
               <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.joined')}</p>
-              <p class="font-medium">{new Date(peer.joinDate).toLocaleString()}</p>
+              <p class="font-medium">{formatPeerDate(peer.joinDate)}</p>
             </div>
             <div>
               <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.lastSeen')}</p>
@@ -2484,7 +2507,7 @@
                 {#if peer.status === 'online'}
                   {$t('network.connectedPeers.now')}
                 {:else}
-                  {new Date(peer.lastSeen).toLocaleString()}
+                  {formatPeerDate(peer.lastSeen)}
                 {/if}
               </p>
             </div>
