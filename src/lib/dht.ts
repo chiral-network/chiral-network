@@ -100,6 +100,8 @@ export interface DhtHealth {
   autonatEnabled: boolean;
   // AutoRelay metrics
   autorelayEnabled: boolean;
+  lastAutorelayEnabledAt: number | null;
+  lastAutorelayDisabledAt: number | null;
   activeRelayPeerId: string | null;
   relayReservationStatus: string | null;
   lastReservationSuccess: number | null;

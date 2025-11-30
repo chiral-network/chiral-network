@@ -1009,6 +1009,8 @@ impl DhtMetricsSnapshot {
             autonat_enabled,
             // AutoRelay metrics
             autorelay_enabled,
+            last_autorelay_enabled_at,
+            last_autorelay_disabled_at,
             active_relay_peer_id,
             relay_reservation_status,
             last_reservation_success,
@@ -1066,6 +1068,8 @@ impl DhtMetricsSnapshot {
             autonat_enabled,
             // AutoRelay metrics
             autorelay_enabled,
+            last_autorelay_enabled_at: last_autorelay_enabled_at.and_then(to_secs),
+            last_autorelay_disabled_at: last_autorelay_disabled_at.and_then(to_secs),
             active_relay_peer_id,
             relay_reservation_status,
             last_reservation_success: last_reservation_success.and_then(to_secs),
@@ -5600,6 +5604,8 @@ impl DhtService {
         enable_relay_server: bool,
         enable_upnp: bool,
         blockstore_db_path: Option<&Path>,
+        last_autorelay_enabled_at: Option<SystemTime>,
+        last_autorelay_disabled_at: Option<SystemTime>,
     ) -> Result<Self, Box<dyn Error>> {
         // Respect user-configured AutoRelay preference (allow env to force-disable)
         let mut final_enable_autorelay = enable_autorelay;
@@ -6043,7 +6049,16 @@ impl DhtService {
             let mut guard = metrics.lock().await;
             guard.autonat_enabled = enable_autonat;
             guard.autorelay_enabled = final_enable_autorelay;
+            guard.last_autorelay_enabled_at = last_autorelay_enabled_at;
+            guard.last_autorelay_disabled_at = last_autorelay_disabled_at;
             guard.dcutr_enabled = enable_autonat; // DCUtR enabled when AutoNAT is enabled
+            let now = SystemTime::now();
+            if final_enable_autorelay {
+                // Always record a fresh enable time when AutoRelay is turned on
+                guard.last_autorelay_enabled_at = Some(now);
+            } else {
+                guard.last_autorelay_disabled_at = Some(now);
+            }
         }
 
         // Spawn the Dht node task
@@ -6774,6 +6789,16 @@ impl DhtService {
         let metrics = self.metrics.lock().await.clone();
         let peer_count = self.connected_peers.lock().await.len();
         DhtMetricsSnapshot::from(metrics, peer_count)
+    }
+
+    pub async fn autorelay_history(
+        &self,
+    ) -> (Option<SystemTime>, Option<SystemTime>) {
+        let metrics = self.metrics.lock().await;
+        (
+            metrics.last_autorelay_enabled_at.clone(),
+            metrics.last_autorelay_disabled_at.clone(),
+        )
     }
 
     pub async fn store_block(&self, cid: Cid, data: Vec<u8>) -> Result<(), String> {
@@ -7735,6 +7760,8 @@ mod tests {
             Vec::new(), // preferred_relays
             false,      // enable_relay_server
             false,      // enable_upnp (disabled for testing)
+            None,
+            None,
             None,
         )
         .await

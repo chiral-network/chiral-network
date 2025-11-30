@@ -380,6 +380,10 @@ struct AppState {
     // Protocol manager for handling different download/upload protocols
     protocol_manager: Arc<ProtocolManager>,
 
+    // AutoRelay timeline persistence across DHT restarts
+    autorelay_last_enabled: Arc<Mutex<Option<SystemTime>>>,
+    autorelay_last_disabled: Arc<Mutex<Option<SystemTime>>>,
+
     // File logger writer for dynamic log configuration updates
     file_logger: Arc<Mutex<Option<logger::ThreadSafeWriter>>>,
     // BitTorrent handler for creating and seeding torrents
@@ -1441,6 +1445,15 @@ async fn start_dht_node(
     let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
     let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
 
+    let previous_autorelay_enabled = {
+        let guard = state.autorelay_last_enabled.lock().await;
+        guard.clone()
+    };
+    let previous_autorelay_disabled = {
+        let guard = state.autorelay_last_disabled.lock().await;
+        guard.clone()
+    };
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -1459,9 +1472,21 @@ async fn start_dht_node(
         is_bootstrap.unwrap_or(false), // enable_relay_server only on bootstrap
         enable_upnp.unwrap_or(true), // enable UPnP by default
         Some(&async_blockstore_path),
+        previous_autorelay_enabled,
+        previous_autorelay_disabled,
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
+
+    let (last_enabled, last_disabled) = dht_service.autorelay_history().await;
+    {
+        let mut guard = state.autorelay_last_enabled.lock().await;
+        *guard = last_enabled;
+    }
+    {
+        let mut guard = state.autorelay_last_disabled.lock().await;
+        *guard = last_disabled;
+    }
 
     let peer_id = dht_service.get_peer_id().await;
 
@@ -1711,6 +1736,16 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     };
 
     if let Some(dht) = dht {
+        let (last_enabled, last_disabled) = dht.autorelay_history().await;
+        {
+            let mut guard = state.autorelay_last_enabled.lock().await;
+            *guard = last_enabled;
+        }
+        {
+            let mut guard = state.autorelay_last_disabled.lock().await;
+            *guard = last_disabled;
+        }
+
         (*dht)
             .shutdown()
             .await
@@ -6702,6 +6737,8 @@ fn main() {
             is_bootstrap, // enable_relay_server
             true, // enable_upnp
             Some(&async_blockstore_path),
+            None,
+            None,
         )
         .await
         .expect("Failed to create DHT service at startup");
@@ -6908,6 +6945,10 @@ fn main() {
 
             // Protocol Manager with BitTorrent support
             protocol_manager: protocol_manager_arc,
+
+            // AutoRelay timeline persistence across DHT restarts
+            autorelay_last_enabled: Arc::new(Mutex::new(None)),
+            autorelay_last_disabled: Arc::new(Mutex::new(None)),
 
             // File logger - will be initialized in setup phase after loading settings
             file_logger: Arc::new(Mutex::new(None)),
