@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { settings } from '$lib/stores';
+  import type { AppSettings } from '$lib/stores';
   import { dhtService } from '$lib/dht';
   import { relayErrorService } from '$lib/services/relayErrorService';
   import Card from '$lib/components/ui/card.svelte';
@@ -20,18 +22,33 @@
 
   // AutoRelay client settings
   let autoRelayEnabled = true;
-  let preferredRelaysText = '';
+
+  let settingsUnsubscribe: (() => void) | null = null;
+
+  function applySettingsState(source: Partial<AppSettings>) {
+    if (typeof source.enableRelayServer === 'boolean') {
+      relayServerEnabled = source.enableRelayServer;
+    }
+    if (typeof source.enableAutorelay === 'boolean') {
+      autoRelayEnabled = source.enableAutorelay;
+    }
+    if (typeof source.relayServerAlias === 'string') {
+      relayServerAlias = source.relayServerAlias;
+    }
+  }
 
   async function loadSettings() {
+    // Start with current store values
+    applySettingsState(get(settings));
+
     // Load settings from localStorage
     const stored = localStorage.getItem('chiralSettings');
     if (stored) {
       try {
-        const loadedSettings = JSON.parse(stored);
-        relayServerEnabled = loadedSettings.enableRelayServer ?? false;
-        autoRelayEnabled = loadedSettings.enableAutorelay ?? true;
-        preferredRelaysText = (loadedSettings.preferredRelays || []).join('\n');
-        relayServerAlias = loadedSettings.relayServerAlias ?? '';
+        const loadedSettings = JSON.parse(stored) as Partial<AppSettings>;
+        applySettingsState(loadedSettings);
+        // Keep the shared settings store in sync with what we loaded
+        settings.update((prev) => ({ ...prev, ...loadedSettings }));
       } catch (e) {
         console.error('Failed to load settings:', e);
       }
@@ -39,6 +56,19 @@
 
     // Check if DHT is actually running
     await checkDhtStatus();
+
+    // If DHT is running, trust the live health snapshot for AutoRelay state
+    if (dhtIsRunning) {
+      try {
+        const health = await dhtService.getHealth();
+        if (health) {
+          autoRelayEnabled = health.autorelayEnabled;
+          await saveSettings();
+        }
+      } catch (error) {
+        console.error('Failed to sync AutoRelay state from DHT health:', error);
+      }
+    }
   }
 
   async function checkDhtStatus() {
@@ -75,10 +105,6 @@
       ...currentSettings,
       enableRelayServer: relayServerEnabled,
       enableAutorelay: autoRelayEnabled,
-      preferredRelays: preferredRelaysText
-        .split('\n')
-        .map((r) => r.trim())
-        .filter((r) => r.length > 0),
       relayServerAlias: relayServerAlias.trim(),
     };
 
@@ -149,14 +175,10 @@
     }
   }
 
-  function updatePreferredRelays() {
-    saveSettings();
-  }
-
   async function handleAutorelayToggle(event: Event) {
     const target = event.target as HTMLInputElement;
     const newValue = target.checked;
-    const previousValue = !newValue;
+    const previousValue = autoRelayEnabled;
 
     isRestartingAutorelay = true;
     try {
@@ -182,6 +204,8 @@
   let statusCheckInterval: number | undefined;
 
   onMount(() => {
+    settingsUnsubscribe = settings.subscribe(applySettingsState);
+
     // Load settings and start status checking
     (async () => {
       await loadSettings();
@@ -190,10 +214,7 @@
       statusCheckInterval = window.setInterval(checkDhtStatus, 3000);
 
       // Initialize relay error service with preferred relays
-      const preferredRelays = preferredRelaysText
-        .split('\n')
-        .map((r) => r.trim())
-        .filter((r) => r.length > 0);
+      const preferredRelays = get(settings).preferredRelays || [];
 
       if (preferredRelays.length > 0 || autoRelayEnabled) {
         await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
@@ -219,6 +240,7 @@
       if (statusCheckInterval !== undefined) {
         clearInterval(statusCheckInterval);
       }
+      settingsUnsubscribe?.();
     };
   });
 </script>
@@ -364,21 +386,6 @@
         </div>
 
         {#if autoRelayEnabled}
-          <div>
-            <Label for="preferred-relays">{$t('relay.client.preferredRelays')}</Label>
-            <textarea
-              id="preferred-relays"
-              bind:value={preferredRelaysText}
-              on:blur={updatePreferredRelays}
-              placeholder={$t('relay.client.preferredRelaysPlaceholder')}
-              rows="4"
-              class="font-mono text-sm w-full border rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            ></textarea>
-            <p class="text-xs text-gray-500 mt-1">
-              {$t('relay.client.preferredRelaysHint')}
-            </p>
-          </div>
-
           <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
             <p class="text-sm text-purple-900">
               <strong>{$t('relay.client.howItWorks')}</strong>
