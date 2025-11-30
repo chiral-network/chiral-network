@@ -290,6 +290,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             is_encrypted: false,
             encryption_method: None,
             key_fingerprint: None,
+            version: Some(1),
             parent_hash: None,
             cids: None,
             is_root: true,

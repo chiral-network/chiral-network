@@ -125,17 +125,42 @@ import type { FileMetadata } from '$lib/dht'
 
           // Update file status to completed - only update files that are actively downloading
           // to avoid overwriting seeding files with the same hash
-          files.update(f => f.map(file => {
-            if (file.hash === data.file_hash && file.status === 'downloading') {
-              return {
-                ...file,
-                status: 'completed' as const,
+          files.update(f => {
+            let found = false;
+            const updated = f.map(file => {
+              if (file.hash === data.file_hash && file.status === 'downloading') {
+                found = true;
+                return {
+                  ...file,
+                  status: 'completed' as const,
+                  progress: 100,
+                  downloadPath: data.output_path,
+                  path: data.output_path,
+                  isDownload: true,
+                  isSeedingDownload: true,
+                };
+              }
+              return file;
+            });
+
+            if (!found) {
+              updated.push({
+                id: `download-${Date.now()}`,
+                name: data.file_name,
+                hash: data.file_hash,
+                size: data.file_size ?? 0,
+                status: 'completed',
                 progress: 100,
-                downloadPath: data.output_path
-              };
+                downloadPath: data.output_path,
+                path: data.output_path,
+                uploadDate: new Date(),
+                isDownload: true,
+                isSeedingDownload: true,
+                price: data.price ?? 0,
+              });
             }
-            return file;
-          }));
+            return updated;
+          });
 
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
@@ -313,6 +338,47 @@ import type { FileMetadata } from '$lib/dht'
                 }
                 return file;
             }));
+            files.update(f => {
+                let found = false;
+                const updated = f.map(file => {
+                    if (file.hash === metadata.merkleRoot) {
+                        found = true;
+                        return {
+                            ...file,
+                            status: 'completed' as const,
+                            progress: 100,
+                            downloadPath: metadata.downloadPath,
+                            path: metadata.downloadPath,
+                            seederAddresses: metadata.seeders ?? file.seederAddresses,
+                            seeders: metadata.seeders?.length ?? file.seeders,
+                            isDownload: true,
+                            isSeedingDownload: true
+                        };
+                    }
+                    return file;
+                });
+
+                if (!found) {
+                    updated.push({
+                        id: `download-${Date.now()}`,
+                        name: metadata.fileName,
+                        hash: metadata.merkleRoot,
+                        size: metadata.fileSize ?? 0,
+                        status: 'completed',
+                        progress: 100,
+                        downloadPath: metadata.downloadPath,
+                        path: metadata.downloadPath,
+                        seeders: metadata.seeders?.length ?? 1,
+                        seederAddresses: metadata.seeders ?? [],
+                        uploadDate: new Date(),
+                        isDownload: true,
+                        isSeedingDownload: true,
+                        price: metadata.price ?? 0,
+                    });
+                }
+
+                return updated;
+            });
         });
 
         // Listen for DHT errors (like missing CIDs)
@@ -1277,6 +1343,28 @@ async function loadAndResumeDownloads() {
       ));
       return;
     }
+
+
+    // ✅ ADD SEEDING CONFIRMATION
+  const userConfirmed = confirm(
+    `Download "${downloadingFile.name}"?\n\n` +
+    `You will automatically become a seeder for this file after downloading.\n\n` +
+    `This means:\n` +
+    `• The file will be shared with other users\n` +
+    `• You can stop seeding anytime from the Uploads page\n\n` +
+    `Continue with download?`
+  );
+
+  if (!userConfirmed) {
+    console.log('User cancelled download');
+    files.update(f => f.map(file =>
+      file.id === downloadingFile.id
+        ? { ...file, status: 'idle' }
+        : file
+    ));
+    return;
+  }
+
 
     // Construct full file path: directory + filename
     const fullPath = `${storagePath}/${downloadingFile.name}`;

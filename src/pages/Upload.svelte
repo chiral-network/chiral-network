@@ -21,7 +21,7 @@
     Key,
     DollarSign,
     Copy,
-    Share2,
+    Share2,,
     Globe,
     Blocks,
     Network,
@@ -40,6 +40,7 @@
   import { showToast } from "$lib/toast";
   import { getStorageStatus } from "$lib/uploadHelpers";
   import { fileService } from "$lib/services/fileService";
+  import { toHumanReadableSize } from "$lib/utils";
   import { toHumanReadableSize } from "$lib/utils";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
@@ -949,6 +950,33 @@
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
 
+        // Handle BitTorrent differently - create and seed torrent
+        if (selectedProtocol === "BitTorrent") {
+          const magnetLink = await invoke<string>('torrent_seed', { filePath, announceUrls: null });
+
+          const torrentFile = {
+            id: `torrent-${Date.now()}-${Math.random()}`,
+            name: fileName,
+            hash: magnetLink, // Use magnet link as hash for torrents
+            size: fileSize,
+            path: filePath,
+            seederAddresses: [],
+            uploadDate: new Date(),
+            seeders: 1,
+            status: "seeding" as const,
+            price: 0, // BitTorrent is free
+          };
+
+          files.update(f => [...f, torrentFile]);
+          // showToast(`${fileName} is now seeding as a torrent`, "success");
+          showToast(
+            tr('toasts.upload.torrentSeeding', { values: { name: fileName } }),
+            "success"
+          );
+          continue; // Skip the normal Chiral upload flow
+        }
+
+        const metadata = await dhtService.publishFileToNetwork(filePath, price);
         // Copy file to temp location to prevent original file from being moved
         const tempFilePath = await invoke<string>("copy_file_to_temp", {
           filePath,
@@ -1080,6 +1108,10 @@
     if (addedCount > 0) {
       setTimeout(() => refreshAvailableStorage(), 100);
     }
+  }
+
+  // Use centralized file size formatting for consistency
+  const formatFileSize = toHumanReadableSize;
 
     // Ensure isUploading is always reset, even if there are errors
     clearTimeout(forceResetTimeout);
