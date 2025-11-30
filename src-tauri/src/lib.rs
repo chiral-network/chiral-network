@@ -8,6 +8,9 @@ pub mod multi_source_download;
 pub mod download_restart;
 pub mod transfer_events;
 
+// Connection retry and resilience framework
+pub mod connection_retry;
+
 // Download source abstraction
 pub mod download_source;
 pub mod download_scheduler;
