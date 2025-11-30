@@ -1009,7 +1009,6 @@ async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json:
         if let Ok(json) = response.json::<serde_json::Value>().await {
             if let Some(result) = json.get("result").and_then(|r| r.as_str()) {
                 if let Ok(current_block) = u64::from_str_radix(&result[2..], 16) {
-                    println!("DEBUG: Current block is {}", current_block);
 
                     // Check last 5 blocks
                     for block_num in (current_block.saturating_sub(4)..=current_block).rev() {
@@ -1025,7 +1024,6 @@ async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json:
                                 if let Some(block) = block_json.get("result") {
                                     if let Some(miner) = block.get("miner").and_then(|m| m.as_str()) {
                                         recent_miners.insert(format!("{}", block_num), serde_json::Value::String(miner.to_string()));
-                                        println!("DEBUG: Block {} mined by: {}", block_num, miner);
                                     }
                                 }
                             }
@@ -3541,7 +3539,6 @@ async fn upload_file_to_network(
             }
             "ED2K" => {
                 // Actually use the ED2K protocol handler to generate real ed2k links
-                println!("📡 Starting ED2K seeding with price: {:?}", price);
 
                 let file_path_buf = PathBuf::from(&file_path);
 
@@ -3606,7 +3603,19 @@ async fn upload_file_to_network(
                             download_path: None,
                         };
 
-                        println!("✅ ED2K file seeded successfully: {}", seeding_info.identifier);
+                        // Publish metadata to DHT for discoverability
+                        let dht = {
+                            let dht_guard = state.dht.lock().await;
+                            dht_guard.as_ref().cloned()
+                        };
+
+                        if let Some(dht) = dht {
+                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                                warn!("Failed to publish ED2K file metadata to DHT: {}", e);
+                                // Don't fail the upload, just log the warning
+                            }
+                        }
+
 
                         // Emit the published_file event to notify the frontend
                         let payload = serde_json::json!(metadata);
@@ -3622,7 +3631,6 @@ async fn upload_file_to_network(
             }
             "FTP" => {
                 // Use FTP protocol handler (though FTP seeding is more complex)
-                println!("📡 Starting FTP seeding with price: {:?}", price);
 
                 let file_path_buf = PathBuf::from(&file_path);
 
@@ -3682,7 +3690,24 @@ async fn upload_file_to_network(
                             download_path: None,
                         };
 
-                        println!("✅ FTP file seeded successfully: {}", seeding_info.identifier);
+
+                        // Publish metadata to DHT for discoverability
+                        let dht = {
+                            let dht_guard = state.dht.lock().await;
+                            dht_guard.as_ref().cloned()
+                        };
+
+                        if let Some(dht) = dht {
+                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                                warn!("Failed to publish FTP file metadata to DHT: {}", e);
+                                // Don't fail the upload, just log the warning
+                            }
+                        }
+
+                        // Emit the published_file event to notify the frontend
+                        let payload = serde_json::json!(metadata);
+                        let _ = app.emit("published_file", payload);
+
                         return Ok(());
                     }
                     Err(e) => {

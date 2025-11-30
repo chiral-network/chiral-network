@@ -974,7 +974,7 @@
         } else if (selectedProtocol === "ED2K" && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
           // Use the first ED2K source
           const ed2kSource = metadata.ed2kSources[0];
-          protocolHash = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.fileHash}|/`;
+          protocolHash = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`;
         } else if (selectedProtocol === "FTP" && metadata.ftpSources && metadata.ftpSources.length > 0) {
           // Use the first FTP source
           protocolHash = metadata.ftpSources[0].url;

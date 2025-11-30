@@ -53,8 +53,8 @@ export interface FtpSourceInfo {
 }
 
 export interface Ed2kSourceInfo {
-  serverUrl: string;
-  fileHash: string;
+  server_url: string;
+  file_hash: string;
 }
 
 export interface FileMetadata {

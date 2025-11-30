@@ -129,7 +129,8 @@ impl Ed2kProtocolHandler {
 
         let mut hasher = Md4::new();
         hasher.update(&file_data);
-        let md4_hash = hex::encode(hasher.finalize());
+        let hash_result = hasher.finalize();
+        let md4_hash = hex::encode(hash_result);
 
         Ok(format!(
             "ed2k://|file|{}|{}|{}|/",
