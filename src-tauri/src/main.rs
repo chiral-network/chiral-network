@@ -3348,7 +3348,16 @@ async fn upload_file_to_network(
     file_path: String,
     price: Option<f64>,
     protocol: Option<String>,
+    original_file_name: Option<String>,
 ) -> Result<(), String> {
+
+    // Use provided original filename, or extract from path if not provided
+    let original_file_name = original_file_name
+        .unwrap_or_else(|| Path::new(&file_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string());
 
     // Ensure price is never null - default to 0
     let price = price.unwrap_or(0.0);
@@ -3382,11 +3391,6 @@ async fn upload_file_to_network(
     let file_path = permanent_path.to_string_lossy().to_string();
 
     // Register with HTTP server
-    let file_name = Path::new(&file_path)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown");
-
     let file_size = tokio::fs::metadata(&file_path).await
         .map_err(|e| format!("Failed to get file size: {}", e))?
         .len();
@@ -3394,7 +3398,7 @@ async fn upload_file_to_network(
     state.http_server_state.register_file(http_server::HttpFileMetadata {
         hash: file_hash.clone(),
         file_hash: file_hash.clone(),
-        name: file_name.to_string(),
+        name: original_file_name.clone(),
         size: file_size,
         encrypted: false,
     }).await;
@@ -3418,20 +3422,15 @@ async fn upload_file_to_network(
                 match create_and_seed_torrent(file_path.clone(), state).await {
                     Ok(magnet_link) => {
                         // Emit published_file event with torrent metadata
-                        let file_name = Path::new(&file_path)
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or(&file_path);
-
                         let file_size = match tokio::fs::metadata(&file_path).await {
                             Ok(metadata) => metadata.len(),
                             Err(_) => 0,
                         };
 
                         let metadata = FileMetadata {
-                            merkle_root: magnet_link.clone(),
+                            merkle_root: file_hash.clone(), // Use content hash for consistency
                             is_root: true,
-                            file_name: file_name.to_string(),
+                            file_name: original_file_name.clone(),
                             file_size,
                             file_data: vec![], // Not stored for torrents
                             seeders: vec![],
@@ -3498,20 +3497,15 @@ async fn upload_file_to_network(
 
                 match ed2k_handler.seed(file_path_buf.clone(), seed_options).await {
                     Ok(seeding_info) => {
-                        let file_name = file_path_buf
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or(&file_path);
-
                         let file_size = match tokio::fs::metadata(&file_path).await {
                             Ok(metadata) => metadata.len(),
                             Err(_) => 0,
                         };
 
                         let metadata = FileMetadata {
-                            merkle_root: seeding_info.identifier.clone(), // Real ed2k link
+                            merkle_root: file_hash.clone(), // Use content hash for consistency
                             is_root: true,
-                            file_name: file_name.to_string(),
+                            file_name: original_file_name.clone(),
                             file_size,
                             file_data: vec![],
                             seeders: vec![],
@@ -3544,7 +3538,7 @@ async fn upload_file_to_network(
                                     }
                                 },
                                 file_size,
-                                file_name: Some(file_name.to_string()),
+                                file_name: Some(original_file_name.clone()),
                                 sources: None,
                                 timeout: None,
                             }]),
@@ -3578,20 +3572,15 @@ async fn upload_file_to_network(
 
                 match ftp_handler.seed(file_path_buf.clone(), seed_options).await {
                     Ok(seeding_info) => {
-                        let file_name = file_path_buf
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or(&file_path);
-
                         let file_size = match tokio::fs::metadata(&file_path).await {
                             Ok(metadata) => metadata.len(),
                             Err(_) => 0,
                         };
 
                         let metadata = FileMetadata {
-                            merkle_root: seeding_info.identifier.clone(), // FTP URL from handler
+                            merkle_root: file_hash.clone(), // Use content hash for consistency
                             is_root: true,
-                            file_name: file_name.to_string(),
+                            file_name: original_file_name.clone(),
                             file_size,
                             file_data: vec![],
                             seeders: vec![],
@@ -3640,11 +3629,6 @@ async fn upload_file_to_network(
                 // Use streaming upload for Bitswap to handle large files
                 println!("📡 Using streaming Bitswap upload for protocol: {}", protocol_name);
 
-                let file_name = Path::new(&file_path)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&file_path);
-
                 // Inline streaming upload logic for Bitswap
                 use tokio::io::AsyncReadExt;
 
@@ -3667,7 +3651,7 @@ async fn upload_file_to_network(
                          total_chunks, chunk_size);
 
                 // Start streaming upload session
-                let upload_id = start_streaming_upload(file_name.to_string(), file_size, state.clone()).await?;
+                let upload_id = start_streaming_upload(original_file_name.clone(), file_size, state.clone()).await?;
 
                 // Stream file in chunks
                 let mut file = tokio::fs::File::open(&file_path)
@@ -3792,7 +3776,7 @@ async fn upload_file_to_network(
             let metadata = FileMetadata {
                 merkle_root: file_hash.clone(),
                 is_root: true,
-                file_name: file_name.to_string(),
+                file_name: original_file_name.clone(),
                 file_size: file_data.len() as u64,
                 file_data: file_data.clone(),
                 seeders: vec![],
@@ -4499,6 +4483,35 @@ async fn append_chunk_to_temp_file(temp_file_path: String, chunk_data: Vec<u8>) 
         .map_err(|e| format!("Failed to flush temp file: {}", e))?;
 
     Ok(())
+}
+
+#[tauri::command]
+async fn copy_file_to_temp(file_path: String) -> Result<String, String> {
+    use std::path::Path;
+    use tokio::fs;
+
+    let temp_dir = std::env::temp_dir().join("chiral_uploads");
+    fs::create_dir_all(&temp_dir).await
+        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+
+    // Get original file name
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+
+    // Create unique temp file path
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_nanos();
+    let temp_file_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
+
+    // Copy the original file to temp location
+    fs::copy(&file_path, &temp_file_path).await
+        .map_err(|e| format!("Failed to copy file to temp location: {}", e))?;
+
+    Ok(temp_file_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -6696,25 +6709,8 @@ fn main() {
         Arc::new(dht_service)
     });
 
-    // --- Spawn DHT event pump ---
-    let app_handle_for_pump = {
-        // Create a temporary builder to get an AppHandle.
-        // This is a bit of a workaround to get the handle before the main builder is consumed.
-        let temp_app = tauri::Builder::default().build(tauri::generate_context!()).expect("Failed to build temp app");
-        temp_app.handle().clone()
-    };
-    let dht_clone_for_pump = dht_service_arc.clone();
-    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
-    let relay_reputation_arc_for_pump = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
-     runtime.spawn(async move {
-        pump_dht_events(
-            app_handle_for_pump,
-            dht_clone_for_pump,
-            proxies_arc_for_pump,
-            relay_reputation_arc_for_pump,
-        ).await;
-    });
 
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -7067,6 +7063,7 @@ fn main() {
             disconnect_from_peer,
             create_temp_file_for_streaming,
             append_chunk_to_temp_file,
+            copy_file_to_temp,
             start_streaming_upload,
             upload_file_chunk,
             cancel_streaming_upload,
@@ -7441,6 +7438,36 @@ fn main() {
                         }
                     }
                 });
+            }
+
+            // Start DHT event pump with the real app handle
+            {
+                let app_handle = app.handle().clone();
+                let dht_clone_for_pump = {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        if let Ok(dht_guard) = state.dht.try_lock() {
+                            dht_guard.clone()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(dht_service) = dht_clone_for_pump {
+                    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
+                    let relay_reputation_arc_for_pump = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+                    tauri::async_runtime::spawn(async move {
+                        pump_dht_events(
+                            app_handle,
+                            dht_service,
+                            proxies_arc_for_pump,
+                            relay_reputation_arc_for_pump,
+                        ).await;
+                    });
+                }
             }
 
             Ok(())

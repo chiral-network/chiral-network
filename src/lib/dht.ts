@@ -222,7 +222,8 @@ export class DhtService {
   async publishFileToNetwork(
     filePath: string,
     price?: number,
-    protocol?: string
+    protocol?: string,
+    originalFileName?: string
   ): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
@@ -263,6 +264,7 @@ export class DhtService {
         filePath,
         price: price ?? 0, // Default to 0 instead of null
         protocol: protocol ?? "Bitswap", // Default to Bitswap if no protocol specified
+        originalFileName: originalFileName || null,
       });
 
       // Wait until the event arrives
