@@ -612,8 +612,127 @@ fn test_ftp_priority_score() {
 ✅ **Error Handling** - Comprehensive FTP-specific error messages and retry logic  
 ✅ **Integration** - Seamlessly integrates with existing multi-source download system  
 ✅ **Testing** - Unit tests for FTP functionality included  
+✅ **Transfer Event Bus** - Full lifecycle event emission for UI updates
 
 The FTP data fetching and verification implementation is **complete and production-ready**.
+
+---
+
+## Transfer Event Bus Integration
+
+The FTP protocol handler is fully integrated with the Transfer Event Bus, enabling the frontend UI to receive real-time download lifecycle events for FTP transfers.
+
+### Event-Aware Constructors
+
+```rust
+use crate::protocols::ftp::FtpProtocolHandler;
+
+// Without event bus (existing behavior, no UI updates)
+let handler = FtpProtocolHandler::new();
+
+// With event bus (enables UI updates)
+let handler = FtpProtocolHandler::with_event_bus(app_handle.clone());
+
+// With custom config and event bus
+let handler = FtpProtocolHandler::with_config_and_event_bus(config, app_handle.clone());
+```
+
+### Structural Changes
+
+The following fields were added to support event emission:
+
+**FtpProtocolHandler struct:**
+```rust
+pub struct FtpProtocolHandler {
+    // ... existing fields
+    event_bus: Option<Arc<TransferEventBus>>,
+}
+```
+
+**FtpDownloadState struct:**
+```rust
+pub struct FtpDownloadState {
+    // ... existing fields
+    pub file_name: String,    // For event reporting
+    pub file_size: u64,       // For progress/completion events
+}
+```
+
+### Events Emitted by Method
+
+| Method | Events | When Emitted |
+|--------|--------|--------------|
+| `download()` | TransferStarted | After successful FTP connection |
+| `download()` | SourceConnected | When FTP server connection established |
+| `download()` | ChunkCompleted | When file download completes (single chunk) |
+| `download()` | SourceDisconnected | On disconnect (success or failure) |
+| `download()` | TransferCompleted | Download finishes successfully |
+| `download()` | TransferFailed | Connection failure, download error, or file write error |
+| `pause_download()` | TransferPaused | With downloaded bytes and pause reason |
+| `cancel_download()` | TransferCanceled | With progress at cancellation |
+
+### Helper Functions
+
+```rust
+/// Get current timestamp in milliseconds for events
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Extract filename from FTP URL for display
+fn extract_file_name(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_string()
+}
+```
+
+### Example Event Flow
+
+```
+User initiates FTP download
+    │
+    ▼
+TransferStarted
+    │ (FTP connection initiated)
+    ▼
+SourceConnected
+    │ (FTP server connection established)
+    ▼
+ChunkCompleted
+    │ (file data received)
+    ▼
+SourceDisconnected
+    │ (connection closed)
+    ▼
+TransferCompleted
+```
+
+### Error Event Flow
+
+```
+FTP connection attempt
+    │
+    ▼
+TransferStarted
+    │
+    ▼
+[Connection fails]
+    │
+    ▼
+TransferFailed
+    │ (with ErrorCategory::Network and error message)
+```
+
+### Backward Compatibility
+
+Event emission is **opt-in** through new constructors. Existing code using `FtpProtocolHandler::new()` or `FtpProtocolHandler::with_config()` continues to work without changes - these handlers simply don't emit events.
+
+---
 
 ## Next Steps
 
