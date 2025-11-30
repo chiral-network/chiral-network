@@ -4,7 +4,6 @@ use crate::ethereum::{
     get_network_hashrate,
     get_network_difficulty,
     get_peer_count,
-    get_mined_blocks_count,
 };
 use crate::get_power_consumption;
 use futures::join;
@@ -21,7 +20,7 @@ pub struct FullNetworkStats {
 }
 
 #[tauri::command]
-pub async fn get_full_network_stats(address: Option<String>)-> Result<FullNetworkStats, String> {
+pub async fn get_full_network_stats(app: tauri::AppHandle, address: Option<String>)-> Result<FullNetworkStats, String> {
     use futures::join;
     let power_usage = get_power_consumption().await.unwrap_or(0.0) as f64;
     let (hashrate_res, difficulty_res, peers_res) = join!(
@@ -46,8 +45,8 @@ pub async fn get_full_network_stats(address: Option<String>)-> Result<FullNetwor
     let active_miners = peers_res.unwrap_or(1); // prevent division by zero
 
     // Optionally get blocks mined for a given address
-    let blocks_mined = if let Some(addr) = address {
-        Some(get_mined_blocks_count(&addr).await.unwrap_or(0))
+    let blocks_mined = if let Some(addr) = &address {
+        Some(crate::get_total_mined_blocks(addr).await)
     } else {
         None
     };

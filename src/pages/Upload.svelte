@@ -1,6 +1,7 @@
 <script lang="ts">
   import Card from "$lib/components/ui/card.svelte";
   import Badge from "$lib/components/ui/badge.svelte";
+  import DropDown from "$lib/components/ui/dropDown.svelte";
   import {
     File as FileIcon,
     X,
@@ -21,6 +22,10 @@
     DollarSign,
     Copy,
     Share2,
+    Globe,
+    Blocks,
+    Network,
+    Server,
   } from "lucide-svelte";
   import { files, type FileItem } from "$lib/stores";
   import {
@@ -35,6 +40,7 @@
   import { showToast } from "$lib/toast";
   import { getStorageStatus } from "$lib/uploadHelpers";
   import { fileService } from "$lib/services/fileService";
+  import { toHumanReadableSize } from "$lib/utils";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from "$lib/dht";
@@ -161,6 +167,40 @@
   let showEncryptionOptions = false;
 
   // Calculate price using dynamic network metrics with safe fallbacks
+  async function uploadFileStreamingToDisk(file: File) {
+    const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+    try {
+      // Create a temporary file path for streaming upload to disk
+      const tempFilePath = await invoke<string>("create_temp_file_for_streaming", {
+        fileName: file.name,
+      });
+
+      // Stream file to disk in chunks
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const buffer = await chunk.arrayBuffer();
+        const chunkData = Array.from(new Uint8Array(buffer));
+
+        // Append chunk to temp file
+        await invoke("append_chunk_to_temp_file", {
+          tempFilePath,
+          chunkData,
+        });
+      }
+
+      return tempFilePath;
+    } catch (error) {
+      console.error("Streaming upload to disk failed:", error);
+      throw error;
+    }
+  }
+
+
   async function calculateFilePrice(sizeInBytes: number): Promise<number> {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
 
@@ -277,7 +317,179 @@
     }
   }
 
+  // Map to track active WebRTC sessions with downloaders
+  let activeSeederSessions = new Map<string, any>();
+  let signalingService: any = null;
+
   onMount(async () => {
+    // Initialize WebRTC seeder to accept download requests
+    try {
+      const { SignalingService } = await import('$lib/services/signalingService');
+
+      signalingService = new SignalingService({
+        preferDht: false,  // Force WebSocket instead of DHT
+        persistPeers: false  // Don't persist peers to avoid stale peer IDs
+      });
+
+      // Connect to signaling server
+      await signalingService.connect();
+      console.log('[Upload] Connected to signaling server as seeder');
+      console.log('[Upload] My client ID:', signalingService.clientId);
+
+      // Expose for debugging
+      if (typeof window !== 'undefined') {
+        (window as any).uploadSignalingService = signalingService;
+      }
+
+      // Listen for incoming WebRTC connection requests
+      // Don't use webrtcService - handle WebRTC directly to avoid handler conflicts
+      signalingService.setOnMessage(async (message: any) => {
+        console.log('[Upload] Received signaling message:', message);
+
+        if (message.type === 'offer') {
+          console.log('[Upload] Received download request from:', message.from);
+
+          // Check if we already have a session with this peer
+          if (activeSeederSessions.has(message.from)) {
+            console.log('[Upload] Already have session with peer:', message.from);
+            // Still handle the new offer - create new peer connection
+            const oldSession = activeSeederSessions.get(message.from);
+            try {
+              oldSession.pc?.close();
+            } catch (e) {
+              console.error('[Upload] Error closing old session:', e);
+            }
+            activeSeederSessions.delete(message.from);
+          }
+
+          try {
+            // Create RTCPeerConnection directly (not using webrtcService to avoid handler conflicts)
+            const pc = new RTCPeerConnection({
+              iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:global.stun.twilio.com:3478" }
+              ]
+            });
+
+            let dataChannel: RTCDataChannel | null = null;
+
+            // Handle incoming data channel (created by initiator)
+            pc.ondatachannel = (event) => {
+              console.log('[Upload] Data channel received');
+              dataChannel = event.channel;
+
+              dataChannel.onopen = () => {
+                console.log('[Upload] Data channel opened with downloader:', message.from);
+              };
+
+              dataChannel.onclose = () => {
+                console.log('[Upload] Data channel closed with downloader:', message.from);
+                activeSeederSessions.delete(message.from);
+              };
+
+              dataChannel.onerror = (e) => {
+                console.error('[Upload] Data channel error:', e);
+              };
+
+              dataChannel.onmessage = async (event) => {
+                const data = event.data;
+                console.log('[Upload] Received message from downloader:', data);
+
+                // Handle file chunk requests
+                if (typeof data === 'string') {
+                  try {
+                    const request = JSON.parse(data);
+
+                    // Handle chunk_request
+                    if (request.type === 'chunk_request') {
+                      const fileHash = request.fileHash;
+                      const chunkIndex = request.chunkIndex;
+
+                      const currentFiles = get(files);
+                      const requestedFile = currentFiles.find(f => f.hash === fileHash);
+
+                      if (requestedFile && requestedFile.path) {
+                        console.log(`[Upload] Sending chunk ${chunkIndex} for file ${requestedFile.name}`);
+
+                        try {
+                          const { readFile } = await import('@tauri-apps/plugin-fs');
+                          const fileData = await readFile(requestedFile.path);
+
+                          const CHUNK_SIZE = 16 * 1024;
+                          const start = chunkIndex * CHUNK_SIZE;
+                          const end = Math.min(start + CHUNK_SIZE, fileData.length);
+                          const chunk = fileData.slice(start, end);
+
+                          dataChannel?.send(chunk.buffer);
+                          console.log(`[Upload] Sent chunk ${chunkIndex} (${chunk.length} bytes)`);
+                        } catch (error) {
+                          console.error('[Upload] Error reading file chunk:', error);
+                        }
+                      } else {
+                        console.error('[Upload] Requested file not found or no path:', fileHash);
+                      }
+                    }
+                  } catch (e) {
+                    console.error('[Upload] Error handling message:', e);
+                  }
+                }
+              };
+            };
+
+            // Handle ICE candidates
+            pc.onicecandidate = (event) => {
+              if (event.candidate) {
+                signalingService.send({
+                  type: 'candidate',
+                  candidate: event.candidate.toJSON(),
+                  to: message.from
+                });
+              }
+            };
+
+            pc.onconnectionstatechange = () => {
+              console.log('[Upload] Connection state:', pc.connectionState);
+              if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                activeSeederSessions.delete(message.from);
+              }
+            };
+
+            // Accept the offer and create answer
+            await pc.setRemoteDescription(message.sdp);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            // Send answer
+            signalingService.send({
+              type: 'answer',
+              sdp: answer,
+              to: message.from
+            });
+            console.log('[Upload] Sent answer to:', message.from);
+
+            // Store session
+            activeSeederSessions.set(message.from, { pc, dataChannel });
+
+          } catch (error) {
+            console.error('[Upload] Failed to create WebRTC session:', error);
+          }
+        }
+        else if (message.type === 'candidate') {
+          // Handle incoming ICE candidates
+          const session = activeSeederSessions.get(message.from);
+          if (session && session.pc) {
+            try {
+              await session.pc.addIceCandidate(message.candidate);
+              console.log('[Upload] Added ICE candidate from:', message.from);
+            } catch (e) {
+              console.error('[Upload] Error adding ICE candidate:', e);
+            }
+          }
+        }
+      });
+    } catch (error) {
+      console.error('[Upload] Failed to initialize WebRTC seeder:', error);
+    }
 
     // Make storage refresh non-blocking on startup to prevent UI hanging
     setTimeout(() => refreshAvailableStorage(), 100);
@@ -445,18 +657,13 @@
               }
 
               try {
-                const buffer = await file.arrayBuffer();
-                const fileData = Array.from(new Uint8Array(buffer));
-                const tempFilePath = await invoke<string>(
-                  "save_temp_file_for_upload",
-                  {
-                    fileName: file.name,
-                    fileData,
-                  },
-                );
+                let metadata;
                 const filePrice = await calculateFilePrice(file.size);
 
-                const metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice);
+                // Use streaming upload for all protocols to avoid memory issues with large files
+                // All protocol handlers read from file paths on disk
+                const tempFilePath = await uploadFileStreamingToDisk(file);
+                metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice, selectedProtocol);
 
                 if (get(files).some((f) => f.hash === metadata.merkleRoot)) {
                   duplicateCount++;
@@ -658,6 +865,13 @@
   }
 
   async function addFilesFromPaths(paths: string[]) {
+    // Fallback: Force reset isUploading after 30 seconds to prevent UI from being stuck
+    const forceResetTimeout = setTimeout(() => {
+      console.log(`[UPLOAD] Force resetting isUploading due to timeout`);
+      isUploading = false;
+      showToast("Upload timed out - please try again", "error");
+    }, 30000);
+
     // STEP 1: Verify backend has active account before proceeding
     if (isTauri) {
       try {
@@ -668,17 +882,21 @@
             tr('toasts.upload.loginRequired'),
             "error",
           );
+          clearTimeout(forceResetTimeout);
+          isUploading = false;
+          return;
+          }
+        } catch (error) {
+          console.error("Failed to verify account status:", error);
+          showToast(
+            // "Failed to verify account status. Please try logging in again.",
+            tr('toasts.upload.verifyAccountFailed'),
+            "error",
+          );
+          clearTimeout(forceResetTimeout);
+          isUploading = false;
           return;
         }
-      } catch (error) {
-        console.error("Failed to verify account status:", error);
-        showToast(
-          // "Failed to verify account status. Please try logging in again.",
-          tr('toasts.upload.verifyAccountFailed'),
-          "error",
-        );
-        return;
-      }
     }
 
     // STEP 2: Ensure DHT is connected before attempting upload
@@ -689,6 +907,8 @@
         tr('toasts.upload.dhtDisconnected'),
         "error",
       );
+      clearTimeout(forceResetTimeout);
+      isUploading = false;
       return;
     }
 
@@ -704,33 +924,16 @@
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
 
-        // Handle BitTorrent differently - create and seed torrent
-        if (selectedProtocol === "BitTorrent") {
-          const magnetLink = await invoke<string>('torrent_seed', { filePath, announceUrls: null });
+        const metadata = await dhtService.publishFileToNetwork(filePath, price, selectedProtocol);
 
-          const torrentFile = {
-            id: `torrent-${Date.now()}-${Math.random()}`,
-            name: fileName,
-            hash: magnetLink, // Use magnet link as hash for torrents
-            size: fileSize,
-            path: filePath,
-            seederAddresses: [],
-            uploadDate: new Date(),
-            seeders: 1,
-            status: "seeding" as const,
-            price: 0, // BitTorrent is free
-          };
-
-          files.update(f => [...f, torrentFile]);
-          // showToast(`${fileName} is now seeding as a torrent`, "success");
-          showToast(
-            tr('toasts.upload.torrentSeeding', { values: { name: fileName } }),
-            "success"
-          );
-          continue; // Skip the normal Chiral upload flow
-        }
-
-        const metadata = await dhtService.publishFileToNetwork(filePath, price);
+        // Add WebSocket client ID to seeder addresses for WebRTC discovery
+        const webrtcSeederIds = signalingService?.clientId
+          ? [signalingService.clientId]
+          : [];
+        const allSeederAddresses = [
+          ...(metadata.seeders ?? []),
+          ...webrtcSeederIds
+        ];
 
         const newFile = {
           id: `file-${Date.now()}-${Math.random()}`,
@@ -740,11 +943,12 @@
           size: metadata.fileSize,
           status: "seeding" as const,
           seeders: metadata.seeders?.length ?? 0,
-          seederAddresses: metadata.seeders ?? [],
+          seederAddresses: allSeederAddresses,
           leechers: 0,
           uploadDate: new Date(metadata.createdAt),
           price: price,
           cids: metadata.cids,
+          protocol: selectedProtocol, // Track which protocol was used
         };
 
         let existed = false;
@@ -758,13 +962,21 @@
 
           if (matchIndex !== -1) {
             const existing = f[matchIndex];
+            // Merge WebSocket client ID with existing seeder addresses
+            const webrtcSeederIds = signalingService?.clientId
+              ? [signalingService.clientId]
+              : [];
+            const mergedSeederAddresses = [
+              ...(metadata.seeders ?? existing.seederAddresses ?? []),
+              ...webrtcSeederIds
+            ];
             const updated = {
               ...existing,
               name: metadata.fileName || existing.name,
               hash: metadata.merkleRoot || existing.hash,
               size: metadata.fileSize ?? existing.size,
               seeders: metadata.seeders?.length ?? existing.seeders,
-              seederAddresses: metadata.seeders ?? existing.seederAddresses,
+              seederAddresses: mergedSeederAddresses,
               uploadDate: new Date(
                 (metadata.createdAt ??
                   existing.uploadDate?.getTime() ??
@@ -798,7 +1010,7 @@
           );
         }
       } catch (error) {
-        console.error(error);
+        console.error(`[UPLOAD] Error uploading ${filePath}:`, error);
         showToast(
           tr("upload.fileFailed", {
             values: {
@@ -821,21 +1033,42 @@
     if (addedCount > 0) {
       setTimeout(() => refreshAvailableStorage(), 100);
     }
+
+    // Ensure isUploading is always reset, even if there are errors
+    clearTimeout(forceResetTimeout);
+    isUploading = false;
   }
 
-  function formatFileSize(bytes: number): string {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1048576) return (bytes / 1024).toFixed(2) + " KB";
-    return (bytes / 1048576).toFixed(2) + " MB";
-  }
+  // Use centralized file size formatting for consistency
+  const formatFileSize = toHumanReadableSize;
+
+  // Protocol options for dropdown
+  const protocolOptions = [
+    { value: "Bitswap", label: "Bitswap" },
+    { value: "WebRTC", label: "WebRTC" },
+    { value: "BitTorrent", label: "BitTorrent" },
+    { value: "ED2K", label: "ED2K" },
+    { value: "FTP", label: "FTP" },
+  ];
+
 
   async function handleCopy(hash: string) {
     await navigator.clipboard.writeText(hash);
     showToast(tr("upload.hashCopiedClipboard"), "success");
   }
 
-  // BitTorrent seeding functions - REMOVED: Now integrated into main upload flow
+  // Extract info hash from magnet link
+  function extractInfoHash(magnetLink: string): string {
+    const match = magnetLink.match(/xt=urn:btih:([a-fA-F0-9]{40})/);
+    return match ? match[1] : "unknown";
+  }
 
+  // Extract MD4 hash from ed2k link
+  function extractEd2kHash(ed2kLink: string): string {
+    const parts = ed2kLink.split('|');
+    // ed2k://|file|name|size|hash|/
+    return parts.length >= 5 ? parts[4] : "unknown";
+  }
 </script>
 
 <div class="space-y-6">
@@ -889,6 +1122,37 @@
         <p class="text-sm text-muted-foreground">
           {$t("upload.storageMonitoringDesktopOnly")}
         </p>
+      </div>
+    </Card>
+  {/if}
+
+  <!-- Upload Protocol Selection -->
+  {#if isTauri}
+    <Card class="p-4">
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <div
+            class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20"
+          >
+            <Upload class="h-5 w-5 text-blue-600" />
+          </div>
+          <div class="text-left">
+            <h3 class="text-sm font-semibold text-foreground">
+              Upload Protocol
+            </h3>
+            <p class="text-xs text-muted-foreground">
+              Choose which protocol to use for uploading files
+            </p>
+          </div>
+        </div>
+
+        <div class="w-fit min-w-32">
+          <DropDown
+            id="upload-protocol"
+            options={protocolOptions}
+            bind:value={$settings.selectedProtocol}
+          />
+        </div>
       </div>
     </Card>
   {/if}
@@ -1179,56 +1443,117 @@
                             </div>
 
                             <div class="space-y-2 text-xs text-muted-foreground">
-                              <div class="flex items-center gap-1">
-                                <span class="opacity-60">{$t("upload.hashLabel")}</span>
-                                <code
-                                  class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono"
-                                >
-                                  {file.hash.slice(0, 8)}...{file.hash.slice(
-                                    -6,
-                                  )}
-                                </code>
-                                <button
-                                  on:click={() => handleCopy(file.hash)}
-                                  class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                  title={$t("upload.copyHash")}
-                                  aria-label="Copy file hash"
-                                >
-                                  <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
-                                </button>
-                              </div>
+                              <!-- Protocol Badge -->
+                              {#if file.protocol}
+                                <div class="flex items-center gap-2">
+                                  <Badge class={`text-xs px-2 py-0.5 ${
+                                    file.protocol === 'WebRTC' ? 'bg-blue-100 text-blue-800' :
+                                    file.protocol === 'Bitswap' ? 'bg-purple-100 text-purple-800' :
+                                    file.protocol === 'BitTorrent' ? 'bg-green-100 text-green-800' :
+                                    file.protocol === 'ED2K' ? 'bg-orange-100 text-orange-800' :
+                                    'bg-gray-100 text-gray-800'
+                                  }`}>
+                                    {#if file.protocol === 'WebRTC'}
+                                      <Globe class="h-3 w-3 mr-1" />
+                                    {:else if file.protocol === 'Bitswap'}
+                                      <Blocks class="h-3 w-3 mr-1" />
+                                    {:else if file.protocol === 'BitTorrent'}
+                                      <Share2 class="h-3 w-3 mr-1" />
+                                    {:else if file.protocol === 'ED2K'}
+                                      <Network class="h-3 w-3 mr-1" />
+                                    {:else if file.protocol === 'FTP'}
+                                      <Server class="h-3 w-3 mr-1" />
+                                    {/if}
+                                    {file.protocol}
+                                  </Badge>
+                                </div>
+                              {/if}
 
-                              {#if file.cids && file.cids.length > 0}
+                              <!-- Protocol-Specific Identifiers -->
+                              {#if file.protocol === 'WebRTC' || file.protocol === 'Bitswap'}
+                                <!-- Chiral Native Protocols: Show Merkle Hash -->
                                 <div class="flex items-center gap-1">
-                                  <span class="opacity-60">CID:</span>
-                                  <code
-                                    class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono"
-                                  >
-                                    {file.cids[0].slice(0, 8)}...{file.cids[0].slice(-6)}
+                                  <span class="opacity-60">Merkle Hash:</span>
+                                  <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono">
+                                    {file.hash.slice(0, 8)}...{file.hash.slice(-6)}
                                   </code>
                                   <button
-                                    on:click={() => handleCopy(file.cids![0])}
+                                    on:click={() => handleCopy(file.hash)}
                                     class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                    title="Copy CID"
-                                    aria-label="Copy file CID"
+                                    title="Copy Merkle Hash (use this to search and download)"
+                                    aria-label="Copy Merkle hash"
                                   >
                                     <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
                                   </button>
                                 </div>
-                              {/if}
-
-                              {#if file.hash.startsWith('magnet:')}
+                              {:else if file.protocol === 'BitTorrent'}
+                                <!-- BitTorrent: Show Magnet Link -->
+                                {#if file.hash.startsWith('magnet:')}
+                                  <div class="flex items-center gap-1">
+                                    <span class="opacity-60">Magnet Link:</span>
+                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                      magnet:?xt=urn:btih:{extractInfoHash(file.hash)}
+                                    </code>
+                                    <button
+                                      on:click={() => handleCopy(file.hash)}
+                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                      title="Copy Magnet Link"
+                                      aria-label="Copy magnet link"
+                                    >
+                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                    </button>
+                                  </div>
+                                {/if}
+                              {:else if file.protocol === 'ED2K'}
+                                <!-- ED2K: Show ed2k Link -->
+                                {#if file.hash.startsWith('ed2k://')}
+                                  <div class="flex items-center gap-1">
+                                    <span class="opacity-60">eD2k Link:</span>
+                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                      ed2k://|file|{file.name}|{file.size}|{extractEd2kHash(file.hash)}|/
+                                    </code>
+                                    <button
+                                      on:click={() => handleCopy(file.hash)}
+                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                      title="Copy eD2k Link"
+                                      aria-label="Copy eD2k link"
+                                    >
+                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                    </button>
+                                  </div>
+                                {/if}
+                              {:else if file.protocol === 'FTP'}
+                                <!-- FTP: Show FTP URL -->
+                                {#if file.hash.startsWith('ftp://')}
+                                  <div class="flex items-center gap-1">
+                                    <span class="opacity-60">FTP URL:</span>
+                                    <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                      {file.hash}
+                                    </code>
+                                    <button
+                                      on:click={() => handleCopy(file.hash)}
+                                      class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                      title="Copy FTP URL"
+                                      aria-label="Copy FTP URL"
+                                    >
+                                      <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                    </button>
+                                  </div>
+                                {/if}
+                              {:else}
+                                <!-- Fallback: Show generic hash -->
                                 <div class="flex items-center gap-1">
-                                  <Badge class="bg-green-100 text-green-800 text-xs px-2 py-0.5">
-                                    <Share2 class="h-3 w-3 mr-1" />
-                                    BitTorrent
-                                  </Badge>
+                                  <span class="opacity-60">{$t("upload.hashLabel")}</span>
+                                  <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono">
+                                    {file.hash.slice(0, 8)}...{file.hash.slice(-6)}
+                                  </code>
                                   <button
                                     on:click={() => handleCopy(file.hash)}
-                                    class="text-xs text-muted-foreground hover:text-primary"
-                                    title="Copy magnet link"
+                                    class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                    title={$t("upload.copyHash")}
+                                    aria-label="Copy file hash"
                                   >
-                                    Copy Magnet Link
+                                    <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
                                   </button>
                                 </div>
                               {/if}

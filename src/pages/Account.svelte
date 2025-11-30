@@ -6,8 +6,8 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist } from '$lib/stores'
-  import { gethStatus, gethSyncStatus } from '$lib/services/gethService'
+  import { wallet, etcAccount, blacklist, settings } from '$lib/stores'
+  import { gethStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
   import { transactions, transactionPagination, miningPagination } from '$lib/stores';
   import { derived } from 'svelte/store'
@@ -87,6 +87,7 @@
   let hdPassphrase: string = '';
   type HDAccountItem = { index: number; change: number; address: string; label?: string; privateKeyHex?: string };
   let hdAccounts: HDAccountItem[] = [];
+  let chainId = 98765; // Default, will be fetched from backend
 
   // Transaction receipt modal state
   let selectedTransaction: any = null;
@@ -565,18 +566,29 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
-  onMount(async () => {
-    await walletService.initialize();
-    await loadKeystoreAccountsList();
+  onMount(() => {
+    // Initialize wallet service asynchronously
+    walletService.initialize().then(async () => {
+      await loadKeystoreAccountsList();
 
-    if ($etcAccount && isGethRunning) {
-      // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
-      await walletService.refreshTransactions();
-      await walletService.refreshBalance();
+      // Fetch chain ID from backend
+      if (isTauri) {
+        try {
+          chainId = await invoke<number>('get_chain_id');
+        } catch (error) {
+          console.warn('Failed to fetch chain ID from backend, using default:', error);
+        }
+      }
 
-      // Start progressive loading of all transactions in background
-      walletService.startProgressiveLoading();
-    }
+      if ($etcAccount && isGethRunning) {
+        // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
+        await walletService.refreshTransactions();
+        await walletService.refreshBalance();
+
+        // Start progressive loading of all transactions in background
+        walletService.startProgressiveLoading();
+      }
+    });
 
     // Cleanup on unmount
     return () => {
@@ -1419,16 +1431,29 @@
 
   let sessionTimeout = 3600; // seconds (1 hour)
   let sessionTimer: number | null = null;
+  let sessionCleanup: (() => void) | null = null;
   let autoLockMessage = '';
 
+  function clearSessionTimer() {
+    if (sessionTimer) {
+      clearTimeout(sessionTimer);
+      sessionTimer = null;
+    }
+  }
+
   function resetSessionTimer() {
-    if (sessionTimer) clearTimeout(sessionTimer);
+    if (typeof window === 'undefined' || !$settings.enableWalletAutoLock) {
+      clearSessionTimer();
+      return;
+    }
+    clearSessionTimer();
     sessionTimer = window.setTimeout(() => {
       autoLockWallet();
     }, sessionTimeout * 1000);
   }
 
   function autoLockWallet() {
+    if (!$settings.enableWalletAutoLock) return;
     handleLogout();
     autoLockMessage = 'Wallet auto-locked due to inactivity.';
     showToast(autoLockMessage, 'warning');
@@ -1437,23 +1462,50 @@
 
   // Listen for user activity to reset timer
   function setupSessionTimeout() {
+    if (typeof window === 'undefined') {
+      return () => {};
+    }
     const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    const handler = () => resetSessionTimer();
     for (const ev of events) {
-      window.addEventListener(ev, resetSessionTimer);
+      window.addEventListener(ev, handler);
     }
     resetSessionTimer();
     return () => {
       for (const ev of events) {
-        window.removeEventListener(ev, resetSessionTimer);
+        window.removeEventListener(ev, handler);
       }
-      if (sessionTimer) clearTimeout(sessionTimer);
+      clearSessionTimer();
     };
   }
 
+  function teardownSessionTimeout() {
+    if (sessionCleanup) {
+      sessionCleanup();
+      sessionCleanup = null;
+    } else {
+      clearSessionTimer();
+    }
+  }
+
+  $: if (typeof window !== 'undefined') {
+    if ($settings.enableWalletAutoLock) {
+      if (!sessionCleanup) {
+        sessionCleanup = setupSessionTimeout();
+      } else {
+        resetSessionTimer();
+      }
+    } else {
+      teardownSessionTimeout();
+    }
+  }
+
   onMount(() => {
-    const cleanup = setupSessionTimeout();
-    return cleanup;
-  })
+    if ($settings.enableWalletAutoLock && !sessionCleanup) {
+      sessionCleanup = setupSessionTimeout();
+    }
+    return () => teardownSessionTimeout();
+  });
 
 </script>
 
@@ -1857,11 +1909,11 @@
           <!-- Fee selector (UI stub) -->
           <div class="mt-3">
             <div class="inline-flex rounded-md border overflow-hidden">
-              <button type="button" class="px-3 py-1 text-xs {feePreset === 'low' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'low'}>{$t('fees.low')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'market' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'market'}>{$t('fees.market')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'fast' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'fast'}>{$t('fees.fast')}</button>
+              <button type="button" class="px-3 py-1 text-xs {feePreset === 'low' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'low'}>{$t('transfer.fees.low')}</button>
+              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'market' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'market'}>{$t('transfer.fees.market')}</button>
+              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'fast' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'fast'}>{$t('transfer.fees.fast')}</button>
             </div>
-            <p class="text-xs text-muted-foreground mt-2">{$t('fees.estimated')}: {estimatedFeeDisplay}</p>
+            <p class="text-xs text-muted-foreground mt-2">{$t('transfer.fees.estimated')}: {estimatedFeeDisplay}</p>
           </div>
         
         </div>
@@ -1920,7 +1972,7 @@
               <Button variant="outline" on:click={openImportMnemonic}>Import</Button>
             </div>
           </div>
-          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{98765}'/0'/0/*</p>
+          <p class="text-sm text-muted-foreground mb-4">Path m/44'/{chainId}'/0'/0/*</p>
           <AccountList
             mnemonic={hdMnemonic}
             passphrase={hdPassphrase}

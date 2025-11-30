@@ -80,11 +80,6 @@ impl HttpServerState {
     pub async fn register_file(&self, metadata: HttpFileMetadata) {
         let mut files = self.files.write().await;
         files.insert(metadata.hash.clone(), metadata.clone());
-        tracing::info!(
-            "Registered file for HTTP serving: {} ({})",
-            metadata.name,
-            metadata.hash
-        );
     }
 
     /// Unregister a file (e.g., when user stops seeding)
@@ -413,6 +408,7 @@ pub fn create_router(state: Arc<HttpServerState>) -> Router {
 pub async fn start_server(
     state: Arc<HttpServerState>,
     addr: SocketAddr,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<SocketAddr, String> {
     let app = create_router(state);
 
@@ -421,10 +417,18 @@ pub async fn start_server(
         .map_err(|e| e.to_string())?;
     let bound_addr = listener.local_addr().map_err(|e| e.to_string())?;
 
-    // Spawn server in background
+    // Spawn server in background with graceful shutdown
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+        let server = axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                shutdown_rx.await.ok();
+                tracing::info!("HTTP server received shutdown signal");
+            });
+        
+        if let Err(e) = server.await {
             tracing::error!("HTTP server error: {}", e);
+        } else {
+            tracing::info!("HTTP server shut down gracefully");
         }
     });
 

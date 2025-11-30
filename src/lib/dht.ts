@@ -30,6 +30,7 @@ export interface DhtConfig {
   enableAutorelay?: boolean;
   preferredRelays?: string[];
   enableRelayServer?: boolean;
+  enableUpnp?: boolean;
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
@@ -39,6 +40,21 @@ export interface HttpSourceInfo {
   verifySsl: boolean;
   headers?: Array<[string, string]>;
   timeoutSecs?: number;
+}
+
+export interface FtpSourceInfo {
+  url: string;
+  username?: string;
+  password?: string;
+  supportsResume: boolean;
+  fileSize?: number;
+  lastChecked?: number;
+  isAvailable: boolean;
+}
+
+export interface Ed2kSourceInfo {
+  serverUrl: string;
+  fileHash: string;
 }
 
 export interface FileMetadata {
@@ -57,32 +73,14 @@ export interface FileMetadata {
   manifest?: string;
   isRoot?: boolean;
   cids?: string[];
-  price?: number;
+  price: number;
   uploaderAddress?: string;
   httpSources?: HttpSourceInfo[];
+  ftpSources?: FtpSourceInfo[];
+  ed2kSources?: Ed2kSourceInfo[];
+  infoHash?: string;
+  trackers?: string[];
 }
-
-export interface FileManifestForJs {
-  merkleRoot: string;
-  chunks: any[]; // Define a proper type for ChunkInfo if you can
-  encryptedKeyBundle: string; // This is the JSON string
-}
-
-export const encryptionService = {
-  async encryptFile(filePath: string): Promise<FileManifestForJs> {
-    return await invoke("encrypt_file_for_upload", { filePath });
-  },
-
-  async decryptFile(
-    manifest: FileManifestForJs,
-    outputPath: string
-  ): Promise<void> {
-    await invoke("decrypt_and_reassemble_file", {
-      manifestJs: manifest,
-      outputPath,
-    });
-  },
-};
 
 export interface DhtHealth {
   peerCount: number;
@@ -190,6 +188,9 @@ export class DhtService {
       if (typeof config?.enableRelayServer === "boolean") {
         payload.enableRelayServer = config.enableRelayServer;
       }
+      if (typeof config?.enableUpnp === "boolean") {
+        payload.enableUpnp = config.enableUpnp;
+      }
       if (
         typeof config?.relayServerAlias === "string" &&
         config.relayServerAlias.trim().length > 0
@@ -220,10 +221,13 @@ export class DhtService {
 
   async publishFileToNetwork(
     filePath: string,
-    price?: number
+    price?: number,
+    protocol?: string
   ): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
+      let timeoutId: NodeJS.Timeout;
+
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
@@ -235,6 +239,8 @@ export class DhtService {
             if (!metadata.fileHash && metadata.merkleRoot) {
               metadata.fileHash = metadata.merkleRoot;
             }
+            // Clear timeout on success
+            if (timeoutId) clearTimeout(timeoutId);
             resolve(metadata);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
@@ -242,20 +248,21 @@ export class DhtService {
         );
 
         // Add timeout to reject the promise if publishing takes too long
-        setTimeout(() => {
+        timeoutId = setTimeout(() => {
           reject(
             new Error(
               "File publishing timeout - no published_file event received"
             )
           );
           unlistenPromise.then((unlistenFn) => unlistenFn());
-        }, 120000); // 2 minute timeout for file publishing
+        }, 10000); // Reduce timeout to 10 seconds for debugging
       });
 
-      // Trigger the backend upload with price
+      // Trigger the backend upload with price and protocol
       await invoke("upload_file_to_network", {
         filePath,
-        price: price ?? null,
+        price: price ?? 0, // Default to 0 instead of null
+        protocol: protocol ?? "Bitswap", // Default to Bitswap if no protocol specified
       });
 
       // Wait until the event arrives
@@ -381,20 +388,6 @@ export class DhtService {
       console.log("Searching for file:", fileHash);
     } catch (error) {
       console.error("Failed to search file:", error);
-      throw error;
-    }
-  }
-
-  async searchFileByCid(cid: string): Promise<void> {
-    if (!this.peerId) {
-      throw new Error("DHT not started");
-    }
-
-    try {
-      await invoke("search_file_by_cid", { cidStr: cid });
-      console.log("Searching for file by CID:", cid);
-    } catch (error) {
-      console.error("Failed to search file by CID:", error);
       throw error;
     }
   }

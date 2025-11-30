@@ -27,6 +27,7 @@
   import { peerDiscoveryStore, startPeerEventStream, type PeerDiscovery } from '$lib/services/peerEventService';
   import type { GeoRegionConfig } from '$lib/geo';
   import { calculateRegionDistance } from '$lib/services/geolocation';
+  import { diagnosticLogger, errorLogger, networkLogger } from '$lib/diagnostics/logger';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -43,8 +44,17 @@
   let newPeerAddress = ''
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
+  let currentPage = 1
+  let peersPerPage = 5
+  let discoveryCurrentPage = 1
+  let discoveryPerPage = 5
 
   const UNKNOWN_DISTANCE = 1_000_000;
+
+  $: if (sortBy || sortDirection) {
+    // Reset to page 1 when sorting changes
+    currentPage = 1
+  }
 
   let currentUserRegion: GeoRegionConfig = normalizeRegion(undefined);
   $: currentUserRegion = normalizeRegion($userLocation);
@@ -78,7 +88,7 @@
   let downloadError = ''
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
-  let chainId = 98765
+  let chainId = 98765 // Default, will be fetched from backend
   let nodeAddress = ''
   let copiedNodeAddr = false
   
@@ -162,7 +172,7 @@
       const addrs = await invoke<string[]>('get_multiaddresses')
       publicMultiaddrs = addrs
     } catch (e) {
-      console.error('Failed to get multiaddresses:', e)
+      errorLogger.networkError(`Failed to get multiaddresses: ${e instanceof Error ? e.message : String(e)}`);
       publicMultiaddrs = []
     }
   }
@@ -241,7 +251,7 @@
       await navigator.clipboard.writeText(addr)
       showToast(tr('network.dht.reachability.copySuccess'), 'success')
     } catch (error) {
-      console.error('Failed to copy observed address', error)
+      errorLogger.networkError(`Failed to copy observed address: ${error instanceof Error ? error.message : String(error)}`);
       showToast(tr('network.dht.reachability.copyError'), 'error')
     }
   }
@@ -292,7 +302,7 @@
         dhtBootstrapNode = dhtBootstrapNodes[0] || 'No bootstrap nodes configured'
       }
     } catch (error) {
-      console.error('Failed to fetch bootstrap nodes:', error)
+      errorLogger.networkError(`Failed to fetch bootstrap nodes: ${error instanceof Error ? error.message : String(error)}`);
       dhtBootstrapNodes = []
       dhtBootstrapNode = 'Failed to load bootstrap nodes'
     }
@@ -312,11 +322,11 @@
             lastNatConfidence = snapshot.reachabilityConfidence
           }
         } catch (error) {
-          console.error('Failed to refresh NAT status', error)
+          errorLogger.networkError(`Failed to refresh NAT status: ${error instanceof Error ? error.message : String(error)}`);
         }
       })
     } catch (error) {
-      console.error('Failed to subscribe to NAT status updates', error)
+      errorLogger.networkError(`Failed to subscribe to NAT status updates: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   
@@ -434,7 +444,7 @@
             }
           }, 3000)
         } catch (error: any) {
-          console.warn('Cannot connect to bootstrap nodes:', error)
+          diagnosticLogger.warn('Network', 'Cannot connect to bootstrap nodes', { error: error?.message || String(error) });
           
           // Parse and improve error messages
           let errorMessage = error.toString ? error.toString() : String(error)
@@ -483,7 +493,7 @@
       }
       startDhtPolling()
     } catch (error: any) {
-      console.error('Failed to start DHT:', error)
+      errorLogger.dhtInitError(`Failed to start DHT: ${error?.message || String(error)}`);
       dhtStatus = 'disconnected'
       let errorMessage = error.toString ? error.toString() : String(error)
       
@@ -574,11 +584,11 @@
             const connectedPeers = await peerService.getConnectedPeers();
             peers.set(connectedPeers);
           } catch (error) {
-            console.debug('Background peer refresh failed:', error);
+            diagnosticLogger.debug('Network', 'Background peer refresh failed', { error: error instanceof Error ? error.message : String(error) });
           }
         }
       } catch (error) {
-        console.error('Failed to poll DHT status:', error)
+        errorLogger.networkError(`Failed to poll DHT status: ${error instanceof Error ? error.message : String(error)}`);
       }
     }, 2000) as unknown as number
   }
@@ -626,7 +636,7 @@
       // Small delay to ensure port is fully released
       await new Promise(resolve => setTimeout(resolve, 500))
     } catch (error) {
-      console.error('Failed to stop DHT:', error)
+      errorLogger.dhtInitError(`Failed to stop DHT: ${error instanceof Error ? error.message : String(error)}`);
       dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
       // Even if stop failed, clear local state
       dhtStatus = 'disconnected'
@@ -664,7 +674,7 @@
             lastNatConfidence = health.reachabilityConfidence
           }
         } catch (healthError) {
-          console.debug('Could not fetch health snapshot:', healthError)
+          diagnosticLogger.debug('Network', 'Could not fetch health snapshot', { error: healthError instanceof Error ? healthError.message : String(healthError) });
         }
         
         // Set status based on peer count - polling will handle dynamic updates
@@ -680,7 +690,7 @@
         lastNatConfidence = null
       }
     } catch (error) {
-      console.error('Failed to sync DHT status:', error)
+      errorLogger.networkError(`Failed to sync DHT status: ${error instanceof Error ? error.message : String(error)}`);
       dhtStatus = 'disconnected'
       dhtPeerId = null
       dhtPeerCount = 0
@@ -717,9 +727,8 @@
         signaling.peers.subscribe(peers => {
           // Filter out own client ID from discovered peers
           // discoveredPeers = peers.filter(p => p !== myClientId);
-          // console.log('Updated discovered peers (excluding self):', discoveredPeers);
           webDiscoveredPeers = peers.filter(p => p !== myClientId);
-          console.log('Updated discovered peers (excluding self):', webDiscoveredPeers);
+          diagnosticLogger.debug('Network', 'Updated discovered peers', { peerCount: webDiscoveredPeers.length });
         });
 
         // Register signaling message handler for WebRTC
@@ -739,7 +748,7 @@
         // showToast('Connected to signaling server', 'success');
         showToast(tr('toasts.network.signalingConnected'), 'success');
       } catch (error) {
-        console.error('Failed to connect to signaling server:', error);
+        errorLogger.networkError(`Failed to connect to signaling server: ${error instanceof Error ? error.message : String(error)}`);
         // showToast('Failed to connect to signaling server for web mode testing', 'error');
         showToast(
           tr('toasts.network.signalingError'),
@@ -808,7 +817,7 @@
           }
         }, 2000);
       } catch (error) {
-        console.error('Failed to connect to peer:', error);
+        errorLogger.networkError(`Failed to connect to peer: ${error instanceof Error ? error.message : String(error)}`);
         // showToast('Failed to connect to peer: ' + error, 'error');
         showToast(
           tr('toasts.network.connectError', { values: { error: String(error) } }),
@@ -851,7 +860,10 @@
           )
         },
         onConnectionStateChange: (state) => {
-          console.log('[WebRTC] Connection state:', state);
+          // Only log connected/disconnected states for network logger
+          if (state === 'connected' || state === 'disconnected') {
+            networkLogger.statusChanged(state, 1);
+          }
 
           // Only show toasts for important states (not every intermediate state)
           if (state === 'connected') {
@@ -865,7 +877,7 @@
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           } else if (state === 'disconnected' || state === 'closed') {
-            console.log('[WebRTC] Peer disconnected');
+            diagnosticLogger.debug('Network', 'WebRTC peer disconnected', { peerId });
             // Mark peer as offline / remove from peers list
             markPeerDisconnected(peerId);
           }
@@ -887,7 +899,7 @@
             tr('toasts.network.webrtcError', { values: { error: String(e) } }),
             'error'
           );
-          console.error('WebRTC error:', e);
+          errorLogger.networkError(`WebRTC error: ${e instanceof Error ? e.message : String(e)}`);
         }
       });
       // Optimistically add the peer as 'connecting' so it appears in UI while the handshake occurs
@@ -925,7 +937,7 @@
       newPeerAddress = '';
 
     } catch (error) {
-      console.error('Failed to create WebRTC session:', error);
+      errorLogger.networkError(`Failed to create WebRTC session: ${error instanceof Error ? error.message : String(error)}`);
       // showToast('Failed to create connection: ' + error, 'error');
       showToast(
         tr('toasts.network.webrtcCreateError', { values: { error: String(error) } }),
@@ -968,7 +980,7 @@
       const connectedPeers = await peerService.getConnectedPeers();
       peers.set(connectedPeers);
     } catch (error) {
-      console.debug('Failed to refresh peers:', error);
+      diagnosticLogger.debug('Network', 'Failed to refresh peers', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -986,7 +998,7 @@
       peers.update(p => p.filter(peer => peer.address !== peerId))
       showToast($t('network.connectedPeers.disconnected'), 'success')
     } catch (error) {
-      console.error('Failed to disconnect from peer:', error)
+      errorLogger.networkError(`Failed to disconnect from peer: ${error instanceof Error ? error.message : String(error)}`);
       showToast($t('network.connectedPeers.disconnectError') + ': ' + error, 'error')
     }
   }
@@ -1031,7 +1043,7 @@
       // Preserve the running state - don't stop the node if it's already running
       applyGethStatus(status)
     } catch (error) {
-      console.error('Failed to check geth status:', error)
+      errorLogger.networkError(`Failed to check geth status: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       isCheckingGeth = false
     }
@@ -1056,7 +1068,7 @@
         return
       }
     } catch (error) {
-      console.error('Failed to check geth status before download:', error)
+      errorLogger.networkError(`Failed to check geth status before download: ${error instanceof Error ? error.message : String(error)}`);
       // Continue with download attempt
     }
     isCheckingGeth = false
@@ -1088,7 +1100,7 @@
 
   async function startGethNode() {
     if (!isTauri) {
-      console.log('Cannot start Chiral Node in web mode - desktop app required')
+      diagnosticLogger.info('Network', 'Cannot start Chiral Node in web mode - desktop app required');
       return
     }
 
@@ -1098,7 +1110,7 @@
       isGethRunning = true
       startPolling()
     } catch (error) {
-      console.error('Failed to start Chiral node:', error)
+      errorLogger.networkError(`Failed to start Chiral node: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       isStartingNode = false
     }
@@ -1106,7 +1118,7 @@
 
   async function stopGethNode() {
     if (!isTauri) {
-      console.log('Cannot stop Chiral Node in web mode - desktop app required')
+      diagnosticLogger.info('Network', 'Cannot stop Chiral Node in web mode - desktop app required');
       return
     }
 
@@ -1119,7 +1131,7 @@
       }
       peerCount = 0
     } catch (error) {
-      console.error('Failed to stop Chiral node:', error)
+      errorLogger.networkError(`Failed to stop Chiral node: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   
@@ -1139,7 +1151,7 @@
     try {
       await navigator.clipboard.writeText(text)
     } catch (e) {
-      console.error('Copy failed:', e)
+      errorLogger.networkError(`Copy failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -1154,7 +1166,7 @@
     try {
       peerCount = await invoke('get_network_peer_count') as number
     } catch (error) {
-      console.error('Failed to fetch peer count:', error)
+      errorLogger.networkError(`Failed to fetch peer count: ${error instanceof Error ? error.message : String(error)}`);
       peerCount = 0
     }
   }
@@ -1196,13 +1208,25 @@
         }
       }
       
+      // Fetch chain ID from backend
+      const fetchChainId = async () => {
+        if (isTauri) {
+          try {
+            chainId = await invoke<number>('get_chain_id')
+          } catch (error) {
+            console.warn('Failed to fetch chain ID from backend, using default:', error)
+          }
+        }
+      }
+      
       // Initialize async operations (preserves connections)
       const initAsync = async () => {
         // Run ALL independent checks in parallel for better performance
         await Promise.all([
           fetchBootstrapNodes(),
           checkGethStatus(),
-          syncDhtStatusOnPageLoad() // DHT check is independent from Geth check
+          syncDhtStatusOnPageLoad(), // DHT check is independent from Geth check
+          fetchChainId()
         ])
 
         // Listen for download progress updates (only in Tauri)
@@ -1227,7 +1251,7 @@
           try {
             stopPeerEvents = await startPeerEventStream();
           } catch (error) {
-            console.error('Failed to start peer event stream:', error);
+            errorLogger.networkError(`Failed to start peer event stream: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
         await refreshConnectedPeers();
@@ -1944,11 +1968,84 @@
         </div>
         <!-- {#if discoveredPeers && discoveredPeers.length > 0} -->
          {#if isTauri}
+          {@const discoveryTotalPages = Math.ceil(discoveredPeerEntries.length / discoveryPerPage)}
+          {@const discoveryStartIndex = (discoveryCurrentPage - 1) * discoveryPerPage}
+          {@const discoveryEndIndex = Math.min(discoveryStartIndex + discoveryPerPage, discoveredPeerEntries.length)}
+          {@const paginatedDiscoveryPeers = discoveredPeerEntries.slice(discoveryStartIndex, discoveryEndIndex)}
+
           <div class="mt-4 space-y-3">
-            <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeerEntries.length } })}</p>
-            {#if discoveredPeerEntries.length > 0}
+            <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+            <div class="flex items-center justify-between gap-4">
+              <!-- Left: Showing peers counter -->
+              <div class="text-sm text-muted-foreground flex-shrink-0">
+                {#if discoveredPeerEntries.length > 0}
+                  Showing {discoveryStartIndex + 1}-{discoveryEndIndex} of {discoveredPeerEntries.length} discovered peers
+                {:else}
+                  No discovered peers
+                {/if}
+              </div>
+
+              <!-- Center: Pagination Controls -->
+              <div class="flex items-center justify-center flex-1">
+                {#if discoveredPeerEntries.length > discoveryPerPage}
+                  <div class="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage > 1) discoveryCurrentPage--
+                      }}
+                      disabled={discoveryCurrentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <div class="flex items-center gap-1">
+                      {#each Array.from({ length: discoveryTotalPages }, (_, i) => i + 1) as page}
+                        {#if page === 1 || page === discoveryTotalPages || (page >= discoveryCurrentPage - 1 && page <= discoveryCurrentPage + 1)}
+                          <Button
+                            size="sm"
+                            variant={page === discoveryCurrentPage ? 'default' : 'outline'}
+                            class="w-10"
+                            on:click={() => discoveryCurrentPage = page}
+                          >
+                            {page}
+                          </Button>
+                        {:else if page === discoveryCurrentPage - 2 || page === discoveryCurrentPage + 2}
+                          <span class="px-2 text-muted-foreground">...</span>
+                        {/if}
+                      {/each}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage < discoveryTotalPages) discoveryCurrentPage++
+                      }}
+                      disabled={discoveryCurrentPage === discoveryTotalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Right: Run Discovery button -->
+              <div class="flex-shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  on:click={runDiscovery}
+                  disabled={discoveryRunning}
+                >
+                  <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
+                  {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
+                </Button>
+              </div>
+            </div>
+
+            {#if paginatedDiscoveryPeers.length > 0}
               <ul class="space-y-3">
-                {#each discoveredPeerEntries as peer}
+                {#each paginatedDiscoveryPeers as peer}
                   <li class="border rounded p-3 space-y-2 bg-background/50">
                     <div class="flex items-start justify-between gap-2">
                       <div class="text-sm font-mono break-all">{peer.peerId}</div>
@@ -1995,12 +2092,83 @@
             {/if}
           </div>
         {:else if webDiscoveredPeers.length > 0}
-          <div class="mt-4">
-            <!-- <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: discoveredPeers.length } })}</p> -->
-             <p class="text-sm text-muted-foreground">{$t('network.peerDiscovery.foundPeers', { values: { count: webDiscoveredPeers.length } })}</p>
-            <ul class="mt-2 space-y-2">
-              <!-- {#each discoveredPeers as p} -->
-               {#each webDiscoveredPeers as p}
+          {@const webDiscoveryTotalPages = Math.ceil(webDiscoveredPeers.length / discoveryPerPage)}
+          {@const webDiscoveryStartIndex = (discoveryCurrentPage - 1) * discoveryPerPage}
+          {@const webDiscoveryEndIndex = Math.min(webDiscoveryStartIndex + discoveryPerPage, webDiscoveredPeers.length)}
+          {@const paginatedWebDiscoveryPeers = webDiscoveredPeers.slice(webDiscoveryStartIndex, webDiscoveryEndIndex)}
+
+          <div class="mt-4 space-y-3">
+            <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+            <div class="flex items-center justify-between gap-4">
+              <!-- Left: Showing peers counter -->
+              <div class="text-sm text-muted-foreground flex-shrink-0">
+                {#if webDiscoveredPeers.length > 0}
+                  Showing {webDiscoveryStartIndex + 1}-{webDiscoveryEndIndex} of {webDiscoveredPeers.length} discovered peers
+                {:else}
+                  No discovered peers
+                {/if}
+              </div>
+
+              <!-- Center: Pagination Controls -->
+              <div class="flex items-center justify-center flex-1">
+                {#if webDiscoveredPeers.length > discoveryPerPage}
+                  <div class="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage > 1) discoveryCurrentPage--
+                      }}
+                      disabled={discoveryCurrentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <div class="flex items-center gap-1">
+                      {#each Array.from({ length: webDiscoveryTotalPages }, (_, i) => i + 1) as page}
+                        {#if page === 1 || page === webDiscoveryTotalPages || (page >= discoveryCurrentPage - 1 && page <= discoveryCurrentPage + 1)}
+                          <Button
+                            size="sm"
+                            variant={page === discoveryCurrentPage ? 'default' : 'outline'}
+                            class="w-10"
+                            on:click={() => discoveryCurrentPage = page}
+                          >
+                            {page}
+                          </Button>
+                        {:else if page === discoveryCurrentPage - 2 || page === discoveryCurrentPage + 2}
+                          <span class="px-2 text-muted-foreground">...</span>
+                        {/if}
+                      {/each}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => {
+                        if (discoveryCurrentPage < webDiscoveryTotalPages) discoveryCurrentPage++
+                      }}
+                      disabled={discoveryCurrentPage === webDiscoveryTotalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Right: Run Discovery button -->
+              <div class="flex-shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  on:click={runDiscovery}
+                  disabled={discoveryRunning}
+                >
+                  <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
+                  {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
+                </Button>
+              </div>
+            </div>
+
+            <ul class="space-y-2">
+              {#each paginatedWebDiscoveryPeers as p}
                 <li class="flex items-center justify-between p-2 border rounded">
                   <div class="truncate mr-4">{p}</div>
                       <!-- <div class="flex items-center gap-2">
@@ -2073,8 +2241,7 @@
         </div>
           </div>
       </div>
-    <div class="space-y-3">
-        {#each [...$peers].sort((a, b) => {
+    {@const sortedPeers = [...$peers].sort((a, b) => {
             let aVal: any, bVal: any
 
             switch (sortBy) {
@@ -2153,7 +2320,84 @@
             }
 
             return 0
-        }) as peer}
+        })}
+    {@const totalPages = Math.ceil(sortedPeers.length / peersPerPage)}
+    {@const startIndex = (currentPage - 1) * peersPerPage}
+    {@const endIndex = Math.min(startIndex + peersPerPage, sortedPeers.length)}
+    {@const paginatedPeers = sortedPeers.slice(startIndex, endIndex)}
+
+    <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
+    <div class="flex items-center justify-between mb-4 gap-4">
+      <!-- Left: Showing peers counter -->
+      <div class="text-sm text-muted-foreground flex-shrink-0">
+        {#if sortedPeers.length > 0}
+          Showing {startIndex + 1}-{endIndex} of {sortedPeers.length} peers
+        {:else}
+          No peers
+        {/if}
+      </div>
+
+      <!-- Center: Pagination Controls -->
+      <div class="flex items-center justify-center flex-1">
+        {#if sortedPeers.length > peersPerPage}
+          <div class="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={() => {
+                if (currentPage > 1) currentPage--
+              }}
+              disabled={currentPage === 1}
+            >
+              Previous
+            </Button>
+            <div class="flex items-center gap-1">
+              {#each Array.from({ length: totalPages }, (_, i) => i + 1) as page}
+                {#if page === 1 || page === totalPages || (page >= currentPage - 1 && page <= currentPage + 1)}
+                  <Button
+                    size="sm"
+                    variant={page === currentPage ? 'default' : 'outline'}
+                    class="w-10"
+                    on:click={() => currentPage = page}
+                  >
+                    {page}
+                  </Button>
+                {:else if page === currentPage - 2 || page === currentPage + 2}
+                  <span class="px-2 text-muted-foreground">...</span>
+                {/if}
+              {/each}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={() => {
+                if (currentPage < totalPages) currentPage++
+              }}
+              disabled={currentPage === totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Right: Refresh button -->
+      <div class="flex-shrink-0">
+        <Button
+          size="sm"
+          variant="outline"
+          on:click={refreshConnectedPeers}
+          disabled={!isTauri || dhtStatus !== 'connected'}
+        >
+          <RefreshCw class="h-4 w-4 mr-2" />
+          Refresh Peers
+        </Button>
+      </div>
+    </div>
+
+    <!-- Peer list -->
+    <div class="space-y-3">
+        {#each paginatedPeers as peer}
         <div class="p-4 bg-secondary rounded-lg">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2 gap-2">
             <div class="flex items-start gap-3 min-w-0">
@@ -2227,19 +2471,6 @@
       {#if $peers.length === 0}
         <p class="text-center text-muted-foreground py-8">{$t('network.connectedPeers.noPeers')}</p>
       {/if}
-    </div>
-
-    <!-- Refresh button at bottom right -->
-    <div class="flex justify-end mt-4">
-      <Button
-        size="sm"
-        variant="outline"
-        on:click={refreshConnectedPeers}
-        disabled={!isTauri || dhtStatus !== 'connected'}
-      >
-        <RefreshCw class="h-4 w-4 mr-2" />
-        Refresh Peers
-      </Button>
     </div>
   </Card>
 </div>
