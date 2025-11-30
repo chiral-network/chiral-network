@@ -145,6 +145,9 @@
         "title": "Status do Relay",
         "enabled": "AutoRelay Ativado",
         "disabled": "AutoRelay Desativado",
+        "timeline": "Linha do tempo do AutoRelay",
+        "enabledAt": "Última ativação",
+        "disabledAt": "Última desativação",
         "noPeer": "Não conectado ao relay",
         "activePeer": "Relay Ativo",
         "status": "Status",
@@ -153,6 +156,8 @@
         "renewals": "Reservas renovadas",
         "evictions": "Reservas despejadas",
         "never": "Nunca",
+        "neverEnabled": "Nunca ativado",
+        "neverDisabled": "Nunca desativado",
         "noEvictions": "Sem despejos",
         "accepted": "Reserva aceita",
         "pending": "Pendente",
@@ -570,6 +575,12 @@
       "noDetails": "Nenhum detalhe de transação pendente disponível.",
       "count": "{count, plural, one {# Transação Pendente} other {# Transações Pendentes}}",
       "none": "Transações Pendentes"
+    },
+    "fees": {
+      "low": "Baixa",
+      "market": "Mercado",
+      "fast": "Rápida",
+      "estimated": "Taxa estimada"
     }
   },
   "transactions": {
@@ -1562,6 +1573,14 @@
     "blocks": {
       "latest": "Blocos recentes",
       "noBlocks": "Nenhum bloco encontrado"
+    },
+    "sync": {
+      "syncing": "Sincronizando",
+      "current": "Bloco atual",
+      "highest": "Bloco mais alto",
+      "remaining": "Restante",
+      "eta": "ETA",
+      "complete": "Sincronização completa"
     },
     "search": {
       "title": "Pesquisar na blockchain",

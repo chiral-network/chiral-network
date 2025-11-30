@@ -593,7 +593,6 @@ export async function subscribeToTransferEvents(): Promise<() => void> {
 
     unlistenFunctions.push(unlisten);
 
-    console.log("✅ Subscribed to transfer events");
     return unsubscribeFromTransferEvents;
   } catch (error) {
     console.error("Failed to subscribe to transfer events:", error);

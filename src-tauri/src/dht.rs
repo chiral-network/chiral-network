@@ -9,6 +9,88 @@ use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
 use x25519_dalek::PublicKey;
+
+/// Merges two FileMetadata instances for the same file uploaded via different protocols.
+/// This preserves all protocol-specific information while keeping the most recent common fields.
+fn merge_file_metadata(existing: crate::dht::models::FileMetadata, new: crate::dht::models::FileMetadata) -> crate::dht::models::FileMetadata {
+
+    // Keep the most recent metadata as base, but merge protocol-specific fields
+    let mut merged = new.clone();
+
+    // Merge seeders (combine unique addresses)
+    let mut all_seeders = existing.seeders.clone();
+    all_seeders.extend(new.seeders.clone());
+    all_seeders.sort();
+    all_seeders.dedup();
+    merged.seeders = all_seeders;
+
+    // Merge FTP sources (if any)
+    if let (Some(existing_ftp), Some(new_ftp)) = (&existing.ftp_sources, &new.ftp_sources) {
+        let mut merged_ftp = existing_ftp.clone();
+        merged_ftp.extend(new_ftp.clone());
+        // Remove duplicates based on URL
+        merged_ftp.sort_by(|a, b| a.url.cmp(&b.url));
+        merged_ftp.dedup_by(|a, b| a.url == b.url);
+        merged.ftp_sources = Some(merged_ftp);
+    } else if existing.ftp_sources.is_some() {
+        merged.ftp_sources = existing.ftp_sources.clone();
+    }
+    // If new has FTP sources, they're already in merged (since we cloned new)
+
+    // Merge ED2K sources (if any)
+    if let (Some(existing_ed2k), Some(new_ed2k)) = (&existing.ed2k_sources, &new.ed2k_sources) {
+        let mut merged_ed2k = existing_ed2k.clone();
+        merged_ed2k.extend(new_ed2k.clone());
+        // Remove duplicates based on server_url and file_hash
+        merged_ed2k.sort_by(|a, b| {
+            match a.server_url.cmp(&b.server_url) {
+                std::cmp::Ordering::Equal => a.file_hash.cmp(&b.file_hash),
+                other => other,
+            }
+        });
+        merged_ed2k.dedup_by(|a, b| a.server_url == b.server_url && a.file_hash == b.file_hash);
+        merged.ed2k_sources = Some(merged_ed2k);
+    } else if existing.ed2k_sources.is_some() {
+        merged.ed2k_sources = existing.ed2k_sources.clone();
+    }
+
+    // Merge HTTP sources (if any)
+    if let (Some(existing_http), Some(new_http)) = (&existing.http_sources, &new.http_sources) {
+        let mut merged_http = existing_http.clone();
+        merged_http.extend(new_http.clone());
+        // Remove duplicates based on URL
+        merged_http.sort_by(|a, b| a.url.cmp(&b.url));
+        merged_http.dedup_by(|a, b| a.url == b.url);
+        merged.http_sources = Some(merged_http);
+    } else if existing.http_sources.is_some() {
+        merged.http_sources = existing.http_sources.clone();
+    }
+
+    // Merge CIDs (IPFS content identifiers)
+    if let (Some(existing_cids), Some(new_cids)) = (&existing.cids, &new.cids) {
+        let mut merged_cids = existing_cids.clone();
+        merged_cids.extend(new_cids.clone());
+        merged_cids.sort();
+        merged_cids.dedup();
+        merged.cids = Some(merged_cids);
+    } else if existing.cids.is_some() {
+        merged.cids = existing.cids.clone();
+    }
+
+    // Keep BitTorrent-specific fields from whichever has them (prefer new)
+    if existing.info_hash.is_some() && new.info_hash.is_none() {
+        merged.info_hash = existing.info_hash.clone();
+    }
+    if existing.trackers.is_some() && new.trackers.is_none() {
+        merged.trackers = existing.trackers.clone();
+    }
+
+    // For other fields, we keep the new values (most recent upload)
+    // This includes: file_name, file_size, created_at, price, uploader_address, etc.
+
+    merged
+}
+
 // ------ Key Request Protocol Implementation ------
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyRequestProtocol;
@@ -110,10 +192,6 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
-use libp2p::{
-    multiaddr::Protocol,
-    noise, tcp, yamux,
-};
 pub use multihash_codetable::{Code, MultihashDigest};
 use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
@@ -171,6 +249,8 @@ use libp2p::{
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
+    multiaddr::Protocol,
+    noise, tcp, yamux,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
     upnp,
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
@@ -180,17 +260,11 @@ const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
 const MAX_MULTIHASH_LENGHT: usize = 64;
 /// Prefix for DHT records that map a torrent info_hash to a Chiral Merkle root.
 const INFO_HASH_PREFIX: &str = "info_hash_idx::";
-/// Prefix for DHT records that map a keyword to a list of file Merkle roots.
-const KEYWORD_INDEX_PREFIX: &str = "keyword_idx::";
 pub const RAW_CODEC: u64 = 0x55;
 /// Heartbeat interval (how often we refresh our provider entry).
 const FILE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15); // More frequent updates
 /// File seeder TTL – if no heartbeat lands within this window, drop the entry.
 const FILE_HEARTBEAT_TTL: Duration = Duration::from_secs(90); // Longer TTL with grace period
-pub struct PendingKeywordIndex {
-    pub keyword: String,
-    pub merkle_root: String,
-}
 
 /// thread-safe, mutable block store
 
@@ -280,6 +354,28 @@ pub enum DhtCommand {
         key: String,
         sender: oneshot::Sender<Result<Option<Vec<u8>>, String>>,
     },
+    /// Re-bootstrap the DHT to discover new peers
+    ReBootstrap {
+        sender: oneshot::Sender<Result<usize, String>>,
+    },
+    /// Check DHT health and optionally trigger recovery
+    HealthCheck {
+        min_peers: usize,
+        auto_recover: bool,
+        sender: oneshot::Sender<DhtHealthStatus>,
+    },
+}
+
+/// Health status of the DHT network
+#[derive(Debug, Clone, Serialize)]
+pub struct DhtHealthStatus {
+    pub healthy: bool,
+    pub peer_count: usize,
+    pub min_required: usize,
+    pub bootstrap_failures: u64,
+    pub last_bootstrap_secs_ago: Option<u64>,
+    pub recommendation: Option<String>,
+    pub recovery_triggered: bool,
 }
 #[derive(Debug, Clone, Serialize)]
 pub enum DhtEvent {
@@ -708,6 +804,55 @@ impl rr::Codec for WebRTCSignalingCodec {
         write_framed(io, data).await
     }
 }
+
+/// Merge two DHT metadata JSON objects, combining protocol-specific fields
+fn merge_dht_metadata(existing: &serde_json::Value, new: &serde_json::Value) -> serde_json::Value {
+    let mut merged = existing.clone();
+
+    if let (Some(existing_obj), Some(new_obj)) = (existing.as_object(), new.as_object()) {
+        let merged_obj = merged.as_object_mut().unwrap();
+
+        // Merge protocol-specific arrays/vectors
+        merge_array_field(merged_obj, new_obj, "cids");
+        merge_array_field(merged_obj, new_obj, "seeders");
+        merge_array_field(merged_obj, new_obj, "http_sources");
+        merge_array_field(merged_obj, new_obj, "ftp_sources");
+        merge_array_field(merged_obj, new_obj, "ed2k_sources");
+        merge_array_field(merged_obj, new_obj, "trackers");
+
+        // For single-value fields, prefer the new value if it exists
+        for (key, value) in new_obj {
+            if !matches!(key.as_str(), "cids" | "seeders" | "http_sources" | "ftp_sources" | "ed2k_sources" | "trackers") {
+                merged_obj.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    merged
+}
+
+/// Helper function to merge array fields in DHT metadata
+fn merge_array_field(merged: &mut serde_json::Map<String, serde_json::Value>,
+                     new: &serde_json::Map<String, serde_json::Value>,
+                     field_name: &str) {
+    if let (Some(existing_array), Some(new_array)) =
+        (merged.get(field_name).and_then(|v| v.as_array()),
+         new.get(field_name).and_then(|v| v.as_array())) {
+
+        let mut combined = existing_array.clone();
+        for item in new_array {
+            if !combined.contains(item) {
+                combined.push(item.clone());
+            }
+        }
+        merged.insert(field_name.to_string(), serde_json::Value::Array(combined));
+    } else if let Some(new_array) = new.get(field_name).and_then(|v| v.as_array()) {
+        // Only new has this field, use it
+        merged.insert(field_name.to_string(), serde_json::Value::Array(new_array.clone()));
+    }
+    // If only existing has it, keep existing
+}
+
 #[derive(Clone)]
 struct Socks5Transport {
     proxy: SocketAddr,
@@ -864,6 +1009,8 @@ impl DhtMetricsSnapshot {
             autonat_enabled,
             // AutoRelay metrics
             autorelay_enabled,
+            last_autorelay_enabled_at,
+            last_autorelay_disabled_at,
             active_relay_peer_id,
             relay_reservation_status,
             last_reservation_success,
@@ -921,6 +1068,8 @@ impl DhtMetricsSnapshot {
             autonat_enabled,
             // AutoRelay metrics
             autorelay_enabled,
+            last_autorelay_enabled_at: last_autorelay_enabled_at.and_then(to_secs),
+            last_autorelay_disabled_at: last_autorelay_disabled_at.and_then(to_secs),
             active_relay_peer_id,
             relay_reservation_status,
             last_reservation_success: last_reservation_success.and_then(to_secs),
@@ -1077,7 +1226,6 @@ async fn run_dht_node(
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
-    pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     pending_dht_queries: Arc<
         Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
@@ -1337,11 +1485,8 @@ async fn run_dht_node(
                                         // Also hash the original data for the Merkle root
                                         original_chunk_hashes.push(Sha256Hasher::hash(block.data()));
 
-                                        println!("block {} size={} cid={}", idx, block.data().len(), cid);
-
                                         match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), block.data().to_vec()){
                                             Ok(_) => {
-                                                info!("📦 Stored block {} (size: {} bytes) in Bitswap blockstore", cid, block.data().len());
                                             },
                                             Err(e) => {
                                                 error!("failed to store block {}: {}", cid, e);
@@ -1375,7 +1520,6 @@ async fn run_dht_node(
                                     let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
                                     match swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data.clone()) {
                                         Ok(_) => {
-                                            info!("🌳 Stored ROOT block {} (size: {} bytes, contains {} CIDs) in Bitswap blockstore", root_cid, root_block_data.len(), block_cids.len());
                                         },
                                         Err(e) => {
                                             error!("failed to store root block: {}", e);
@@ -1390,10 +1534,6 @@ async fn run_dht_node(
                                     let file_data_len = metadata.file_data.len();
                                     if metadata.merkle_root.is_empty() {
                                         metadata.merkle_root = computed_merkle_root.clone();
-                                        println!("💾 Using computed merkle_root: {}", metadata.merkle_root);
-                                    } else {
-                                        println!("💾 Preserving custom merkle_root: {} (computed: {})",
-                                            metadata.merkle_root, computed_merkle_root);
                                     }
                                     metadata.cids = Some(vec![root_cid]); // Store root CID for bitswap retrieval
 
@@ -1402,19 +1542,11 @@ async fn run_dht_node(
                                     const MAX_INLINE_SIZE: usize = 10 * 1024; // 10KB
                                     if file_data_len > MAX_INLINE_SIZE {
                                         metadata.file_data.clear(); // Don't store large files in DHT record
-                                        println!("💾 Cleared file_data for large file ({} bytes)", file_data_len);
-                                    } else {
-                                        println!("💾 Keeping file_data inline ({} bytes) for fast cache retrieval", file_data_len);
                                     }
-
-                                    println!("Publishing file with root CID: {} (merkle_root: {:?})",
-                                        root_cid, metadata.merkle_root);
                                 } else {
                                     // File data is empty - chunks and root block are already in Bitswap
                                     // (from streaming upload or pre-processed encrypted file)
                                     // Use the provided file_hash (which should already be a CID)
-                                    println!("Publishing file with pre-computed Merkle root: {} and CID: {:?}",
-                                        metadata.merkle_root, metadata.cids);
                                 }
 
                                 let now = unix_timestamp();
@@ -1432,8 +1564,6 @@ async fn run_dht_node(
                                 metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
 
                                 // Store minimal metadata in DHT
-                                println!("💾 DHT: About to serialize metadata with price: {:?}, uploader: {:?}", metadata.price, metadata.uploader_address);
-
                                 let dht_metadata = serde_json::json!({
                                     "file_hash":metadata.merkle_root,
                                     "merkle_root": metadata.merkle_root,
@@ -1457,27 +1587,38 @@ async fn run_dht_node(
                                     "http_sources": metadata.http_sources,
                                 });
 
-                                println!("💾 DHT: Serialized metadata JSON: {}", serde_json::to_string(&dht_metadata).unwrap_or_else(|_| "error".to_string()));
+                                let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
 
+                                // Check for existing metadata and merge if found
+                                let merged_dht_metadata = {
+                                    // Try to get existing record from heartbeat cache first
+                                    if let Some(existing_entry) = seeder_heartbeats_cache.lock().await.get(&metadata.merkle_root) {
+                                        // Merge with existing DHT metadata from heartbeat cache
+                                        merge_dht_metadata(&existing_entry.metadata, &dht_metadata)
+                                    } else {
+                                        // No existing record, use the new metadata as-is
+                                        dht_metadata.clone()
+                                    }
+                                };
+
+                                // Update the heartbeat cache with merged metadata
                                 {
                                     let mut cache = seeder_heartbeats_cache.lock().await;
                                     cache.insert(
                                         metadata.merkle_root.clone(),
                                         FileHeartbeatCacheEntry {
                                             heartbeats: active_heartbeats.clone(),
-                                            metadata: dht_metadata.clone(),
+                                            metadata: merged_dht_metadata.clone(),
                                         },
                                     );
                                 }
-
-                                let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
 
                                 // Note: We skip the get_record heartbeat update here during initial publish
                                 // to avoid race conditions. The record doesn't exist yet, so fetching it
                                 // immediately would always fail with NotFound. Heartbeat updates will
                                 // happen on subsequent seeder refresh cycles.
 
-                                let dht_record_data = match serde_json::to_vec(&dht_metadata) {
+                                let dht_record_data = match serde_json::to_vec(&merged_dht_metadata) {
                                     Ok(data) => data,
                                     Err(e) => {
                                         eprintln!("Failed to serialize DHT metadata: {}", e);
@@ -1502,22 +1643,16 @@ async fn run_dht_node(
                                     // Use N(3) for better reliability - requires majority, not all
                                     // This tolerates slow/offline peers while ensuring redundancy
                                     if let Some(n) = std::num::NonZeroUsize::new(replication_factor) {
-                                        info!("Using Quorum::N({}) for file {} ({} peers available)",
-                                            replication_factor, metadata.merkle_root, connected_peers_count);
                                         kad::Quorum::N(n)
                                     } else {
                                         kad::Quorum::One
                                     }
                                 } else {
-                                    info!("Using Quorum::One for file {} (only {} peers available)",
-                                        metadata.merkle_root, connected_peers_count);
                                     kad::Quorum::One
                                 };
 
                                 match swarm.behaviour_mut().kademlia.put_record(record, quorum) {
                                     Ok(query_id) => {
-                                        info!("started providing file: {}, query id: {:?} with quorum {:?}",
-                                            metadata.merkle_root, query_id, quorum);
                                     }
                                     Err(e) => {
                                         error!("failed to start providing file {}: {}", metadata.merkle_root, e);
@@ -1529,49 +1664,24 @@ async fn run_dht_node(
                                 let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
                                 match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
                                     Ok(query_id) => {
-                                        info!("registered as provider for file: {}, query id: {:?}", metadata.merkle_root, query_id);
                                     }
                                     Err(e) => {
                                         error!("failed to register as provider for file {}: {}", metadata.merkle_root, e);
                                         let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
                                     }
                                 }
-                                // Task 1: Keyword Extraction
-                                let keywords = extract_keywords(&metadata.file_name);
-                                info!(
-                                    "Extracted {} keywords for file '{}': {:?}", // Merkle root is now the primary identifier
-                                    keywords.len(),
-                                    metadata.file_name,
-                                    keywords
-                                );
-                                // Task 2: DHT Indexing
-                                // Implement the "read-modify-write" logic inside this loop.
-                                for keyword in keywords {
-                                    let index_key_str = format!("{}{}", KEYWORD_INDEX_PREFIX, keyword);
-                                    let index_key = kad::RecordKey::new(&index_key_str);
-
-                                    // Initiate read-modify-write: first get the existing record
-                                    let query_id = swarm.behaviour_mut().kademlia.get_record(index_key.clone());
-
-                                    // Track this keyword index operation
-                                    pending_keyword_indexes.lock().await.insert(
-                                        query_id,
-                                        PendingKeywordIndex {
-                                            keyword: keyword.clone(),
-                                            merkle_root: metadata.merkle_root.clone(),
-                                        }
-                                    );
-
-                                    info!("Initiated keyword index update for '{}' with file hash '{}'", keyword, metadata.merkle_root);
-                                }
-
                                 // Cache the published file locally so it can be found in searches
                                 // This ensures nodes can discover their own published files
-                                file_metadata_cache.lock().await.insert(
-                                    metadata.merkle_root.clone(),
-                                    metadata.clone()
-                                );
-                                info!("Cached published file {} locally", metadata.merkle_root);
+                                // Merge with existing metadata if it exists (for multi-protocol support)
+                                {
+                                    let mut cache = file_metadata_cache.lock().await;
+                                    let merged_metadata = if let Some(existing) = cache.get(&metadata.merkle_root) {
+                                        merge_file_metadata(existing.clone(), metadata.clone())
+                                    } else {
+                                        metadata.clone()
+                                    };
+                                    cache.insert(metadata.merkle_root.clone(), merged_metadata);
+                                }
 
                                 // notify frontend
                                 let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
@@ -1632,13 +1742,26 @@ async fn run_dht_node(
                                     "seederHeartbeats": active_heartbeats,
                                 });
 
+                                // Check for existing metadata and merge if found
+                                let merged_dht_metadata = {
+                                    // Try to get existing record from heartbeat cache first
+                                    if let Some(existing_entry) = seeder_heartbeats_cache.lock().await.get(&metadata.merkle_root) {
+                                        // Merge with existing DHT metadata from heartbeat cache
+                                        merge_dht_metadata(&existing_entry.metadata, &dht_metadata)
+                                    } else {
+                                        // No existing record, use the new metadata as-is
+                                        dht_metadata.clone()
+                                    }
+                                };
+
+                                // Update the heartbeat cache with merged metadata
                                 {
                                     let mut cache = seeder_heartbeats_cache.lock().await;
                                     cache.insert(
                                         metadata.merkle_root.clone(),
                                         FileHeartbeatCacheEntry {
                                             heartbeats: active_heartbeats.clone(),
-                                            metadata: dht_metadata.clone(),
+                                            metadata: merged_dht_metadata.clone(),
                                         },
                                     );
                                 }
@@ -1653,7 +1776,7 @@ async fn run_dht_node(
                                     .kademlia
                                     .get_record(record_key.clone());
 
-                                let record_value = match serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()) {
+                                let record_value = match serde_json::to_vec(&merged_dht_metadata).map_err(|e| e.to_string()) {
                                     Ok(val) => val,
                                     Err(e) => {
                                         warn!("Failed to serialize DHT metadata: {}", e);
@@ -1678,10 +1801,16 @@ async fn run_dht_node(
                                 }
 
                                 // Cache the published encrypted file locally
-                                file_metadata_cache.lock().await.insert(
-                                    metadata.merkle_root.clone(),
-                                    metadata.clone()
-                                );
+                                // Merge with existing metadata if it exists (for multi-protocol support)
+                                {
+                                    let mut cache = file_metadata_cache.lock().await;
+                                    let merged_metadata = if let Some(existing) = cache.get(&metadata.merkle_root) {
+                                        merge_file_metadata(existing.clone(), metadata.clone())
+                                    } else {
+                                        metadata.clone()
+                                    };
+                                    cache.insert(metadata.merkle_root.clone(), merged_metadata);
+                                }
                                 info!("Cached published encrypted file {} locally", metadata.merkle_root);
 
                                 info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
@@ -2364,6 +2493,90 @@ async fn run_dht_node(
                                 // Store the sender to respond when we get the Kademlia result
                                 pending_dht_queries.lock().await.insert(query_id, sender);
                             }
+                            Some(DhtCommand::ReBootstrap { sender }) => {
+                                info!("🔄 Re-bootstrapping DHT to discover new peers...");
+                                let initial_peer_count = connected_peers.lock().await.len();
+                                
+                                // Trigger Kademlia bootstrap
+                                match swarm.behaviour_mut().kademlia.bootstrap() {
+                                    Ok(query_id) => {
+                                        info!("✅ Re-bootstrap initiated (query_id: {:?})", query_id);
+                                        
+                                        // Update metrics
+                                        {
+                                            let mut m = metrics.lock().await;
+                                            m.last_bootstrap = Some(SystemTime::now());
+                                        }
+                                        
+                                        // Wait a bit for bootstrap to find peers
+                                        tokio::spawn(async move {
+                                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                            // Note: We can't accurately report new peers here since bootstrap is async
+                                            // The sender will get a success result, actual peer count changes happen over time
+                                            let _ = sender.send(Ok(0)); // 0 indicates bootstrap started but count unknown
+                                        });
+                                    }
+                                    Err(e) => {
+                                        error!("❌ Re-bootstrap failed: {:?}", e);
+                                        let mut m = metrics.lock().await;
+                                        m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
+                                        m.last_error = Some(format!("Re-bootstrap failed: {:?}", e));
+                                        m.last_error_at = Some(SystemTime::now());
+                                        drop(m);
+                                        let _ = sender.send(Err(format!("Re-bootstrap failed: {:?}", e)));
+                                    }
+                                }
+                            }
+                            Some(DhtCommand::HealthCheck { min_peers, auto_recover, sender }) => {
+                                let peer_count = connected_peers.lock().await.len();
+                                let m = metrics.lock().await;
+                                
+                                let last_bootstrap_secs_ago = m.last_bootstrap.map(|t| {
+                                    SystemTime::now()
+                                        .duration_since(t)
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0)
+                                });
+                                
+                                let healthy = peer_count >= min_peers;
+                                let bootstrap_failures = m.bootstrap_failures;
+                                drop(m);
+                                
+                                let recommendation = if !healthy {
+                                    if peer_count == 0 {
+                                        Some("No peers connected. Check network connectivity and bootstrap nodes.".to_string())
+                                    } else {
+                                        Some(format!(
+                                            "Peer count ({}) below minimum ({}). Consider re-bootstrapping.",
+                                            peer_count, min_peers
+                                        ))
+                                    }
+                                } else {
+                                    None
+                                };
+                                
+                                let mut recovery_triggered = false;
+                                
+                                // Auto-recover if unhealthy and requested
+                                if !healthy && auto_recover {
+                                    info!("🔄 Auto-recovery: triggering re-bootstrap (peers: {}, min: {})", peer_count, min_peers);
+                                    if let Ok(_) = swarm.behaviour_mut().kademlia.bootstrap() {
+                                        recovery_triggered = true;
+                                        let mut m = metrics.lock().await;
+                                        m.last_bootstrap = Some(SystemTime::now());
+                                    }
+                                }
+                                
+                                let _ = sender.send(DhtHealthStatus {
+                                    healthy,
+                                    peer_count,
+                                    min_required: min_peers,
+                                    bootstrap_failures,
+                                    last_bootstrap_secs_ago,
+                                    recommendation,
+                                    recovery_triggered,
+                                });
+                            }
                             None => {
                                 info!("DHT command channel closed; shutting down node task");
                                 break 'outer;
@@ -2385,7 +2598,6 @@ async fn run_dht_node(
                                     &get_providers_queries,
                                     &seeder_heartbeats_cache,
                                     &pending_heartbeat_updates,
-                                    &pending_keyword_indexes,
                                     &pending_infohash_searches,
                                     &file_metadata_cache,
                                     &pending_dht_queries,
@@ -3608,27 +3820,6 @@ fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
     None
 }
 
-/// Extracts a set of unique, searchable keywords from a filename.
-fn extract_keywords(file_name: &str) -> Vec<String> {
-    // 1. Sanitize: remove the file extension and convert to lowercase.
-    let name_without_ext = std::path::Path::new(file_name)
-        .file_stem()
-        .unwrap_or_default()
-        .to_str()
-        .unwrap_or_default()
-        .to_lowercase();
-
-    // 2. Split the name into words based on common non-alphanumeric delimiters.
-    let keywords: std::collections::HashSet<String> = name_without_ext
-        .split(|c: char| !c.is_alphanumeric())
-        // 3. Filter out empty strings and common short words (e.g., "a", "of").
-        .filter(|s| !s.is_empty() && s.len() > 2)
-        .map(String::from)
-        .collect(); // Using a HashSet automatically handles duplicates.
-
-    // 4. Return the unique keywords as a Vec.
-    keywords.into_iter().collect()
-}
 
 fn unix_timestamp() -> u64 {
     SystemTime::now()
@@ -3817,7 +4008,6 @@ async fn handle_kademlia_event(
     get_providers_queries: &Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: &Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: &Arc<Mutex<HashSet<String>>>,
-    pending_keyword_indexes: &Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>>,
     pending_infohash_searches: &Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>>,
     file_metadata_cache: &Arc<Mutex<HashMap<String, FileMetadata>>>,
     pending_dht_queries: &Arc<
@@ -3881,62 +4071,6 @@ async fn handle_kademlia_event(
                                 return; // End processing for this event here.
                             }
 
-                            // Check if this is a response to a keyword index lookup (read-modify-write)
-                            if let Some(pending_index) =
-                                pending_keyword_indexes.lock().await.remove(&id)
-                            {
-                                // Deserialize the existing keyword index (list of merkle roots)
-                                let mut merkle_roots: Vec<String> = if let Ok(roots) =
-                                    serde_json::from_slice::<Vec<String>>(&peer_record.record.value)
-                                {
-                                    roots
-                                } else {
-                                    // If deserialization fails, start with empty list
-                                    warn!("Failed to deserialize keyword index for '{}', starting fresh", pending_index.keyword);
-                                    Vec::new()
-                                };
-
-                                // Add the new merkle root if not already present
-                                if !merkle_roots.contains(&pending_index.merkle_root) {
-                                    merkle_roots.push(pending_index.merkle_root.clone());
-                                }
-
-                                // Serialize the updated list
-                                if let Ok(updated_value) = serde_json::to_vec(&merkle_roots) {
-                                    // Create and put the updated record
-                                    let record = Record {
-                                        key: peer_record.record.key.clone(),
-                                        value: updated_value,
-                                        publisher: None,
-                                        expires: None,
-                                    };
-
-                                    let _put_query_id = match swarm
-                                        .behaviour_mut()
-                                        .kademlia
-                                        .put_record(record, kad::Quorum::One)
-                                    {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            error!("Failed to put keyword index record: {}", e);
-                                            return; // Exit the function instead of continue
-                                        }
-                                    };
-
-                                    info!(
-                                        "Updated keyword index '{}' with {} files",
-                                        pending_index.keyword,
-                                        merkle_roots.len()
-                                    );
-                                } else {
-                                    error!(
-                                        "Failed to serialize updated keyword index for '{}'",
-                                        pending_index.keyword
-                                    );
-                                }
-
-                                return; // End processing for this event here.
-                            }
 
                             // Construct FileMetadata from the JSON
                             if let (
@@ -4224,95 +4358,11 @@ async fn handle_kademlia_event(
                             return; // End processing for this event here.
                         }
 
-                        // Check if this was a keyword index lookup that found no existing record
-                        if let Some(pending_index) =
-                            pending_keyword_indexes.lock().await.remove(&id)
-                        {
-                            // This is the first time this keyword is being indexed - create new record
-                            let merkle_roots = vec![pending_index.merkle_root.clone()];
-
-                            if let Ok(value) = serde_json::to_vec(&merkle_roots) {
-                                // Create the record key from the keyword
-                                let index_key_str =
-                                    format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
-                                let record_key = kad::RecordKey::new(&index_key_str);
-
-                                let record = Record {
-                                    key: record_key,
-                                    value,
-                                    publisher: None,
-                                    expires: None,
-                                };
-
-                                let _put_query_id = match swarm
-                                    .behaviour_mut()
-                                    .kademlia
-                                    .put_record(record, kad::Quorum::One)
-                                {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        error!("Failed to put keyword index record: {}", e);
-                                        return;
-                                    }
-                                };
-
-                                info!(
-                                    "Created new keyword index '{}' with first file '{}'",
-                                    pending_index.keyword, pending_index.merkle_root
-                                );
-                            } else {
-                                error!(
-                                    "Failed to serialize new keyword index for '{}'",
-                                    pending_index.keyword
-                                );
-                            }
-
-                            return; // End processing for this event here.
-                        }
 
                         // No additional records; do nothing here for other queries
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
-                    // Check if this was a failed keyword index lookup
-                    if let Some(pending_index) = pending_keyword_indexes.lock().await.remove(&id) {
-                        // Treat GetRecord errors as "not found" - create new keyword index
-                        let merkle_roots = vec![pending_index.merkle_root.clone()];
-
-                        if let Ok(value) = serde_json::to_vec(&merkle_roots) {
-                            let index_key_str =
-                                format!("{}{}", KEYWORD_INDEX_PREFIX, pending_index.keyword);
-                            let record_key = kad::RecordKey::new(&index_key_str);
-
-                            let record = Record {
-                                key: record_key,
-                                value,
-                                publisher: None,
-                                expires: None,
-                            };
-
-                            let _put_query_id = match swarm
-                                .behaviour_mut()
-                                .kademlia
-                                .put_record(record, kad::Quorum::One)
-                            {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    error!("Failed to put keyword index record: {}", e);
-                                    return;
-                                }
-                            };
-
-                            info!("Created new keyword index '{}' after GetRecord error for file '{}'", pending_index.keyword, pending_index.merkle_root);
-                        } else {
-                            error!(
-                                "Failed to serialize new keyword index for '{}' after error",
-                                pending_index.keyword
-                            );
-                        }
-
-                        return; // End processing for this event here.
-                    }
 
                     warn!("GetRecord error: {:?}", err);
 
@@ -4377,10 +4427,6 @@ async fn handle_kademlia_event(
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
                     let key_str = String::from_utf8_lossy(key.as_ref());
-                    info!(
-                        "✅ PutRecord succeeded for key: {} (DHT metadata stored successfully)",
-                        key_str
-                    );
                 }
                 QueryResult::PutRecord(Err(err)) => {
                     error!("❌ PutRecord failed: {:?}", err);
@@ -4818,12 +4864,6 @@ async fn handle_identify_event(
             // }
         }
         IdentifyEvent::Pushed { peer_id, info, .. } => {
-            info!(
-                "Pushed identify update to {} (listen addrs: {})",
-                peer_id,
-                info.listen_addrs.len()
-            );
-            // record_identify_push_metrics(&metrics, &info).await;
         }
         IdentifyEvent::Sent { peer_id, .. } => {
             debug!("Sent identify info to {}", peer_id);
@@ -4848,7 +4888,7 @@ async fn handle_mdns_event(
 ) {
     match event {
         MdnsEvent::Discovered(list) => {
-            let discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
+            let mut discovered: HashMap<PeerId, Vec<String>> = HashMap::new();
             for (peer_id, multiaddr) in list {
                 info!("mDNS discovered peer {} at {}", peer_id, multiaddr);
                 // Skip self-discoveries to prevent self-connection attempts
@@ -4861,6 +4901,10 @@ async fn handle_mdns_event(
                             .behaviour_mut()
                             .kademlia
                             .add_address(&peer_id, multiaddr.clone());
+                        discovered
+                            .entry(peer_id)
+                            .or_insert_with(Vec::new)
+                            .push(multiaddr.to_string());
                     }
                     Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", multiaddr, e),
                 }
@@ -5560,18 +5604,17 @@ impl DhtService {
         enable_relay_server: bool,
         enable_upnp: bool,
         blockstore_db_path: Option<&Path>,
+        last_autorelay_enabled_at: Option<SystemTime>,
+        last_autorelay_disabled_at: Option<SystemTime>,
     ) -> Result<Self, Box<dyn Error>> {
-        // ---- Hotfix: finalize AutoRelay flag (bootstrap OFF + ENV OFF)
-        let mut final_enable_autorelay = true; // force enable autorelay to facilitate autonat/dcutr
-        info!("FINAL ENABLE AUTORELAY {}", enable_autorelay);
-        // if is_bootstrap {
-        //     final_enable_autorelay = false;
-        //     info!("AutoRelay disabled on bootstrap (hotfix).");
-        // }
+        // Respect user-configured AutoRelay preference (allow env to force-disable)
+        let mut final_enable_autorelay = enable_autorelay;
+        info!("AutoRelay requested: {}", enable_autorelay);
         if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
             final_enable_autorelay = false;
             info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
         }
+        info!("AutoRelay enabled (final): {}", final_enable_autorelay);
         // Convert chunk size from KB to bytes
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
         let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
@@ -5996,10 +6039,6 @@ impl DhtService {
             Arc::new(Mutex::new(HashMap::new()));
         let pending_heartbeat_updates: Arc<Mutex<HashSet<String>>> =
             Arc::new(Mutex::new(HashSet::new()));
-        let pending_keyword_indexes: Arc<Mutex<HashMap<kad::QueryId, PendingKeywordIndex>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
-            Arc::new(Mutex::new(HashMap::new()));
         let pending_infohash_searches: Arc<Mutex<HashMap<kad::QueryId, PendingInfohashSearch>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let pending_dht_queries: Arc<
@@ -6010,7 +6049,16 @@ impl DhtService {
             let mut guard = metrics.lock().await;
             guard.autonat_enabled = enable_autonat;
             guard.autorelay_enabled = final_enable_autorelay;
+            guard.last_autorelay_enabled_at = last_autorelay_enabled_at;
+            guard.last_autorelay_disabled_at = last_autorelay_disabled_at;
             guard.dcutr_enabled = enable_autonat; // DCUtR enabled when AutoNAT is enabled
+            let now = SystemTime::now();
+            if final_enable_autorelay {
+                // Always record a fresh enable time when AutoRelay is turned on
+                guard.last_autorelay_enabled_at = Some(now);
+            } else {
+                guard.last_autorelay_disabled_at = Some(now);
+            }
         }
 
         // Spawn the Dht node task
@@ -6041,7 +6089,6 @@ impl DhtService {
             get_providers_queries_local.clone(),
             seeder_heartbeats_cache.clone(),
             pending_heartbeat_updates.clone(),
-            pending_keyword_indexes.clone(),
             file_metadata_cache_local.clone(),
             pending_dht_queries.clone(),
             pending_key_requests.clone(),
@@ -6459,6 +6506,111 @@ impl DhtService {
             .map(|peer_id| peer_id.to_string())
             .collect()
     }
+    
+    /// Trigger a re-bootstrap to discover new peers
+    /// Returns the number of new peers discovered
+    pub async fn re_bootstrap(&self) -> Result<usize, String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::ReBootstrap { sender: tx })
+            .await
+            .map_err(|e| format!("Failed to send re-bootstrap command: {}", e))?;
+        
+        rx.await
+            .map_err(|e| format!("Re-bootstrap response error: {}", e))?
+    }
+    
+    /// Check DHT health and optionally trigger automatic recovery
+    /// 
+    /// # Arguments
+    /// * `min_peers` - Minimum number of peers required for healthy status
+    /// * `auto_recover` - Whether to automatically trigger re-bootstrap if unhealthy
+    /// 
+    /// # Returns
+    /// Health status including peer count and recommendations
+    pub async fn check_health(&self, min_peers: usize, auto_recover: bool) -> DhtHealthStatus {
+        let (tx, rx) = oneshot::channel();
+        if self.cmd_tx
+            .send(DhtCommand::HealthCheck {
+                min_peers,
+                auto_recover,
+                sender: tx,
+            })
+            .await
+            .is_ok()
+        {
+            rx.await.unwrap_or_else(|_| DhtHealthStatus {
+                healthy: false,
+                peer_count: 0,
+                min_required: min_peers,
+                bootstrap_failures: 0,
+                last_bootstrap_secs_ago: None,
+                recommendation: Some("Health check failed to complete".to_string()),
+                recovery_triggered: false,
+            })
+        } else {
+            DhtHealthStatus {
+                healthy: false,
+                peer_count: 0,
+                min_required: min_peers,
+                bootstrap_failures: 0,
+                last_bootstrap_secs_ago: None,
+                recommendation: Some("Failed to send health check command".to_string()),
+                recovery_triggered: false,
+            }
+        }
+    }
+    
+    /// Check if the DHT is healthy (has minimum required peers)
+    pub async fn is_healthy(&self, min_peers: usize) -> bool {
+        let peer_count = self.connected_peers.lock().await.len();
+        peer_count >= min_peers
+    }
+    
+    /// Start a background health monitoring task
+    /// 
+    /// This task periodically checks DHT health and triggers recovery if needed.
+    /// Returns a handle to cancel the monitoring task.
+    pub fn start_health_monitor(
+        self: &Arc<Self>,
+        check_interval_secs: u64,
+        min_peers: usize,
+    ) -> tokio::task::JoinHandle<()> {
+        let dht_service = Arc::clone(self);
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                std::time::Duration::from_secs(check_interval_secs)
+            );
+            
+            // Skip the first tick (which fires immediately)
+            interval.tick().await;
+            
+            loop {
+                interval.tick().await;
+                
+                let peer_count = dht_service.connected_peers.lock().await.len();
+                
+                if peer_count < min_peers {
+                    warn!(
+                        "DHT health check: peer count ({}) below minimum ({}), triggering recovery",
+                        peer_count, min_peers
+                    );
+                    
+                    // Check full health and trigger auto-recovery
+                    let status = dht_service.check_health(min_peers, true).await;
+                    
+                    if status.recovery_triggered {
+                        info!("DHT recovery triggered, waiting for bootstrap to complete...");
+                    } else if !status.healthy {
+                        warn!("DHT recovery was not triggered: {:?}", status.recommendation);
+                    }
+                } else {
+                    debug!("DHT health check: {} peers connected (min: {})", peer_count, min_peers);
+                }
+            }
+        })
+    }
 
     pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
         let target_peer_id: PeerId = peer_id
@@ -6637,6 +6789,16 @@ impl DhtService {
         let metrics = self.metrics.lock().await.clone();
         let peer_count = self.connected_peers.lock().await.len();
         DhtMetricsSnapshot::from(metrics, peer_count)
+    }
+
+    pub async fn autorelay_history(
+        &self,
+    ) -> (Option<SystemTime>, Option<SystemTime>) {
+        let metrics = self.metrics.lock().await;
+        (
+            metrics.last_autorelay_enabled_at.clone(),
+            metrics.last_autorelay_disabled_at.clone(),
+        )
     }
 
     pub async fn store_block(&self, cid: Cid, data: Vec<u8>) -> Result<(), String> {
@@ -7598,6 +7760,8 @@ mod tests {
             Vec::new(), // preferred_relays
             false,      // enable_relay_server
             false,      // enable_upnp (disabled for testing)
+            None,
+            None,
             None,
         )
         .await

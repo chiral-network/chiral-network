@@ -319,6 +319,8 @@ pub struct DhtMetrics {
     pub autonat_enabled: bool,
     // AutoRelay metrics
     pub autorelay_enabled: bool,
+    pub last_autorelay_enabled_at: Option<SystemTime>,
+    pub last_autorelay_disabled_at: Option<SystemTime>,
     pub active_relay_peer_id: Option<String>,
     pub relay_reservation_status: Option<String>,
     pub last_reservation_success: Option<SystemTime>,
@@ -355,6 +357,8 @@ pub struct DhtMetricsSnapshot {
     pub autonat_enabled: bool,
     // AutoRelay metrics
     pub autorelay_enabled: bool,
+    pub last_autorelay_enabled_at: Option<u64>,
+    pub last_autorelay_disabled_at: Option<u64>,
     pub active_relay_peer_id: Option<String>,
     pub relay_reservation_status: Option<String>,
     pub last_reservation_success: Option<u64>,

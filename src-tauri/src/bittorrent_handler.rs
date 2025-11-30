@@ -5,7 +5,7 @@ use crate::transfer_events::{
     current_timestamp_ms, calculate_progress, calculate_eta,
 };
 use async_trait::async_trait;
-use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions};
+use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions, create_torrent, CreateTorrentOptions, AddTorrentOptions};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -13,6 +13,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration}; // Added for timeout in tests
 use tracing::{error, info, instrument, warn};
+use crate::dht::DhtService;
+use libp2p::Multiaddr;
 use thiserror::Error;
 
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
@@ -202,6 +204,7 @@ struct PaymentRequiredPayload {
 #[derive(Clone)]
 pub struct BitTorrentHandler {
     rqbit_session: Arc<Session>,
+    dht_service: Arc<DhtService>,
     download_directory: std::path::PathBuf,
     // NEW: Manage active torrents and their stats.
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
@@ -212,29 +215,35 @@ pub struct BitTorrentHandler {
 
 impl BitTorrentHandler {
     /// Creates a new BitTorrentHandler with the specified download directory.
-    pub async fn new(download_directory: std::path::PathBuf) -> Result<Self, BitTorrentError> {
-        Self::new_with_port_range(download_directory, None).await
+    pub async fn new(
+        download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
+    ) -> Result<Self, BitTorrentError> {
+        Self::new_with_port_range(download_directory, dht_service, None).await
     }
 
     /// Creates a new BitTorrentHandler with a specific port range to avoid conflicts.
     pub async fn new_with_port_range(
         download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
     ) -> Result<Self, BitTorrentError> {
-        Self::new_with_port_range_and_app_handle(download_directory, listen_port_range, None).await
+        Self::new_with_port_range_and_app_handle(download_directory, dht_service, listen_port_range, None).await
     }
 
     /// Creates a new BitTorrentHandler with AppHandle for TransferEventBus integration.
     pub async fn new_with_app_handle(
         download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
         app_handle: AppHandle,
     ) -> Result<Self, BitTorrentError> {
-        Self::new_with_port_range_and_app_handle(download_directory, None, Some(app_handle)).await
+        Self::new_with_port_range_and_app_handle(download_directory, dht_service, None, Some(app_handle)).await
     }
 
     /// Creates a new BitTorrentHandler with all options.
     pub async fn new_with_port_range_and_app_handle(
         download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
         app_handle: Option<AppHandle>,
     ) -> Result<Self, BitTorrentError> {
@@ -263,11 +272,12 @@ impl BitTorrentHandler {
             opts.listen_port_range = Some(range);
         }
 
-        // Disable DHT entirely to avoid conflicts between multiple instances
-        opts.disable_dht = true;
-        opts.persistence = None;
+        // Use instance-specific DHT config if available (for multiple instances)
+        // The DHT state file will be stored in the download directory
+        opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
+            folder: Some(download_directory.clone()),
+        });
 
-        info!("Initializing session with disable_dht=true, persistence=None");
         let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
             error!("Session initialization failed: {}", e);
             BitTorrentError::SessionInit {
@@ -279,14 +289,15 @@ impl BitTorrentHandler {
         let event_bus = app_handle.as_ref().map(|handle| Arc::new(TransferEventBus::new(handle.clone())));
 
         let handler = Self {
-            rqbit_session: session,
-            download_directory,
+            rqbit_session: session.clone(),
+            dht_service,
+            download_directory: download_directory.clone(),
             active_torrents: Default::default(),
             peer_states: Default::default(),
             app_handle,
             event_bus,
         };
-
+        
         // Spawn the background task for statistics polling.
         handler.spawn_stats_poller();
 
@@ -392,17 +403,23 @@ impl BitTorrentHandler {
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
+        let info_hash: Option<String>;
+
         let add_torrent = if identifier.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| {
                 error!("Magnet link validation failed: {}", e);
                 e
             })?;
+            info_hash = Some(Self::extract_info_hash(identifier).ok_or(BitTorrentError::InvalidMagnetLink { url: identifier.to_string() })?);
             AddTorrent::from_url(identifier)
         } else {
             Self::validate_torrent_file(identifier).map_err(|e| {
                 error!("Torrent file validation failed: {}", e);
                 e
             })?;
+            // For .torrent files, info_hash will be available after parsing,
+            // which librqbit does internally. For now, we can only prioritize for magnets.
+            info_hash = None;
             AddTorrent::from_local_filename(identifier).map_err(|e| {
                 error!("Failed to load torrent file: {}", e);
                 BitTorrentError::TorrentFileError {
@@ -411,9 +428,50 @@ impl BitTorrentHandler {
             })?
         };
 
+        let add_opts = AddTorrentOptions::default();
+
+        if let Some(hash) = info_hash {
+            info!("Searching for Chiral peers for info_hash: {}", hash);
+            match self.dht_service.search_peers_by_infohash(hash).await {
+                Ok(chiral_peer_ids) => {
+                    if !chiral_peer_ids.is_empty() {
+                        info!("Found {} Chiral peers. Using reputation system to prioritize them.", chiral_peer_ids.len());
+
+                        // Use the PeerSelectionService (via DhtService) to rank the discovered peers.
+                        // We'll use a balanced strategy for general-purpose downloads.
+                        let recommended_peers = self.dht_service.select_peers_with_strategy(
+                            &chiral_peer_ids,
+                            chiral_peer_ids.len(), // Get all peers, but ranked
+                            crate::peer_selection::SelectionStrategy::Balanced,
+                            false, // Encryption not required for public torrents
+                        ).await;
+
+                        info!("Prioritized peer list ({} peers): {:?}", recommended_peers.len(), recommended_peers);
+
+                        // Attempt to connect to the prioritized peers.
+                        for peer_id_str in recommended_peers {
+                            // Trigger the DHT to find and connect to the peer.
+                            // This will add the peer to the swarm, and librqbit will discover it.
+                            match self.dht_service.connect_to_peer_by_id(peer_id_str.clone()).await {
+                                Ok(_) => {
+                                    info!("Initiated connection attempt to Chiral peer: {}", peer_id_str);
+                                }
+                                Err(e) => warn!("Failed to initiate connection to Chiral peer {}: {}", peer_id_str, e),
+                            }
+                        }
+                    } else {
+                        info!("No additional Chiral peers found for this torrent.");
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to search for Chiral peers: {}", e);
+                }
+            }
+        }
+
         let add_torrent_response = self
             .rqbit_session
-            .add_torrent(add_torrent, None)
+            .add_torrent(add_torrent, Some(add_opts))
             .await
             .map_err(|e| {
                 error!("Failed to add torrent to session: {}", e);
@@ -557,6 +615,24 @@ impl BitTorrentHandler {
             BitTorrentError::Unknown { message: error_msg }
         }
     }
+
+    
+}
+
+/// Helper to convert a libp2p Multiaddr to a standard SocketAddr.
+/// This is a simplified conversion that only handles TCP/IP.
+fn multiaddr_to_socket_addr(multiaddr: &Multiaddr) -> Result<std::net::SocketAddr, &'static str> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut iter = multiaddr.iter();
+    let proto1 = iter.next().ok_or("Empty Multiaddr")?;
+    let proto2 = iter.next().ok_or("Multiaddr needs at least two protocols")?;
+    
+    match (proto1, proto2) {
+        (Protocol::Ip4(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
+        (Protocol::Ip6(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
+        _ => Err("Multiaddr format not supported (expected IP/TCP)"),
+    }
 }
 
 #[async_trait]
@@ -591,8 +667,6 @@ impl SimpleProtocolHandler for BitTorrentHandler {
 
     #[instrument(skip(self), fields(protocol = "bittorrent"))]
     async fn seed(&self, file_path: &str) -> Result<String, String> {
-        info!("Starting to seed file: {}", file_path);
-
         let path = Path::new(file_path);
         if !path.exists() {
             let error = BitTorrentError::FileSystemError {
@@ -610,22 +684,43 @@ impl SimpleProtocolHandler for BitTorrentHandler {
             return Err(error.into());
         }
 
-        let add_torrent = AddTorrent::from_local_filename(file_path).map_err(|e| {
+        // Create a torrent from the file
+        let torrent = create_torrent(path, CreateTorrentOptions::default()).await.map_err(|e| {
             let error = BitTorrentError::SeedingError {
                 message: format!("Failed to create torrent from file {}: {}", file_path, e),
             };
+            error!("Torrent creation failed: {}", e);
             error!("Seeding failed: {}", error);
             String::from(error)
         })?;
 
+        // Convert the torrent to bytes and create AddTorrent
+        let torrent_bytes = torrent.as_bytes().map_err(|e| {
+            let error = BitTorrentError::SeedingError {
+                message: format!("Failed to serialize torrent for {}: {}", file_path, e),
+            };
+            error!("Torrent serialization failed: {}", e);
+            error!("Seeding failed: {}", error);
+            String::from(error)
+        })?;
+
+        let add_torrent = AddTorrent::from_bytes(torrent_bytes.clone());
+
+        // For seeding, we need to allow overwriting existing files
+        let options = AddTorrentOptions {
+            overwrite: true,
+            ..Default::default()
+        };
+
         let handle = self
             .rqbit_session
-            .add_torrent(add_torrent, None)
+            .add_torrent(add_torrent, Some(options))
             .await
             .map_err(|e| {
                 let error = BitTorrentError::SeedingError {
                     message: format!("Failed to add torrent for seeding: {}", e),
                 };
+                error!("Failed to add torrent to session: {}", e);
                 error!("Seeding failed: {}", error);
                 String::from(error)
             })?
@@ -635,8 +730,7 @@ impl SimpleProtocolHandler for BitTorrentHandler {
         // Get the info hash and construct a magnet link
         let info_hash = handle.info_hash();
         let magnet_link = format!("magnet:?xt=urn:btih:{}", hex::encode(info_hash.0));
-        
-        info!("Successfully started seeding. Magnet link: {}", magnet_link);
+
         Ok(magnet_link)
     }
 }
@@ -820,12 +914,7 @@ impl BitTorrentHandler {
     /// Extract info hash from magnet link
     pub fn extract_info_hash(magnet: &str) -> Option<String> {
         if let Ok(_) = Self::validate_magnet_link(magnet) {
-            if let Some(hash_start) = magnet.find("urn:btih:") {
-                let hash_start = hash_start + 9; // "urn:btih:".len()
-                let hash_end = magnet[hash_start..]
-                    .find('&')
-                    .map(|i| i + hash_start)
-                    .unwrap_or(magnet.len());
+            if let Some(hash_start) = magnet.to_lowercase().find("urn:btih:") {
                 let hash_start = hash_start + 9;
                 let hash_end = magnet[hash_start..]
                     .find('&')
@@ -895,8 +984,35 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory for download");
         let download_path = temp_dir.path().to_path_buf();
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+                None,
+                None,
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts if other tests run in parallel
-        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), Some(31000..32000))
+        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), dht_service, Some(31000..32000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -938,8 +1054,35 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory for download");
         let download_path = temp_dir.path().to_path_buf();
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+                None,
+                None,
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts
-        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), Some(33000..34000))
+        let handler = BitTorrentHandler::new_with_port_range(download_path.clone(), dht_service, Some(33000..34000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -969,8 +1112,35 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp directory");
         let file_path = create_test_file(temp_dir.path(), "seed_me.txt", "hello world seeding test");
 
+        // Create a DHT service for the test
+        let dht_service = Arc::new(
+            DhtService::new(
+                0,                            // Random port
+                vec![],                       // No bootstrap nodes for this test
+                None,                         // No identity secret
+                false,                        // Not bootstrap node
+                false,                        // Disable AutoNAT for test
+                None,                         // No autonat probe interval
+                vec![],                       // No custom AutoNAT servers
+                None,                         // No proxy
+                None,                         // No file transfer service
+                None,                         // No chunk manager
+                Some(256),                    // chunk_size_kb
+                Some(1024),                   // cache_size_mb
+                false,                        // enable_autorelay
+                Vec::new(),                   // preferred_relays
+                false,                        // enable_relay_server
+                false,                        // enable_upnp
+                None,                         // blockstore_db_path
+                None,
+                None,
+            )
+            .await
+            .expect("Failed to create DHT service for test"),
+        );
+
         // Use a specific port range to avoid conflicts
-        let handler = BitTorrentHandler::new_with_port_range(temp_dir.path().to_path_buf(), Some(32000..33000))
+        let handler = BitTorrentHandler::new_with_port_range(temp_dir.path().to_path_buf(), dht_service, Some(32000..33000))
             .await
             .expect("Failed to create BitTorrentHandler");
 
@@ -1027,5 +1197,40 @@ mod tests {
             .category(),
             "filesystem"
         );
+    }
+
+    #[test]
+    fn test_multiaddr_to_socket_addr() {
+        // IPv4 test
+        let multiaddr_ipv4: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
+        let socket_addr_ipv4 = multiaddr_to_socket_addr(&multiaddr_ipv4).unwrap();
+        assert_eq!(
+            socket_addr_ipv4,
+            "127.0.0.1:8080".parse::<std::net::SocketAddr>().unwrap()
+        );
+
+        // IPv6 test
+        let multiaddr_ipv6: Multiaddr = "/ip6/::1/tcp/8080".parse().unwrap();
+        let socket_addr_ipv6 = multiaddr_to_socket_addr(&multiaddr_ipv6).unwrap();
+        assert_eq!(
+            socket_addr_ipv6,
+            "[::1]:8080".parse::<std::net::SocketAddr>().unwrap()
+        );
+
+        // Invalid format (DNS)
+        let multiaddr_dns: Multiaddr = "/dns/localhost/tcp/8080".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_dns).is_err());
+
+        // Invalid format (UDP)
+        let multiaddr_udp: Multiaddr = "/ip4/127.0.0.1/udp/8080".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_udp).is_err());
+
+        // Too short
+        let multiaddr_short: Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_short).is_err());
+
+        // Empty
+        let multiaddr_empty: Multiaddr = "".parse().unwrap();
+        assert!(multiaddr_to_socket_addr(&multiaddr_empty).is_err());
     }
 }

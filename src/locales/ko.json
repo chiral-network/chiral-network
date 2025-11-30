@@ -158,6 +158,9 @@
         "title": "릴레이 상태",
         "enabled": "자동 릴레이 활성화됨",
         "disabled": "자동 릴레이 비활성화됨",
+        "timeline": "자동 릴레이 타임라인",
+        "enabledAt": "마지막 활성화",
+        "disabledAt": "마지막 비활성화",
         "noPeer": "릴레이에 연결되지 않음",
         "activePeer": "활성 릴레이",
         "status": "상태",
@@ -166,6 +169,8 @@
         "renewals": "예약 갱신",
         "evictions": "예약 제거",
         "never": "없음",
+        "neverEnabled": "활성화된 적 없음",
+        "neverDisabled": "비활성화된 적 없음",
         "noEvictions": "제거 없음",
         "accepted": "예약 수락됨",
         "pending": "대기 중",
@@ -455,6 +460,12 @@
       "noDetails": "표시할 보류 중 트랜잭션이 없습니다.",
       "count": "보류 중 {count}건",
       "none": "보류 중 트랜잭션"
+    },
+    "fees": {
+      "low": "낮음",
+      "market": "시장",
+      "fast": "빠름",
+      "estimated": "예상 수수료"
     }
   },
   "transactions": {
@@ -1427,6 +1438,14 @@
     "blocks": {
       "latest": "최신 블록",
       "noBlocks": "블록을 찾을 수 없습니다"
+    },
+    "sync": {
+      "syncing": "동기화 중",
+      "current": "현재 블록",
+      "highest": "최고 블록",
+      "remaining": "남음",
+      "eta": "예상 시간",
+      "complete": "동기화 완료"
     },
     "search": {
       "title": "블록체인 검색",

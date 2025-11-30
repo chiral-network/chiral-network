@@ -94,7 +94,11 @@
         "cannotConnect": "Your Chiral node may have difficulty connecting to the blockchain network. Check your internet connection or firewall settings.",
         "someNodesDown": "Some bootstrap nodes are unreachable",
         "usingAvailable": "Your Chiral node will use the available nodes. Network connectivity should be stable.",
-        "allNodesHealthy": "All bootstrap nodes are healthy and reachable"
+        "allNodesHealthy": "All bootstrap nodes are healthy and reachable",
+        "lastChecked": "Last checked",
+        "reconnecting": "Reconnecting...",
+        "reconnect": "Reconnect to Bootstrap",
+        "consecutiveFailures": "consecutive failures"
       }
     },
     "dht": {
@@ -161,6 +165,9 @@
         "title": "Relay Status",
         "enabled": "AutoRelay Enabled",
         "disabled": "AutoRelay Disabled",
+        "timeline": "AutoRelay timeline",
+        "enabledAt": "Last enabled",
+        "disabledAt": "Last disabled",
         "noPeer": "Not connected to relay",
         "activePeer": "Active Relay",
         "status": "Status",
@@ -169,6 +176,8 @@
         "renewals": "Reservations renewed",
         "evictions": "Reservations evicted",
         "never": "Never",
+        "neverEnabled": "Never enabled",
+        "neverDisabled": "Never disabled",
         "noEvictions": "No evictions",
         "accepted": "Reservation accepted",
         "pending": "Pending",
@@ -590,6 +599,12 @@
       "noDetails": "No pending transaction details available.",
       "count": "{count, plural, one {# Pending Transaction} other {# Pending Transactions}}",
       "none": "Pending Transactions"
+    },
+    "fees": {
+      "low": "Low",
+      "market": "Market",
+      "fast": "Fast",
+      "estimated": "Estimated fee"
     }
   },
   "transactions": {
@@ -1587,6 +1602,14 @@
     "blocks": {
       "latest": "Latest Blocks",
       "noBlocks": "No blocks found"
+    },
+    "sync": {
+      "syncing": "Syncing",
+      "current": "Current Block",
+      "highest": "Highest Block",
+      "remaining": "Remaining",
+      "eta": "ETA",
+      "complete": "Sync Complete"
     },
     "search": {
       "title": "Search Blockchain",

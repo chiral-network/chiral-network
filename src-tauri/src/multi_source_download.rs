@@ -9,7 +9,7 @@ use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
 use crate::transfer_events::{
     TransferEventBus, TransferStartedEvent, SourceConnectedEvent, SourceDisconnectedEvent,
     ChunkCompletedEvent, ChunkFailedEvent, TransferProgressEvent, TransferCompletedEvent,
-    TransferFailedEvent, SourceInfo, SourceType, DisconnectReason, ErrorCategory,
+    TransferFailedEvent, SourceInfo, SourceType, SourceSummary, DisconnectReason, ErrorCategory,
     current_timestamp_ms, calculate_progress,
 };
 use crate::ftp_downloader::{FtpCredentials, FtpDownloader};
@@ -1026,6 +1026,9 @@ impl MultiSourceDownloadService {
                         chunk.chunk_id, start_byte, size, remote_path
                     );
 
+                    // Capture start time for duration tracking
+                    let download_start_ms = current_timestamp_ms();
+
                     // Get FTP connection (we need to handle connection sharing carefully)
                     let download_result = {
                         let mut connections_guard = connections.lock().await;
@@ -1165,6 +1168,10 @@ impl MultiSourceDownloadService {
                                 chunk.chunk_id, chunk.size
                             );
 
+                            // Calculate actual download duration
+                            let completed_at = current_timestamp_ms();
+                            let download_duration_ms = completed_at.saturating_sub(download_start_ms);
+
                             // Emit chunk completed event via TransferEventBus
                             transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
                                 transfer_id: file_hash.clone(),
@@ -1172,8 +1179,8 @@ impl MultiSourceDownloadService {
                                 chunk_size: chunk.size,
                                 source_id: ftp_url.clone(),
                                 source_type: SourceType::Ftp,
-                                completed_at: current_timestamp_ms(),
-                                download_duration_ms: 0, // TODO: track actual duration
+                                completed_at,
+                                download_duration_ms,
                                 verified: true,
                             });
 
@@ -1288,6 +1295,9 @@ impl MultiSourceDownloadService {
 
         // For each requested chunk, attempt HTTP download with hash verification
         for chunk_id in chunk_ids {
+            // Capture start time for duration tracking
+            let download_start_ms = current_timestamp_ms();
+
             // Find chunk info
             let chunk_info = match download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
                 Some(chunk) => chunk,
@@ -1367,7 +1377,7 @@ impl MultiSourceDownloadService {
 
             // Chunk passed verification - store it
             info!("HTTP chunk {} downloaded and verified successfully", chunk_id);
-            if let Err(e) = self.store_verified_chunk(file_hash, chunk_info, chunk_data).await {
+            if let Err(e) = self.store_verified_chunk(file_hash, chunk_info, chunk_data, download_start_ms).await {
                 let error = format!("Failed to store HTTP chunk {}: {}", chunk_id, e);
                 error!("{}", error);
                 self.on_source_failed(file_hash, &http_info.url, error).await;
@@ -1383,6 +1393,7 @@ impl MultiSourceDownloadService {
         file_hash: &str,
         chunk_info: &ChunkInfo,
         data: Vec<u8>,
+        download_start_ms: u64,
     ) -> Result<(), String> {
         let mut downloads = self.active_downloads.write().await;
         let download = downloads.get_mut(file_hash)
@@ -1397,6 +1408,10 @@ impl MultiSourceDownloadService {
         };
         download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
 
+        // Calculate actual download duration
+        let completed_at = current_timestamp_ms();
+        let download_duration_ms = completed_at.saturating_sub(download_start_ms);
+
         // Emit chunk completed event via TransferEventBus
         self.transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
             transfer_id: file_hash.to_string(),
@@ -1404,8 +1419,8 @@ impl MultiSourceDownloadService {
             chunk_size: chunk_info.size,
             source_id: "http".to_string(),
             source_type: SourceType::Http,
-            completed_at: current_timestamp_ms(),
-            download_duration_ms: 0, // TODO: track actual duration
+            completed_at,
+            download_duration_ms,
             verified: true,
         });
 
@@ -2575,7 +2590,7 @@ impl MultiSourceDownloadService {
             loop {
                 interval.tick().await;
 
-                let (progress, download_info) = {
+                let (progress, download_info, sources_used) = {
                     let downloads = downloads.read().await;
                     if let Some(download) = downloads.get(&file_hash) {
                         let progress = Self::calculate_progress_static(download);
@@ -2584,9 +2599,59 @@ impl MultiSourceDownloadService {
                             download.file_metadata.file_size,
                             download.output_path.clone(),
                         );
-                        (Some(progress), Some(info))
+                        
+                        // Calculate source statistics from completed chunks
+                        let now_secs = current_timestamp_ms() / 1000;
+                        let sources: Vec<SourceSummary> = download.source_assignments.iter().map(|(source_id, assignment)| {
+                            let source_type = match &assignment.source {
+                                DownloadSource::P2p(_) => SourceType::P2p,
+                                DownloadSource::Http(_) => SourceType::Http,
+                                DownloadSource::Ftp(_) => SourceType::Ftp,
+                                DownloadSource::BitTorrent(_) => SourceType::BitTorrent,
+                                DownloadSource::Ed2k(_) => SourceType::P2p,
+                            };
+                            
+                            // Count chunks and bytes provided by this source
+                            let mut chunks_provided = 0u32;
+                            let mut bytes_provided = 0u64;
+                            for completed_chunk in download.completed_chunks.values() {
+                                if completed_chunk.source_id == *source_id {
+                                    chunks_provided += 1;
+                                    // Find chunk size from chunks metadata
+                                    if let Some(chunk_info) = download.chunks.iter().find(|c| c.chunk_id == completed_chunk.chunk_id) {
+                                        bytes_provided += chunk_info.size as u64;
+                                    }
+                                }
+                            }
+                            
+                            // Calculate connection duration
+                            let connection_duration_seconds = if let Some(connected_at_ms) = assignment.connected_at {
+                                let connected_at_secs = connected_at_ms / 1000;
+                                now_secs.saturating_sub(connected_at_secs)
+                            } else {
+                                0
+                            };
+                            
+                            // Calculate average speed
+                            let average_speed_bps = if connection_duration_seconds > 0 {
+                                bytes_provided as f64 / connection_duration_seconds as f64
+                            } else {
+                                0.0
+                            };
+                            
+                            SourceSummary {
+                                source_id: source_id.clone(),
+                                source_type,
+                                chunks_provided,
+                                bytes_provided,
+                                average_speed_bps,
+                                connection_duration_seconds,
+                            }
+                        }).collect();
+                        
+                        (Some(progress), Some(info), sources)
                     } else {
-                        (None, None)
+                        (None, None, Vec::new())
                     }
                 };
 
@@ -2632,7 +2697,7 @@ impl MultiSourceDownloadService {
                                 duration_seconds: duration.as_secs(),
                                 average_speed_bps: avg_speed,
                                 total_chunks: progress.total_chunks,
-                                sources_used: Vec::new(), // TODO: track sources
+                                sources_used,
                             }, &analytics_service).await;
                             // Also emit legacy internal event
                             let _ = event_tx.send(MultiSourceEvent::DownloadCompleted {

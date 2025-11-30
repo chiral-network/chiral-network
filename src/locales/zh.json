@@ -151,6 +151,9 @@
         "title": "中继状态",
         "enabled": "自动中继已启用",
         "disabled": "自动中继已禁用",
+        "timeline": "自动中继时间线",
+        "enabledAt": "最近启用时间",
+        "disabledAt": "最近禁用时间",
         "noPeer": "未连接到中继",
         "activePeer": "活动中继",
         "status": "状态",
@@ -159,6 +162,8 @@
         "renewals": "预留续期次数",
         "evictions": "预留被逐次数",
         "never": "从未",
+        "neverEnabled": "从未启用",
+        "neverDisabled": "从未禁用",
         "noEvictions": "无被逐记录",
         "accepted": "预留已接受",
         "pending": "待定",
@@ -455,6 +460,12 @@
       "noDetails": "没有可用的待处理交易详情。",
       "count": "{count} 笔待处理交易",
       "none": "无待处理交易"
+    },
+    "fees": {
+      "low": "低",
+      "market": "市场",
+      "fast": "快",
+      "estimated": "预估费用"
     }
   },
   "transactions": {
@@ -1456,6 +1467,14 @@
     "blocks": {
       "latest": "最新区块",
       "noBlocks": "未找到区块"
+    },
+    "sync": {
+      "syncing": "同步中",
+      "current": "当前区块",
+      "highest": "最高区块",
+      "remaining": "剩余",
+      "eta": "预计时间",
+      "complete": "同步完成"
     },
     "search": {
       "title": "搜索区块链",
