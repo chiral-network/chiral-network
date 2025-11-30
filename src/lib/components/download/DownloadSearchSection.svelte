@@ -147,6 +147,8 @@
   }
 
   async function searchForFile() {
+    isSearching = true
+
     // Handle BitTorrent downloads - show confirmation instead of immediately downloading
     if (searchMode === 'magnet' || searchMode === 'torrent' || searchMode === 'ed2k' || searchMode === 'ftp') {
       let identifier: string | null = null
@@ -155,6 +157,7 @@
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter a magnet link', 'warning')
+          isSearching = false
           return
         }
 
@@ -172,6 +175,7 @@
               latestStatus = 'found'
               hasSearched = true
               pushMessage(`Found file: ${metadata.fileName}`, 'success')
+              isSearching = false
               return
             }
           } catch (error) {
@@ -183,6 +187,7 @@
       } else if (searchMode === 'torrent') {
         if (!torrentFileName) {
           pushMessage('Please select a .torrent file', 'warning')
+          isSearching = false
           return
         }
         // Use the file input to get the actual file
@@ -205,11 +210,13 @@
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter an ED2K link', 'warning')
+          isSearching = false
           return
         }
         // Basic ED2K link validation
         if (!identifier.startsWith('ed2k://')) {
           pushMessage('Please enter a valid ED2K link starting with ed2k://', 'warning')
+          isSearching = false
           return
         }
 
@@ -227,6 +234,7 @@
               latestStatus = 'found'
               hasSearched = true
               pushMessage(`Found file: ${metadata.fileName}`, 'success')
+              isSearching = false
               return
             }
           } catch (error) {
@@ -237,18 +245,19 @@
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter an FTP URL', 'warning')
+          isSearching = false
           return
         }
         // Basic FTP URL validation
         if (!identifier.startsWith('ftp://') && !identifier.startsWith('ftps://')) {
           pushMessage('Please enter a valid FTP URL starting with ftp:// or ftps://', 'warning')
+          isSearching = false
           return
         }
       }
 
       if (identifier) {
         try {
-          isSearching = true
           
           // Store the pending torrent info for confirmation
           if (searchMode === 'torrent') {
@@ -309,10 +318,10 @@
                      searchMode === 'ftp' ? 'Please enter an FTP URL' :
                      'Please enter a search term';
       pushMessage(message, 'warning');
+      isSearching = false; // Reset searching state
       return;
     }
 
-    isSearching = true;
     hasSearched = true;
     latestMetadata = null;
     latestStatus = 'pending';

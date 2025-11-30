@@ -3560,8 +3560,18 @@ async fn upload_file_to_network(
                             Err(_) => 0,
                         };
 
+                        let ed2k_hash = {
+                            // Extract hash from ed2k link: ed2k://|file|name|size|hash|/
+                            let parts: Vec<&str> = seeding_info.identifier.split('|').collect();
+                            if parts.len() >= 5 {
+                                Some(parts[4].to_string())
+                            } else {
+                                None
+                            }
+                        };
+
                         let metadata = FileMetadata {
-                            merkle_root: file_hash.clone(), // Use content hash for consistency
+                            merkle_root: ed2k_hash.clone().unwrap_or_else(|| file_hash.clone()), // Use ED2K hash as key for ED2K link searches
                             is_root: true,
                             file_name: original_file_name.clone(),
                             file_size,
@@ -3586,15 +3596,7 @@ async fn upload_file_to_network(
                             trackers: None,
                             ed2k_sources: Some(vec![dht::models::Ed2kSourceInfo {
                                 server_url: "ed2k://|server|45.82.80.155|5687|/".to_string(),
-                                file_hash: {
-                                    // Extract hash from ed2k link: ed2k://|file|name|size|hash|/
-                                    let parts: Vec<&str> = seeding_info.identifier.split('|').collect();
-                                    if parts.len() >= 5 {
-                                        parts[4].to_string()
-                                    } else {
-                                        "unknown".to_string()
-                                    }
-                                },
+                                file_hash: ed2k_hash.clone().unwrap_or_else(|| "unknown".to_string()),
                                 file_size,
                                 file_name: Some(original_file_name.clone()),
                                 sources: None,
