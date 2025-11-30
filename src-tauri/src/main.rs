@@ -6696,25 +6696,8 @@ fn main() {
         Arc::new(dht_service)
     });
 
-    // --- Spawn DHT event pump ---
-    let app_handle_for_pump = {
-        // Create a temporary builder to get an AppHandle.
-        // This is a bit of a workaround to get the handle before the main builder is consumed.
-        let temp_app = tauri::Builder::default().build(tauri::generate_context!()).expect("Failed to build temp app");
-        temp_app.handle().clone()
-    };
-    let dht_clone_for_pump = dht_service_arc.clone();
-    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
-    let relay_reputation_arc_for_pump = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
-     runtime.spawn(async move {
-        pump_dht_events(
-            app_handle_for_pump,
-            dht_clone_for_pump,
-            proxies_arc_for_pump,
-            relay_reputation_arc_for_pump,
-        ).await;
-    });
 
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -7441,6 +7424,36 @@ fn main() {
                         }
                     }
                 });
+            }
+
+            // Start DHT event pump with the real app handle
+            {
+                let app_handle = app.handle().clone();
+                let dht_clone_for_pump = {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        if let Ok(dht_guard) = state.dht.try_lock() {
+                            dht_guard.clone()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(dht_service) = dht_clone_for_pump {
+                    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
+                    let relay_reputation_arc_for_pump = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+                    tauri::async_runtime::spawn(async move {
+                        pump_dht_events(
+                            app_handle,
+                            dht_service,
+                            proxies_arc_for_pump,
+                            relay_reputation_arc_for_pump,
+                        ).await;
+                    });
+                }
             }
 
             Ok(())
