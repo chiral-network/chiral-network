@@ -1,3 +1,4 @@
+use crate::connection_retry::{ConnectionManager, ConnectionState, RetryConfig, WebRtcRetryContext, };
 use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, FileEncryption};
 use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
@@ -27,6 +28,15 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
 const CHUNK_SIZE: usize = 4096; // 4KB chunks - safe size for WebRTC data channel max message size (~16KB after JSON serialization)
+
+/// Maximum connection retry attempts before giving up
+const MAX_CONNECTION_RETRIES: u32 = 3;
+
+/// Initial delay between connection retries (milliseconds)
+const INITIAL_RETRY_DELAY_MS: u64 = 1000;
+
+/// Maximum delay between connection retries (milliseconds)
+const MAX_RETRY_DELAY_MS: u64 = 15000;
 
 /// Creates a WebRTC configuration with public STUN servers for NAT traversal.
 /// Without ICE servers, WebRTC connections will fail for users behind NAT (majority of users).
@@ -108,6 +118,8 @@ pub struct PeerConnection {
     pub received_chunks: HashMap<String, HashMap<u32, FileChunk>>, // file_hash -> chunk_index -> chunk
     pub acked_chunks: HashMap<String, std::collections::HashSet<u32>>, // file_hash -> acked chunk indices
     pub pending_acks: HashMap<String, u32>, // file_hash -> number of unacked chunks
+    /// Retry context for connection resilience
+    pub retry_context: Option<WebRtcRetryContext>,
 }
 
 #[derive(Debug)]
@@ -151,6 +163,11 @@ pub enum WebRTCCommand {
     CloseConnection {
         peer_id: String,
     },
+    /// Retry a failed connection with exponential backoff
+    RetryConnection {
+        peer_id: String,
+        offer: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +178,19 @@ pub enum WebRTCEvent {
     ConnectionFailed {
         peer_id: String,
         error: String,
+    },
+    /// Connection is being retried after failure
+    ConnectionRetrying {
+        peer_id: String,
+        attempt: u32,
+        max_attempts: u32,
+        next_retry_ms: u64,
+    },
+    /// Connection permanently failed after all retries exhausted
+    ConnectionPermanentlyFailed {
+        peer_id: String,
+        total_attempts: u32,
+        last_error: String,
     },
     OfferCreated {
         peer_id: String,
@@ -232,6 +262,8 @@ pub struct WebRTCService {
     active_private_key: Arc<Mutex<Option<String>>>,
     stream_auth: Arc<Mutex<StreamAuthService>>, // Stream authentication
     bandwidth: Arc<BandwidthController>,
+    /// Connection manager for retry logic
+    connection_manager: Arc<ConnectionManager>,
 }
 
 impl WebRTCService {
@@ -245,9 +277,13 @@ impl WebRTCService {
         let (event_tx, event_rx) = mpsc::channel(100);
         let connections = Arc::new(Mutex::new(HashMap::new()));
         let active_private_key = Arc::new(Mutex::new(None));
+        
+        // Initialize connection manager with WebRTC-optimized retry config
+        let connection_manager = Arc::new(ConnectionManager::new(RetryConfig::for_webrtc()));
 
         // Spawn the WebRTC service task
         let stream_auth = Arc::new(Mutex::new(StreamAuthService::new()));
+        let connection_manager_clone = connection_manager.clone();
         tokio::spawn(Self::run_webrtc_service(
             app_handle.clone(),
             cmd_rx,
@@ -258,6 +294,7 @@ impl WebRTCService {
             active_private_key.clone(),
             stream_auth.clone(),
             bandwidth.clone(),
+            connection_manager_clone,
         ));
 
         Ok(WebRTCService {
@@ -271,6 +308,7 @@ impl WebRTCService {
             active_private_key,
             stream_auth,
             bandwidth,
+            connection_manager,
         })
     }
 
@@ -278,6 +316,22 @@ impl WebRTCService {
     pub async fn set_active_private_key(&self, private_key: Option<String>) {
         let mut key_guard = self.active_private_key.lock().await;
         *key_guard = private_key;
+    }
+    
+    /// Get connection statistics
+    pub async fn get_connection_stats(&self) -> crate::connection_retry::ConnectionManagerStats {
+        self.connection_manager.get_stats().await
+    }
+    
+    /// Manually trigger retry for a failed connection
+    pub async fn retry_connection(&self, peer_id: &str) -> Result<(), String> {
+        self.cmd_tx
+            .send(WebRTCCommand::RetryConnection {
+                peer_id: peer_id.to_string(),
+                offer: None,
+            })
+            .await
+            .map_err(|e| format!("Failed to send retry command: {}", e))
     }
 
     async fn run_webrtc_service(
@@ -290,11 +344,12 @@ impl WebRTCService {
         active_private_key: Arc<Mutex<Option<String>>>,
         stream_auth: Arc<Mutex<StreamAuthService>>,
         bandwidth: Arc<BandwidthController>,
+        connection_manager: Arc<ConnectionManager>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 WebRTCCommand::EstablishConnection { peer_id, offer } => {
-                    Self::handle_establish_connection(
+                    Self::handle_establish_connection_with_retry(
                         &app_handle,
                         &peer_id,
                         &offer,
@@ -305,11 +360,12 @@ impl WebRTCService {
                         &active_private_key,
                         &stream_auth,
                         &bandwidth,
+                        &connection_manager,
                     )
                     .await;
                 }
                 WebRTCCommand::HandleAnswer { peer_id, answer } => {
-                    Self::handle_answer(&peer_id, &answer, &connections).await;
+                    Self::handle_answer(&peer_id, &answer, &connections, &connection_manager).await;
                 }
                 WebRTCCommand::AddIceCandidate { peer_id, candidate } => {
                     Self::handle_ice_candidate(&peer_id, &candidate, &connections).await;
@@ -337,9 +393,206 @@ impl WebRTCService {
                     .await;
                 }
                 WebRTCCommand::CloseConnection { peer_id } => {
-                    Self::handle_close_connection(&peer_id, &connections).await;
+                    Self::handle_close_connection(&peer_id, &connections, &connection_manager).await;
+                }
+                WebRTCCommand::RetryConnection { peer_id, offer } => {
+                    Self::handle_retry_connection(
+                        &app_handle,
+                        &peer_id,
+                        offer.as_deref(),
+                        &event_tx,
+                        &connections,
+                        &file_transfer_service,
+                        &keystore,
+                        &active_private_key,
+                        &stream_auth,
+                        &bandwidth,
+                        &connection_manager,
+                    )
+                    .await;
                 }
             }
+        }
+    }
+    
+    /// Handle connection establishment with retry tracking
+    async fn handle_establish_connection_with_retry(
+        app_handle: &tauri::AppHandle,
+        peer_id: &str,
+        offer_sdp: &str,
+        event_tx: &mpsc::Sender<WebRTCEvent>,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        file_transfer_service: &Arc<FileTransferService>,
+        keystore: &Arc<Mutex<Keystore>>,
+        active_private_key: &Arc<Mutex<Option<String>>>,
+        stream_auth: &Arc<Mutex<StreamAuthService>>,
+        bandwidth: &Arc<BandwidthController>,
+        connection_manager: &Arc<ConnectionManager>,
+    ) {
+        // Get or create tracker for this peer
+        let mut tracker = connection_manager.get_or_create(peer_id).await;
+        tracker.start_retry();
+        
+        // Attempt connection
+        let result = Self::handle_establish_connection_internal(
+            app_handle,
+            peer_id,
+            offer_sdp,
+            event_tx,
+            connections,
+            file_transfer_service,
+            keystore,
+            active_private_key,
+            stream_auth,
+            bandwidth,
+        )
+        .await;
+        
+        match result {
+            Ok(()) => {
+                tracker.record_success();
+                connection_manager.update(tracker).await;
+                info!("WebRTC connection to {} established successfully", peer_id);
+            }
+            Err(error) => {
+                tracker.record_failure(&error);
+                let state = tracker.state;
+                let attempts = tracker.consecutive_failures;
+                let config = tracker.config.clone();
+                connection_manager.update(tracker).await;
+                
+                if state == ConnectionState::Failed {
+                    // All retries exhausted
+                    let _ = event_tx
+                        .send(WebRTCEvent::ConnectionPermanentlyFailed {
+                            peer_id: peer_id.to_string(),
+                            total_attempts: attempts,
+                            last_error: error,
+                        })
+                        .await;
+                } else {
+                    // Will retry - notify with backoff info
+                    let delay = config.calculate_delay(attempts - 1);
+                    let _ = event_tx
+                        .send(WebRTCEvent::ConnectionRetrying {
+                            peer_id: peer_id.to_string(),
+                            attempt: attempts,
+                            max_attempts: config.max_attempts,
+                            next_retry_ms: delay.as_millis() as u64,
+                        })
+                        .await;
+                }
+            }
+        }
+    }
+    
+    /// Handle retry of a failed connection
+    async fn handle_retry_connection(
+        app_handle: &tauri::AppHandle,
+        peer_id: &str,
+        offer_sdp: Option<&str>,
+        event_tx: &mpsc::Sender<WebRTCEvent>,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        file_transfer_service: &Arc<FileTransferService>,
+        keystore: &Arc<Mutex<Keystore>>,
+        active_private_key: &Arc<Mutex<Option<String>>>,
+        stream_auth: &Arc<Mutex<StreamAuthService>>,
+        bandwidth: &Arc<BandwidthController>,
+        connection_manager: &Arc<ConnectionManager>,
+    ) {
+        let tracker = connection_manager.get_or_create(peer_id).await;
+        
+        // Check if we should retry
+        if !tracker.is_ready_to_retry() {
+            if let Some(wait_time) = tracker.time_until_retry() {
+                debug!(
+                    "Connection {} not ready to retry, waiting {:?}",
+                    peer_id, wait_time
+                );
+                return;
+            }
+        }
+        
+        // Get stored offer from connection if not provided
+        let offer = if let Some(o) = offer_sdp {
+            o.to_string()
+        } else {
+            // Try to get from existing connection's retry context
+            let conns = connections.lock().await;
+            if let Some(conn) = conns.get(peer_id) {
+                if let Some(ref ctx) = conn.retry_context {
+                    if let Some(ref stored_offer) = ctx.last_offer {
+                        stored_offer.clone()
+                    } else {
+                        warn!("No stored offer for retry of connection {}", peer_id);
+                        return;
+                    }
+                } else {
+                    warn!("No retry context for connection {}", peer_id);
+                    return;
+                }
+            } else {
+                warn!("No connection found for retry: {}", peer_id);
+                return;
+            }
+        };
+        
+        info!("Retrying connection to peer {} (attempt {})", peer_id, tracker.consecutive_failures + 1);
+        
+        Self::handle_establish_connection_with_retry(
+            app_handle,
+            peer_id,
+            &offer,
+            event_tx,
+            connections,
+            file_transfer_service,
+            keystore,
+            active_private_key,
+            stream_auth,
+            bandwidth,
+            connection_manager,
+        )
+        .await;
+    }
+    
+    /// Internal connection establishment (without retry tracking)
+    async fn handle_establish_connection_internal(
+        app_handle: &tauri::AppHandle,
+        peer_id: &str,
+        offer_sdp: &str,
+        event_tx: &mpsc::Sender<WebRTCEvent>,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        file_transfer_service: &Arc<FileTransferService>,
+        keystore: &Arc<Mutex<Keystore>>,
+        active_private_key: &Arc<Mutex<Option<String>>>,
+        stream_auth: &Arc<Mutex<StreamAuthService>>,
+        bandwidth: &Arc<BandwidthController>,
+    ) -> Result<(), String> {
+        // Call the existing implementation but return Result
+        Self::handle_establish_connection(
+            app_handle,
+            peer_id,
+            offer_sdp,
+            event_tx,
+            connections,
+            file_transfer_service,
+            keystore,
+            active_private_key,
+            stream_auth,
+            bandwidth,
+        )
+        .await;
+        
+        // Check if connection was established by looking at the connection state
+        let conns = connections.lock().await;
+        if let Some(conn) = conns.get(peer_id) {
+            if conn.peer_connection.is_some() {
+                Ok(())
+            } else {
+                Err("Connection failed to establish".to_string())
+            }
+        } else {
+            Err("Connection not found after establishment attempt".to_string())
         }
     }
 
@@ -550,8 +803,11 @@ impl WebRTCService {
             }
         }
 
-        // Store connection
+        // Store connection with retry context
         let mut conns = connections.lock().await;
+        let mut retry_ctx = WebRtcRetryContext::new(peer_id.to_string(), false);
+        retry_ctx.last_offer = Some(offer_sdp.to_string());
+        
         let connection = PeerConnection {
             peer_id: peer_id.to_string(),
             is_connected: false, // Will be set to true when connected
@@ -563,6 +819,7 @@ impl WebRTCService {
             received_chunks: HashMap::new(),
             acked_chunks: HashMap::new(),
             pending_acks: HashMap::new(),
+            retry_context: Some(retry_ctx),
         };
         conns.insert(peer_id.to_string(), connection);
     }
@@ -571,10 +828,14 @@ impl WebRTCService {
         peer_id: &str,
         answer_sdp: &str,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        connection_manager: &Arc<ConnectionManager>,
     ) {
         // Check if the answer is an error message from the seeder
         if answer_sdp.starts_with("error:") {
             error!("Seeder {} returned error: {}", peer_id, answer_sdp);
+
+            // Record failure in connection manager
+            connection_manager.record_failure(peer_id, answer_sdp).await;
 
             // Remove the failed connection
             let mut conns = connections.lock().await;
@@ -594,12 +855,17 @@ impl WebRTCService {
                     Ok(answer) => answer,
                     Err(e) => {
                         error!("Failed to parse answer SDP: {}", e);
+                        connection_manager.record_failure(peer_id, format!("Invalid answer SDP: {}", e)).await;
                         return;
                     }
                 };
 
                 if let Err(e) = pc.set_remote_description(answer).await {
                     error!("Failed to set remote description: {}", e);
+                    connection_manager.record_failure(peer_id, format!("Failed to set remote description: {}", e)).await;
+                } else {
+                    // Answer was set successfully - connection is progressing
+                    debug!("Successfully set remote description for peer {}", peer_id);
                 }
             }
         }
@@ -816,6 +1082,7 @@ impl WebRTCService {
     async fn handle_close_connection(
         peer_id: &str,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        connection_manager: &Arc<ConnectionManager>,
     ) {
         info!("Closing WebRTC connection with peer: {}", peer_id);
         let mut conns = connections.lock().await;
@@ -824,6 +1091,8 @@ impl WebRTCService {
                 let _ = pc.close().await;
             }
         }
+        // Remove from connection manager tracking
+        connection_manager.remove(peer_id).await;
     }
 
     async fn handle_data_channel_message(
@@ -1641,8 +1910,10 @@ impl WebRTCService {
             }
         }
 
-        // Store connection
+        // Store connection with retry context (this is an outbound connection)
         let mut conns = self.connections.lock().await;
+        let retry_ctx = WebRtcRetryContext::new(peer_id.clone(), true);
+        
         let connection = PeerConnection {
             peer_id: peer_id.clone(),
             is_connected: false,
@@ -1654,6 +1925,7 @@ impl WebRTCService {
             received_chunks: HashMap::new(),
             acked_chunks: HashMap::new(),
             pending_acks: HashMap::new(),
+            retry_context: Some(retry_ctx),
         };
         conns.insert(peer_id, connection);
 
@@ -1844,6 +2116,9 @@ impl WebRTCService {
         // (data_channel will be set via on_data_channel callback when it fires during set_remote_description)
         info!("Storing peer connection in map BEFORE set_remote_description for peer: {}", peer_id);
         let mut conns = self.connections.lock().await;
+        let mut retry_ctx = WebRtcRetryContext::new(peer_id.clone(), false);
+        retry_ctx.last_offer = Some(offer.clone());
+        
         let connection = PeerConnection {
             peer_id: peer_id.clone(),
             is_connected: false, // Will be set to true when connected
@@ -1855,6 +2130,7 @@ impl WebRTCService {
             received_chunks: HashMap::new(),
             acked_chunks: HashMap::new(),
             pending_acks: HashMap::new(),
+            retry_context: Some(retry_ctx),
         };
         conns.insert(peer_id.clone(), connection);
         info!("✅ Peer {} stored in connections map, now calling set_remote_description", peer_id);
