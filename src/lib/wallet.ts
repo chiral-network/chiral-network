@@ -318,6 +318,7 @@ export class WalletService {
 
   async refreshBalance(): Promise<void> {
     if (!this.isTauri) {
+      console.log("[refreshBalance] Not in Tauri, skipping");
       return;
     }
 
@@ -331,9 +332,11 @@ export class WalletService {
     try {
       const isRunning = await invoke<boolean>("is_geth_running");
       if (!isRunning) {
+        console.log("[refreshBalance] Geth not running, skipping");
         return; // Silently skip if Geth is not running
       }
     } catch (error) {
+      console.log("[refreshBalance] Could not check Geth status:", error);
       return; // Can't check Geth status, skip
     }
 
@@ -341,43 +344,54 @@ export class WalletService {
     let accountAddress: string;
     try {
       accountAddress = await invoke<string>("get_active_account_address");
+      console.log("[refreshBalance] Got account address:", accountAddress);
     } catch (error) {
-      // No active account
+      console.log("[refreshBalance] No active account:", error);
       return;
     }
 
     try {
-      // Get real balance directly from geth - this is the source of truth
+      // Get actual total blocks mined from miningState (set by refreshTransactions)
+      const currentMiningState = get(miningState);
+      const actualBlocksFound = currentMiningState.blocksFound ?? 0;
+
+      // Calculate total rewards based on ACTUAL blocks found, not recentBlocks length
+      const totalEarned = actualBlocksFound * 2;
+      console.log(`[refreshBalance] Blocks found: ${actualBlocksFound}, totalEarned: ${totalEarned}`);
+
+      // Try to get balance from geth
       let realBalance = 0;
       try {
         const balanceStr = (await invoke("get_account_balance", {
           address: accountAddress,
         })) as string;
         realBalance = parseFloat(balanceStr);
-        console.log(`[refreshBalance] Got balance from geth: ${realBalance} CHIRAL for ${accountAddress}`);
+        console.log(`[refreshBalance] Got balance from geth: ${realBalance} CHIRAL`);
       } catch (e) {
-        console.error("[refreshBalance] Failed to get balance from geth:", e);
-        return; // Can't get balance, don't update
+        console.log("[refreshBalance] Could not get balance from geth:", e);
       }
 
-      // Update wallet with the real blockchain balance
-      wallet.update((current) => ({
-        ...current,
-        balance: realBalance,
-        actualBalance: realBalance,
-      }));
+      // Use real balance from Geth if available, otherwise use totalEarned
+      const displayBalance = realBalance > 0 ? realBalance : totalEarned;
+      console.log(`[refreshBalance] Display balance will be: ${displayBalance} (real: ${realBalance}, earned: ${totalEarned})`);
 
-      // Also update mining state totalRewards based on blocks found
-      const currentMiningState = get(miningState);
-      const actualBlocksFound = currentMiningState.blocksFound ?? 0;
-      const totalEarned = actualBlocksFound * 2;
-      
+      // Update wallet with the balance
+      wallet.update((current) => {
+        console.log(`[refreshBalance] Updating wallet from ${current.balance} to ${displayBalance}`);
+        return {
+          ...current,
+          balance: displayBalance,
+          actualBalance: realBalance,
+        };
+      });
+
+      // Update mining state totalRewards
       miningState.update((state) => ({
         ...state,
         totalRewards: totalEarned,
       }));
     } catch (error) {
-      console.error("Failed to refresh balance:", error);
+      console.error("[refreshBalance] Failed:", error);
     }
   }
 

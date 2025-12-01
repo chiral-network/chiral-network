@@ -5299,6 +5299,7 @@ fn main() {
             get_active_account_address,
             get_active_account_private_key,
             get_user_balance,
+            get_account_balance,
             can_afford_download,
             process_download_payment,
             record_download_payment,

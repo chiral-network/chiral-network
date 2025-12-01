@@ -467,6 +467,8 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
 
     // Convert wei to ether (1 ether = 10^18 wei)
     let balance_ether = balance_wei as f64 / 1e18;
+    
+    tracing::info!("💰 Balance for {}: {} (raw: {})", address, balance_ether, balance_hex);
 
     Ok(format!("{:.6}", balance_ether))
 }
@@ -579,6 +581,8 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
+    tracing::info!("🔧 Setting up mining with etherbase: {}", miner_address);
+    
     // First try to set the etherbase using miner_setEtherbase
     let set_etherbase = json!({
         "jsonrpc": "2.0",
@@ -628,6 +632,18 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
 
     if let Some(error) = json_response.get("error") {
         return Err(format!("{}", error));
+    }
+
+    // Log the actual coinbase being used
+    match get_coinbase().await {
+        Ok(coinbase) => {
+            tracing::info!("⛏️ Mining started! Rewards will go to: {}", coinbase);
+            if coinbase.to_lowercase() != miner_address.to_lowercase() {
+                tracing::warn!("⚠️ WARNING: Coinbase {} does not match requested miner address {}!", 
+                    coinbase, miner_address);
+            }
+        },
+        Err(e) => tracing::warn!("Could not verify coinbase: {}", e),
     }
 
     Ok(())
@@ -2265,5 +2281,37 @@ pub async fn debug_network_tx() -> Result<String, String> {
     
     tracing::info!("Network debug report:\n{}", report);
     Ok(report)
+}
+
+/// Gets the current coinbase (etherbase) address used for mining rewards
+pub async fn get_coinbase() -> Result<String, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_coinbase",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get coinbase: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse coinbase response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    let coinbase = json_response["result"]
+        .as_str()
+        .ok_or("Invalid coinbase response")?;
+
+    Ok(coinbase.to_string())
 }
 
