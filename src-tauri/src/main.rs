@@ -7,12 +7,7 @@
 
 // Modules unique to the binary
 pub mod blockchain_listener;
-pub mod commands {
-    pub mod auth;
-    pub mod bootstrap;
-    pub mod network;
-    pub mod proxy;
-}
+pub mod commands;
 pub mod ethereum;
 pub mod geth_bootstrap;
 pub mod geth_downloader;
@@ -307,6 +302,7 @@ pub struct StreamingUploadSession {
     pub created_at: std::time::SystemTime,
     pub chunk_cids: Vec<String>,
     pub file_data: Vec<u8>,
+    pub price: f64,
 }
 
 /// Session for streaming WebRTC downloads - writes chunks directly to disk
@@ -3756,7 +3752,7 @@ async fn upload_file_to_network(
                          total_chunks, chunk_size);
 
                 // Start streaming upload session
-                let upload_id = start_streaming_upload(original_file_name.clone(), file_size, state.clone()).await?;
+                let upload_id = start_streaming_upload(original_file_name.clone(), file_size, price, state.clone()).await?;
 
                 // Stream file in chunks
                 let mut file = tokio::fs::File::open(&file_path)
@@ -4623,6 +4619,7 @@ async fn copy_file_to_temp(file_path: String) -> Result<String, String> {
 async fn start_streaming_upload(
     file_name: String,
     file_size: u64,
+    price: f64,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // Check for active account - require login for all uploads
@@ -4655,6 +4652,7 @@ async fn start_streaming_upload(
             created_at: std::time::SystemTime::now(),
             chunk_cids: Vec::new(),
             file_data: Vec::new(),
+            price,
         },
     );
 
@@ -4739,6 +4737,9 @@ async fn upload_file_chunk(
             .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
+        // Get the account address for the uploader
+        let account = get_active_account(&state).await?;
+
         let metadata = dht::models::FileMetadata {
             merkle_root: merkle_root, // Store Merkle root for verification
             file_name: session.file_name.clone(),
@@ -4755,8 +4756,8 @@ async fn upload_file_chunk(
             parent_hash: None,
             is_root: true,
             download_path: None,
-            price: 0.0,
-            uploader_address: None,
+            price: session.price,
+            uploader_address: Some(account),
             ftp_sources: None,
             http_sources: None,
             info_hash: None,
@@ -5388,13 +5389,12 @@ async fn encrypt_file_for_upload(
     ))
 }
 
-// Update the search_file_metadata Tauri command around line 5392:
 #[tauri::command]
 async fn search_file_metadata(
     state: State<'_, AppState>,
     file_hash: String,
     timeout_ms: Option<u64>,
-) -> Result<Option<FileMetadata>, String> {
+) -> Result<(), String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
@@ -5402,7 +5402,7 @@ async fn search_file_metadata(
 
     if let Some(dht) = dht {
         let timeout = timeout_ms.unwrap_or(10_000);
-        dht.synchronous_search_metadata(file_hash, timeout).await
+        dht.search_metadata(file_hash, timeout).await
     } else {
         Err("DHT node is not running".to_string())
     }
