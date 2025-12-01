@@ -4233,163 +4233,6 @@ fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
     None
 }
 
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_secs()
-}
-
-fn merge_heartbeats(
-    mut a: Vec<SeederHeartbeat>,
-    mut b: Vec<SeederHeartbeat>,
-) -> Vec<SeederHeartbeat> {
-    let mut merged = Vec::new();
-    let mut seen_peers = std::collections::HashSet::new();
-    let now = unix_timestamp();
-
-    // Create sets to track which peers appear in both vectors
-    let a_peers: HashSet<String> = a.iter().map(|hb| hb.peer_id.clone()).collect();
-    let b_peers: HashSet<String> = b.iter().map(|hb| hb.peer_id.clone()).collect();
-    let common_peers: HashSet<_> = a_peers.intersection(&b_peers).cloned().collect();
-
-    // Filter and collect entries in one pass instead of using retain
-    let filtered_a: Vec<_> = a
-        .into_iter()
-        .filter(|hb| {
-            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
-            // 30s grace period
-        })
-        .collect();
-
-    let filtered_b: Vec<_> = b
-        .into_iter()
-        .filter(|hb| {
-            common_peers.contains(&hb.peer_id) || hb.expires_at > now.saturating_sub(30)
-            // 30s grace period
-        })
-        .collect();
-
-    // Now work with the filtered vectors
-    a = filtered_a;
-    b = filtered_b;
-
-    // Sort both vectors by peer_id for deterministic merging
-    a.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
-    b.sort_by(|x, y| x.peer_id.cmp(&y.peer_id));
-
-    let mut a_iter = a.into_iter();
-    let mut b_iter = b.into_iter();
-
-    let mut next_a = a_iter.next();
-    let mut next_b = b_iter.next();
-
-    while let (Some(a_entry), Some(b_entry)) = (&next_a, &next_b) {
-        match a_entry.peer_id.cmp(&b_entry.peer_id) {
-            std::cmp::Ordering::Equal => {
-                // For equal peer IDs, create a merged entry that:
-                // 1. Takes the most recent heartbeat timestamp
-                // 2. Uses the latest expiry time
-                // 3. Extends the expiry if it's an active seeder (recent heartbeat)
-                let latest_heartbeat =
-                    std::cmp::max(a_entry.last_heartbeat, b_entry.last_heartbeat);
-                let latest_expiry = std::cmp::max(a_entry.expires_at, b_entry.expires_at);
-
-                // If this is an active seeder (recent heartbeat), extend its expiry
-                let new_expiry =
-                    if now.saturating_sub(latest_heartbeat) < FILE_HEARTBEAT_INTERVAL.as_secs() {
-                        now.saturating_add(FILE_HEARTBEAT_TTL.as_secs())
-                    } else {
-                        latest_expiry
-                    };
-
-                let entry = SeederHeartbeat {
-                    peer_id: a_entry.peer_id.clone(),
-                    expires_at: new_expiry,
-                    last_heartbeat: latest_heartbeat,
-                };
-
-                if !seen_peers.contains(&entry.peer_id) {
-                    seen_peers.insert(entry.peer_id.clone());
-                    merged.push(entry);
-                }
-
-                next_a = a_iter.next();
-                next_b = b_iter.next();
-            }
-            std::cmp::Ordering::Less => {
-                if !seen_peers.contains(&a_entry.peer_id) {
-                    seen_peers.insert(a_entry.peer_id.clone());
-                    merged.push(a_entry.clone());
-                }
-                next_a = a_iter.next();
-            }
-            std::cmp::Ordering::Greater => {
-                if !seen_peers.contains(&b_entry.peer_id) {
-                    seen_peers.insert(b_entry.peer_id.clone());
-                    merged.push(b_entry.clone());
-                }
-                next_b = b_iter.next();
-            }
-        }
-    }
-
-    // Add remaining entries from a
-    while let Some(entry) = next_a {
-        if !seen_peers.contains(&entry.peer_id) {
-            seen_peers.insert(entry.peer_id.clone());
-            merged.push(entry);
-        }
-        next_a = a_iter.next();
-    }
-
-    // Add remaining entries from b
-    while let Some(entry) = next_b {
-        if !seen_peers.contains(&entry.peer_id) {
-            seen_peers.insert(entry.peer_id.clone());
-            merged.push(entry);
-        }
-        next_b = b_iter.next();
-    }
-
-    merged
-}
-
-fn prune_heartbeats(mut entries: Vec<SeederHeartbeat>, now: u64) -> Vec<SeederHeartbeat> {
-    // Add a more generous grace period to prevent premature pruning
-    // Use 30 seconds which is between the heartbeat interval (15s) and TTL (90s)
-    let prune_threshold = now.saturating_sub(30); // 30 second grace period
-    entries.retain(|hb| hb.expires_at > prune_threshold);
-    entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
-    entries
-}
-
-fn upsert_heartbeat(entries: &mut Vec<SeederHeartbeat>, peer_id: &str, now: u64) {
-    let expires_at = now.saturating_add(FILE_HEARTBEAT_TTL.as_secs());
-
-    // First remove any expired entries
-    entries.retain(|hb| hb.expires_at > now);
-
-    // Then update or add the new heartbeat
-    if let Some(entry) = entries.iter_mut().find(|hb| hb.peer_id == peer_id) {
-        entry.expires_at = expires_at;
-        entry.last_heartbeat = now;
-    } else {
-        entries.push(SeederHeartbeat {
-            peer_id: peer_id.to_string(),
-            expires_at,
-            last_heartbeat: now,
-        });
-    }
-
-    // Sort by peer_id for consistent ordering
-    entries.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
-}
-
-fn heartbeats_to_peer_list(entries: &[SeederHeartbeat]) -> Vec<String> {
-    entries.iter().map(|hb| hb.peer_id.clone()).collect()
-}
-
 fn extract_bootstrap_peer_ids(bootstrap_nodes: &[String]) -> HashSet<PeerId> {
     use libp2p::multiaddr::Protocol;
     use libp2p::{Multiaddr, PeerId};
@@ -5484,9 +5327,9 @@ async fn handle_dcutr_event(
             metrics_guard.dcutr_hole_punch_successes += 1;
             metrics_guard.last_dcutr_success = Some(SystemTime::now());
             let success_rate = if metrics_guard.dcutr_hole_punch_attempts > 0 {
-                (metrics_guard.dcutr_hole_punch_successes as f64
+                metrics_guard.dcutr_hole_punch_successes as f64
                     / metrics_guard.dcutr_hole_punch_attempts as f64
-                    * 100.0)
+                    * 100.0
             } else {
                 0.0
             };
@@ -5509,9 +5352,9 @@ async fn handle_dcutr_event(
             metrics_guard.dcutr_hole_punch_failures += 1;
             metrics_guard.last_dcutr_failure = Some(SystemTime::now());
             let success_rate = if metrics_guard.dcutr_hole_punch_attempts > 0 {
-                (metrics_guard.dcutr_hole_punch_successes as f64
+                metrics_guard.dcutr_hole_punch_successes as f64
                     / metrics_guard.dcutr_hole_punch_attempts as f64
-                    * 100.0)
+                    * 100.0
             } else {
                 0.0
             };
