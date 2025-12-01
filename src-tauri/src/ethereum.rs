@@ -1787,10 +1787,21 @@ pub async fn send_transaction(
         .parse()
         .map_err(|e| format!("Invalid from address: {}", e))?;
 
+    // Get both confirmed and pending nonces for debugging
+    let confirmed_nonce = provider
+        .get_transaction_count(from_addr, Some(BlockNumber::Latest.into()))
+        .await
+        .map_err(|e| format!("Failed to get confirmed nonce: {}", e))?;
+    
     let nonce = provider
         .get_transaction_count(from_addr, Some(BlockNumber::Pending.into()))
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
+    
+    tracing::info!("   Confirmed nonce: {}, Pending nonce: {}", confirmed_nonce, nonce);
+    if nonce > confirmed_nonce {
+        tracing::warn!("   ⚠️ There are {} pending transactions for this address!", nonce - confirmed_nonce);
+    }
 
     // For EIP-1559 transactions, we need to cover at least the base fee
     // Query the current base fee from the latest block and add a buffer
@@ -1802,6 +1813,24 @@ pub async fn send_transaction(
     // Set max fee to 2x base fee to handle fee fluctuations, priority fee to 1 wei
     let max_fee = base_fee * 2;
     let priority_fee = U256::from(1u64);
+    let gas_limit = U256::from(21000u64);
+    let max_gas_cost = max_fee * gas_limit;
+    let total_cost = amount_wei + max_gas_cost;
+    
+    // Check sender's balance
+    let sender_balance = provider.get_balance(from_addr, None).await
+        .map_err(|e| format!("Failed to get sender balance: {}", e))?;
+    
+    tracing::info!("   Sender balance: {} wei", sender_balance);
+    tracing::info!("   Amount to send: {} wei, Max gas cost: {} wei, Total needed: {} wei", 
+        amount_wei, max_gas_cost, total_cost);
+    
+    if sender_balance < total_cost {
+        return Err(format!(
+            "Insufficient balance. Have: {} wei, Need: {} wei (amount: {} + max gas: {})",
+            sender_balance, total_cost, amount_wei, max_gas_cost
+        ));
+    }
     
     tracing::info!("   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei", base_fee, max_fee, priority_fee);
 
@@ -1829,11 +1858,33 @@ pub async fn send_transaction(
     // Verify the transaction was added to the local txpool
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     
-    // Check txpool status
+    // Check txpool status and content
     if let Ok(status) = get_txpool_status().await {
-        tracing::info!("   TxPool Status: pending={}, queued={}", 
-            status.get("pending").and_then(|v| v.as_str()).unwrap_or("?"),
-            status.get("queued").and_then(|v| v.as_str()).unwrap_or("?"));
+        let pending_count = status.get("pending").and_then(|v| v.as_str()).unwrap_or("?");
+        let queued_count = status.get("queued").and_then(|v| v.as_str()).unwrap_or("?");
+        tracing::info!("   TxPool Status: pending={}, queued={}", pending_count, queued_count);
+        
+        // If there are pending transactions, log their details
+        if pending_count != "0x0" && pending_count != "?" {
+            if let Ok(content) = get_txpool_content().await {
+                if let Some(pending) = content.get("pending") {
+                    tracing::info!("   TxPool PENDING content:");
+                    if let Some(obj) = pending.as_object() {
+                        for (addr, nonces) in obj {
+                            tracing::info!("      Address: {}", addr);
+                            if let Some(nonces_obj) = nonces.as_object() {
+                                for (nonce, tx_data) in nonces_obj {
+                                    let hash = tx_data.get("hash").and_then(|h| h.as_str()).unwrap_or("?");
+                                    let to_addr = tx_data.get("to").and_then(|t| t.as_str()).unwrap_or("?");
+                                    let value = tx_data.get("value").and_then(|v| v.as_str()).unwrap_or("?");
+                                    tracing::info!("         Nonce {}: hash={}, to={}, value={}", nonce, hash, to_addr, value);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     
     // Try to get the transaction back to verify it's in the pool
@@ -1844,8 +1895,72 @@ pub async fn send_transaction(
             if let Some(block) = tx_data.get("blockNumber") {
                 if block.is_null() {
                     tracing::info!("   Transaction is PENDING (not yet mined)");
+                    
+                    // Spawn a background task to monitor the transaction
+                    let tx_hash_clone = tx_hash.clone();
+                    let from_clone = from_address.to_string();
+                    let to_clone = to_address.to_string();
+                    let amount_clone = amount_chiral;
+                    tokio::spawn(async move {
+                        tracing::info!("🔍 Monitoring transaction {} for mining...", tx_hash_clone);
+                        for attempt in 1..=60 {  // Monitor for up to 60 seconds
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            
+                            match get_transaction_receipt(tx_hash_clone.clone()).await {
+                                Ok(Some(receipt)) => {
+                                    let block_num = receipt.get("blockNumber")
+                                        .and_then(|b| b.as_str())
+                                        .unwrap_or("?");
+                                    let status = receipt.get("status")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("?");
+                                    let gas_used = receipt.get("gasUsed")
+                                        .and_then(|g| g.as_str())
+                                        .unwrap_or("?");
+                                    
+                                    if status == "0x1" {
+                                        tracing::info!("🎉 TRANSACTION MINED SUCCESSFULLY!");
+                                        tracing::info!("   Hash: {}", tx_hash_clone);
+                                        tracing::info!("   Block: {}", block_num);
+                                        tracing::info!("   From: {} -> To: {}", from_clone, to_clone);
+                                        tracing::info!("   Amount: {} CHIRAL", amount_clone);
+                                        tracing::info!("   Gas Used: {}", gas_used);
+                                        tracing::info!("   Status: SUCCESS ✅");
+                                    } else {
+                                        tracing::error!("❌ TRANSACTION MINED BUT FAILED!");
+                                        tracing::error!("   Hash: {}", tx_hash_clone);
+                                        tracing::error!("   Block: {}", block_num);
+                                        tracing::error!("   Status: {} (0x0 = failed, 0x1 = success)", status);
+                                        tracing::error!("   Gas Used: {}", gas_used);
+                                        tracing::error!("   Full receipt: {:?}", receipt);
+                                    }
+                                    return;
+                                },
+                                Ok(None) => {
+                                    if attempt % 10 == 0 {
+                                        tracing::info!("   Still waiting for tx {} to be mined... ({}s)", tx_hash_clone, attempt);
+                                    }
+                                },
+                                Err(e) => {
+                                    tracing::warn!("   Error checking receipt: {}", e);
+                                }
+                            }
+                        }
+                        tracing::warn!("⚠️ Transaction {} still not mined after 60 seconds", tx_hash_clone);
+                    });
                 } else {
                     tracing::info!("   Transaction is in block: {}", block);
+                    // Check receipt for success/failure
+                    if let Ok(Some(receipt)) = get_transaction_receipt(tx_hash.clone()).await {
+                        if let Some(status) = receipt.get("status") {
+                            let status_str = status.as_str().unwrap_or("");
+                            if status_str == "0x1" {
+                                tracing::info!("   ✅ Transaction SUCCEEDED");
+                            } else {
+                                tracing::error!("   ❌ Transaction FAILED (status: {})", status_str);
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -2017,3 +2132,97 @@ pub async fn get_block_details_by_number(
 
     Ok(json_response["result"].clone().into())
 }
+
+/// Gets connected peer information for debugging network connectivity
+#[tauri::command]
+pub async fn get_peer_info() -> Result<serde_json::Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "admin_peers",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get peer info: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse peer info response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    let peers = &json_response["result"];
+    if let Some(peers_array) = peers.as_array() {
+        tracing::info!("Connected peers: {}", peers_array.len());
+        for peer in peers_array {
+            let name = peer.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+            let remote_addr = peer.get("network").and_then(|n| n.get("remoteAddress")).and_then(|a| a.as_str()).unwrap_or("?");
+            tracing::info!("  Peer: {} at {}", name, remote_addr);
+        }
+    }
+
+    Ok(json_response["result"].clone())
+}
+
+/// Debug function to check why transactions aren't being mined across network
+#[tauri::command]
+pub async fn debug_network_tx() -> Result<String, String> {
+    let mut report = String::new();
+    
+    // 1. Check peer count
+    match get_peer_count().await {
+        Ok(count) => {
+            report.push_str(&format!("Peer count: {}\n", count));
+            if count == 0 {
+                report.push_str("⚠️ WARNING: No peers connected! Transactions cannot propagate.\n");
+            }
+        },
+        Err(e) => report.push_str(&format!("Failed to get peer count: {}\n", e)),
+    }
+    
+    // 2. Check txpool
+    match get_txpool_status().await {
+        Ok(status) => {
+            let pending = status.get("pending").and_then(|v| v.as_str()).unwrap_or("?");
+            let queued = status.get("queued").and_then(|v| v.as_str()).unwrap_or("?");
+            report.push_str(&format!("TxPool: pending={}, queued={}\n", pending, queued));
+        },
+        Err(e) => report.push_str(&format!("Failed to get txpool: {}\n", e)),
+    }
+    
+    // 3. Check chain ID
+    match get_chain_id().await {
+        Ok(id) => report.push_str(&format!("Chain ID: {}\n", id)),
+        Err(e) => report.push_str(&format!("Failed to get chain ID: {}\n", e)),
+    }
+    
+    // 4. Get peer details
+    match get_peer_info().await {
+        Ok(peers) => {
+            if let Some(peers_array) = peers.as_array() {
+                report.push_str(&format!("Connected peers details ({}):\n", peers_array.len()));
+                for peer in peers_array {
+                    let name = peer.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                    let remote_addr = peer.get("network")
+                        .and_then(|n| n.get("remoteAddress"))
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("?");
+                    report.push_str(&format!("  - {} at {}\n", name, remote_addr));
+                }
+            }
+        },
+        Err(e) => report.push_str(&format!("Failed to get peer info: {}\n", e)),
+    }
+    
+    tracing::info!("Network debug report:\n{}", report);
+    Ok(report)
+}
+
