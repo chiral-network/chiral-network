@@ -247,7 +247,7 @@ impl Blockstore for LevelDbBlockstore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cid::multihash::{Code, MultihashDigest};
+    use multihash_codetable::{Code, MultihashDigest};
     use tempfile::tempdir;
 
     const RAW_CODEC: u64 = 0x55;
