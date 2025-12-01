@@ -1676,7 +1676,7 @@
               <div class="bg-purple-100 rounded p-1">
                 <Coins class="h-4 w-4 text-purple-600" />
               </div>
-              <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
               <p class="text-base font-semibold text-foreground break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
@@ -1690,7 +1690,7 @@
               <div class="bg-green-100 rounded p-1">
                 <ArrowDownLeft class="h-4 w-4 text-green-600" />
               </div>
-              <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
               <p class="text-base font-semibold text-green-600 dark:text-green-400 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
@@ -1704,7 +1704,7 @@
               <div class="bg-red-100 rounded p-1">
                 <ArrowUpRight class="h-4 w-4 text-red-600" />
               </div>
-              <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
               <p class="text-base font-semibold text-red-600 dark:text-red-400 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
@@ -1782,8 +1782,8 @@
                       
                       <div class="bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg p-3 mb-4">
                         <p class="text-xs text-gray-600 dark:text-gray-300 break-all font-mono">
-                          {$etcAccount?.address}
-                        </p>
+                        {$etcAccount?.address}
+                      </p>
                       </div>
 
                       <Button class="w-full font-semibold" variant="outline" on:click={() => showQrCodeModal = false}>
@@ -1985,12 +1985,12 @@
           {#if isConfirming}
             <div class="flex items-center justify-center gap-2">
               <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-              {$t('transfer.sendingIn', { values: { seconds: countdown } })}
+            {$t('transfer.sendingIn', { values: { seconds: countdown } })}
             </div>
           {:else}
             <div class="flex items-center justify-center gap-2">
               <ArrowUpRight class="h-4 w-4" />
-              {$t('transfer.send')}
+            {$t('transfer.send')}
             </div>
           {/if}
         </Button>
@@ -1999,9 +1999,9 @@
           <span class="flex items-center gap-2">
             <div class="relative">
               <svg class="h-4 w-4 text-orange-600 dark:text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <circle cx="12" cy="10" r="8" />
-                <polyline points="12,6 12,10 16,14" />
-              </svg>
+              <circle cx="12" cy="10" r="8" />
+              <polyline points="12,6 12,10 16,14" />
+            </svg>
               {#if $pendingCount > 0}
                 <span class="absolute -top-1 -right-1 bg-orange-600 text-white text-[9px] font-bold rounded-full h-3.5 w-3.5 flex items-center justify-center">{$pendingCount}</span>
               {/if}
@@ -2128,12 +2128,12 @@
       {$t('filters.from')}
     </label>
     <div class="relative">
-      <input
-        id="filter-date-from"
-        type="date"
-        bind:value={filterDateFrom}
+    <input
+      id="filter-date-from"
+      type="date"
+      bind:value={filterDateFrom}
         class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-      />
+    />
     </div>
   </div>
 
@@ -2142,12 +2142,12 @@
       {$t('filters.to')}
     </label>
     <div class="relative">
-      <input
-        id="filter-date-to"
-        type="date"
-        bind:value={filterDateTo}
+    <input
+      id="filter-date-to"
+      type="date"
+      bind:value={filterDateTo}
         class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-      />
+    />
     </div>
   </div>
 
@@ -2209,9 +2209,9 @@
                 <Coins class="h-4 w-4 text-yellow-600" />
               {:else if tx.type === 'received'}
                 <ArrowDownLeft class="h-4 w-4 text-green-600" />
-              {:else}
+            {:else}
                 <ArrowUpRight class="h-4 w-4 text-red-600" />
-              {/if}
+            {/if}
             </div>
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-1">
@@ -2313,10 +2313,10 @@
           <div class="bg-blue-100 p-2 rounded-lg">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
           </div>
-          <div>
-            <h2 class="text-lg font-semibold">{$t('security.2fa.title')}</h2>
+        <div>
+          <h2 class="text-lg font-semibold">{$t('security.2fa.title')}</h2>
             <p class="text-sm text-muted-foreground">{$t('security.2fa.subtitle_clear')}</p>
-          </div>
+        </div>
         </div>
       </div>
       <div class="space-y-4">
@@ -2324,7 +2324,7 @@
           <div class="flex items-center justify-between p-4 bg-green-50 border-l-4 border-l-green-500 border-y border-r border-green-200 rounded-lg shadow-sm">
             <div class="flex items-center gap-3">
               <div class="bg-green-100 p-2 rounded-full">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
               </div>
               <div>
                 <p class="font-semibold text-green-800">{$t('security.2fa.status.enabled')}</p>
@@ -2350,7 +2350,7 @@
         <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
           <div class="flex items-start gap-2">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600 mt-0.5 flex-shrink-0"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
-            <p class="text-sm text-muted-foreground">{$t('security.2fa.how_it_works')}</p>
+        <p class="text-sm text-muted-foreground">{$t('security.2fa.how_it_works')}</p>
           </div>
         </div>
       </div>
@@ -2364,7 +2364,7 @@
         <KeyRound class="h-5 w-5 text-amber-600" />
       </div>
       <div>
-        <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>
+      <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>
         <p class="text-xs text-muted-foreground">{$t('keystore.desc')}</p>
       </div>
     </div>
@@ -2438,7 +2438,7 @@
                   {/if}
                   <span>{$t('password.requirements.special')}</span>
                 </li>
-              </ul>
+            </ul>
             </div>
           {/if}
         </div>
@@ -2450,12 +2450,12 @@
           {#if isSavingToKeystore}
             <div class="flex items-center gap-2">
               <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-              {$t('actions.saving')}
+            {$t('actions.saving')}
             </div>
           {:else}
             <div class="flex items-center gap-2">
               <KeyRound class="h-4 w-4" />
-              {$t('actions.saveKey')}
+            {$t('actions.saveKey')}
             </div>
           {/if}
         </Button>
@@ -2479,16 +2479,25 @@
   {#if $etcAccount}
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-3">
+        <div class="bg-red-100 p-2 rounded-lg">
+          <BadgeX class="h-5 w-5 text-red-600" />
+        </div>
       <div>
         <h2 class="text-lg font-semibold">{$t('blacklist.title')}</h2>
-        <p class="text-sm text-muted-foreground mt-1">{$t('blacklist.subtitle')}</p>
+          <p class="text-sm text-muted-foreground">{$t('blacklist.subtitle')}</p>
       </div>
-      <BadgeX class="h-5 w-5 text-muted-foreground" />
+      </div>
     </div>
 
     <div class="space-y-6">
-      <div class="border rounded-lg p-4 bg-gray-50/50">
-        <h3 class="text-md font-medium mb-3">{$t('blacklist.add.title')}</h3>
+      <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+        <div class="flex items-center gap-2 mb-3">
+          <div class="bg-red-100 p-1.5 rounded">
+            <Plus class="h-4 w-4 text-red-600" />
+          </div>
+          <h3 class="text-md font-semibold">{$t('blacklist.add.title')}</h3>
+        </div>
         <div class="space-y-4">
           <div>
             <Label for="blacklist-address">{$t('blacklist.add.address')}</Label>
@@ -2496,7 +2505,7 @@
               id="blacklist-address"
               bind:value={newBlacklistEntry.chiral_address}
               placeholder={$t('blacklist.add.addressPlaceholder')}
-              class="mt-2 font-mono text-sm {isBlacklistAddressValid ? 'border-green-300' : ''}"
+              class="mt-2 font-mono text-sm {isBlacklistAddressValid ? 'border-green-500 focus:ring-green-500' : newBlacklistEntry.chiral_address && !isBlacklistAddressValid ? 'border-red-500 focus:ring-red-500' : ''}"
             />
             <div class="flex items-center justify-between mt-1">
               <span class="text-xs text-muted-foreground">
@@ -2534,62 +2543,64 @@
             {/if}
           </div>
 
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs text-muted-foreground">{$t('blacklist.quickReasons.label')}</span>
+          <div>
+            <Label class="text-xs mb-2 block">{$t('blacklist.quickReasons.label')}</Label>
+            <div class="flex flex-wrap gap-2">
             {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harassment'), $t('blacklist.quickReasons.scam')] as reason}
               <button
                 type="button"
-                class="px-2 py-1 text-xs border rounded hover:bg-gray-100 transition-colors"
+                  class="px-3 py-1.5 text-xs font-medium border rounded-full transition-all {newBlacklistEntry.reason === reason ? 'bg-red-600 text-white border-red-600' : 'bg-white border-gray-300 hover:border-red-300 hover:bg-red-50'}"
                 on:click={() => newBlacklistEntry.reason = reason}
               >
                 {reason}
               </button>
             {/each}
+            </div>
           </div>
 
           <Button 
             type="button" 
-            class="w-full" 
+            class="w-full bg-red-600 hover:bg-red-700 text-white font-semibold" 
             disabled={!isBlacklistFormValid} 
             on:click={addBlacklistEntry}
           >
+            <div class="flex items-center gap-2">
+              <BadgeX class="h-4 w-4" />
             {$t('blacklist.add.submit')}
+            </div>
           </Button>
         </div>
       </div>
 
       <div>
-        <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2">
-            <h3 class="text-md font-medium">{$t('blacklist.list.title')}</h3>
+            <h3 class="text-md font-semibold">{$t('blacklist.list.title')}</h3>
             {#if $blacklist.length > 0}
-              <span class="text-sm text-muted-foreground">({$blacklist.length})</span>
+              <span class="bg-red-100 text-red-700 text-xs font-semibold px-2 py-1 rounded-full">{$blacklist.length}</span>
             {/if}
           </div>
           
           <div class="flex gap-2">
             <div class="relative">
+              <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+              </svg>
               <Input
                 bind:value={blacklistSearch}
                 placeholder={$t('placeholders.searchBlacklist')}
-                class="w-96 text-sm pr-8"
+                class="w-96 text-sm pl-10 pr-10"
               />
               {#if blacklistSearch}
                 <button
                   type="button"
-                  class="absolute right-2 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors"
                   on:click={clearBlacklistSearch}
                   title={$t('tooltips.clearSearch')}
+                  aria-label="Clear search"
                 >
-                  ×
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
-              {:else}
-                <div class="absolute right-2 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="11" cy="11" r="8"/>
-                    <path d="m21 21-4.35-4.35"/>
-                  </svg>
-                </div>
               {/if}
             </div>
             
@@ -2598,9 +2609,12 @@
                 size="sm" 
                 variant="outline" 
                 on:click={clearAllBlacklist}
-                class="text-red-600 hover:text-red-700"
+                class="bg-red-50 text-red-700 border-red-300 hover:bg-red-100 hover:border-red-400 font-semibold"
               >
+                <div class="flex items-center gap-1">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="m19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                 {$t('blacklist.actions.clearAll')}
+                </div>
               </Button>
             {/if}
           </div>
@@ -2619,34 +2633,40 @@
         {:else}
           <div class="space-y-2 max-h-64 overflow-y-auto">
             {#each filteredBlacklist as entry, index (entry.chiral_address)}
-              <div class="flex items-center justify-between p-3 bg-red-50 border border-red-100 rounded-lg group hover:bg-red-100/50 transition-colors">
+              <div class="flex items-start justify-between p-4 bg-red-50 border-l-4 border-l-red-500 border-y border-r border-red-200 rounded-lg group hover:shadow-md transition-all">
+                <div class="flex items-start gap-3 flex-1 min-w-0">
+                  <div class="bg-red-100 p-2 rounded-full flex-shrink-0 mt-0.5">
+                    <BadgeX class="h-4 w-4 text-red-600" />
+                  </div>
+                  
                 <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 mb-1">
-                    <p class="text-sm font-mono font-medium truncate">
+                    <div class="flex items-center gap-2 mb-2">
+                      <p class="text-sm font-mono font-semibold text-red-900 truncate">
                       {entry.chiral_address}
                     </p>
                     <button
                       type="button"
-                      class="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-200 rounded"
+                        class="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-red-200 rounded flex-shrink-0"
                       on:click={() => copyToClipboard(entry.chiral_address)}
                       title={$t('blacklist.actions.copyAddress')}
+                        aria-label="Copy address"
                     >
-                      <Copy class="h-3 w-3" />
+                        <Copy class="h-3.5 w-3.5 text-red-700" />
                     </button>
                   </div>
 
                   {#if editingEntry === index}
-                    <div class="space-y-2">
+                      <div class="space-y-2 bg-white p-3 rounded-lg border border-red-200">
                       <Input
                         bind:value={editReason}
                         placeholder={$t('placeholders.reason')}
                         maxlength={200}
-                        class="text-xs"
+                          class="text-sm"
                         on:keydown={handleEditKeydown}
                         autofocus
                       />
                       <div class="flex gap-2">
-                        <Button size="sm" on:click={saveEdit} disabled={!editReason.trim()}>
+                          <Button size="sm" on:click={saveEdit} disabled={!editReason.trim()} class="bg-green-600 hover:bg-green-700 text-white">
                           {$t('actions.save')}
                         </Button>
                         <Button size="sm" variant="outline" on:click={cancelEdit}>
@@ -2655,21 +2675,24 @@
                       </div>
                     </div>
                   {:else}
-                    <p class="text-xs text-muted-foreground mb-1">{entry.reason}</p>
-                  {/if}
-                  
-                  <p class="text-xs text-muted-foreground">
+                      <div class="bg-red-100 border border-red-200 rounded-md px-3 py-2 mb-2">
+                        <p class="text-xs font-medium text-red-800"><span class="font-semibold">Reason:</span> {entry.reason}</p>
+                      </div>
+                      <div class="flex items-center gap-1 text-xs text-red-700">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                     {$t('blacklist.list.addedAt', { values: { date: formatDate(entry.timestamp) } })}
-                  </p>
+                      </div>
+                    {/if}
+                  </div>
                 </div>
                 
-                <div class="flex items-center gap-2 ml-4">
+                <div class="flex items-center gap-2 ml-4 flex-shrink-0">
                   {#if editingEntry !== index}
                     <Button 
                       size="sm" 
                       variant="outline"
                       on:click={() => startEditEntry(index)}
-                      class="opacity-0 group-hover:opacity-100 transition-opacity"
+                      class="opacity-0 group-hover:opacity-100 transition-opacity hover:bg-blue-50 hover:border-blue-300"
                     >
                       {$t('actions.edit')}
                     </Button>
@@ -2680,6 +2703,7 @@
                     variant="destructive"
                     on:click={() => removeBlacklistEntry(entry.chiral_address)}
                     disabled={editingEntry === index}
+                    class="bg-red-600 hover:bg-red-700 font-semibold"
                   >
                     {$t('actions.remove')}
                   </Button>
@@ -2698,27 +2722,33 @@
         {/if}
       </div>
 
-        <div class="border-t pt-4">
+        <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
           <div class="flex gap-2">
             {#if $blacklist.length > 0}
             <Button 
               variant="outline" 
               size="sm" 
               on:click={exportBlacklist}
-              class="flex-1"
+              class="flex-1 hover:bg-green-50 hover:border-green-300 hover:text-green-700 font-medium"
               disabled={$blacklist.length === 0}
               title={$t('blacklist.actions.exportTitle', { values: { count: $blacklist.length } })}
             >
-              {$t('blacklist.actions.export')} {$blacklist.length > 0 ? `(${$blacklist.length})` : ''}
+              <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                {$t('blacklist.actions.export')} ({$blacklist.length})
+              </div>
             </Button>
             {/if}
             <Button 
               variant="outline" 
               size="sm" 
               on:click={() => importFileInput.click()}
-              class="flex-1"
+              class="flex-1 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 font-medium"
             >
+              <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
               {$t('blacklist.actions.import')}
+              </div>
             </Button>
           </div>
           
@@ -2798,26 +2828,26 @@
         <div class="space-y-3">
           <div>
             <Label for="totp-verify" class="text-sm font-semibold">{$t('security.2fa.setup.verifyLabel')}</Label>
-            <Input
-              id="totp-verify"
-              type="text"
-              bind:value={totpVerificationCode}
-              placeholder="123456"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength={6}
+          <Input
+            id="totp-verify"
+            type="text"
+            bind:value={totpVerificationCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength={6}
               class="text-center text-lg font-mono tracking-wider mt-1"
-            />
+          />
           </div>
           <div>
             <Label for="totp-password-setup" class="text-sm font-semibold">{$t('keystore.load.password')}</Label>
-            <Input
-              id="totp-password-setup"
-              type="password"
-              bind:value={twoFaPassword}
-              placeholder={$t('placeholders.unlockPassword')}
+          <Input
+            id="totp-password-setup"
+            type="password"
+            bind:value={twoFaPassword}
+            placeholder={$t('placeholders.unlockPassword')}
               class="mt-1"
-            />
+          />
           </div>
           {#if twoFaErrorMessage}
             <div class="bg-red-50 border-l-4 border-l-red-500 p-3 rounded-lg">
@@ -2876,27 +2906,27 @@
         <div class="space-y-3">
           <div>
             <Label for="totp-action" class="text-sm font-semibold">{$t('security.2fa.prompt.label')}</Label>
-            <Input
-              id="totp-action"
-              type="text"
-              bind:value={totpActionCode}
-              placeholder="123456"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength={6}
-              autofocus
+          <Input
+            id="totp-action"
+            type="text"
+            bind:value={totpActionCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength={6}
+            autofocus
               class="text-center text-lg font-mono tracking-wider mt-1"
-            />
+          />
           </div>
           <div>
             <Label for="totp-password-action" class="text-sm font-semibold">{$t('keystore.load.password')}</Label>
-            <Input
-              id="totp-password-action"
-              type="password"
-              bind:value={twoFaPassword}
-              placeholder={$t('placeholders.unlockPassword')}
+          <Input
+            id="totp-password-action"
+            type="password"
+            bind:value={twoFaPassword}
+            placeholder={$t('placeholders.unlockPassword')}
               class="mt-1"
-            />
+          />
           </div>
           {#if twoFaErrorMessage}
             <div class="bg-red-50 border-l-4 border-l-red-500 p-3 rounded-lg">
