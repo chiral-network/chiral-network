@@ -1666,32 +1666,50 @@
         {:else}
         <div>
           <p class="text-sm text-muted-foreground">{$t('wallet.balance')}</p>
-          <p class="text-2xl font-bold">{$wallet.balance.toFixed(8)} Chiral</p>
+          <p class="text-3xl font-bold text-foreground">{$wallet.balance.toFixed(8)} Chiral</p>
         </div>
         
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
-          <div class="min-w-0">
-            <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+          <!-- Blocks Mined -->
+          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-3 shadow-sm">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="bg-purple-100 rounded p-1">
+                <Coins class="h-4 w-4 text-purple-600" />
+              </div>
+              <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            </div>
             {#if $accurateTotals}
-              <p class="text-sm font-medium text-green-600 break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
+              <p class="text-base font-semibold text-foreground break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
             {:else}
-              <p class="text-sm font-medium text-green-600 opacity-60 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
+              <p class="text-base font-semibold text-foreground opacity-60 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
             {/if}
           </div>
-          <div class="min-w-0">
-            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+          <!-- Total Received -->
+          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-3 shadow-sm">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="bg-green-100 rounded p-1">
+                <ArrowDownLeft class="h-4 w-4 text-green-600" />
+              </div>
+              <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            </div>
             {#if $accurateTotals}
-              <p class="text-sm font-medium text-blue-600 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
+              <p class="text-base font-semibold text-green-600 dark:text-green-400 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
             {:else}
-              <p class="text-sm font-medium text-blue-600 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
+              <p class="text-base font-semibold text-green-600 dark:text-green-400 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
             {/if}
           </div>
-          <div class="min-w-0">
-            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+          <!-- Total Spent -->
+          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-3 shadow-sm">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="bg-red-100 rounded p-1">
+                <ArrowUpRight class="h-4 w-4 text-red-600" />
+              </div>
+              <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            </div>
             {#if $accurateTotals}
-              <p class="text-sm font-medium text-red-600 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
+              <p class="text-base font-semibold text-red-600 dark:text-red-400 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
             {:else}
-              <p class="text-sm font-medium text-red-600 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
+              <p class="text-base font-semibold text-red-600 dark:text-red-400 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
             {/if}
           </div>
         </div>
