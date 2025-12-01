@@ -124,31 +124,28 @@ git clone https://github.com/chiral-network/chiral-network.git
 cd chiral-network
 ```
 
-#### Build Blockchain Node
+#### Build the Tauri Application
+
+The main application is a Tauri desktop app:
 
 ```bash
-cd blockchain
-cargo build --release
-sudo cp target/release/chiral-node /usr/local/bin/
-```
-
-[TODO: Revise this. I think we only have one binary.]
-
-#### Build Peer Node
-
-```bash
-cd ../peer
-cargo build --release
-sudo cp target/release/chiral-peer /usr/local/bin/
-```
-
-#### Build Client Application
-
-```bash
-cd ../chiral-app
+# Install frontend dependencies
 npm install
-npm run build
+
+# Build the Tauri application
 npm run tauri build
+```
+
+The built application will be in `src-tauri/target/release/`.
+
+#### Build the Relay Server (Optional)
+
+If you need to run your own relay server for NAT traversal:
+
+```bash
+cd relay
+cargo build --release
+sudo cp target/release/chiral-relay /usr/local/bin/
 ```
 
 ## Configuration

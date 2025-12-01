@@ -145,6 +145,9 @@
         "title": "Status do Relay",
         "enabled": "AutoRelay Ativado",
         "disabled": "AutoRelay Desativado",
+        "timeline": "Linha do tempo do AutoRelay",
+        "enabledAt": "Última ativação",
+        "disabledAt": "Última desativação",
         "noPeer": "Não conectado ao relay",
         "activePeer": "Relay Ativo",
         "status": "Status",
@@ -153,6 +156,8 @@
         "renewals": "Reservas renovadas",
         "evictions": "Reservas despejadas",
         "never": "Nunca",
+        "neverEnabled": "Nunca ativado",
+        "neverDisabled": "Nunca desativado",
         "noEvictions": "Sem despejos",
         "accepted": "Reserva aceita",
         "pending": "Pendente",
@@ -468,6 +473,8 @@
   "privacy.proxyHint": "Digite endereço do proxy SOCKS5 (ex: Tor em 127.0.0.1:9050)",
   "privacy.anonymousMode": "Modo anônimo (ocultar todas as informações de identificação)",
   "privacy.shareAnalytics": "Compartilhar análises de uso anônimas",
+  "privacy.autoLockWallet": "Bloquear carteira automaticamente após inatividade",
+  "privacy.autoLockWalletHint": "Faz logout automaticamente após uma hora sem atividade.",
   "notifications.title": "Notificações",
   "notifications.enable": "Ativar notificações de desktop",
   "notifications.notifyComplete": "Notificar quando downloads forem concluídos",
@@ -523,6 +530,7 @@
     "balance": "Saldo",
     "totalEarned": "Total Minerado",
     "totalSpent": "Total Gasto",
+    "totalReceived": "Total Recebido",
     "address": "Endereço Chiral",
     "qrModal": {
       "title": "Seu Endereço Chiral",
@@ -567,6 +575,12 @@
       "noDetails": "Nenhum detalhe de transação pendente disponível.",
       "count": "{count, plural, one {# Transação Pendente} other {# Transações Pendentes}}",
       "none": "Transações Pendentes"
+    },
+    "fees": {
+      "low": "Baixa",
+      "market": "Mercado",
+      "fast": "Rápida",
+      "estimated": "Taxa estimada"
     }
   },
   "transactions": {
@@ -1559,6 +1573,14 @@
     "blocks": {
       "latest": "Blocos recentes",
       "noBlocks": "Nenhum bloco encontrado"
+    },
+    "sync": {
+      "syncing": "Sincronizando",
+      "current": "Bloco atual",
+      "highest": "Bloco mais alto",
+      "remaining": "Restante",
+      "eta": "ETA",
+      "complete": "Sincronização completa"
     },
     "search": {
       "title": "Pesquisar na blockchain",

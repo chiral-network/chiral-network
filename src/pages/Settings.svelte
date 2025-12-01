@@ -20,10 +20,10 @@
     AlertTriangle,
     Copy,
     Download as DownloadIcon,
-    Upload as UploadIcon
+    Upload as UploadIcon,
   } from "lucide-svelte";
   import { onMount } from "svelte";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import {open} from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
@@ -37,6 +37,7 @@
   import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
+  import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -100,6 +101,7 @@
     enableRelayServer: false,
     anonymousMode: false,
     shareAnalytics: true,
+    enableWalletAutoLock: false,
     customBootstrapNodes: [],
     autoStartDHT: false,
 
@@ -123,9 +125,13 @@
     bandwidthSchedules: [],
     enableFileLogging: false, // Logging to disk
     maxLogSizeMB: 10, // MB per log file
+
+    // Upload Protocol
+    selectedProtocol: "Bitswap", // Default to Bitswap
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
+  savedSettings = {...defaultSettings,...savedSettings}
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
@@ -152,7 +158,7 @@
   // NAT & privacy configuration text bindings
   let autonatServersText = '';
   let trustedProxyText = '';
-  
+
   // Logs directory (loaded from backend)
   let logsDirectory: string | null = null;
   let newBootstrapNode = '';
@@ -232,7 +238,7 @@
         if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
       }
     } catch (error) {
-      console.warn("Failed to restore settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to restore settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     } finally {
       accordionStateInitialized = true;
     }
@@ -253,7 +259,7 @@
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
-      console.warn("Failed to persist settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to persist settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -388,9 +394,9 @@
 
     // Save to local storage (for web compatibility)
     localStorage.setItem("chiralSettings", JSON.stringify(localSettings));
-   
+
     // Save to Tauri app data directory (for backend access)
-    
+
     let isTauri = false;
     try {
       await getVersion();
@@ -404,16 +410,16 @@
           settingsJson: JSON.stringify(localSettings),
         });
       } catch (error) {
-        console.error("Failed to save settings to app data directory:", error);
+        errorLogger.fileOperationError('Save settings', error instanceof Error ? error.message : String(error));
       }
     }
-    
+
     savedSettings = JSON.parse(JSON.stringify(localSettings));
     userLocation.set(localSettings.userLocation);
-    
+
     // Force bandwidth scheduler to update with new settings
     bandwidthScheduler.forceUpdate();
-    
+
     importExportFeedback = null;
 
     try {
@@ -423,7 +429,7 @@
       // showToast("Settings Updated!");
       showToast(tr('toasts.settings.updated'));
     } catch (error) {
-      console.error("Failed to apply networking settings:", error);
+      errorLogger.networkError(`Failed to apply networking settings: ${error instanceof Error ? error.message : String(error)}`);
       // showToast("Settings saved, but networking update failed", "error");
       showToast(tr('toasts.settings.networkingError'), "error");
     }
@@ -441,11 +447,11 @@
         enabled: localSettings.enableFileLogging,
       });
     } catch (error) {
-      console.warn("Failed to update log configuration:", error);
+      diagnosticLogger.warn('Settings', 'Failed to update log configuration', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  
+
   // Backup/Restore Functions
   async function exportSettings() {
     isExporting = true;
@@ -453,7 +459,7 @@
 
     try {
       const result = await settingsBackupService.exportSettings(true);
-      
+
       if (result.success && result.data) {
         // Download as file
         settingsBackupService.downloadBackupFile(result.data);
@@ -474,7 +480,7 @@
       showToast(backupMessage.text, 'error');
     } finally {
       isExporting = false;
-      
+
       // Clear message after 5 seconds
       setTimeout(() => {
         backupMessage = null;
@@ -486,7 +492,7 @@
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
-    
+
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
@@ -497,13 +503,13 @@
       try {
         const text = await file.text();
         const result = await settingsBackupService.importSettings(text, { merge: false });
-        
+
         if (result.success && result.imported) {
           // Update local settings from imported data
           localSettings = { ...result.imported };
           savedSettings = JSON.parse(JSON.stringify(localSettings));
           settings.set(localSettings);
-          
+
           if (result.warnings && result.warnings.length > 0) {
             backupMessage = {
               text: $t('settingsBackup.messages.importWarnings', { values: { warnings: result.warnings.join(', ') } }),
@@ -532,7 +538,7 @@
         showToast(backupMessage.text, 'error');
       } finally {
         isImporting = false;
-        
+
         // Clear message after 5 seconds
         setTimeout(() => {
           backupMessage = null;
@@ -543,7 +549,7 @@
     input.click();
   }
 
-  
+
   async function applyPrivacyRoutingSettings() {
     if (typeof window === "undefined" || !("__TAURI__" in window)) {
       return;
@@ -555,7 +561,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while updating privacy settings:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while updating privacy settings', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -564,7 +570,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while turning privacy off:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while turning privacy off', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -583,7 +589,7 @@
     try {
       await invoke("stop_dht_node");
     } catch (error) {
-      console.debug("stop_dht_node failed (probably already stopped):", error);
+      diagnosticLogger.debug('Settings', 'stop_dht_node failed (probably already stopped)', { error: error instanceof Error ? error.message : String(error) });
     }
 
     // Use custom bootstrap nodes if configured, otherwise use defaults
@@ -594,7 +600,7 @@
       try {
         bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
       } catch (error) {
-        console.error("Failed to fetch bootstrap nodes:", error);
+        errorLogger.networkError(`Failed to fetch bootstrap nodes: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
       }
 
@@ -612,6 +618,7 @@
       cacheSizeMb: localSettings.cacheSize,
       enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
       enableRelayServer: localSettings.enableRelayServer,
+      enableUpnp: localSettings.enableUPnP,
     };
 
     if (localSettings.autonatServers?.length) {
@@ -693,7 +700,7 @@
           localSettings = { ...localSettings, storagePath: directoryHandle.name };
         } catch (err: any) {
           if (err.name !== "AbortError") {
-            console.error("Directory picker error:", err);
+            errorLogger.fileOperationError('Directory picker', err instanceof Error ? err.message : String(err));
           }
         }
       } else {
@@ -758,7 +765,7 @@
           type: "success",
         };
       } catch (err) {
-        console.error("Failed to import settings:", err);
+        errorLogger.fileOperationError('Import settings', err instanceof Error ? err.message : String(err));
         importExportFeedback = {
           message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
@@ -883,7 +890,7 @@
       const platformDefaultPath = await invoke<string>("get_default_storage_path");
       defaultSettings.storagePath = platformDefaultPath;
     } catch (e) {
-      console.error("Failed to get default storage path:", e);
+      errorLogger.fileOperationError('Get default storage path', e instanceof Error ? e.message : String(e));
       // Fallback to the hardcoded default if the command fails
       defaultSettings.storagePath = "~/ChiralNetwork/Storage";
     }
@@ -897,9 +904,9 @@
     settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading
     localSettings = JSON.parse(JSON.stringify(get(settings)));
-    savedSettings = JSON.parse(JSON.stringify(localSettings)); 
+    savedSettings = JSON.parse(JSON.stringify(localSettings));
   } catch (e) {
-    console.error("Failed to load settings:", e);
+    errorLogger.fileOperationError('Load settings', e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -913,7 +920,7 @@ selectedLanguage = initial; // Synchronize dropdown display value
     await getVersion();
     logsDirectory = await invoke("get_logs_directory");
   } catch (error) {
-    console.error("Failed to get logs directory:", error);
+    errorLogger.fileOperationError('Get logs directory', error instanceof Error ? error.message : String(error));
   }
 
 });
@@ -1147,6 +1154,7 @@ $: sectionLabels = {
     tr("privacy.enableProxy"),
     tr("privacy.anonymousMode"),
     tr("privacy.shareAnalytics"),
+    tr("privacy.autoLockWallet"),
   ],
   notifications: [
     tr("notifications.title"),
@@ -1233,7 +1241,7 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
-          
+
         </div>
 
         <div class="grid grid-cols-2 gap-4">
@@ -1748,6 +1756,7 @@ function sectionMatches(section: string, query: string) {
     </Expandable>
   {/if}
 
+
   <!-- Privacy Settings -->
   {#if sectionMatches("privacy", search)}
     <Expandable bind:isOpen={privacySectionOpen}>
@@ -1905,6 +1914,23 @@ function sectionMatches(section: string, query: string) {
             {$t("privacy.shareAnalytics")}
           </Label>
         </div>
+
+        <div class="flex items-start gap-2">
+          <input
+            type="checkbox"
+            id="wallet-auto-lock"
+            bind:checked={localSettings.enableWalletAutoLock}
+            class="mt-1"
+          />
+          <div>
+            <Label for="wallet-auto-lock" class="cursor-pointer">
+              {$t("privacy.autoLockWallet")}
+            </Label>
+            <p class="text-xs text-muted-foreground">
+              {$t("privacy.autoLockWalletHint")}
+            </p>
+          </div>
+        </div>
       </div>
     </Expandable>
   {/if}
@@ -2041,7 +2067,7 @@ function sectionMatches(section: string, query: string) {
                 class="mt-2"
               />
               <p class="text-xs text-muted-foreground mt-1">
-                When a log file reaches this size, a new log file will be created. 
+                When a log file reaches this size, a new log file will be created.
                 The system will keep up to 10x this size in total logs.
               </p>
             </div>
@@ -2238,8 +2264,8 @@ function sectionMatches(section: string, query: string) {
 
         <!-- Export/Import Buttons -->
         <div class="flex flex-wrap gap-3">
-          <Button 
-            size="sm" 
+          <Button
+            size="sm"
             on:click={exportSettings}
             disabled={isExporting}
             class="min-w-[140px]"
@@ -2253,8 +2279,8 @@ function sectionMatches(section: string, query: string) {
             {/if}
           </Button>
 
-          <Button 
-            size="sm" 
+          <Button
+            size="sm"
             variant="outline"
             on:click={importSettings}
             disabled={isImporting}
@@ -2272,7 +2298,7 @@ function sectionMatches(section: string, query: string) {
 
         <!-- Feedback Message -->
         {#if backupMessage}
-          <div 
+          <div
             class="p-3 rounded-lg text-sm transition-all"
             class:bg-green-100={backupMessage.type === 'success'}
             class:text-green-800={backupMessage.type === 'success'}
@@ -2296,7 +2322,7 @@ function sectionMatches(section: string, query: string) {
         <div class="p-4 bg-muted/50 rounded-lg border border-dashed">
           <h3 class="font-medium text-sm mb-2">{$t("settingsBackup.autoBackup")}</h3>
           <p class="text-xs text-muted-foreground mb-3">{$t("settingsBackup.autoBackupDescription")}</p>
-          
+
           <!-- Auto-backups list -->
           {#if settingsBackupService.getAutoBackups().length > 0}
             <div class="space-y-2">
@@ -2406,6 +2432,3 @@ function sectionMatches(section: string, query: string) {
     </div>
   </div>
 {/if}
-
-
-

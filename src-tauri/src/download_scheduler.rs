@@ -7,6 +7,9 @@ use crate::download_source::{
     P2pSourceInfo,
 };
 use crate::ftp_client;
+use crate::http_download::HttpDownloadClient;
+use crate::protocols::ed2k::Ed2kProtocolHandler;
+use crate::protocols::traits::{DownloadOptions, ProtocolHandler};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -158,7 +161,76 @@ impl DownloadScheduler {
             verify_ssl = info.verify_ssl,
             "Initiating HTTP download"
         );
-        // TODO: Implement actual HTTP download logic
+
+        // Get task to determine output path
+        let task = self
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| format!("Task not found: {}", task_id))?;
+
+        // Construct output path (use file name from task)
+        let file_name = &task.file_name;
+        let output_path = PathBuf::from(format!("./downloads/{}", file_name));
+
+        // Create downloads directory if it doesn't exist
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create download directory: {}", e))?;
+        }
+
+        // Spawn async task to download file
+        let url = info.url.clone();
+        let file_hash_clone = task.file_hash.clone();
+        let output_path_clone = output_path.clone();
+
+        tokio::spawn(async move {
+            let client = HttpDownloadClient::new();
+
+            // Create progress channel for monitoring (optional)
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<crate::http_download::HttpDownloadProgress>(10);
+
+            // Spawn progress monitor
+            let file_hash_for_progress = file_hash_clone.clone();
+            let progress_handle = tokio::spawn(async move {
+                while let Some(progress) = progress_rx.recv().await {
+                    debug!(
+                        file_hash = %file_hash_for_progress,
+                        downloaded = progress.bytes_downloaded,
+                        total = progress.bytes_total,
+                        status = ?progress.status,
+                        "HTTP download progress"
+                    );
+                }
+            });
+
+            // Perform the HTTP download
+            match client.download_file(
+                &url,
+                &file_hash_clone,
+                &output_path_clone,
+                Some(progress_tx),
+            ).await {
+                Ok(_) => {
+                    info!(
+                        file_hash = %file_hash_clone,
+                        output = ?output_path_clone,
+                        "HTTP download completed successfully"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        url = %url,
+                        file_hash = %file_hash_clone,
+                        "HTTP download failed"
+                    );
+                }
+            }
+
+            // Wait for progress monitor to finish
+            let _ = progress_handle.await;
+        });
+
         Ok(())
     }
 
@@ -220,12 +292,122 @@ impl DownloadScheduler {
             server_url = %info.server_url,
             file_hash = %info.file_hash,
             file_size = info.file_size,
-            "Initiating Ed2k download (placeholder)"
+            "Initiating Ed2k download"
         );
 
-        // TODO: Implement actual Ed2k download logic in PR #2
-        // This is a placeholder to satisfy the match arm requirement
-        warn!("Ed2k downloads are not yet fully implemented");
+        // Get task to determine output path
+        let task = self
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| format!("Task not found: {}", task_id))?;
+
+        // Construct output path
+        let file_name = &task.file_name;
+        let output_path = PathBuf::from(format!("./downloads/{}", file_name));
+
+        // Create downloads directory if it doesn't exist
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create download directory: {}", e))?;
+        }
+
+        // Build ed2k:// link from source info
+        let ed2k_link = format!(
+            "ed2k://|file|{}|{}|{}|/",
+            file_name,
+            info.file_size,
+            info.file_hash.to_uppercase()
+        );
+
+        // Clone data for async task
+        let server_url = info.server_url.clone();
+        let file_hash_clone = task.file_hash.clone();
+
+        // Spawn async task to download file using Ed2kProtocolHandler
+        tokio::spawn(async move {
+            // Create ED2K protocol handler with the server URL
+            let handler = Ed2kProtocolHandler::new(server_url);
+
+            // Configure download options
+            let options = DownloadOptions {
+                output_path: output_path.clone(),
+                max_peers: Some(5),
+                chunk_size: None,
+                encryption: false,
+                bandwidth_limit: None,
+            };
+
+            // Start the download
+            match handler.download(&ed2k_link, options).await {
+                Ok(handle) => {
+                    info!(
+                        file_hash = %file_hash_clone,
+                        identifier = %handle.identifier,
+                        "ED2K download started successfully"
+                    );
+
+                    // Monitor progress until completion
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+                        match handler.get_download_progress(&handle.identifier).await {
+                            Ok(progress) => {
+                                debug!(
+                                    file_hash = %file_hash_clone,
+                                    downloaded = progress.downloaded_bytes,
+                                    total = progress.total_bytes,
+                                    speed = progress.download_speed,
+                                    status = ?progress.status,
+                                    "ED2K download progress"
+                                );
+
+                                // Check if download is complete or failed
+                                match progress.status {
+                                    crate::protocols::traits::DownloadStatus::Completed => {
+                                        info!(
+                                            file_hash = %file_hash_clone,
+                                            output = ?output_path,
+                                            "ED2K download completed successfully"
+                                        );
+                                        break;
+                                    }
+                                    crate::protocols::traits::DownloadStatus::Failed => {
+                                        error!(
+                                            file_hash = %file_hash_clone,
+                                            "ED2K download failed"
+                                        );
+                                        break;
+                                    }
+                                    crate::protocols::traits::DownloadStatus::Cancelled => {
+                                        info!(
+                                            file_hash = %file_hash_clone,
+                                            "ED2K download cancelled"
+                                        );
+                                        break;
+                                    }
+                                    _ => continue,
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    error = %e,
+                                    file_hash = %file_hash_clone,
+                                    "Failed to get ED2K download progress"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        file_hash = %file_hash_clone,
+                        "ED2K download failed to start"
+                    );
+                }
+            }
+        });
 
         Ok(())
     }

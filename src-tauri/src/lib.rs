@@ -6,6 +6,10 @@ pub mod config;
 pub mod control_plane;
 pub mod multi_source_download;
 pub mod download_restart;
+pub mod transfer_events;
+
+// Connection retry and resilience framework
+pub mod connection_retry;
 
 // Download source abstraction
 pub mod download_source;
@@ -13,6 +17,7 @@ pub mod download_scheduler;
 pub mod download_persistence;
 pub mod ftp_client;
 pub mod ed2k_client;
+pub mod http_download;
 pub mod bittorrent_handler;
 
 // Required modules for multi_source_download

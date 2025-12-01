@@ -12,7 +12,7 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
-    import BlockchainDashboard from './pages/BlockchainDashboard.svelte'
+    import Blockchain from './pages/Blockchain.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
@@ -25,12 +25,16 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
+    import KeyboardShortcutsPanel from './lib/components/KeyboardShortcutsPanel.svelte';
+    import CommandPalette from './lib/components/CommandPalette.svelte';
     import { startNetworkMonitoring } from './lib/services/networkService';
     import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
     import { paymentService } from '$lib/services/paymentService';
+    import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+    import { showToast } from '$lib/toast';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { exit } from '@tauri-apps/plugin-process';
@@ -56,6 +60,55 @@ let unsubscribeScheduler: (() => void) | null = null;
 let unsubscribeBandwidth: (() => void) | null = null;
 let lastAppliedBandwidthSignature: string | null = null;
 let showFirstRunWizard = false;
+let showShortcutsPanel = false;
+let showCommandPalette = false;
+let transferStoreUnsubscribe: (() => void) | null = null;
+const notifiedCompletedTransfers = new Set<string>();
+const scrollPositions: Record<string, number> = {};
+
+// Helper to get the main scroll container (if present)
+const getMainContent = () =>
+  document.querySelector("#main-content") as HTMLElement | null;
+
+// Save scroll position for the current page
+const saveScrollPosition = (page: string) => {
+  if (!page || typeof window === 'undefined') return;
+
+  const mainContent = getMainContent();
+
+  if (mainContent && mainContent.scrollHeight > mainContent.clientHeight) {
+    // App is using the #main-content div as scroll container
+    scrollPositions[page] = mainContent.scrollTop;
+  } else {
+    // Fallback to window scroll (body/document scrolling)
+    scrollPositions[page] = window.scrollY || window.pageYOffset || 0;
+  }
+};
+
+// Restore scroll position for a page
+const restoreScrollPosition = async (page: string) => {
+  if (!page || typeof window === 'undefined') return;
+
+  await tick();
+
+  const y = scrollPositions[page] ?? 0;
+  const mainContent = getMainContent();
+
+  if (mainContent && mainContent.scrollHeight > mainContent.clientHeight) {
+    mainContent.scrollTop = y;
+  } else {
+    window.scrollTo(0, y);
+  }
+};
+
+
+const navigateTo = (page: string, path: string) => {
+  if (page !== currentPage) {
+    saveScrollPosition(currentPage);
+  }
+  currentPage = page;
+  goto(path);
+};
 
   const syncBandwidthScheduler = (config: AppSettings) => {
     const enabledSchedules =
@@ -108,14 +161,16 @@ let showFirstRunWizard = false;
 function handleFirstRunComplete() {
   showFirstRunWizard = false;
   // Navigate to account page after completing wizard
-  currentPage = 'account';
-  goto('/account');
+  navigateTo('account', '/account');
 }
+
 
   onMount(() => {
     let stopNetworkMonitoring: () => void = () => {};
     let stopGethMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
+    let unlistenTorrentPayment: (() => void) | null = null;
+    let transferEventsUnsubscribe: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
     syncBandwidthScheduler(get(settings));
@@ -123,12 +178,88 @@ function handleFirstRunComplete() {
     pushBandwidthLimits(get(activeBandwidthLimits));
 
     (async () => {
+      // Subscribe to transfer events from backend
+      try {
+        transferEventsUnsubscribe = await subscribeToTransferEvents();
+        transferStoreUnsubscribe = transferStore.subscribe(($store) => {
+
+          if (!$store || !$store.transfers) {
+            return;
+          }
+
+          for (const [transferId, transfer] of $store.transfers.entries()) {
+            if (transfer.status === 'completed') {
+              // First time we see this transfer as completed → fire toast
+              if (!notifiedCompletedTransfers.has(transferId)) {
+                notifiedCompletedTransfers.add(transferId);
+
+                const fileName = transfer.fileName ?? 'file';
+                const message = `Download complete: "${fileName}"`;
+
+                showToast(message, 'success');
+              }
+            } else {
+              // If the transfer goes back to a non-completed status (e.g. retry),
+              // allow a later completion to trigger a new toast
+              notifiedCompletedTransfers.delete(transferId);
+            }
+          }
+        });
+      } catch (error) {
+        console.warn('Failed to subscribe to transfer events:', error);
+      }
+
       // Initialize payment service to load wallet and transactions
       await paymentService.initialize();
 
       // Listen for payment notifications from backend
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
+          // Listener for BitTorrent protocol payments
+          const torrentUnlisten = await listen(
+            "torrent_seeder_payment_received",
+            async (event: any) => {
+              const payload = event.payload;
+              console.log(
+                "💰 Torrent seeder payment notification received:",
+                payload,
+              );
+
+              const currentWalletAddress = get(wallet).address;
+              const seederAddress = payload.seeder_wallet_address;
+
+              if (
+                !seederAddress ||
+                !currentWalletAddress ||
+                currentWalletAddress.toLowerCase() !==
+                  seederAddress.toLowerCase()
+              ) {
+                console.log("⏭️ Skipping torrent payment credit - not for us.");
+                return;
+              }
+
+              console.log(
+                "✅ This torrent payment is for us! Crediting...",
+              );
+
+              const result = await paymentService.creditSeederPayment(
+                payload.info_hash, // For torrents, this would be the info_hash
+                payload.file_name,
+                payload.file_size,
+                payload.downloader_address,
+                payload.transaction_hash,
+              );
+
+              if (!result.success) {
+                console.error(
+                  "❌ Failed to credit torrent seeder payment:",
+                  result.error,
+                );
+              }
+            },
+          );
+          unlistenTorrentPayment = torrentUnlisten;
+
           const unlisten = await listen(
             "seeder_payment_received",
             async (event: any) => {
@@ -165,6 +296,7 @@ function handleFirstRunComplete() {
                 payload.file_name,
                 payload.file_size,
                 payload.downloader_address,
+                payload.downloader_peer_id || payload.downloader_address, // Use peer ID or fallback to address
                 payload.transaction_hash,
               );
 
@@ -326,8 +458,15 @@ function handleFirstRunComplete() {
           await invoke("start_file_transfer_service");
         }
       } catch (error) {
-        // Ignore "already running" errors - this is normal during hot reload
-        // Silently skip all errors since services may already be initialized
+        // Only ignore "already running" errors - this is normal during hot reload
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes("already running") || errorMessage.includes("already initialized")) {
+          // Services already running (hot reload) - no need to log
+        } else {
+          // Log other errors - these might indicate real problems
+          console.error("⚠️ Failed to start services:", errorMessage);
+          console.error("WebRTC downloads may not work. Error details:", error);
+        }
       }
 
       // set the currentPage var
@@ -341,13 +480,79 @@ function handleFirstRunComplete() {
     })();
 
       // popstate - event that tracks history of current tab
-      const onPop = () => syncFromUrl();
-      window.addEventListener('popstate', onPop);
-
+      // const onPop = () => syncFromUrl();
+      // window.addEventListener('popstate', onPop);
+      // popstate - event that tracks history of current tab
+    const onPop = () => {
+      // Save where we were on the page we're leaving
+      saveScrollPosition(currentPage);
+      // Update currentPage based on URL
+      syncFromUrl();
+      // restoreScrollPosition will run via the reactive currentPage block
+    };
+    window.addEventListener('popstate', onPop);
 
 
     // keyboard shortcuts
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore shortcuts if user is typing in an input/textarea
+      const target = event.target as HTMLElement;
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      
+      // ? or F1 - Show keyboard shortcuts help
+      if ((event.key === '?' || event.key === 'F1') && !isInputField) {
+        event.preventDefault();
+        showShortcutsPanel = true;
+        return;
+      }
+      
+      // Ctrl/Cmd + K - Open command palette
+      if ((event.ctrlKey || event.metaKey) && event.key === 'k' && !isInputField) {
+        event.preventDefault();
+        showCommandPalette = true;
+        return;
+      }
+      
+      // Ctrl/Cmd + D - Go to Download
+      if ((event.ctrlKey || event.metaKey) && event.key === 'd' && !isInputField) {
+        event.preventDefault();
+        navigateTo('download', '/download');
+        return;
+      }
+
+      
+      // Ctrl/Cmd + U - Go to Upload
+      if ((event.ctrlKey || event.metaKey) && event.key === 'u' && !isInputField) {
+        event.preventDefault();
+        navigateTo('upload', '/upload');
+        return;
+      }
+
+      
+      // Ctrl/Cmd + N - Go to Network
+      if ((event.ctrlKey || event.metaKey) && event.key === 'n' && !isInputField) {
+        event.preventDefault();
+        navigateTo('network', '/network');
+        return;
+      }
+
+      
+      // Ctrl/Cmd + M - Go to Mining
+      if ((event.ctrlKey || event.metaKey) && event.key === 'm' && !isInputField) {
+        event.preventDefault();
+        navigateTo('mining', '/mining');
+        return;
+      }
+
+      
+      // Ctrl/Cmd + A - Go to Account (only if not in input field)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'a' && !isInputField) {
+        event.preventDefault();
+        navigateTo('account', '/account');
+        return;
+      }
+
+
       // Ctrl/Cmd + Q - Quit application
       if ((event.ctrlKey || event.metaKey) && event.key === "q") {
         event.preventDefault();
@@ -358,10 +563,10 @@ function handleFirstRunComplete() {
       // Ctrl/Cmd + , - Open Settings
       if ((event.ctrlKey || event.metaKey) && event.key === ",") {
         event.preventDefault();
-        currentPage = "settings";
-        goto("/settings");
+        navigateTo('settings', '/settings');
         return;
       }
+
 
       // Ctrl/Cmd + R - Refresh current page
       if ((event.ctrlKey || event.metaKey) && event.key === "r") {
@@ -406,6 +611,18 @@ function handleFirstRunComplete() {
       if (unlistenSeederPayment) {
         unlistenSeederPayment();
       }
+      if (unlistenTorrentPayment) {
+        unlistenTorrentPayment();
+      }
+      if (transferEventsUnsubscribe) {
+        transferEventsUnsubscribe();
+      }
+      if (transferStoreUnsubscribe) {
+        transferStoreUnsubscribe();
+        transferStoreUnsubscribe = null;
+      }
+      // Also ensure transfer events are fully unsubscribed
+      unsubscribeFromTransferEvents();
       if (unsubscribeScheduler) {
         unsubscribeScheduler();
         unsubscribeScheduler = null;
@@ -420,22 +637,23 @@ function handleFirstRunComplete() {
 
   setContext("navigation", {
     setCurrentPage: (page: string) => {
+      if (page !== currentPage) {
+        saveScrollPosition(currentPage);
+      }
       currentPage = page;
     },
+    navigateTo,
   });
+
 
   let sidebarCollapsed = false;
   let sidebarMenuOpen = false;
 
-  // Scroll to top when page changes
+  // Restore the previous scroll position when page changes
   $: if (currentPage) {
-    tick().then(() => {
-      const mainContent = document.querySelector("#main-content");
-      if (mainContent) {
-        mainContent.scrollTop = 0;
-      }
-    });
+    restoreScrollPosition(currentPage);
   }
+
 
   type MenuItem = {
     id: string;
@@ -503,7 +721,7 @@ function handleFirstRunComplete() {
     },
     {
       path: "blockchain",
-      component: BlockchainDashboard,
+      component: Blockchain,
     },
     {
       path: "account",
@@ -576,8 +794,7 @@ function handleFirstRunComplete() {
           <button
             on:click={() => {
               if (isBlockchainDisabled) return;
-              currentPage = item.id;
-              goto(`/${item.id}`);
+              navigateTo(item.id, `/${item.id}`);
             }}
             class="w-full group {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : ''}"
             aria-current={currentPage === item.id ? "page" : undefined}
@@ -673,8 +890,7 @@ function handleFirstRunComplete() {
             <button
               on:click={() => {
                 if (isBlockchainDisabled) return;
-                currentPage = item.id;
-                goto(`/${item.id}`);
+                navigateTo(item.id, `/${item.id}`);
                 sidebarMenuOpen = false;
               }}
               class="w-full flex items-center rounded px-4 py-3 text-lg {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-gray-100'}"
@@ -718,6 +934,18 @@ function handleFirstRunComplete() {
     onComplete={handleFirstRunComplete}
   />
 {/if}
+
+<!-- Keyboard Shortcuts Help Panel -->
+<KeyboardShortcutsPanel 
+  isOpen={showShortcutsPanel}
+  onClose={() => showShortcutsPanel = false}
+/>
+
+<!-- Command Palette -->
+<CommandPalette 
+  isOpen={showCommandPalette}
+  onClose={() => showCommandPalette = false}
+/>
 
   <!-- add Toast  -->
 <SimpleToast />
