@@ -2070,22 +2070,33 @@
           type="text"
           bind:value={searchQuery}
           placeholder={tr('transactions.searchPlaceholder')}
-          class="w-full pl-10 pr-4 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          class="w-full pl-10 pr-10 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
         />
+        {#if searchQuery}
+          <button
+            type="button"
+            class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors"
+            on:click={() => searchQuery = ''}
+            title="Clear search"
+            aria-label="Clear search"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        {/if}
       </div>
     </div>
 
     <!-- Filters -->
-    <div class="flex flex-wrap gap-4 mb-4 items-end">
+    <div class="flex flex-wrap gap-3 mb-4 items-end p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
   <div>
-    <label for="filter-type" class="block text-xs font-medium mb-1">
+    <label for="filter-type" class="block text-xs font-semibold mb-1.5 text-foreground">
       {$t('filters.type')}
     </label>
     <div class="relative">
       <select
         id="filter-type"
         bind:value={filterType}
-        class="appearance-none border rounded pl-3 pr-10 py-2 text-sm h-9 bg-white cursor-pointer hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        class="appearance-none border border-gray-300 dark:border-gray-600 rounded-md pl-3 pr-10 py-2 text-sm h-9 bg-white cursor-pointer hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
       >
         <option value="transactions">{$t('filters.typeTransactions')}</option>
         <option value="sent">{$t('filters.typeSent')}</option>
@@ -2093,46 +2104,51 @@
         <option value="mining">{$t('filters.typeMining')}</option>
       </select>
       <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4-4m0 6l-4 4-4-4"></path></svg>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
       </div>
     </div>
   </div>
 
   <div>
-    <label for="filter-date-from" class="block text-xs font-medium mb-1">
+    <label for="filter-date-from" class="block text-xs font-semibold mb-1.5 text-foreground">
       {$t('filters.from')}
     </label>
-    <input
-      id="filter-date-from"
-      type="date"
-      bind:value={filterDateFrom}
-      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-    />
+    <div class="relative">
+      <input
+        id="filter-date-from"
+        type="date"
+        bind:value={filterDateFrom}
+        class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+      />
+    </div>
   </div>
 
   <div>
-    <label for="filter-date-to" class="block text-xs font-medium mb-1">
+    <label for="filter-date-to" class="block text-xs font-semibold mb-1.5 text-foreground">
       {$t('filters.to')}
     </label>
-    <input
-      id="filter-date-to"
-      type="date"
-      bind:value={filterDateTo}
-      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-    />
+    <div class="relative">
+      <input
+        id="filter-date-to"
+        type="date"
+        bind:value={filterDateTo}
+        class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+      />
+    </div>
   </div>
 
   <div>
-    <label for="sort-button" class="block text-xs font-medium mb-1">
+    <label for="sort-button" class="block text-xs font-semibold mb-1.5 text-foreground">
       {$t('filters.sort')}
     </label>
     <button
       id="sort-button"
       type="button"
-      class="border rounded px-3 py-2 text-sm h-9 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-full text-left"
+      class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 bg-white hover:border-gray-400 hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-full text-left transition-colors flex items-center gap-2"
       on:click={() => { sortDescending = !sortDescending; }}
       aria-pressed={sortDescending}
     >
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-500"><path d="m3 16 4 4 4-4"></path><path d="M7 20V4"></path><path d="m21 8-4-4-4 4"></path><path d="M17 4v16"></path></svg>
       {sortDescending ? $t('filters.sortNewest') : $t('filters.sortOldest')}
     </button>
   </div>
@@ -2142,7 +2158,7 @@
   <div class="flex flex-col gap-1 items-end">
     <button
       type="button"
-      class="border rounded px-3 py-2 text-sm h-9 bg-gray-100 hover:bg-gray-200 transition-colors"
+      class="border border-red-300 dark:border-red-700 rounded-md px-4 py-2 text-sm h-9 bg-red-50 hover:bg-red-100 text-red-700 dark:text-red-400 transition-colors font-medium flex items-center gap-2"
       on:click={() => {
         filterType = 'transactions';
         filterDateFrom = '';
@@ -2151,6 +2167,7 @@
         searchQuery = '';
       }}
     >
+      <RefreshCw class="h-3.5 w-3.5" />
       {$t('filters.reset')}
     </button>
   </div>
@@ -2160,7 +2177,7 @@
     <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
       {#each filteredTransactions as tx}
         <div 
-          class="flex items-center justify-between p-3 bg-secondary rounded-lg hover:bg-secondary/80 cursor-pointer transition-colors"
+          class="flex items-center justify-between p-3 border rounded-lg cursor-pointer transition-all hover:shadow-md {tx.type === 'mining' ? 'border-l-4 border-l-yellow-500 border-y border-r border-gray-200 dark:border-gray-700' : tx.type === 'received' ? 'border-l-4 border-l-green-500 border-y border-r border-gray-200 dark:border-gray-700' : 'border-l-4 border-l-red-500 border-y border-r border-gray-200 dark:border-gray-700'}"
           on:click={() => handleTransactionClick(tx)}
           on:keydown={(e) => {
             if (e.key === 'Enter') {
@@ -2172,21 +2189,30 @@
           in:fly={{ y: 20, duration: 300 }}
           out:fade={{ duration: 200 }}
         >
-          <div class="flex items-center gap-3">
-            {#if tx.type === 'received' || tx.type === 'mining'}
-              <ArrowDownLeft class="h-4 w-4 text-green-500" />
-            {:else}
-              <ArrowUpRight class="h-4 w-4 text-red-500" />
-            {/if}
-            <div>
-              <p class="text-sm font-medium">{tx.description}</p>
-              <p class="text-xs text-muted-foreground">
+          <div class="flex items-center gap-3 flex-1 min-w-0">
+            <div class="flex-shrink-0 {tx.type === 'mining' ? 'bg-yellow-100' : tx.type === 'received' ? 'bg-green-100' : 'bg-red-100'} p-2 rounded">
+              {#if tx.type === 'mining'}
+                <Coins class="h-4 w-4 text-yellow-600" />
+              {:else if tx.type === 'received'}
+                <ArrowDownLeft class="h-4 w-4 text-green-600" />
+              {:else}
+                <ArrowUpRight class="h-4 w-4 text-red-600" />
+              {/if}
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <p class="text-sm font-medium truncate">{tx.description}</p>
+                <span class="flex-shrink-0 text-[10px] px-2 py-0.5 rounded font-semibold {tx.type === 'mining' ? 'bg-yellow-500 text-white' : tx.type === 'received' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}">
+                  {tx.type === 'sent' ? 'SENT' : tx.type === 'received' ? 'RECEIVED' : 'MINING'}
+                </span>
+              </div>
+              <p class="text-xs text-muted-foreground truncate">
                 {tx.type === 'received' ? $t('transactions.item.from') : $t('transactions.item.to')}: {tx.type === 'received' ? tx.from : tx.to}
               </p>
             </div>
           </div>
-          <div class="text-right">
-            <p class="text-sm font-medium {tx.type === 'received' || tx.type === 'mining' ? 'text-green-600' : 'text-red-600'}">
+          <div class="text-right flex-shrink-0 ml-2">
+            <p class="text-sm font-semibold {tx.type === 'received' || tx.type === 'mining' ? 'text-green-600' : 'text-red-600'}">
               {tx.type === 'received' || tx.type === 'mining' ? '+' : '-'}{tx.amount} Chiral
             </p>
             <p class="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
