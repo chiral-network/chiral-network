@@ -1324,6 +1324,8 @@ async fn run_dht_node(
     let queries: HashMap<beetswap::QueryId, u32> = HashMap::new();
     let downloaded_chunks: HashMap<usize, Vec<u8>> = HashMap::new();
     let current_metadata: Option<FileMetadata> = None;
+    // Track query_id -> peer_id mapping for reputation tracking
+    let mut query_to_peer: HashMap<beetswap::QueryId, String> = HashMap::new();
 
     #[derive(Debug, Clone, Copy)]
     enum RelayErrClass {
@@ -2844,6 +2846,8 @@ async fn run_dht_node(
                                                     // Request the root block which contains the CIDs
                                                     let block_query_id = swarm.behaviour_mut().bitswap.get_from(&cid, peer_id);
                                                     file_queries.insert(block_query_id, i as u32);
+                                                    // Track which peer we're requesting from for reputation
+                                                    query_to_peer.insert(block_query_id, peer_id.to_string());
                                                 }
 
                                                 // Calculate chunk size based on file size and number of chunks
@@ -2974,6 +2978,30 @@ async fn run_dht_node(
                                                             "timestamp": unix_timestamp(),
                                                         }),
                                                     }).await;
+                                                    
+                                                    // Update peer metrics reputation for successful chunk download
+                                                    if let Some(providing_peer_id) = query_to_peer.remove(&query_id) {
+                                                        let peer_selection_clone = peer_selection.clone();
+                                                        let chunk_size = data.len();
+                                                        tokio::spawn(async move {
+                                                            let mut ps = peer_selection_clone.lock().await;
+                                                            ps.record_transfer_success(&providing_peer_id, chunk_size as u64, 100);
+                                                            info!("Updated reputation for peer {}: successful chunk download ({} bytes)", 
+                                                                  providing_peer_id, chunk_size);
+                                                        });
+                                                    } else {
+                                                        // Fallback: use seeder from metadata if query mapping not found
+                                                        let peer_selection_clone = peer_selection.clone();
+                                                        let seeder_str = seeder.to_string();
+                                                        let chunk_size = data.len();
+                                                        tokio::spawn(async move {
+                                                            let mut ps = peer_selection_clone.lock().await;
+                                                            ps.record_transfer_success(&seeder_str, chunk_size as u64, 100);
+                                                            info!("Updated reputation for peer {} (fallback): successful chunk download ({} bytes)", 
+                                                                  seeder_str, chunk_size);
+                                                        });
+                                                    }
+                                                    
                                                     debug!(
                                                         "Rewarded peer {} for seeding chunk {} of file {}",
                                                         seeder,
@@ -3035,6 +3063,18 @@ async fn run_dht_node(
                                 } => {
                                     // Handle Bitswap query error
                                     error!("❌ Bitswap query {:?} failed: {:?}", query_id, error);
+
+                                    // Update reputation for failed chunk download
+                                    if let Some(failed_peer_id) = query_to_peer.remove(&query_id) {
+                                        let peer_selection_clone = peer_selection.clone();
+                                        let error_str = format!("{:?}", error);
+                                        tokio::spawn(async move {
+                                            let mut ps = peer_selection_clone.lock().await;
+                                            ps.record_transfer_failure(&failed_peer_id, &error_str);
+                                            warn!("Updated reputation for peer {}: failed chunk download - {}", 
+                                                  failed_peer_id, error_str);
+                                        });
+                                    }
 
                                     // Clean up any active downloads that contain this failed query
                                     {
@@ -6909,6 +6949,27 @@ impl DhtService {
         peer_selection.record_transfer_failure(peer_id, error);
     }
 
+    /// Record successful chunk download from a peer (for Bitswap reputation)
+    pub async fn record_chunk_download_success(&self, peer_id: &str, chunk_size: usize) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        // Record as a successful transfer with minimal duration (chunk transfer is fast)
+        // Use 100ms as a default duration for chunk transfers
+        peer_selection.record_transfer_success(peer_id, chunk_size as u64, 100);
+    }
+
+    /// Record failed chunk download from a peer (for Bitswap reputation)
+    pub async fn record_chunk_download_failure(&self, peer_id: &str, error: &str) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        peer_selection.record_transfer_failure(peer_id, error);
+    }
+
+    /// Record successful chunk upload to a peer (for Bitswap reputation)
+    pub async fn record_chunk_upload_success(&self, peer_id: &str, chunk_size: usize) {
+        let mut peer_selection = self.peer_selection.lock().await;
+        // Record as a successful transfer when we serve chunks to others
+        peer_selection.record_transfer_success(peer_id, chunk_size as u64, 100);
+    }
+
     /// Update peer encryption support
     pub async fn set_peer_encryption_support(&self, peer_id: &str, supported: bool) {
         let mut peer_selection = self.peer_selection.lock().await;
@@ -7385,6 +7446,30 @@ impl DhtService {
 
         // Wait for the DHT query to complete
         receiver.await.map_err(|e| e.to_string())?
+    }
+}
+
+/// Process received Bitswap chunk data and assemble complete files (with reputation tracking)
+async fn process_bitswap_chunk_with_reputation(
+    query_id: &beetswap::QueryId,
+    data: &[u8],
+    event_tx: &mpsc::Sender<DhtEvent>,
+    received_chunks: &Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
+    file_transfer_service: &Arc<FileTransferService>,
+    peer_id: Option<String>,
+    peer_selection: Arc<Mutex<PeerSelectionService>>,
+) {
+    // Call the original function
+    process_bitswap_chunk(query_id, data, event_tx, received_chunks, file_transfer_service).await;
+    
+    // Update reputation if we have peer information
+    if let Some(peer_id) = peer_id {
+        let chunk_size = data.len();
+        let peer_selection_clone = peer_selection.clone();
+        tokio::spawn(async move {
+            let mut ps = peer_selection_clone.lock().await;
+            ps.record_transfer_success(&peer_id, chunk_size as u64, 100);
+        });
     }
 }
 

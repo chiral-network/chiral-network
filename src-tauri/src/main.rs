@@ -5918,6 +5918,53 @@ async fn record_transfer_failure(
 }
 
 #[tauri::command]
+async fn record_chunk_download_success(
+    state: State<'_, AppState>,
+    peer_id: String,
+    chunk_size: usize,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.record_chunk_download_success(&peer_id, chunk_size)
+            .await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn record_chunk_download_failure(
+    state: State<'_, AppState>,
+    peer_id: String,
+    error: String,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.record_chunk_download_failure(&peer_id, &error).await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn record_chunk_upload_success(
+    state: State<'_, AppState>,
+    peer_id: String,
+    chunk_size: usize,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        dht.record_chunk_upload_success(&peer_id, chunk_size)
+            .await;
+        Ok(())
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
 async fn get_peer_metrics(
     state: State<'_, AppState>,
 ) -> Result<Vec<peer_selection::PeerMetrics>, String> {
@@ -7155,6 +7202,9 @@ fn main() {
             get_recommended_peers_for_file,
             record_transfer_success,
             record_transfer_failure,
+            record_chunk_download_success,
+            record_chunk_download_failure,
+            record_chunk_upload_success,
             get_peer_metrics,
             report_malicious_peer,
             select_peers_with_strategy,

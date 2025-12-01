@@ -44,6 +44,7 @@
     "@typescript-eslint/eslint-plugin": "^8.45.0",
     "@typescript-eslint/parser": "^8.45.0",
     "autoprefixer": "^10.4.20",
+    "baseline-browser-mapping": "^2.8.32",
     "eslint": "^9.36.0",
     "eslint-plugin-svelte": "^3.12.4",
     "postcss": "^8.4.49",
