@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use suppaftp::FtpStream;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::timeout;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 const DEFAULT_CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks
@@ -179,6 +179,8 @@ pub struct ActiveDownload {
     pub start_time: Instant,
     pub last_progress_update: Instant,
     pub output_path: String,
+    /// ED2K chunk hashes (MD4 hashes for each 9.28MB chunk)
+    pub ed2k_chunk_hashes: Option<Vec<String>>,
 }
 
 pub struct MultiSourceDownloadService {
@@ -428,10 +430,16 @@ impl MultiSourceDownloadService {
         }
 
         // 3. Discover ed2k sources from metadata
+        let mut ed2k_chunk_hashes: Option<Vec<String>> = None;
         if let Some(ed2k_sources) = &metadata.ed2k_sources {
             info!("Found {} ed2k sources for file", ed2k_sources.len());
 
             for ed2k_info in ed2k_sources {
+                // Extract chunk hashes from the first ED2K source that has them
+                if ed2k_chunk_hashes.is_none() {
+                    ed2k_chunk_hashes = ed2k_info.chunk_hashes.clone();
+                }
+
                 // Convert DHT Ed2kSourceInfo to DownloadSource Ed2kSourceInfo
                 available_sources.push(DownloadSource::Ed2k(DownloadEd2kSourceInfo {
                     server_url: ed2k_info.server_url.clone(),
@@ -440,6 +448,7 @@ impl MultiSourceDownloadService {
                     file_name: ed2k_info.file_name.clone(),
                     sources: ed2k_info.sources.clone(),
                     timeout_secs: ed2k_info.timeout,
+                    chunk_hashes: ed2k_info.chunk_hashes.clone(),
                 }));
             }
         }
@@ -502,6 +511,7 @@ impl MultiSourceDownloadService {
             start_time: Instant::now(),
             last_progress_update: Instant::now(),
             output_path,
+            ed2k_chunk_hashes,
         };
 
         // Store download state
@@ -1052,50 +1062,45 @@ impl MultiSourceDownloadService {
                                     data.len()
                                 );
 
-                                // For now, we'll accept partial data if it's the last chunk
-                                let is_last_chunk = {
-                                    let downloads_guard = downloads.read().await;
-                                    if let Some(download) = downloads_guard.get(&file_hash) {
-                                        chunk.chunk_id == (download.chunks.len() - 1) as u32
-                                    } else {
-                                        false
-                                    }
-                                };
+                                // Reject partial data - data integrity is critical
+                                // Partial chunks indicate download corruption or truncation
+                                let error_msg = format!(
+                                    "Chunk size mismatch: expected {}, got {} (partial data rejected)",
+                                    chunk.size,
+                                    data.len()
+                                );
+                                warn!(
+                                    "FTP chunk {} rejected due to size mismatch - marking for retry",
+                                    chunk.chunk_id
+                                );
 
-                                if !is_last_chunk {
-                                    let error_msg = format!(
-                                        "Chunk size mismatch: expected {}, got {}",
-                                        chunk.size,
-                                        data.len()
-                                    );
+                                {
+                                    let mut downloads_guard = downloads.write().await;
+                                    if let Some(download) = downloads_guard.get_mut(&file_hash)
                                     {
-                                        let mut downloads_guard = downloads.write().await;
-                                        if let Some(download) = downloads_guard.get_mut(&file_hash)
-                                        {
-                                            download.failed_chunks.push_back(chunk.chunk_id);
-                                        }
+                                        download.failed_chunks.push_back(chunk.chunk_id);
                                     }
-                                    // Emit chunk failed event via TransferEventBus
-                                    transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
-                                        transfer_id: file_hash.clone(),
-                                        chunk_id: chunk.chunk_id,
-                                        source_id: ftp_url.clone(),
-                                        source_type: SourceType::Ftp,
-                                        failed_at: current_timestamp_ms(),
-                                        error: error_msg.clone(),
-                                        retry_count: 0,
-                                        will_retry: true,
-                                        next_retry_at: None,
-                                    });
-                                    // Also emit legacy internal event
-                                    let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
-                                        file_hash: file_hash.clone(),
-                                        chunk_id: chunk.chunk_id,
-                                        peer_id: ftp_url.clone(),
-                                        error: error_msg.clone(),
-                                    });
-                                    return;
                                 }
+                                // Emit chunk failed event via TransferEventBus
+                                transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                                    transfer_id: file_hash.clone(),
+                                    chunk_id: chunk.chunk_id,
+                                    source_id: ftp_url.clone(),
+                                    source_type: SourceType::Ftp,
+                                    failed_at: current_timestamp_ms(),
+                                    error: error_msg.clone(),
+                                    retry_count: 0,
+                                    will_retry: true,
+                                    next_retry_at: None,
+                                });
+                                // Also emit legacy internal event
+                                let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
+                                    file_hash: file_hash.clone(),
+                                    chunk_id: chunk.chunk_id,
+                                    peer_id: ftp_url.clone(),
+                                    error: error_msg.clone(),
+                                });
+                                return;
                             }
 
                             if let Err((expected, actual)) = verify_chunk_integrity(&chunk, &data) {
@@ -1848,60 +1853,6 @@ impl MultiSourceDownloadService {
         }
     }
 
-    /// Static version of download_ed2k_chunk for use in spawned tasks
-    async fn download_ed2k_chunk_static(
-        ed2k_connections: &Arc<Mutex<HashMap<String, Ed2kClient>>>,
-        server_url: &str,
-        file_hash: &str,
-        ed2k_chunk_id: u32,
-    ) -> Result<Vec<u8>, String> {
-        // Get ed2k client from connection pool
-        let mut ed2k_client = {
-            let mut connections = ed2k_connections.lock().await;
-            connections.remove(server_url).ok_or_else(|| {
-                format!(
-                    "Ed2k client not found in connection pool for {}",
-                    server_url
-                )
-            })?
-        };
-
-        // Calculate expected chunk hash for verification
-        let expected_chunk_hash =
-            Self::get_ed2k_chunk_hash_static(file_hash, ed2k_chunk_id).await?;
-
-        // Download the ed2k chunk
-        let result = ed2k_client
-            .download_chunk(file_hash, ed2k_chunk_id, &expected_chunk_hash)
-            .await;
-
-        // Return client to pool regardless of outcome
-        {
-            let mut connections = ed2k_connections.lock().await;
-            connections.insert(server_url.to_string(), ed2k_client);
-        }
-
-        // Process download result
-        match result {
-            Ok(data) => {
-                // Verify MD4 hash
-                if Self::verify_ed2k_chunk_hash_static(&data, &expected_chunk_hash).await? {
-                    info!(
-                        "Ed2k chunk {} downloaded and verified successfully",
-                        ed2k_chunk_id
-                    );
-                    Ok(data)
-                } else {
-                    Err(format!(
-                        "Ed2k chunk {} hash verification failed",
-                        ed2k_chunk_id
-                    ))
-                }
-            }
-            Err(e) => Err(format!("Ed2k chunk download failed: {:?}", e)),
-        }
-    }
-
     /// Split ed2k chunk into our chunks and store them
     async fn split_and_store_ed2k_chunk(
         &self,
@@ -2051,24 +2002,29 @@ impl MultiSourceDownloadService {
         file_hash: &str,
         ed2k_chunk_id: u32,
     ) -> Result<String, String> {
-        // For now, we'll derive a hash from the file hash and chunk ID
-        // In a real implementation, this should come from ed2k metadata or be calculated
-        //from the actual file content
-        let mut hasher = Md4::new();
-        hasher.update(file_hash.as_bytes());
-        hasher.update(&ed2k_chunk_id.to_le_bytes());
-        let result = hasher.finalize();
-        Ok(hex::encode(result))
-    }
+        // First check if we have stored ED2K chunk hashes from metadata
+        let downloads_guard = self.active_downloads.read().await;
+        if let Some(download) = downloads_guard.get(file_hash) {
+            if let Some(ed2k_hashes) = &download.ed2k_chunk_hashes {
+                if let Some(chunk_hash) = ed2k_hashes.get(ed2k_chunk_id as usize) {
+                    return Ok(chunk_hash.clone());
+                }
+            }
 
-    /// Static version of get_ed2k_chunk_hash
-    async fn get_ed2k_chunk_hash_static(
-        file_hash: &str,
-        ed2k_chunk_id: u32,
-    ) -> Result<String, String> {
-        // For now, we'll derive a hash from the file hash and chunk ID
-        // In a real implementation, this should come from ed2k metadata or be calculated
-        //from the actual file content
+            // Check if we have the actual chunk data and can calculate the real MD4 hash
+            if let Some(completed_chunk) = download.completed_chunks.get(&ed2k_chunk_id) {
+                // Calculate MD4 hash of the actual chunk data
+                let mut hasher = Md4::new();
+                hasher.update(&completed_chunk.data);
+                let result = hasher.finalize();
+                return Ok(hex::encode(result));
+            }
+        }
+        drop(downloads_guard);
+
+        // Fallback: derive a hash from file hash and chunk ID
+        // This should ideally never be reached if ED2K metadata is properly provided
+        warn!("Using fallback ED2K hash derivation for chunk {} of file {}", ed2k_chunk_id, file_hash);
         let mut hasher = Md4::new();
         hasher.update(file_hash.as_bytes());
         hasher.update(&ed2k_chunk_id.to_le_bytes());
@@ -2158,9 +2114,28 @@ impl MultiSourceDownloadService {
         hasher.update(&chunk_id.to_le_bytes());
         let computed = hex::encode(hasher.finalize());
 
-        // For now, always return true since we don't have stored expected hashes
-        // In a real implementation, this should verify against stored chunk hashes
-        Ok(true)
+        // Get the expected hash from stored chunk metadata
+        let downloads_guard = self.active_downloads.read().await;
+        if let Some(download) = downloads_guard.get(file_hash) {
+            // Find the chunk info for this chunk_id
+            if let Some(chunk_info) = download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                let expected_hash = &chunk_info.hash;
+                let matches = computed == *expected_hash;
+
+                if !matches {
+                    debug!(
+                        "Chunk hash verification failed: computed={}, expected={}",
+                        computed, expected_hash
+                    );
+                }
+
+                Ok(matches)
+            } else {
+                Err(format!("No chunk info found for chunk_id {} in file {}", chunk_id, file_hash))
+            }
+        } else {
+            Err(format!("No active download found for file {}", file_hash))
+        }
     }
 
     /// Store chunk data to disk/memory

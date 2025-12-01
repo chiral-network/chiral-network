@@ -127,6 +127,10 @@ pub struct Ed2kSourceInfo {
     /// Connection timeout in seconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+
+    /// ED2K chunk hashes (MD4 hashes for each 9.28MB chunk)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_hashes: Option<Vec<String>>,
 }
 
 /// Information about a BitTorrent download source
