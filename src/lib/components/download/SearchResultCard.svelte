@@ -2,31 +2,38 @@
   import Card from '$lib/components/ui/card.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import { FileIcon, Copy, Download, Server, DollarSign, Globe, Blocks } from 'lucide-svelte';
+  import { FileIcon, Copy, Download, Server, Globe, Blocks } from 'lucide-svelte';
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
   import { files, wallet } from '$lib/stores';
   import { get } from 'svelte/store';
+  import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
   import { paymentService } from '$lib/services/paymentService';
+
+  type TranslateParams = { values?: Record<string, unknown>; default?: string };
+  const tr = (key: string, params?: TranslateParams): string =>
+  $t(key, params);
 
   const dispatch = createEventDispatcher<{ download: FileMetadata; copy: string }>();
 
   export let metadata: FileMetadata;
   export let isBusy = false;
-  export let isBitswap: boolean = false;
 
   let canAfford = true;
   let checkingBalance = false;
   let hashCopied = false;
   let seederCopiedIndex: number | null = null;
-  let showSeedingNotice = false;
+  let magnetCopied = false;
+  let ed2kCopied = false;
+  let ftpCopied = false;
+  let httpCopied = false;
   let showDecryptDialog = false;
   let showDownloadConfirmDialog = false;
   let showPaymentConfirmDialog = false;
   let showSeedersSelection = false;
-  let selectedSeederIndex: number | null = null;
+  let selectedSeederIndex: number | null = 0;
 
   // Use reactive wallet balance from store
   $: userBalance = $wallet.balance;
@@ -39,6 +46,74 @@
   $: createdLabel = metadata?.createdAt
     ? formatRelativeTime(new Date(metadata.createdAt * 1000))
     : null;
+
+
+  // Helper function to determine available protocols for a file
+  $: availableProtocols = (() => {
+    const protocols = [];
+
+    // Check for Bitswap (has CIDs) - comes first
+    if (metadata.cids && metadata.cids.length > 0) {
+      protocols.push({
+        id: 'bitswap',
+        name: 'Bitswap',
+        icon: Blocks,
+        colorClass: 'bg-purple-100 text-purple-800'
+      });
+    }
+
+    // Check for WebRTC (has seeders)
+    if (metadata.seeders && metadata.seeders.length > 0) {
+      protocols.push({
+        id: 'webrtc',
+        name: 'WebRTC',
+        icon: Globe,
+        colorClass: 'bg-blue-100 text-blue-800'
+      });
+    }
+
+    // Check for BitTorrent (has info_hash)
+    if (metadata.infoHash) {
+      protocols.push({
+        id: 'bittorrent',
+        name: 'BitTorrent',
+        icon: Server,
+        colorClass: 'bg-green-100 text-green-800'
+      });
+    }
+
+    // Check for HTTP (has HTTP sources)
+    if (metadata.httpSources && metadata.httpSources.length > 0) {
+      protocols.push({
+        id: 'http',
+        name: 'HTTP',
+        icon: Globe,
+        colorClass: 'bg-gray-100 text-gray-800'
+      });
+    }
+
+    // Check for FTP (has FTP sources)
+    if (metadata.ftpSources && metadata.ftpSources.length > 0) {
+      protocols.push({
+        id: 'ftp',
+        name: 'FTP',
+        icon: Server,
+        colorClass: 'bg-gray-100 text-gray-800'
+      });
+    }
+
+    // Check for ED2K (has ED2K sources)
+    if (metadata.ed2kSources && metadata.ed2kSources.length > 0) {
+      protocols.push({
+        id: 'ed2k',
+        name: 'ED2K',
+        icon: Server,
+        colorClass: 'bg-orange-100 text-orange-800'
+      });
+    }
+
+    return protocols;
+  })();
 
   // Check if user is already seeding this file
   $: isSeeding = !!get(files).find(f => f.hash === metadata.fileHash && f.status === 'seeding');
@@ -63,13 +138,61 @@
     });
   }
 
+  function copyMagnetLink(link: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      magnetCopied = true;
+      dispatch('copy', link);
+      setTimeout(() => (magnetCopied = false), 1500);
+    });
+  }
+
+  function copyEd2kLink(link: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      ed2kCopied = true;
+      dispatch('copy', link);
+      setTimeout(() => (ed2kCopied = false), 1500);
+    });
+  }
+
+  function copyFtpLink(link: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      ftpCopied = true;
+      dispatch('copy', link);
+      setTimeout(() => (ftpCopied = false), 1500);
+    });
+  }
+
+  function copyHttpLink(link: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      httpCopied = true;
+      dispatch('copy', link);
+      setTimeout(() => (httpCopied = false), 1500);
+    });
+  }
+
   async function handleDownload() {
+    // Skipping payment confirmation for now
     // Always show initial download confirmation dialog first
     // showDownloadConfirmDialog = true;
+
     const freshSeeders = await dhtService.getSeedersForFile(metadata.fileHash);
-    metadata.seeders = freshSeeders; 
-    console.log("🔍 DEBUG: Seeders fetched:", freshSeeders);
-    showSeedersSelection = true
+
+    // Also check stores for WebRTC seeder addresses
+    const existingFile = get(files).find(f => f.hash === metadata.fileHash);
+    const webrtcSeeders = existingFile?.seederAddresses ?? [];
+
+    // Combine DHT seeders with WebRTC seeders
+    const allSeeders = [...new Set([...freshSeeders, ...webrtcSeeders])];
+    metadata.seeders = allSeeders;
+    console.log("🔍 DEBUG: Seeders fetched from DHT:", freshSeeders);
+    console.log("🔍 DEBUG: WebRTC seeders from store:", webrtcSeeders);
+    console.log("🔍 DEBUG: All seeders combined:", allSeeders);
+
+    // Bitswap note: manual seeder selection was for demo purposes to show
+    // peer-selection capability; now switching to intelligent peer selection.
+    // showSeedersSelection = true
+
+    proceedWithDownload();
 
   }
 
@@ -117,7 +240,8 @@
     showPaymentConfirmDialog = false;
 
     if (!paymentService.isValidWalletAddress(metadata.uploaderAddress)) {
-      showToast('Cannot process payment: uploader wallet address is missing or invalid', 'error');
+      // showToast('Cannot process payment: uploader wallet address is missing or invalid', 'error');
+      showToast(tr('toasts.download.payment.invalidAddress'), 'error');
       return;
     }
 
@@ -127,23 +251,28 @@
         metadata.fileHash,
         metadata.fileName,
         metadata.fileSize,
-        metadata.uploaderAddress,
+        metadata.uploaderAddress || '',
         seederPeerId
       );
 
       if (!paymentResult.success) {
         const errorMessage = paymentResult.error || 'Unknown error';
-        showToast(`Payment failed: ${errorMessage}`, 'error');
+        // showToast(`Payment failed: ${errorMessage}`, 'error');
+        showToast(tr('toasts.download.payment.failed', { values: { error: errorMessage } }), 'error');
         return;
       }
 
       if (paymentResult.transactionHash) {
         showToast(
-          `Payment successful! Transaction: ${paymentResult.transactionHash.substring(0, 10)}...`,
+          // `Payment successful! Transaction: ${paymentResult.transactionHash.substring(0, 10)}...`,
+          tr('toasts.download.payment.successWithHash', {
+            values: { hash: paymentResult.transactionHash.substring(0, 10) }
+          }),
           'success'
         );
       } else {
-        showToast('Payment successful!', 'success');
+        // showToast('Payment successful!', 'success');
+        showToast(tr('toasts.download.payment.success'), 'success');
       }
 
       // Refresh balance after payment to reflect the deduction
@@ -154,7 +283,8 @@
     } catch (error: any) {
       console.error('Payment processing failed:', error);
       const message = error?.message || error?.toString() || 'Unknown error';
-      showToast(`Payment failed: ${message}`, 'error');
+      // showToast(`Payment failed: ${message}`, 'error');
+      showToast(tr('toasts.download.payment.failed', { values: { error: message } }), 'error');
     }
   }
 
@@ -203,8 +333,6 @@
 
   // Check balance when component mounts
   onMount(() => {
-    console.log("💰 SearchResultCard metadata:", metadata);
-    console.log("💰 Price from metadata:", metadata.price);
     checkBalance();
   });
 </script>
@@ -212,19 +340,19 @@
 <Card class="p-5 space-y-5">
   <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
     <div class="flex items-start gap-3">
-      <div class="mt-1 h-9 w-9 rounded-md bg-muted flex items-center justify-center">
-        <FileIcon class="h-5 w-5 text-muted-foreground" />
+      <div class="w-12 h-12 rounded-md bg-muted flex items-center justify-center">
+        <FileIcon class="h-6 w-6 text-muted-foreground" />
       </div>
-      <div class="space-y-1">
+      <div class="flex-1">
         <h3 class="text-lg font-semibold break-all">{metadata.fileName}</h3>
-        <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <span>{formatFileSize(metadata.fileSize)}</span>
+        <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mt-1">
           {#if createdLabel}
-            <span>•</span>
             <span>Published {createdLabel}</span>
           {/if}
           {#if metadata.mimeType}
-            <span>•</span>
+            {#if createdLabel}
+              <span>•</span>
+            {/if}
             <span>{metadata.mimeType}</span>
           {/if}
         </div>
@@ -232,56 +360,159 @@
     </div>
 
     <div class="flex items-center gap-2 flex-wrap">
-      {#if metadata.cids && metadata.cids.length > 0}
-        <Badge class="bg-purple-500/10 text-purple-600 dark:text-purple-300 border border-purple-500/30">
-          <Blocks class="h-3.5 w-3.5 mr-1" />
-          Bitswap
+      {#each availableProtocols as protocol}
+        <Badge class={protocol.colorClass}>
+          <svelte:component this={protocol.icon} class="h-3.5 w-3.5 mr-1" />
+          {protocol.name}
         </Badge>
-      {:else}
-        <Badge class="bg-blue-500/10 text-blue-600 dark:text-blue-300 border border-blue-500/30">
-          <Globe class="h-3.5 w-3.5 mr-1" />
-          WebRTC
-        </Badge>
-      {/if}
-      <Badge class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border border-emerald-500/30">
-        <Server class="h-3.5 w-3.5 mr-1" />
-        {seederCount} {seederCount === 1 ? 'Seeder' : 'Seeders'}
-      </Badge>
-      {#if metadata.price && metadata.price > 0}
-        <Badge class="bg-blue-500/10 text-blue-600 dark:text-blue-300 border border-blue-500/30">
-          <DollarSign class="h-3.5 w-3.5 mr-1" />
-          {metadata.price} Chiral
-        </Badge>
-      {:else}
-        <Badge class="bg-gray-500/10 text-gray-600 dark:text-gray-300 border border-gray-500/30">
-          Free
-        </Badge>
-      {/if}
+      {/each}
     </div>
   </div>
 
   <div class="grid gap-4 md:grid-cols-2">
+    <!-- Left Column: All technical identifiers and details -->
     <div class="space-y-3">
       <div>
-        <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">File hash</p>
-        <div class="flex items-center gap-2">
-          <code class="text-sm font-mono break-all flex-1">{metadata.fileHash}</code>
-          <Button variant="outline" size="icon" on:click={copyHash} class="h-8 w-8">
-            <Copy class="h-4 w-4" />
+        <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Merkle hash</p>
+        <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 py-1 px-1.5 overflow-hidden">
+          <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{metadata.fileHash}</code>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="h-7 w-7"
+            on:click={copyHash}
+          >
+            <Copy class="h-3.5 w-3.5" />
             <span class="sr-only">Copy hash</span>
           </Button>
         </div>
         {#if hashCopied}
-          <p class="mt-1 text-xs text-emerald-600">Copied!</p>
+          <p class="ml-6 text-xs text-emerald-600">Hash copied</p>
         {/if}
       </div>
 
+      {#if metadata.infoHash}
+        {@const magnetLink = `magnet:?xt=urn:btih:${metadata.infoHash}${metadata.trackers && metadata.trackers.length > 0 ? '&tr=' + metadata.trackers.join('&tr=') : ''}`}
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Magnet Link</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{magnetLink}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              on:click={() => copyMagnetLink(magnetLink)}
+            >
+              <Copy class="h-3.5 w-3.5" />
+              <span class="sr-only">Copy magnet link</span>
+            </Button>
+          </div>
+          {#if magnetCopied}
+            <p class="ml-6 text-xs text-emerald-600">Magnet link copied</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if metadata.ed2kSources && metadata.ed2kSources.length > 0}
+        {@const ed2kSource = metadata.ed2kSources[0]}
+        {@const ed2kLink = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`}
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">ED2K Link</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{ed2kLink}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              on:click={() => copyEd2kLink(ed2kLink)}
+            >
+              <Copy class="h-3.5 w-3.5" />
+              <span class="sr-only">Copy ED2K link</span>
+            </Button>
+          </div>
+          {#if ed2kCopied}
+            <p class="ml-6 text-xs text-emerald-600">ED2K link copied</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if metadata.ftpSources && metadata.ftpSources.length > 0}
+        {@const ftpSource = metadata.ftpSources[0]}
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">FTP Link</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{ftpSource.url}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              on:click={() => copyFtpLink(ftpSource.url)}
+            >
+              <Copy class="h-3.5 w-3.5" />
+              <span class="sr-only">Copy FTP link</span>
+            </Button>
+          </div>
+          {#if ftpCopied}
+            <p class="ml-6 text-xs text-emerald-600">FTP link copied</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if metadata.httpSources && metadata.httpSources.length > 0}
+        {@const httpSource = metadata.httpSources[0]}
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">HTTP Link</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{httpSource.url}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              on:click={() => copyHttpLink(httpSource.url)}
+            >
+              <Copy class="h-3.5 w-3.5" />
+              <span class="sr-only">Copy HTTP link</span>
+            </Button>
+          </div>
+          {#if httpCopied}
+            <p class="ml-6 text-xs text-emerald-600">HTTP link copied</p>
+          {/if}
+        </div>
+      {/if}
+
+      <div class="space-y-3">
+        <p class="text-xs uppercase tracking-wide text-muted-foreground">Details</p>
+        <ul class="space-y-2 text-sm text-foreground">
+          <li class="flex items-center justify-between">
+            <span class="text-muted-foreground">Seeder count</span>
+            <span>{seederCount}</span>
+          </li>
+          <li class="flex items-center justify-between">
+            <span class="text-muted-foreground">Size</span>
+            <span>{formatFileSize(metadata.fileSize)}</span>
+          </li>
+          <li class="flex items-center justify-between">
+            <span class="text-muted-foreground">Price</span>
+            <span class="font-semibold {metadata.price && metadata.price > 0 ? 'text-emerald-600' : 'text-muted-foreground'}">
+              {#if metadata.price && metadata.price > 0}
+                {metadata.price} Chiral
+              {:else}
+                Free
+              {/if}
+            </span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Right Column: Available peers -->
+    <div class="space-y-3">
       {#if metadata.seeders?.length}
         <div class="space-y-2">
           <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
           <div class="space-y-2 max-h-40 overflow-auto pr-1">
             {#each seederIds as seeder, index}
-              <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2">
+              <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden">
                 <div class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
                 <div class="space-y-1 flex-1">
                   <code class="text-xs font-mono break-words block">{seeder.address}</code>
@@ -306,36 +537,11 @@
           </div>
         </div>
       {:else}
-        <p class="text-xs text-muted-foreground italic">No seeders reported yet for this file.</p>
+        <div class="space-y-2">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
+          <p class="text-xs text-muted-foreground italic">No seeders reported yet for this file.</p>
+        </div>
       {/if}
-    </div>
-
-    <div class="space-y-3">
-      <p class="text-xs uppercase tracking-wide text-muted-foreground">Details</p>
-      <ul class="space-y-2 text-sm text-foreground">
-        <li class="flex items-center justify-between">
-          <span class="text-muted-foreground">Seeder count</span>
-          <span>{seederCount}</span>
-        </li>
-        <li class="flex items-center justify-between">
-          <span class="text-muted-foreground">Estimated size</span>
-          <span>{formatFileSize(metadata.fileSize)}</span>
-        </li>
-        <li class="flex items-center justify-between">
-          <span class="text-muted-foreground">Price</span>
-          <span class="font-semibold {metadata.price && metadata.price > 0 ? 'text-emerald-600' : 'text-muted-foreground'}">
-            {#if metadata.price && metadata.price > 0}
-              {metadata.price} Chiral
-            {:else}
-              Free
-            {/if}
-          </span>
-        </li>
-        <li class="flex items-center justify-between">
-          <span class="text-muted-foreground">Hash prefix</span>
-          <span>{metadata.fileHash.slice(0, 10)}…</span>
-        </li>
-      </ul>
     </div>
   </div>
 

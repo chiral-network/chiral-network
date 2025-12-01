@@ -151,6 +151,9 @@
         "title": "Estado del Relay",
         "enabled": "AutoRelay Activado",
         "disabled": "AutoRelay Desactivado",
+        "timeline": "AutoRelay timeline",
+        "enabledAt": "Last enabled",
+        "disabledAt": "Last disabled",
         "noPeer": "No conectado al relay",
         "activePeer": "Relay Activo",
         "status": "Estado",
@@ -159,6 +162,8 @@
         "renewals": "Reservas renovadas",
         "evictions": "Reservas desalojadas",
         "never": "Nunca",
+        "neverEnabled": "Never enabled",
+        "neverDisabled": "Never disabled",
         "noEvictions": "Sin desalojos",
         "accepted": "Reserva aceptada",
         "pending": "Pendiente",
@@ -307,12 +312,16 @@
   "language.chinese": "中文",
   "language.korean": "한국어",
   "language.russian": "Русский",
+  "language.portuguese": "Português",
+  "language.hindi": "हिन्दी",
+  "language.french": "Français",
+  "language.bengali": "বাংলা",
+  "language.arabic": "العربية",
   "nav": {
     "menu": "Menú",
     "download": "Descargar",
     "upload": "Subir",
     "torrents": "Torrents",
-    "messages": "Mensajes",
     "network": "Red",
     "relay": "Relé",
     "mining": "Minería",
@@ -334,6 +343,8 @@
   "privacy.proxyHint": "Ingresa la dirección del proxy SOCKS5 (ej. Tor en 127.0.0.1:9050)",
   "privacy.anonymousMode": "Modo anónimo (ocultar toda información identificativa)",
   "privacy.shareAnalytics": "Compartir analíticas de uso anónimas",
+  "privacy.autoLockWallet": "Bloquear automáticamente la wallet tras inactividad",
+  "privacy.autoLockWalletHint": "Cierra sesión automáticamente tras una hora sin actividad.",
   "notifications.title": "Notificaciones",
   "notifications.enable": "Habilitar notificaciones de escritorio",
   "notifications.notifyComplete": "Notificar cuando finalicen las descargas",
@@ -404,6 +415,7 @@
     "balance": "Saldo",
     "totalEarned": "Total ganado",
     "totalSpent": "Total gastado",
+    "totalReceived": "Total recibido",
     "address": "Dirección Chiral",
     "qrModal": {
       "title": "Tu dirección Chiral",
@@ -448,6 +460,12 @@
       "noDetails": "No hay detalles de transacciones pendientes disponibles.",
       "count": "{count} transacción{count !== 1 ? 'es' : ''} pendiente{count !== 1 ? 's' : ''}",
       "none": "Transacciones pendientes"
+    },
+    "fees": {
+      "low": "Baja",
+      "market": "Mercado",
+      "fast": "Rápida",
+      "estimated": "Tarifa estimada"
     }
   },
   "transactions": {
@@ -460,6 +478,19 @@
     "item": {
       "from": "De",
       "to": "Para"
+    },
+    "receipt": {
+      "title": "Recibo de transacción",
+      "from": "De",
+      "to": "Para",
+      "hash": "Hash de transacción",
+      "blockNumber": "Número de bloque",
+      "gasInfo": "Información de gas",
+      "gasUsed": "Gas usado",
+      "gasPrice": "Precio del gas",
+      "fee": "Tarifa de transacción",
+      "timestamp": "Marca de tiempo",
+      "close": "Cerrar recibo"
     },
     "searchPlaceholder": "Buscar por dirección, descripción o ID..."
   },
@@ -640,10 +671,6 @@
     },
     "exportFailed": "La exportación falló. Inténtalo de nuevo.",
     "createAccount": "No se pudo crear la cuenta: {error}"
-  },
-  "messages": {
-    "copied": "¡Copiado!",
-    "failed": "¡Fallido!"
   },
   "analytics": {
     "title": "Panel de análisis",
@@ -1152,61 +1179,12 @@
       "noRelaysDesc": "Comienza a ejecutar un servidor relay para aparecer en la clasificación"
     }
   },
-  "upload": {
-    "title": "Subir archivos",
-    "subtitle": "Comparte tus archivos en la Red Chiral",
-    "dropFiles": "Suelta archivos aquí para compartir",
-    "dropFilesHint": "Arrastra y suelta archivos en cualquier lugar de esta tarjeta, o haz clic en \"Agregar archivos\" abajo",
-    "addFiles": "Agregar archivos",
-    "sharedFiles": "Archivos compartidos",
-    "files": "archivos",
-    "total": "total",
-    "tip": "Consejo: También puedes arrastrar y soltar archivos aquí para agregarlos",
-    "addMoreFiles": "Agregar más archivos",
-    "supportedFormats": "Admite imágenes, videos, audio, documentos, archivos de código y más",
-    "supportedFormatsDesktop": "La aplicación de escritorio admite imágenes, videos, audio, documentos, archivos de código y más",
-    "hash": "Hash",
-    "seeder": "semilla{count, plural, =1 {} other {s}}",
-    "leecher": "descargador{count, plural, =1 {} other {es}}",
-    "seeding": "Compartiendo",
-    "copyHash": "Copiar hash",
-    "hashCopied": "¡Hash copiado!",
-    "stopSharing": "Dejar de compartir",
-    "noFilesShared": "Aún no hay archivos compartidos",
-    "addFilesHint2": "Agrega archivos para empezar a compartir en la red",
-    "duplicateSkipped": "{count, plural, one {Este archivo ya se está compartiendo. Duplicado omitido.} other {Se omitieron {count} archivos duplicados.}}",
-    "filesAdded": "{count, plural, one {Se agregó 1 archivo a la lista de compartidos.} other {Se agregaron {count} archivos a la lista de compartidos.}}",
-    "fileFailed": "No se pudo compartir {name}: {error}",
-    "storage": {
-      "title": "Almacenamiento local",
-      "available": "{space} GB libres",
-      "unknown": "Espacio no disponible",
-      "lowBadge": "Espacio bajo",
-      "okBadge": "Saludable",
-      "unknownBadge": "Desconocido",
-      "refresh": "Actualizar",
-      "lastChecked": "Actualizado {time}",
-      "error": "No se pudo comprobar el espacio en disco",
-      "checking": "Comprobando...",
-      "lowDescription": "El espacio libre bajo puede impedir compartir archivos nuevos."
-    },
-    "encryption": {
-      "title": "Compartir Cifrado",
-      "subtitle": "Compartir archivos cifrados para destinatarios específicos",
-      "enableForRecipient": "Habilitar compartir cifrado para destinatario específico",
-      "recipientPublicKey": "Clave Pública del Destinatario",
-      "publicKeyPlaceholder": "Ingrese la clave pública X25519 del destinatario (64 caracteres hexadecimales)",
-      "publicKeyHint": "Ingrese la clave pública X25519 del destinatario (formato hexadecimal, 64 caracteres). El archivo se cifrará para que solo ellos puedan descifrarlo. Déjelo vacío para cifrar para usted mismo.",
-      "invalidPublicKey": "⚠️ Formato de clave pública inválido. Debe tener 64 caracteres hexadecimales.",
-      "encryptedBadge": "Cifrado"
-    }
-  },
   "download": {
     "title": "Descargar archivos",
     "subtitle": "Descarga archivos de la Red Chiral usando su hash",
     "addNew": "Agregar nueva descarga",
-    "addNewSubtitle": "Introduce un hash de archivo para buscarlo y descargarlo desde la red",
-    "placeholder": "Introduce el hash del archivo (p. ej., QmZ4tDuvesekqMD...)",
+    "addNewSubtitle": "Introduce un hash Merkle o CID para iniciar una nueva descarga",
+    "placeholder": "Introduce hash Merkle o CID",
     "searchByHash": "Buscar por hash",
     "searchByName": "Buscar por nombre",
     "autoClear": "Limpieza automática",
@@ -1241,7 +1219,7 @@
       "noFailed": "No hay descargas fallidas."
     },
     "file": {
-      "hash": "Hash",
+      "hash": "Hash Merkle",
       "queue": "Cola",
       "progress": "Progreso"
     },
@@ -1261,7 +1239,7 @@
       "retry": "Reintentar"
     },
     "notifications": {
-      "enterHash": "Por favor introduce un hash de archivo",
+      "enterHash": "Por favor introduce un hash Merkle o CID",
       "alreadyExists": "El archivo ya existe en la lista de descargas",
       "searching": "Buscando archivo...",
       "notFound": "Archivo no encontrado, verifica el hash",
@@ -1329,6 +1307,7 @@
     "dropFilesHint": "Arrastra y suelta archivos en cualquier lugar de esta tarjeta, o haz clic en \"Agregar archivos\" abajo",
     "addFiles": "Agregar archivos",
     "sharedFiles": "Archivos compartidos",
+    "file": "archivo",
     "files": "archivos",
     "total": "total",
     "tip": "Consejo: También puedes arrastrar y soltar archivos aquí para agregarlos",
@@ -1339,8 +1318,8 @@
     "seeder": "semilla{count, plural, =1 {} other {s}}",
     "leecher": "descargador{count, plural, =1 {} other {es}}",
     "seeding": "Compartiendo",
-    "copyHash": "Copiar hash",
-    "hashCopied": "¡Hash copiado!",
+    "copyHash": "Copiar hash Merkle",
+    "hashCopied": "¡Hash Merkle copiado!",
     "stopSharing": "Dejar de compartir",
     "noFilesShared": "Aún no hay archivos compartidos",
     "addFilesHint2": "Agrega archivos para empezar a compartir en la red",
@@ -1384,12 +1363,9 @@
     "storedLocally": "Archivos almacenados localmente. Inicia la red DHT para compartir con otros.",
     "uploadError": "Error al procesar archivos soltados. Por favor intenta de nuevo o usa el botón \"Agregar archivos\".",
     "fileManagementDesktopOnly": "La gestión de archivos solo está disponible en la aplicación de escritorio",
-    "fileUpdated": "{name} ya existe; actualizado a v{version}",
-    "fileUploadedNew": "{name} subido como v{version} (archivo nuevo)",
-    "hashCopiedClipboard": "¡Hash del archivo copiado al portapapeles!",
-    "noVersionHistory": "No se encontró historial de versiones para este archivo",
-    "versionHistoryTitle": "Historial de versiones para {name}:\n{list}",
-    "versionHistoryError": "Error al cargar el historial de versiones",
+    "fileUpdated": "{name} ya existe y ha sido actualizado",
+    "fileUploadedNew": "{name} subido exitosamente",
+    "hashCopiedClipboard": "¡Hash Merkle copiado al portapapeles!",
     "desktopAppRequired": "Se Requiere Aplicación de Escritorio",
     "storageMonitoringDesktopOnly": "El monitoreo de almacenamiento requiere la aplicación de escritorio",
     "dropFilesHere": "✨ ¡Suelta archivos aquí!",
@@ -1402,26 +1378,14 @@
     "fileUploadDesktopApp": "La subida de archivos requiere la aplicación de escritorio",
     "downloadDesktopApp": "Descarga la versión de escritorio para subir y compartir archivos",
     "desktopManagementRequired": "Se requiere aplicación de escritorio para gestión de archivos",
-    "versionHistoryTooltip": "v{version} - Haz clic para ver historial de versiones",
     "encryptedEndToEnd": "Este archivo está cifrado de extremo a extremo",
     "active": "Activo",
-    "hashLabel": "Hash:",
+    "hashLabel": "Hash Merkle:",
     "priceTooltip": "Precio calculado dinámicamente basado en el poder de hash de la red",
     "storedLocallyBadge": "Almacenado Localmente",
     "fileManagementTooltip": "La gestión de archivos requiere aplicación de escritorio",
     "fileManagementWebNotAvailable": "Gestión de archivos no disponible en versión web",
     "fileDialogError": "Error al abrir el diálogo de archivos"
-  },
-  "messages": {
-    "title": "Mensajes",
-    "subtitle": "Comunícate de forma segura con tus pares.",
-    "conversations": "Contactos",
-    "searchPlaceholder": "Buscar contactos...",
-    "inputPlaceholder": "Escribe un mensaje cifrado...",
-    "selectConversation": "Selecciona una conversación para comenzar a enviar mensajes",
-    "peer": "Par",
-    "endToEndEncrypted": "Cifrado de extremo a extremo",
-    "refreshPeerList": "Actualizar lista de pares"
   },
   "torrent": {
     "title": "Torrents",
@@ -1465,6 +1429,199 @@
     },
     "clipboard": {
       "copied": "¡Copiado al portapapeles!"
+    }
+  },
+  "blockchain": {
+    "title": "Explorador de blockchain",
+    "subtitle": "Consulta bloques, transacciones y saldos de cuentas en la Red Chiral",
+    "refresh": "Actualizar",
+    "refreshed": "Datos actualizados",
+    "copied": "Copiado al portapapeles",
+    "stats": {
+      "totalBlocks": "Bloques totales",
+      "hashrate": "Tasa de hash de la red",
+      "difficulty": "Dificultad",
+      "peers": "Pares de la red"
+    },
+    "tabs": {
+      "blocks": "Bloques recientes",
+      "search": "Buscar",
+      "stats": "Verificador de saldo"
+    },
+    "blocks": {
+      "latest": "Bloques recientes",
+      "noBlocks": "No se encontraron bloques"
+    },
+    "sync": {
+      "syncing": "Sincronizando",
+      "current": "Bloque actual",
+      "highest": "Bloque más alto",
+      "remaining": "Restante",
+      "eta": "ETA",
+      "complete": "Sincronización completa"
+    },
+    "search": {
+      "title": "Buscar en la blockchain",
+      "address": "Dirección",
+      "transaction": "Transacción",
+      "block": "Bloque",
+      "emptyQuery": "Introduce un término de búsqueda",
+      "error": "La búsqueda falló: {error}",
+      "unknownError": "Error desconocido",
+      "invalidBlock": "Número de bloque no válido",
+      "notFound": "No encontrado",
+      "addressDetails": "Detalles de la dirección",
+      "addressLabel": "Dirección",
+      "balance": "Saldo",
+      "txDetails": "Detalles de la transacción",
+      "status": "Estado",
+      "blockNumber": "Número de bloque",
+      "from": "Desde",
+      "to": "Hacia",
+      "value": "Valor",
+      "blockDetails": "Detalles del bloque",
+      "hash": "Hash",
+      "timestamp": "Marca de tiempo"
+    },
+    "balance": {
+      "checker": "Verificador de saldo",
+      "address": "Dirección",
+      "check": "Consultar saldo",
+      "result": "Saldo",
+      "emptyAddress": "Introduce una dirección",
+      "error": "No se pudo comprobar el saldo: {error}",
+      "errorLabel": "Error"
+    },
+    "error": {
+      "fetchBlocks": "Error al obtener los bloques"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "¡Copiado!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "No se encontraron bloques. Inicia la minería para crear bloques.",
+      "fetchError": "No se pudieron obtener los bloques: {error}"
+    },
+    "settings": {
+      "updated": "¡Configuración actualizada!",
+      "networkingError": "La configuración se guardó, pero la actualización de red falló",
+      "proxyRelayWarning": "Agrega al menos un retransmisor proxy de confianza antes de habilitar Ocultar mi IP."
+    },
+    "analytics": {
+      "direction": {
+        "upload": "Subida",
+        "download": "Descarga"
+      },
+      "bandwidthWarning": "Advertencia de límite de {direction}: {used} GB consumidos ({percent}% de {cap} GB).",
+      "bandwidthTitle": "Advertencia de límite de {direction}"
+    },
+    "upload": {
+      "loginRequired": "Inicia sesión en tu cuenta antes de subir archivos",
+      "verifyAccountFailed": "No se pudo verificar el estado de la cuenta. Intenta iniciar sesión nuevamente.",
+      "dhtDisconnected": "La red DHT no está conectada. Inicia la red DHT antes de subir archivos.",
+      "fileSuccess": "{name} se subió correctamente",
+      "torrentSeeding": "{name} ahora está compartiendo como torrent"
+    },
+    "network": {
+      "signalingConnected": "Conectado al servidor de señalización",
+      "signalingError": "No se pudo conectar al servidor de señalización para las pruebas en modo web",
+      "peerAddressRequired": "Introduce una dirección de par",
+      "dhtRequired": "DHT no conectado. Inicia DHT primero.",
+      "alreadyConnected": "El par ya está conectado",
+      "connecting": "Conectando con el par mediante DHT...",
+      "connectionSuccess": "¡Conexión exitosa!",
+      "connectionFailed": "Conexión fallida. El par puede estar inaccesible o la dirección es inválida.",
+      "connectError": "No se pudo conectar con el par: {error}",
+      "signalingMissing": "Servidor de señalización no conectado. Inicia DHT primero.",
+      "peerNotFound": "Par {peer} no encontrado entre los pares descubiertos",
+      "messageReceived": "Recibido del par: {message}",
+      "webrtcConnected": "¡Conexión con el par exitosa!",
+      "webrtcFailed": "Conexión con el par fallida",
+      "dataChannelOpen": "Canal de datos abierto: ¡ya puedes enviar mensajes!",
+      "dataChannelClosed": "Canal de datos cerrado",
+      "webrtcError": "Error de WebRTC: {error}",
+      "webrtcConnecting": "Conectando con el par: {peer}",
+      "webrtcCreateError": "No se pudo crear la conexión: {error}",
+      "noConnection": "No hay conexión WebRTC activa",
+      "messageSent": "Mensaje de prueba enviado: {message}",
+      "sendError": "No se pudo enviar el mensaje: {error}",
+      "gethInstalled": "Geth ya está instalado",
+      "gethDownloadError": "No se pudo descargar Geth: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "No se puede procesar el pago: falta o es inválida la dirección del monedero del cargador",
+        "failed": "Pago fallido: {error}",
+        "successWithHash": "¡Pago exitoso! Transacción: {hash}...",
+        "success": "¡Pago exitoso!"
+      }
+    },
+    "transactions": {
+      "copied": "{label} copiado al portapapeles",
+      "copyError": "No se pudo copiar {label}",
+      "exported": "Transacción exportada"
     }
   }
 }

@@ -1,0 +1,1783 @@
+{
+  "settings.title": "الإعدادات",
+  "settings.subtitle": "قم بتكوين تفضيلات شبكة Chiral الخاصة بك",
+  "settings.autorelay.enable": "تفعيل AutoRelay (Circuit Relay v2)",
+  "settings.autorelay.relays": "عُقد الترحيل المفضلة",
+  "settings.autorelay.description": "أدخِل عناوين عُقد الترحيل (عنوان واحد في كل سطر). اتركه فارغًا لاستخدام عُقد التمهيد (bootstrap).",
+  "settings.searchPlaceholder": "ابحث في الإعدادات...",
+  "settings.diagnostics.title": "التشخيص",
+  "settings.diagnostics.description": "شغِّل فحوصات البيئة والتخزين والاتصال.",
+  "settings.diagnostics.run": "تشغيل التشخيص",
+  "settings.diagnostics.running": "جارٍ التشغيل...",
+  "settings.diagnostics.environment": "البيئة",
+  "settings.diagnostics.i18nStorage": "تخزين اللغة",
+  "settings.diagnostics.bootstrapNodes": "عُقد التمهيد (Bootstrap)",
+  "settings.diagnostics.privacyConfig": "تهيئة توجيه الخصوصية",
+  "settings.diagnostics.privacyNeedsTrusted": "أضِف مرحِّل بروكسي موثوقًا واحدًا على الأقل عند تفعيل وضع الخصوصية.",
+  "settings.diagnostics.copyReport": "نسخ التقرير",
+  "settings.diagnostics.copied": "تم نسخ بيانات التشخيص",
+  "settings.diagnostics.copyFailed": "فشل النسخ",
+  "settings.diagnostics.resultsTitle": "النتائج",
+  "badges.unsaved": "تغييرات غير محفوظة",
+  "storage.title": "التخزين",
+  "storage.location": "موقع التخزين",
+  "storage.locationPick": "اختر موقع التخزين",
+  "storage.selectLocationTitle": "تحديد موقع التخزين",
+  "storage.enterPathPrompt": "أدخِل مسار التخزين",
+  "storage.browserNoPicker": "أداة اختيار الملفات من Tauri غير متاحة في المتصفّح",
+  "storage.maxSize": "الحد الأقصى لحجم التخزين (غيغابايت)",
+  "storage.cleanupThreshold": "نسبة حد التنظيف التلقائي (%)",
+  "storage.enableCleanup": "تفعيل التنظيف التلقائي عند امتلاء مساحة التخزين",
+  "network": {
+    "title": "الشبكة",
+    "subtitle": "راقب صحة الشبكة واكتشف الأقران",
+    "nodeStatus": "حالة عقدة Chiral",
+    "status": {
+      "notInstalled": "غير مثبت",
+      "downloading": "جارٍ التنزيل...",
+      "starting": "جارٍ التشغيل...",
+      "connecting": "جارٍ الاتصال...",
+      "connected": "متصل",
+      "disconnected": "غير متصل"
+    },
+    "download": {
+      "progress": "التقدّم",
+      "notFound": "لم يتم العثور على الملف التنفيذي لعقدة Chiral",
+      "prompt": "قم بتنزيل ملف Core-Geth لتشغيل عقدة محلية",
+      "button": "تنزيل عقدة Chiral (~50 ميغابايت)",
+      "starting": "جارٍ بدء التنزيل...",
+      "currentProtocol": "البروتوكول الحالي",
+      "changeProtocol": "تغيير البروتوكول"
+    },
+    "startingNode": "جارٍ تشغيل عقدة Chiral...",
+    "pleaseWait": "يرجى الانتظار، قد يستغرق ذلك بعض الوقت.",
+    "notRunning": "عقدة Chiral غير قيد التشغيل",
+    "startNode": "تشغيل عقدة Chiral",
+    "chiralPeers": "أقران Chiral",
+    "chainId": "معرّف السلسلة",
+    "nodeAddress": "عنوان العقدة",
+    "copied": "تم النسخ!",
+    "copy": "نسخ",
+    "stopNode": "إيقاف عقدة Chiral",
+
+    "geth": {
+      "title": "دورة حياة العقدة",
+      "subtitle": "راقب التثبيت ووقت التشغيل والسجلات لعقدة Geth المدمجة.",
+      "refresh": "تحديث الحالة",
+      "desktopOnly": "متاح في تطبيق سطح المكتب فقط.",
+      "installed": "الملف التنفيذي",
+      "installedYes": "مثبّت",
+      "installedNo": "مفقود",
+      "binaryMissing": "مسار الملف التنفيذي غير متاح",
+      "running": "وقت التشغيل",
+      "runningYes": "قيد التشغيل",
+      "runningNo": "متوقف",
+      "versionUnknown": "الإصدار غير متوفر",
+      "dataDir": "دليل البيانات",
+      "dataDirMissing": "المجلد غير موجود",
+      "logHeading": "السجلات الحديثة",
+      "logEmpty": "لا توجد سجلات بعد.",
+      "logUnavailable": "ملف السجلات غير موجود.",
+      "logTruncated": "عرض آخر {count} سطرًا.",
+      "errorGeneric": "تعذّر تحميل حالة Geth.",
+      "lastUpdated": "تم التحديث في {time}"
+    },
+
+    "dht": {
+      "title": "شبكة DHT",
+      "notConnected": "DHT غير متصل",
+      "connectionError": "خطأ في الاتصال",
+      "retry": "إعادة المحاولة",
+      "connect": "الاتصال بشبكة DHT",
+      "stop": "إيقاف DHT",
+      "cancel": "إلغاء الاتصال",
+      "connectionCancelled": "تم إلغاء الاتصال",
+      "log": "سجل الاتصال",
+      "connectingToBootstrap": "جارٍ الاتصال بعقدة التمهيد...",
+      "attempt": "المحاولة #{connectionAttempts}",
+      "port": "منفذ DHT",
+      "peers": "الأقران المتصلون",
+      "peerId": "معرّف النظير",
+      "bootstrapNode": "عقدة التمهيد",
+      "listenAddresses": "العناوين المتعددة",
+      "noListenAddresses": "لا تتوفر عناوين متعددة. ربما يعمل DHT في وضع العميل فقط.",
+
+      "health": {
+        "lastBootstrap": "آخر تمهيد",
+        "lastPeer": "آخر حدث نظير",
+        "lastError": "آخر خطأ",
+        "failures": "إخفاقات التمهيد",
+        "never": "أبدًا",
+        "none": "لا يوجد"
+      },
+
+      "recentEvents": "الأحداث الحديثة",
+      "disconnect": "فصل الاتصال عن DHT",
+
+      "reachability": {
+        "title": "قابلية الوصول",
+        "state": {
+          "public": "مباشر (عام)",
+          "private": "عبر ترحيل / خاص",
+          "unknown": "غير معروف"
+        },
+        "confidence": {
+          "low": "ثقة منخفضة",
+          "medium": "ثقة متوسطة",
+          "high": "ثقة عالية"
+        },
+        "lastProbe": "آخر فحص",
+        "lastChange": "آخر تغيير",
+        "lastError": "آخر خطأ فحص",
+        "observedAddrs": "العناوين الخارجية المُلاحظة",
+        "observedEmpty": "لا توجد عناوين خارجية مُلاحظة بعد.",
+        "history": "سجل الفحوصات الحديثة",
+        "historyEmpty": "لا توجد فحوصات مسجّلة.",
+        "summary": "الملخص",
+        "timestamp": "الطابع الزمني",
+        "stateLabel": "الحالة",
+        "autonatDisabled": "تم تعطيل AutoNAT",
+        "copySuccess": "تم نسخ العنوان",
+        "copyError": "تعذّر نسخ العنوان",
+        "genericSummary": "لا توجد تفاصيل إضافية.",
+        "toast": {
+          "public": "تمت استعادة قابلية الوصول. {summary}",
+          "private": "تدهورت قابلية الوصول. {summary}",
+          "unknown": "تم تحديث حالة قابلية الوصول. {summary}"
+        }
+      },
+
+      "relay": {
+        "title": "حالة الترحيل",
+        "enabled": "AutoRelay مفعّل",
+        "disabled": "AutoRelay معطّل",
+        "timeline": "الجدول الزمني لـ AutoRelay",
+        "enabledAt": "آخر وقت للتفعيل",
+        "disabledAt": "آخر وقت للتعطيل",
+        "noPeer": "غير متصل بمرحّل",
+        "activePeer": "المرحّل النشط",
+        "status": "الحالة",
+        "lastSuccess": "آخر حجز ناجح",
+        "lastFailure": "آخر فشل في الحجز",
+        "renewals": "الحجوزات المُجدّدة",
+        "evictions": "الحجوزات المُزالة",
+        "never": "أبدًا",
+        "neverEnabled": "لم يتم تفعيله من قبل",
+        "neverDisabled": "لم يتم تعطيله من قبل",
+        "noEvictions": "لا توجد إزالات",
+        "accepted": "تم القبول",
+        "pending": "قيد الانتظار",
+        "failed": "فشل"
+      },
+
+      "dcutr": {
+        "title": "اختراق NAT عبر DCUtR",
+        "enabled": "DCUtR مفعّل",
+        "disabled": "DCUtR معطّل",
+        "attempts": "محاولات الاختراق",
+        "successes": "النجاحات",
+        "failures": "الإخفاقات",
+        "successRate": "معدل النجاح",
+        "lastSuccess": "آخر نجاح",
+        "lastFailure": "آخر فشل",
+        "never": "أبدًا",
+        "description": "يسمح DCUtR باختراق الـNAT لتمكين اتصالات مباشرة بين الأقران عبر ترقية الاتصال من خلال المرحّل."
+      }
+    },
+
+    "networkStatus": "حالة الشبكة",
+    "dhtPeers": "أقران DHT",
+    "networkSize": "حجم الشبكة",
+    "bandwidth": "النطاق الترددي",
+
+    "peerDiscovery": {
+      "title": "اكتشاف الأقران",
+      "discovering": "جارٍ الاكتشاف...",
+      "run": "بدء الاكتشاف",
+      "directConnect": "اتصال مباشر",
+      "placeholder": "Enter peer multiaddress (e.g., /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
+      "connect": "اتصال",
+      "foundPeers": "تم العثور على أقران: {count}",
+      "discoveryStarted": "بدأ الاكتشاف. عدد الأقران المكتشفين: {count}",
+      "peerAddedToInput": "تمت إضافة النظير إلى الحقل",
+      "add": "إضافة"
+    },
+
+    "connectedPeers": {
+      "title": "الأقران المتصلون ({count})",
+      "sortBy": "ترتيب حسب",
+      "reputation": "السمعة",
+      "sharedFiles": "الملفات المشتركة",
+      "totalSize": "الحجم الإجمالي",
+      "name": "الاسم",
+      "location": "الموقع",
+      "joinDate": "تاريخ الانضمام",
+      "lastSeen": "آخر ظهور",
+      "status": "الحالة",
+      "highest": "الأعلى",
+      "lowest": "الأدنى",
+      "most": "الأكثر",
+      "least": "الأقل",
+      "largest": "الأكبر",
+      "smallest": "الأصغر",
+      "newest": "الأحدث",
+      "oldest": "الأقدم",
+      "mostRecent": "الأحدث",
+      "leastRecent": "الأقل حداثة",
+      "closest": "الأقرب",
+      "farthest": "الأبعد",
+      "online": "متصل",
+      "offline": "غير متصل",
+      "aToZ": "A → Z",
+      "zToA": "Z → A",
+      "anonymous": "مجهول",
+      "unknown": "غير معروف",
+      "joined": "انضمّ",
+      "now": "الآن",
+      "noPeers": "لا يوجد أقران متصلون. ابدأ الاكتشاف للعثور على أقران.",
+      "disconnect": "فصل الاتصال",
+      "disconnected": "تم فصل الاتصال بنجاح",
+      "disconnectError": "فشل في فصل الاتصال بالنظير"
+    },
+
+    "smartPeerSelection": "اختيار أقران ذكي",
+    "peerSearch": "بحث عن أقران",
+    "sendTest": "إرسال اختبار",
+
+    "peerMetrics": {
+      "refresh": "تحديث",
+      "refreshing": "جارٍ التحديث...",
+      "cleanupInactive": "تنظيف غير النشطين",
+      "error": "خطأ",
+      "loading": "جارٍ تحميل بيانات الأقران...",
+      "noPeers": "لا توجد بيانات متاحة. الرجاء تشغيل DHT والاتصال بالأقران.",
+      "totalPeers": "إجمالي الأقران",
+      "encryptionCapable": "يدعم التشفير",
+      "avgReliability": "متوسط الاعتمادية",
+      "peerId": "معرّف النظير",
+      "address": "العنوان",
+      "latency": "الكمون",
+      "bandwidth": "النطاق الترددي",
+      "reliability": "الاعتمادية",
+      "successRate": "معدل النجاح",
+      "transfers": "عمليات النقل",
+      "dataTransfer": "نقل البيانات",
+      "encryption": "التشفير",
+      "health": "الصحة"
+    },
+
+    "errors": {
+      "downloadOnlyTauri": "تنزيل عقدة Chiral متاح فقط عبر تطبيق سطح المكتب. يرجى تنزيل نسخة Tauri.",
+      "dhtNotConnected": "DHT غير متصل. يرجى بدء الخدمة أولًا."
+    },
+
+    "maxConnections": "الحد الأقصى للاتصالات",
+    "port": "المنفذ",
+    "uploadLimit": "حد الرفع (MB/s)",
+    "downloadLimit": "حد التنزيل (MB/s)",
+    "userLocation": "موقع المستخدم",
+    "locationHint": "يساعد في العثور على أقران أقرب لتحسين الأداء.",
+    "enableUpnp": "تفعيل UPnP",
+    "enableNat": "تفعيل تعيين منافذ NAT",
+    "enableDht": "تفعيل DHT",
+
+    "geoDistribution": {
+      "title": "التوزيع الجغرافي",
+      "subtitle": "عرض خريطة لـ {peers} من الأقران",
+      "topRegion": "أكبر منطقة: {region}",
+      "noData": "بانتظار بيانات الموقع",
+      "tooltip": "{region}: {count} أقران",
+      "peersShort": "{count} أقران",
+      "emptyState": "اتصل بـ DHT لبدء رسم خريطة الأقران.",
+      "unknownNotice": "{count} من الأقران ليس لديهم موقع معلن بعد."
+    },
+
+    "quickActions": {
+      "title": "إجراءات سريعة",
+      "badge": "أدوات الشبكة",
+      "discoverPeers": {
+        "tooltip": "البحث عن أقران جدد",
+        "discovering": "جارٍ البحث...",
+        "button": "اكتشاف الأقران"
+      },
+      "addPeer": {
+        "placeholder": "Peer Address",
+        "tooltip": "إضافة نظير عبر عنوانه",
+        "success": "تمت إضافة النظير!"
+      },
+      "copyPeerId": {
+        "tooltip": "نسخ معرّف النظير",
+        "tooltipUnavailable": "معرّف النظير غير متاح",
+        "button": "نسخ معرّف النظير",
+        "success": "تم النسخ!"
+      },
+      "refreshStatus": {
+        "tooltip": "تحديث حالة الشبكة والعقدة",
+        "button": "تحديث الحالة",
+        "success": "تم تحديث الحالة"
+      },
+      "restartNode": {
+        "tooltip": "إعادة تشغيل العقدة المحلية",
+        "button": "إعادة التشغيل",
+        "success": "تمت إعادة التشغيل",
+        "notRunning": "لا يمكن إعادة التشغيل: العقدة غير قيد التشغيل"
+      }
+    }
+  },
+  "download": {
+    "title": "تنزيل الملفات",
+    "subtitle": "تنزيل الملفات من شبكة Chiral",
+    "addNew": "إضافة تنزيل جديد",
+    "addNewSubtitle": "أدخل Merkle hash أو CID لبدء تنزيل جديد.",
+    "placeholder": "Enter Merkle hash or CID",
+    "clearInput": "مسح الإدخال",
+    "searchAndDownload": "البحث والتنزيل",
+    "searchByHash": "البحث بواسطة Hash",
+    "searchByName": "البحث بواسطة الاسم",
+    "downloads": "عمليات التنزيل",
+    "searchPlaceholder": "البحث في التنزيلات...",
+    "clearSearch": "مسح البحث",
+    "clearFinished": "مسح المكتملة",
+
+    "filters": {
+      "all": "الكل",
+      "active": "نشط",
+      "paused": "موقوف مؤقتًا",
+      "queued": "في قائمة الانتظار",
+      "completed": "مكتمل",
+      "canceled": "ملغى",
+      "failed": "فشل"
+    },
+
+    "settings": {
+      "title": "الإعدادات",
+      "concurrency": "التوازي",
+      "automation": "الأتمتة",
+      "features": "الميزات",
+      "maxConcurrent": "الحد الأقصى لعمليات التنزيل المتزامنة",
+      "autoStart": "بدء تلقائي",
+      "toggleAutoStart": "تبديل البدء التلقائي {status}"
+    },
+
+    "autoClear": "مسح تلقائي",
+    "multiSource": "متعدد المصادر",
+    "maxPeers": "الحد الأقصى للأقران",
+
+    "status": {
+      "noDownloads": "لم تبدأ أي عمليات تنزيل بعد.",
+      "noActive": "لا توجد تنزيلات نشطة.",
+      "noPaused": "لا توجد تنزيلات موقوفة.",
+      "noQueued": "لا توجد تنزيلات في قائمة الانتظار.",
+      "noCompleted": "لا توجد تنزيلات مكتملة.",
+      "noFailed": "لا توجد تنزيلات فاشلة."
+    },
+
+    "file": {
+      "hash": "Merkle Hash",
+      "queue": "قائمة الانتظار",
+      "progress": "التقدّم"
+    },
+
+    "priority": {
+      "low": "منخفض",
+      "normal": "عادي",
+      "high": "عالٍ"
+    },
+
+    "actions": {
+      "start": "بدء",
+      "pause": "إيقاف مؤقت",
+      "resume": "استئناف",
+      "remove": "إزالة",
+      "cancel": "إلغاء",
+      "showInFolder": "عرض في المجلد",
+      "retry": "إعادة المحاولة"
+    },
+
+    "notifications": {
+      "enterHash": "يرجى إدخال Merkle hash أو CID لبدء التنزيل.",
+      "searching": "جارٍ البحث عن بيانات الملف في DHT...",
+      "addedToQueue": "تمت إضافة الملف إلى قائمة التنزيل.",
+      "autostart": "تم بدء التنزيل تلقائيًا.",
+      "searchFailed": "فشل البحث: {error}",
+      "downloadFailed": "فشل التنزيل للملف {name}.",
+      "downloadComplete": "اكتمل التنزيل للملف {name}.",
+      "resumedSingle": "تمت استعادة تنزيل واحد متوقف. يمكنك استئنافه من صفحة التنزيلات.",
+      "resumedMultiple": "تمت استعادة {count} تنزيلات متوقفة. يمكنك استئنافها من صفحة التنزيلات."
+    },
+
+    "search": {
+      "status": {
+        "started": "جارٍ البحث في الشبكة...",
+        "searching": "جارٍ البحث...",
+        "foundNotification": "تم العثور على {name}",
+        "notFoundNotification": "لم يتم العثور على الملف في الشبكة.",
+        "unknownError": "خطأ غير معروف",
+        "errorNotification": "فشل البحث",
+        "completedIn": "اكتمل خلال {seconds} ثانية",
+        "notFoundDetail": "لم نتمكن من العثور على هذا الـhash في الشبكة.",
+        "errorHeadline": "فشل البحث",
+        "placeholder": "قم بتشغيل بحث لعرض بيانات الملف.",
+        "addedToQueue": "تمت إضافة \"{name}\" إلى قائمة التنزيل"
+      },
+
+      "notifications": {
+        "copied": "تم نسخ {value} إلى الحافظة"
+      },
+
+      "history": {
+        "title": "سجل البحث",
+        "clear": "مسح السجل",
+        "empty": "لا توجد عمليات بحث حديثة.",
+        "retry": "إعادة البحث",
+        "foundSeeders": "{count, plural, one {تم اكتشاف 1 seeder} other {تم اكتشاف {count} seeders}}",
+        "notFound": "لم يتم العثور على seeders",
+        "pending": "بانتظار النتيجة"
+      },
+
+      "queue": {
+        "status": {
+          "completed": "تم اكتمال تنزيل الملف مسبقًا",
+          "downloading": "الملف قيد التنزيل حاليًا ({progress}% مكتمل)",
+          "paused": "تم إيقاف تنزيل الملف عند {progress}%",
+          "queued": "الملف موجود بالفعل في قائمة التنزيل",
+          "failed": "فشل تنزيل الملف سابقًا. هل تريد المحاولة مرة أخرى؟",
+          "seeding": "أنت تشارك هذا الملف بالفعل",
+          "other": "الملف موجود بالفعل في التنزيلات ({status})"
+        }
+      },
+
+      "button": "بحث",
+      "searchVersions": "البحث عن الإصدارات",
+      "namePlaceholder": "Enter file name (e.g., \"document.pdf\")"
+    },
+
+    "telemetry": {
+      "retrying": "إعادة محاولة التنزيل لـ {hash} (المحاولة {attempt} من {max})",
+      "recovered": "تم استعادة التنزيل لـ {hash} بعد {retries} محاولات ({duration} مللي ثانية)",
+      "failed": "فشل تنزيل {hash} بعد {attempts} محاولات"
+    },
+
+    "selectProtocol": "اختيار البروتوكول",
+    "currentProtocol": "البروتوكول الحالي",
+    "changeProtocol": "تغيير البروتوكول"
+  },
+  "regions.usEast": "US East",
+  "regions.usWest": "US West",
+  "regions.euWest": "Europe West",
+  "regions.apac": "Asia Pacific",
+  "language.title": "اللغة",
+  "language.select": "اختر اللغة",
+  "language.english": "English",
+  "language.spanish": "Español",
+  "language.chinese": "中文",
+  "language.korean": "한국어",
+  "language.russian": "Русский",
+  "language.portuguese": "Português",
+  "language.hindi": "हिन्दी",
+  "language.french": "Français",
+  "language.bengali": "বাংলা",
+  "language.arabic": "العربية",
+  "nav": {
+    "menu": "القائمة",
+    "download": "تحميل",
+    "upload": "رفع",
+    "torrents": "التورنت",
+    "network": "الشبكة",
+    "relay": "المرحل",
+    "mining": "التعدين",
+    "proxy": "البروكسي",
+    "proxySelfTest": "اختبار البروكسي الذاتي",
+    "analytics": "التحليلات",
+    "reputation": "السمعة",
+    "account": "الحساب",
+    "settings": "الإعدادات",
+    "connected": "متصل",
+    "disconnected": "غير متصل",
+    "expandSidebar": "توسيع الشريط الجانبي",
+    "collapseSidebar": "طي الشريط الجانبي",
+    "closeSidebarMenu": "إغلاق القائمة الجانبية"
+  },
+  "privacy.title": "الخصوصية والأمان",
+  "privacy.enableProxy": "تفعيل التوجيه عبر البروكسي لتحقيق إخفاء الهوية",
+  "privacy.proxyAddress": "عنوان البروكسي",
+  "privacy.proxyHint": "أدخل عنوان بروكسي SOCKS5 (مثل Tor على 127.0.0.1:9050)",
+  "privacy.anonymousMode": "وضع التخفي (إخفاء جميع المعلومات التعريفية)",
+  "privacy.shareAnalytics": "مشاركة تحليلات استخدام مجهولة",
+  "privacy.autoLockWallet": "القفل التلقائي للمحفظة بعد عدم النشاط",
+  "privacy.autoLockWalletHint": "سيتم تسجيل خروجك تلقائيًا بعد ساعة من عدم النشاط.",
+
+  "notifications.title": "الإشعارات",
+  "notifications.enable": "تفعيل إشعارات سطح المكتب",
+  "notifications.notifyComplete": "إشعار عند اكتمال التنزيلات",
+  "notifications.notifyError": "إشعار عند حدوث أخطاء",
+  "notifications.soundAlerts": "تشغيل تنبيهات صوتية",
+
+  "advanced.title": "خيارات متقدمة",
+  "advanced.chunkSize": "حجم القطعة (KB)",
+  "advanced.cacheSize": "حجم الذاكرة المؤقتة (MB)",
+  "advanced.logLevel": "مستوى السجلات",
+  "advanced.logError": "خطأ",
+  "advanced.logWarn": "تحذير",
+  "advanced.logInfo": "معلومات",
+  "advanced.logDebug": "تصحيح",
+  "advanced.autoUpdate": "تثبيت التحديثات تلقائيًا",
+  "advanced.clearCache": "مسح الذاكرة المؤقتة",
+  "advanced.exportSettings": "تصدير الإعدادات",
+  "advanced.importSettings": "استيراد الإعدادات",
+  "advanced.invalidJsonAlert": "ملف JSON غير صالح. يرجى اختيار ملف تصدير صالح.",
+  "advanced.exportSuccess": "تم تصدير الإعدادات إلى مجلد التنزيلات في المتصفح.",
+  "advanced.importSuccess": "تم استيراد الإعدادات بنجاح.",
+  "advanced.importError": "ملف JSON غير صالح. يرجى اختيار ملف تصدير صالح.",
+
+  "actions.resetDefaults": "إعادة التعيين إلى الإعدادات الافتراضية",
+  "actions.cancel": "إلغاء",
+  "actions.save": "حفظ الإعدادات",
+  "actions.confirm": "تأكيد إعادة التعيين",
+
+  "confirm.title": "هل أنت متأكد؟",
+  "confirm.resetBody": "سيتم إعادة جميع الإعدادات إلى قيمها الافتراضية. سيتم حفظ هذا الإجراء مباشرة.",
+  "validation.min": "يجب أن يكون {label} ≥ {min}.",
+  "validation.between": "يجب أن تكون قيمة {label} بين {min} و {max}.",
+  "button": {
+    "clearCache": "مسح الذاكرة المؤقتة",
+    "clearing": "جارٍ المسح...",
+    "cleared": "✓ تم المسح!"
+  },
+  "account": {
+    "title": "الحساب",
+    "subtitle": "إدارة المحفظة وإعدادات الحساب",
+    "firstRun": {
+      "welcome": "مرحبًا بك في Chiral Network!",
+      "description": "لبدء التعدين وكسب المكافآت، ستحتاج إلى إنشاء محفظة.",
+      "whyAccount": "لماذا أحتاج إلى حساب؟",
+      "reason1": "استلام مكافآت التعدين إلى محفظتك",
+      "reason2": "حماية أموالك باستخدام عبارة الاسترداد المشفّرة",
+      "reason3": "تحويل العملات إلى مستخدمين آخرين في الشبكة",
+      "createWallet": "إنشاء محفظة جديدة",
+      "requiresWallet": "المحفظة مطلوبة للتعدين وكسب المكافآت وتحويل Chiral. سيتم إنشاء عبارة الاسترداد الخاصة بك في الخطوة التالية.",
+      "accountCreated": "تم إنشاء المحفظة بنجاح! يمكنك الآن بدء التعدين.",
+      "error": "فشل في إنشاء الحساب. يرجى المحاولة مرة أخرى."
+    }
+  },
+  "wallet": {
+    "title": "محفظة Chiral Network",
+    "balance": "الرصيد",
+    "totalEarned": "إجمالي التعدين",
+    "totalSpent": "إجمالي المصروف",
+    "address": "عنوان Chiral",
+    "qrModal": {
+      "title": "عنوان Chiral الخاص بك",
+      "alt": "رمز QR لعنوان Chiral"
+    },
+    "export": "تصدير المحفظة",
+    "exportSuccess": "تم تصدير المحفظة بنجاح!",
+    "cta": {
+      "intro": "ابدأ باستخدام Chiral Network بإنشاء أو استيراد حساب:",
+      "or": "أو"
+    },
+    "privateKey": "المفتاح الخاص",
+    "hd": {
+      "create_via_phrase": "إنشاء عبر عبارة الاسترداد",
+      "import_phrase": "استيراد عبارة الاسترداد",
+      "load_from_wallet": "التحميل من المحفظة"
+    }
+  },
+  "transfer": {
+    "title": "إرسال عملات Chiral",
+    "recipient": {
+      "label": "عنوان المستلم",
+      "aria": "حقل إدخال عنوان المستلم",
+      "placeholder": "0x...",
+      "characters": "أحرف",
+      "remaining": "متبقي",
+      "over": "زيادة",
+      "scanQr": "مسح رمز QR",
+      "scanQrTitle": "مسح رمز QR"
+    },
+    "amount": {
+      "label": "المبلغ (Chiral)",
+      "max": "الحد الأقصى",
+      "placeholder": ""
+    },
+    "available": "المتوفر: {amount} Chiral",
+    "send": "إرسال المعاملة",
+    "sendingIn": "سيتم الإرسال خلال {seconds} ثوانٍ (اضغط للإلغاء)",
+    "viewPending": "عرض المعاملات المعلقة",
+    "pending": {
+      "title": "المعاملات المعلقة",
+      "noDetails": "لا توجد تفاصيل حول معاملات معلقة.",
+      "count": "{count, plural, one {# معاملة معلقة} other {# معاملات معلقة}}",
+      "none": "معاملات معلقة"
+    },
+    "fees": {
+      "low": "منخفض",
+      "market": "سوق",
+      "fast": "سريع",
+      "estimated": "الرسوم المقدرة"
+    }
+  },
+  "transactions": {
+    "title": "سجل المعاملات",
+    "manual": "معاملة يدوية",
+    "empty": {
+      "title": "لا توجد معاملات بعد",
+      "desc": "ستظهر المعاملات هنا عند إرسال أو استلام Chiral"
+    },
+    "item": {
+      "from": "من",
+      "to": "إلى"
+    },
+    "receipt": {
+      "title": "إيصال المعاملة",
+      "from": "من",
+      "to": "إلى",
+      "hash": "Hash المعاملة",
+      "blockNumber": "رقم الكتلة",
+      "gasInfo": "معلومات الغاز",
+      "gasUsed": "الغاز المستخدم",
+      "gasPrice": "سعر الغاز",
+      "fee": "رسوم المعاملة",
+      "timestamp": "الطابع الزمني",
+      "close": "إغلاق الإيصال"
+    },
+    "searchPlaceholder": "البحث بواسطة العنوان أو الوصف أو المعرّف..."
+  },
+  "keystore": {
+    "title": "الحفظ في Keystore المحلي",
+    "desc": "احفظ مفتاحك الخاص بأمان على هذا الجهاز، مشفّرًا بكلمة مرور.",
+    "success": "نجاح! تم حفظ المفتاح الخاص في keystore.",
+    "successSimulated": "نجاح! (محاكاة) تم حفظ المفتاح الخاص.",
+    "error": "خطأ: {error}",
+    "load": {
+      "title": "التحميل من Keystore",
+      "select": "اختيار الحساب",
+      "empty": "لم يتم العثور على أي حسابات في keystore.",
+      "success": "تم تحميل الحساب بنجاح",
+      "successSimulated": "تم تحميل الحساب (وضع تجريبي)",
+      "error": "فشل في تحميل الحساب: {error}",
+      "savePassword": "حفظ كلمة المرور على هذا الجهاز (تنتهي خلال 30 يومًا)",
+      "savePasswordDisabled": "لأسباب أمنية، تم تعطيل ميزة \"حفظ كلمة المرور\". يرجى إدخال كلمة المرور في كل مرة تفتح فيها حسابك.",
+      "savePasswordWarning": "تحذير: حفظ كلمة المرور محليًا مريح لكنه أقل أمانًا. استخدم هذه الميزة بحذر.",
+      "addressMismatch": "خطأ في فك التشفير: العنوان غير مطابق."
+    }
+  },
+  "blacklist": {
+    "title": "إدارة القائمة السوداء",
+    "subtitle": "حظر العناوين الضارة أو غير المرغوب فيها",
+    "add": {
+      "title": "إضافة إدخال جديد",
+      "address": "عنوان Chiral",
+      "addressPlaceholder": "0x1234567890abcdef...",
+      "reason": "سبب الإضافة إلى القائمة السوداء",
+      "remaining": "متبقي {remaining} من الأحرف",
+      "submit": "إضافة إلى القائمة السوداء"
+    },
+    "quickReasons": {
+      "label": "أسباب سريعة:",
+      "spam": "رسائل مزعجة",
+      "fraud": "احتيال",
+      "malicious": "نشاط ضار",
+      "harassment": "مضايقة",
+      "scam": "خداع"
+    },
+    "list": {
+      "title": "العناوين في القائمة السوداء",
+      "emptyTitle": "لا توجد عناوين في القائمة السوداء",
+      "emptyDesc": "أضف عناوين في الأعلى لحظر المعاملات والتفاعلات",
+      "noMatch": "لا توجد عناوين في القائمة السوداء تطابق \"{q}\"",
+      "addedAt": "أضيف في {date}",
+      "showing": "عرض {shown} من أصل {total} عنوانًا محظورًا"
+    },
+    "actions": {
+      "clearAll": "مسح الكل",
+      "export": "تصدير القائمة السوداء",
+      "exportTitle": "تصدير القائمة السوداء إلى ملف JSON",
+      "import": "استيراد القائمة السوداء",
+      "copyAddress": "نسخ العنوان"
+    },
+    "errors": {
+      "alreadyExists": "هذا العنوان موجود بالفعل في القائمة السوداء.",
+      "ownAddress": "لا يمكن حظر عنوانك الخاص."
+    },
+    "confirm": {
+      "remove": "إزالة {address} من القائمة السوداء؟",
+      "removeAll": "إزالة جميع العناوين ({count}) من القائمة السوداء؟"
+    },
+    "import": {
+      "success": "تم استيراد {count} إدخالًا بنجاح",
+      "none": "لا توجد إدخالات جديدة صالحة للاستيراد",
+      "invalid": "صيغة ملف غير صالحة - لم يتم العثور على بيانات قائمة سوداء",
+      "parseError": "صيغة الملف غير صالحة - يرجى اختيار ملف JSON صالح"
+    }
+  },
+  "security": {
+    "2fa": {
+      "title": "المصادقة الثنائية (2FA)",
+      "subtitle_clear": "أضف طبقة أمان إضافية لحسابك.",
+      "status": {
+        "enabled": "2FA مفعّلة",
+        "enabled_desc": "الإجراءات الحساسة تتطلب الآن رمز تحقق.",
+        "disabled_desc": "قم بتمكين 2FA لتحسين أمان حسابك."
+      },
+      "how_it_works": "عند التفعيل، ستحتاج إلى رمز من تطبيق مصادقة (مثل Google Authenticator أو Authy) لتنفيذ الإجراءات الحساسة.",
+      "enable": "تفعيل 2FA",
+      "disable": "تعطيل",
+      "setup": {
+        "title": "إعداد 2FA",
+        "step1_scan": "1. امسح رمز QR باستخدام تطبيق المصادقة.",
+        "scanAlt": "لا يمكنك المسح؟",
+        "step2_manual": "أو أدخل هذا المفتاح يدويًا:",
+        "step3_verify": "2. أدخل رمز الـ6 أرقام من التطبيق للتحقق.",
+        "verifyLabel": "رمز التحقق",
+        "verifyAndEnable": "تحقق وتفعيل"
+      },
+      "prompt": {
+        "title": "مطلوب 2FA",
+        "enter_code": "أدخل رمز الـ6 أرقام من تطبيق المصادقة للمتابعة.",
+        "label": "رمز المصادقة"
+      }
+    }
+  },
+  "filters": {
+    "type": "النوع",
+    "typeAll": "الكل",
+    "typeSent": "المرسلة",
+    "typeReceived": "المستلمة",
+    "from": "من",
+    "to": "إلى",
+    "sort": "الفرز",
+    "sortNewest": "الأحدث → الأقدم",
+    "sortOldest": "الأقدم → الأحدث",
+    "reset": "إعادة تعيين"
+  },
+  "actions": {
+    "createAccount": "إنشاء حساب جديد",
+    "creating": "جارٍ الإنشاء...",
+    "importAccount": "استيراد حساب موجود",
+    "importing": "جارٍ الاستيراد...",
+    "unlockAccount": "فتح الحساب",
+    "unlocking": "جارٍ الفتح...",
+    "copy": "نسخ",
+    "show": "إظهار",
+    "hide": "إخفاء",
+    "close": "إغلاق",
+    "saveKey": "حفظ المفتاح",
+    "saving": "جارٍ الحفظ...",
+    "save": "حفظ",
+    "saveSettings": "حفظ الإعدادات",
+    "cancel": "إلغاء",
+    "remove": "إزالة",
+    "edit": "تعديل",
+    "resetDefaults": "إعادة إلى الإعدادات الافتراضية",
+    "lockWallet": "قفل المحفظة",
+    "verifying": "جارٍ التحقق...",
+    "confirm": "تأكيد"
+  },
+  "placeholders": {
+    "importPrivateKey": "أدخل المفتاح الخاص للاستيراد",
+    "password": "أدخل كلمة مرور قوية",
+    "unlockPassword": "أدخل كلمة المرور لفتح الحساب",
+    "searchBlacklist": "البحث في القائمة السوداء...",
+    "reason": "أدخل السبب..."
+  },
+  "password": {
+    "weak": "كلمة مرور ضعيفة",
+    "medium": "قوة متوسطة",
+    "strong": "كلمة مرور قوية",
+    "requirements": {
+      "length": "8 أحرف على الأقل",
+      "uppercase": "حرف كبير واحد",
+      "lowercase": "حرف صغير واحد",
+      "number": "رقم واحد",
+      "special": "رمز خاص واحد"
+    }
+  },
+  "tooltips": {
+    "showQr": "إظهار رمز QR",
+    "clearSearch": "مسح البحث"
+  },
+  "aria": {
+    "copyAddress": "نسخ العنوان",
+    "copyPrivateKey": "نسخ المفتاح الخاص",
+    "showQr": "إظهار رمز QR"
+  },
+  "warnings": {
+    "neverSharePrivateKey": "لا تشارك مفتاحك الخاص مع أي شخص أبدًا"
+  },
+  "errors": {
+    "address": {
+      "mustStartWith0x": "يجب أن يبدأ العنوان بـ 0x.",
+      "mustBe42": "يجب أن يكون العنوان 42 حرفًا بالضبط.",
+      "mustBeHex": "يجب أن يحتوي العنوان على أحرف Hex صالحة (0-9, a-f, A-F).",
+      "blacklisted": "هذا العنوان في القائمة السوداء ولا يمكنه استلام المعاملات."
+    },
+    "amount": {
+      "invalid": "يرجى إدخال مبلغ صالح أكبر من 0.",
+      "min": "يجب أن يكون المبلغ على الأقل {min} Chiral.",
+      "insufficient": "رصيد غير كافٍ - تحتاج إلى {more} Chiral إضافية.",
+      "insufficientWithFee": "رصيد غير كافٍ. إجمالي {total} Chiral (المبلغ + الرسوم) يتجاوز رصيدك البالغ {balance} Chiral."
+    },
+    "exportFailed": "فشل التصدير. يرجى المحاولة مرة أخرى.",
+    "createAccount": "فشل إنشاء الحساب: {error}"
+  },
+  "analytics": {
+    "title": "لوحة التحليلات",
+    "subtitle": "تتبع أدائك ونشاط الشبكة",
+    "totalEarnings": "إجمالي الأرباح",
+    "earningsThisWeek": "+12.5% هذا الأسبوع",
+    "storageUsed": "المساحة المستخدمة",
+    "filesShared": "الملفات التي تمت مشاركتها",
+    "downloaded": "تم تنزيله",
+    "reputation": "السمعة",
+    "bandwidthUsage": "استخدام النطاق الترددي (اليوم)",
+    "upload": "رفع",
+    "download": "تنزيل",
+    "totalBandwidthUsed": "إجمالي النطاق المستخدم",
+    "networkActivity": "نشاط الشبكة",
+    "activeUploads": "عمليات الرفع النشطة",
+    "activeDownloads": "عمليات التنزيل النشطة",
+    "queuedDownloads": "تنزيلات قيد الانتظار",
+    "completedUploads": "عمليات الرفع المكتملة",
+    "completedDownloads": "عمليات التنزيل المكتملة",
+    "uniquePeers": "الأقران الفريدون",
+    "totalTransactions": "إجمالي المعاملات",
+    "networkFiles": "ملفات الشبكة",
+    "networkLatency": "كمون الشبكة",
+    "average": "متوسط",
+    "p95": "P95",
+    "best": "الأفضل",
+    "currentAvg": "المتوسط الحالي",
+    "latencyHint": "0–50 ms ممتاز، 50–150 ms مقبول، أكثر من 150 ms ضعيف",
+    "nodesReporting": "العُقد المُبلّغة",
+    "sampleSize": "حجم العينة",
+    "latencyRecent": "الكمون (حديث)",
+    "topEarningFiles": "الملفات الأعلى ربحًا",
+    "seeders": "seeders",
+    "noEarningsYet": "لا توجد أرباح بعد",
+    "popularFiles": "الملفات الشائعة",
+    "leechers": "leechers",
+    "noFilesYet": "لا توجد ملفات بعد",
+    "earningsHistory": "سجل الأرباح",
+    "bars": "أعمدة",
+    "line": "خط",
+    "periods": {
+      "7d": "آخر 7 أيام",
+      "30d": "آخر 30 يومًا",
+      "thisMonth": "هذا الشهر",
+      "lastMonth": "الشهر الماضي",
+      "ytd": "منذ بداية السنة",
+      "custom": "مخصص"
+    },
+    "from": "من",
+    "to": "إلى",
+    "suspiciousActivity": "نشاط مشبوه",
+    "noSuspiciousActivity": "لا توجد أنشطة مشبوهة مكتشفة.",
+    "latencyNoNodes": "لا توجد عُقد بروكسي متصلة. ستظهر بيانات الكمون هنا عند الاتصال."
+  },
+  "proxy": {
+    "title": "شبكة البروكسي",
+    "subtitle": "إدارة عُقد البروكسي وإعدادات الشبكة",
+    "status": "حالة البروكسي",
+    "active": "نشط",
+    "inactive": "غير نشط",
+    "protected": "محمي",
+    "vulnerable": "معرّض للخطر",
+    "secured": "مؤمَّن",
+    "disabled": "معطّل",
+    "activeNodes": "العُقد النشطة",
+    "totalBandwidth": "إجمالي النطاق الترددي",
+    "settings": "إعدادات البروكسي",
+    "proxy": "بروكسي",
+    "addNode": "إضافة عقدة بروكسي",
+    "enterAddress": "أدخل عنوان العقدة (مثال: 192.168.1.100:8080)",
+    "addNodeButton": "إضافة عقدة",
+    "invalidAddress": "يرجى إدخال عنوان بروكسي صالح (مثال: 192.168.1.100:8080)",
+    "proxyNodes": "عُقد البروكسي",
+    "bandwidth": "النطاق الترددي",
+    "latency": "الكمون",
+    "disconnect": "قطع الاتصال",
+    "connect": "اتصال",
+    "connecting": "جارٍ الاتصال...",
+    "retry": "إعادة المحاولة",
+    "remove": "إزالة",
+    "alreadyAdded": "تمت إضافة هذا عنوان البروكسي بالفعل!",
+    "autoReconnect": "إعادة الاتصال تلقائيًا",
+    "validation": {
+      "emptyAddress": "لا يمكن أن يكون العنوان فارغًا",
+      "noSpaces": "لا يمكن أن يحتوي العنوان على فراغات",
+      "invalidEnode": "صيغة enode غير صالحة (enode://[128-char-hex]@ip:port)",
+      "missingPort": "يجب أن يتضمن العنوان منفذًا (مثال: example.com:8080)",
+      "invalidHostname": "اسم مضيف غير صالح",
+      "invalidPort": "يجب أن يكون المنفذ بين 1 و 65535",
+      "systemPort": "تجنّب المنافذ الخاصة بالنظام (استخدم 1024 فأعلى)",
+      "invalidFormat": "صيغة عنوان IP أو نطاق غير صالحة"
+    },
+    "errors": {
+      "connectionTimeout": "انتهت مهلة الاتصال",
+      "optimizationUnavailable": "❌ حالة التحسين غير متاحة",
+      "tauriUnavailable": "❌ واجهة Tauri غير متاحة. يرجى تشغيل هذا الاختبار من تطبيق سطح المكتب، وليس من المتصفح."
+    },
+    "dialog": {
+      "confirmRemoval": "تأكيد الإزالة",
+      "confirmMessage": "تأكيد إزالة عقدة البروكسي",
+      "cancel": "إلغاء",
+      "remove": "إزالة"
+    },
+    "privacy": {
+      "title": "إعدادات الخصوصية",
+      "anonymousMode": "وضع التخفي",
+      "anonymousModeDesc": "التوجيه عبر بروكسيات مجهولة",
+      "multiHop": "توجيه متعدد القفزات",
+      "multiHopDesc": "التوجيه عبر عدة عُقد بروكسي",
+      "currentMode": "وضع الخصوصية الحالي:",
+      "maxPrivacy": "أقصى خصوصية (تخفي + تعدد القفزات)",
+      "anonymousOnly": "وضع التخفي",
+      "multiHopOnly": "توجيه متعدد القفزات",
+      "standardMode": "وضع قياسي"
+    },
+    "stats": {
+      "title": "إحصاءات توجيه البروكسي",
+      "availableProxies": "البروكسيات المتاحة",
+      "totalRoutes": "إجمالي المسارات",
+      "privacyProfile": "ملف الخصوصية",
+      "anon": "تخفي",
+      "standard": "قياسي",
+      "multi": "متعدد",
+      "plusMulti": "+ متعدد القفزات"
+    },
+    "nodeInfo": {
+      "address": "عنوان عقدة البروكسي",
+      "peerId": "معرّف نظير DHT",
+      "reliability": "الاعتمادية",
+      "success": "النجاح",
+      "attempts": "محاولات",
+      "mbps": "Mbps",
+      "ms": "ms",
+      "placeholder": "example.com:8080 أو enode://..."
+    },
+    "optimization": {
+      "title": "تحسين كمون البروكسي",
+      "currentStatus": "الحالة الحالية",
+      "refreshStatus": "تحديث الحالة",
+      "proveOptimization": "إثبات أن التحسين يعمل",
+      "runningTests": "جارٍ تشغيل اختبارات الإثبات...",
+      "testResults": "نتائج الاختبار"
+    },
+    "statusFilter": {
+      "all": "الكل",
+      "online": "متصل",
+      "offline": "غير متصل",
+      "connecting": "جارٍ الاتصال",
+      "error": "خطأ"
+    },
+    "sortOptions": {
+      "status": "الفرز حسب الحالة",
+      "latency": "الفرز حسب الكمون",
+      "bandwidth": "الفرز حسب النطاق الترددي",
+      "smart": "الفرز حسب الجودة (الذكي)"
+    }
+  },
+  "mining": {
+    "title": "التعدين",
+    "subtitle": "ساهم بقوة المعالجة لتأمين الشبكة وكسب المكافآت",
+    "hashRate": "معدل الـHash",
+    "threads": "خيوط (threads)",
+    "notMining": "غير نشط في التعدين",
+    "totalRewards": "إجمالي المكافآت",
+    "blocksFound": "الكتل التي تم العثور عليها",
+    "powerUsage": "استهلاك الطاقة",
+    "hw": "H/W",
+    "temperature": "درجة الحرارة",
+    "temperatureStatus": {
+      "critical": "حرج",
+      "hot": "حار",
+      "warm": "دافئ",
+      "normal": "طبيعي"
+    },
+    "control": "التحكم في التعدين",
+    "active": "التعدين نشط",
+    "stopped": "التعدين متوقف",
+    "pool": "مجمع التعدين",
+    "cpuThreads": "خيوط المعالج (CPU Threads) ({cpuThreads} متاحة)",
+    "intensity": "شدة التعدين (%)",
+    "session": "الجلسة",
+    "totalHashes": "إجمالي الـHashes",
+    "stop": "إيقاف التعدين",
+    "start": "بدء التعدين",
+    "showLogs": "عرض سجلات التعدين",
+    "networkPage": "صفحة الشبكة",
+    "accountPage": "صفحة الحساب",
+    "networkStats": "إحصاءات الشبكة",
+    "networkHashRate": "معدل Hash الشبكة",
+    "networkDifficulty": "صعوبة الشبكة",
+    "blockHeight": "ارتفاع الكتلة (Block Height)",
+    "blockReward": "مكافأة الكتلة",
+    "estTimeToBlock": "الوقت التقديري لاكتشاف كتلة",
+    "calculating": "جارٍ الحساب...",
+    "activeMiners": "المعدّنون النشطون",
+    "poolInfo": "معلومات المجمع",
+    "soloInfo": "أنت تعدّن منفردًا. ستكون جميع مكافآت الكتل لك، لكن العثور على الكتل قد يستغرق وقتًا أطول.",
+    "yourShare": "حصتك",
+    "poolFee": "رسوم المجمع",
+    "minPayout": "الحد الأدنى للدفع",
+    "na": "غير متوفر",
+    "poolHashRate": "معدل Hash للمجمع",
+    "poolMiners": "معدّنو المجمع",
+    "paymentMethod": "طريقة الدفع",
+    "recentBlocks": "الكتل التي تم العثور عليها حديثًا",
+    "noBlocksFound": "لا توجد كتل مكتشفة بعد. ابدأ التعدين لكسب المكافآت!",
+    "blockFound": "تم اكتشاف كتلة!",
+    "hash": "Hash",
+    "nonce": "Nonce",
+    "hashRateHistory": "سجل معدل الـHash",
+    "chartType": "نوع الرسم البياني",
+    "bar": "أعمدة",
+    "line": "خط",
+    "last5Minutes": "آخر 5 دقائق",
+    "logs": "سجلات التعدين",
+    "noLogs": "لا توجد سجلات متاحة بعد...",
+    "autoRefresh": "تحديث تلقائي",
+    "wrapLogs": "التفاف",
+    "filterByLevel": "تصفية حسب المستوى",
+    "on": "تشغيل",
+    "off": "إيقاف",
+    "refresh": "تحديث",
+    "clear": "مسح",
+    "pools": {
+      "solo": "تعدين منفرد",
+      "pool1": "ChiralPool #1",
+      "pool2": "ChiralPool #2",
+      "community": "مجمع المجتمع"
+    },
+    "decentralizedPools": "مجمعات تعدين لامركزية",
+    "discovering": "جارٍ الاكتشاف...",
+    "discoverPools": "اكتشاف المجمعات",
+    "createPool": "إنشاء مجمع",
+    "poolDetails": {
+      "connectedTo": "متصل بـ",
+      "leave": "مغادرة المجمع",
+      "yourHashrate": "معدل الـHash الخاص بك",
+      "poolHashrate": "معدل الـHash للمجمع",
+      "yourShare": "حصتك",
+      "est24hPayout": "الدفع التقديري خلال 24 ساعة",
+      "shares": "الأسهم (A/S)",
+      "connectedMiners": "المعدّنون المتصلون",
+      "poolFee": "رسوم المجمع",
+      "lastShare": "آخر سهم",
+      "soloMining": "تعدين منفرد",
+      "soloMiningDesc": "أنت تعدّن منفردًا. اكتشف وانضم إلى مجمع لتقاسم المكافآت وتقليل التذبذب.",
+      "availablePools": "مجمعات التعدين المتاحة",
+      "noPoolsFound": "لم يتم اكتشاف أي مجمعات بعد. حاول اكتشاف المجمعات أولًا.",
+      "miners": "معدّنون",
+      "hashrate": "Hashrate",
+      "fee": "الرسوم",
+      "lastBlock": "آخر كتلة",
+      "never": "أبدًا",
+      "blocks24h": "كتل آخر 24 ساعة",
+      "minPayout": "الحد الأدنى للدفع",
+      "payment": "الدفع",
+      "url": "URL",
+      "join": "الانضمام إلى المجمع",
+      "createNew": "إنشاء مجمع تعدين جديد",
+      "poolName": "اسم المجمع",
+      "poolNamePlaceholder": "My Mining Pool",
+      "region": "المنطقة",
+      "description": "الوصف",
+      "descriptionPlaceholder": "وصف مختصر للمجمع...",
+      "feePercentage": "نسبة الرسوم",
+      "minPayoutChiral": "الحد الأدنى للدفع (Chiral)",
+      "paymentMethod": "طريقة الدفع",
+      "note": "ملاحظة",
+      "createNote": "إنشاء مجمع سيجعلك منسّقه تلقائيًا. سيتم الإعلان عن مجمعك على الشبكة اللامركزية ليتمكن الآخرون من اكتشافه والانضمام إليه.",
+      "cancel": "إلغاء"
+    },
+    "errors": {
+      "threads": "يجب أن يكون عدد الخيوط بين 1 و {cpuThreads}",
+      "intensity": "يجب أن تكون شدة التعدين بين 1 و 100",
+      "noAccount": "يرجى إنشاء حساب Chiral Network أولًا في صفحة الحساب",
+      "noAccountToStart": "يرجى إنشاء حساب Chiral Network من صفحة الحساب لبدء التعدين",
+      "gethNotRunning": "عقدة Chiral غير قيد التشغيل. يرجى تشغيلها من",
+      "noAccountLink": "يرجى إنشاء حساب Chiral Network من"
+    },
+    "starting": "جارٍ بدء التعدين... (قد تتم إعادة تشغيل العقدة إذا لزم الأمر)",
+    "temporaryAccount": {
+      "title": "⚠️ حساب مؤقت - مكافآت التعدين في خطر!",
+      "description": "أنت تقوم بالتعدين باستخدام حساب مؤقت. سيتم فقدان مكافآت التعدين عند إغلاق التطبيق ما لم تقم بحفظ حسابك.",
+      "createWallet": "إنشاء محفظة دائمة",
+      "goToAccount": "الانتقال إلى صفحة الحساب"
+    },
+    "calculator": {
+      "title": "حاسبة الربحية",
+      "show": "إظهار",
+      "hide": "إخفاء",
+      "electricityCost": "تكلفة الكهرباء ($/kWh)",
+      "electricityCostHint": "المعدل المتوسط في الولايات المتحدة: ‎$0.12/kWh",
+      "powerUsage": "استهلاك الطاقة التقديري (واط)",
+      "powerUsageHint": "تعدين المعالج (CPU) عادة بين 50–150 واط",
+      "chiralPrice": "سعر Chiral (دولار أمريكي)",
+      "chiralPriceHint": "حدّثه إلى السعر الحالي في السوق",
+      "hashRate": "معدل الـHash (H/s)",
+      "useCurrent": "استخدام المعدل الحالي",
+      "usingCurrent": "يتم استخدام معدل الـHash الحالي الخاص بك",
+      "enterCustom": "أدخل معدل Hash مخصص",
+      "estimatedProfitability": "الربحية التقديرية",
+      "daily": "يوميًا",
+      "monthly": "شهريًا",
+      "yearly": "سنويًا",
+      "revenue": "الإيرادات",
+      "cost": "التكلفة",
+      "profitMargin": "هامش الربح",
+      "profitable": "✓ مربح",
+      "notProfitable": "✗ غير مربح",
+      "profitableDesc": "أرباح التعدين أعلى من تكاليف الكهرباء",
+      "notProfitableDesc": "تكاليف الكهرباء أعلى من أرباح التعدين",
+      "calculationDetails": "تفاصيل الحساب:",
+      "yourHashrate": "معدل الـHash الخاص بك",
+      "networkDiff": "صعوبة الشبكة",
+      "expectedBlocks": "الكتل المتوقعة في اليوم",
+      "chiralEach": "Chiral لكل كتلة",
+      "powerConsumption": "استهلاك الطاقة",
+      "kwhPerDay": "kWh/اليوم",
+      "breakEvenPrice": "سعر التعادل لـChiral",
+      "perChiral": "/Chiral",
+      "enableMining": "فعّل التعدين لرؤية تقديرات الربحية"
+    }
+  },
+  "reputation": {
+    "title": "نظام السمعة",
+    "subtitle": "مراقبة مستوى الثقة بين الأقران وصحة الشبكة",
+    "refreshing": "جارٍ التحديث...",
+    "refreshData": "تحديث البيانات",
+    "hideAnalytics": "إخفاء التحليلات",
+    "showAnalytics": "عرض التحليلات",
+    "hideRelayLeaderboard": "إخفاء قائمة ترتيب المرحّلات",
+    "showRelayLeaderboard": "عرض قائمة ترتيب المرحّلات",
+    "loading": "جارٍ تحميل بيانات السمعة...",
+    "viewPeers": "سمعة الأقران",
+    "viewRelays": "قائمة المرحّلات",
+    "searchPeers": "البحث عن الأقران",
+    "searchPlaceholder": "البحث حسب معرّف النظير...",
+    "filters": "عوامل التصفية",
+    "trustLevel": "مستوى الثقة",
+    "encryption": "التشفير",
+    "any": "أي",
+    "supported": "مدعوم",
+    "notSupported": "غير مدعوم",
+    "minimumUptime": "أدنى زمن تشغيل",
+    "clear": "مسح",
+    "apply": "تطبيق",
+    "showing": "عرض {filtered} من أصل {total} من الأقران",
+    "view": "عرض",
+    "cards": "بطاقات",
+    "noPeersFound": "لم يتم العثور على أقران",
+    "tryAdjusting": "حاول تعديل معايير البحث أو عوامل التصفية.",
+    "sortOptions": {
+      "score": "درجة السمعة",
+      "interactions": "إجمالي التفاعلات",
+      "lastSeen": "آخر ظهور"
+    },
+    "score": "درجة السمعة",
+    "history": "سجل السمعة",
+    "events": "أحداث السمعة",
+    "trustScore": "درجة الثقة",
+    "penalties": "العقوبات",
+    "rewards": "المكافآت",
+    "analytics": {
+      "totalPeers": "إجمالي الأقران",
+      "trustedPeers": "الأقران الموثوقون",
+      "avgScore": "متوسط الدرجة",
+      "trustRate": "معدل الثقة",
+      "trustLevelDistribution": "توزيع مستويات الثقة",
+      "total": "الإجمالي",
+      "recentEvents": "الأحداث الأخيرة",
+      "topPerformers": "الأداء الأعلى",
+      "interactions": "{count} تفاعل",
+      "hoverTooltip": "{level}: {count}",
+      "prev": "السابق",
+      "next": "التالي",
+      "scoreFormat": "{score}/5.0 ⭐"
+    },
+    "pageTitle": "نظام السمعة - شبكة Chiral",
+    "sortBy": "الفرز حسب",
+    "trustLevels": {
+      "Trusted": "موثوق",
+      "High": "عالٍ",
+      "Medium": "متوسط",
+      "Low": "منخفض",
+      "Unknown": "غير معروف"
+    },
+    "eventTypes": {
+      "FileTransferSuccess": "نجاح نقل ملف",
+      "FileTransferFailure": "فشل نقل ملف",
+      "PaymentSuccess": "نجاح دفع",
+      "PaymentFailure": "فشل دفع",
+      "ConnectionEstablished": "تم إنشاء اتصال",
+      "ConnectionLost": "تم فقد الاتصال",
+      "DhtQueryAnswered": "تمت إجابة استعلام DHT",
+      "StorageOffered": "تخزين معروض",
+      "MaliciousBehaviorReport": "تقرير عن سلوك ضار",
+      "FileShared": "تمت مشاركة ملف"
+    },
+    "myRelay": {
+      "title": "سمعة المرحّل الخاص بك",
+      "subtitle": "عقدتك تعمل كخادم مرحّل",
+      "rankOf": "الترتيب من أصل {total}",
+      "reputationScore": "درجة السمعة",
+      "successfulCircuits": "الدورات الناجحة",
+      "reservations": "الحجوزات"
+    },
+    "pagination": {
+      "showing": "عرض {start}-{end} من {total} من الأقران",
+      "previous": "السابق",
+      "next": "التالي"
+    },
+    "card": {
+      "daysAgo": "منذ {days} يوم",
+      "hoursAgo": "منذ {hours} ساعة",
+      "minutesAgo": "منذ {minutes} دقيقة",
+      "justNow": "الآن",
+      "reputationScore": "درجة السمعة",
+      "transfers": "عمليات النقل",
+      "interactions": "التفاعلات",
+      "latency": "الكمون",
+      "bandwidth": "النطاق الترددي",
+      "uptime": "زمن التشغيل",
+      "encryption": "التشفير",
+      "supported": "مدعوم",
+      "notSupported": "غير مدعوم"
+    }
+  },
+  "relay": {
+    "title": "بنية المرحّلات",
+    "subtitle": "إدارة خوادم المرحّل واتصال الشبكة",
+    "server": {
+      "title": "خادم المرحّل",
+      "subtitle": "ساعد الأقران على الاتصال من خلال عقدتك",
+      "running": "قيد التشغيل",
+      "stopped": "متوقف",
+      "description": "قم بتشغيل خادم مرحّل لمساعدة الأقران خلف أجهزة NAT على الاتصال بالشبكة وكسب السمعة.",
+      "benefit1": "اكسب نقاط سمعة مقابل مساعدة الأقران",
+      "benefit2": "تحسين اتصال الشبكة واللامركزية",
+      "benefit3": "يستخدم النطاق الترددي عند تمرير الدورات النشطة",
+      "enable": "تفعيل خادم المرحّل",
+      "disable": "تعطيل خادم المرحّل",
+      "start": "بدء الخادم",
+      "stop": "إيقاف الخادم",
+      "starting": "جارٍ البدء...",
+      "enabling": "جارٍ التفعيل...",
+      "disabling": "جارٍ التعطيل...",
+      "activeMessage": "خادم المرحّل الخاص بك نشط ويساعد الأقران!",
+      "earningReputation": "أنت تكسب سمعة عن كل اتصال ناجح.",
+      "aliasLabel": "الاسم العلني لخادم المرحّل",
+      "aliasPlaceholder": "مثال: Alice's Fast Relay 🚀",
+      "aliasHint": "سيظهر هذا الاسم الودود في السجلات وعندما تستخدم العقد الأخرى خادمك كنقطة إقلاع (bootstrap).",
+      "dhtNotRunning": "شبكة DHT غير قيد التشغيل",
+      "dhtNotRunningHint": "يرجى تشغيل الشبكة من صفحة الشبكة أولًا.",
+      "broadcastingAs": "يتم البث كالتالي:"
+    },
+    "client": {
+      "title": "عميل AutoRelay",
+      "subtitle": "الاتصال عبر عُقد المرحّل عند الحاجة",
+      "enableAutorelay": "تفعيل Circuit Relay v2 (AutoRelay)",
+      "preferredRelays": "عُقد المرحّل المفضلة (اختياري)",
+      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\nعنوان multiaddr واحد في كل سطر",
+      "preferredRelaysHint": "اتركها فارغة لاستخدام عقد bootstrap كمرحّلات",
+      "howItWorks": "كيف يعمل:",
+      "description": "يقوم AutoRelay تلقائيًا بالاتصال عبر عُقد المرحّل عندما تكون خلف NAT أو جدار ناري، لضمان إمكانية مشاركتك في الشبكة دائمًا."
+    },
+    "monitoring": {
+      "title": "صحة المرحّل والمراقبة"
+    },
+    "errors": {
+      "dhtNotRunning": "شبكة DHT غير قيد التشغيل. يرجى تشغيل الشبكة من ",
+      "toggleFailed": "فشل تبديل حالة خادم المرحّل: {error}"
+    },
+    "monitor": {
+      "statsTitle": "إحصاءات مجموعة المرحّلات",
+      "totalRelays": "إجمالي المرحّلات",
+      "connected": "متصل",
+      "healthy": "سليم",
+      "totalErrors": "إجمالي الأخطاء",
+      "avgHealthScore": "متوسط درجة الصحة",
+      "activeRelayTitle": "المرحّل النشط",
+      "connectedBadge": "متصل",
+      "peerId": "معرّف النظير:",
+      "healthScore": "درجة الصحة:",
+      "avgLatency": "متوسط الكمون:",
+      "reservation": "الحجز:",
+      "successRate": "معدل النجاح:",
+      "relayPoolTitle": "مجموعة المرحّلات",
+      "noRelaysInPool": "لا توجد مرحّلات في المجموعة",
+      "primaryBadge": "أساسي",
+      "state": "الحالة:",
+      "latency": "الكمون:",
+      "attempts": "المحاولات:",
+      "successes": "النجاحات:",
+      "failures": "الإخفاقات:",
+      "lastSuccess": "آخر نجاح:",
+      "recentErrorsLabel": "الأخطاء الأخيرة:",
+      "recentErrorsTitle": "الأخطاء الأخيرة",
+      "clearButton": "مسح",
+      "relayLabel": "المرحّل:",
+      "retryLabel": "إعادة المحاولة:",
+      "errorTypes": {
+        "connectionRefused": "تم رفض الاتصال",
+        "timeout": "انتهت المهلة",
+        "reservationFailed": "فشل الحجز",
+        "expired": "منتهي الصلاحية",
+        "overloaded": "محمل بشكل زائد",
+        "unreachable": "غير قابل للوصول",
+        "networkError": "خطأ في الشبكة",
+        "authFailed": "فشل المصادقة",
+        "protocolError": "خطأ في البروتوكول",
+        "unknown": "غير معروف"
+      },
+      "time": {
+        "never": "أبدًا",
+        "justNow": "الآن",
+        "minutesAgo": "منذ {minutes} دقيقة",
+        "hoursAgo": "منذ {hours} ساعة",
+        "na": "غير متوفر",
+        "expired": "منتهي",
+        "seconds": "{seconds} ثانية",
+        "minutes": "{minutes} دقيقة",
+        "hours": "{hours} ساعة"
+      }
+    },
+    "leaderboard": {
+      "title": "أفضل خوادم المرحّل",
+      "subtitle": "ترتيب المرحّلات بناءً على السمعة",
+      "refresh": "تحديث",
+      "refreshing": "جارٍ التحديث...",
+      "loading": "جارٍ تحميل بيانات سمعة المرحّلات...",
+      "rank": "الترتيب",
+      "peerId": "معرّف النظير",
+      "score": "الدرجة",
+      "circuits": "الدورات",
+      "bandwidth": "النطاق الترددي",
+      "uptime": "زمن التشغيل",
+      "points": "نقطة",
+      "lastSeen": "آخر ظهور",
+      "totalRelays": "إجمالي المرحّلات",
+      "badgedRelays": "المرحّلات المميّزة",
+      "totalCircuits": "إجمالي الدورات",
+      "noRelays": "لم يتم العثور على خوادم مرحّل",
+      "noRelaysDesc": "ابدأ تشغيل خادم مرحّل للظهور في لوحة الصدارة"
+    }
+  },
+  "upload": {
+    "title": "رفع الملفات",
+    "subtitle": "شارك ملفاتك على شبكة Chiral",
+    "dropFiles": "أسقط الملفات هنا للمشاركة",
+    "dropFilesHint": "اسحب الملفات وأسقطها في أي مكان ضمن هذه البطاقة، أو انقر على زر \"Add Files\" أدناه",
+    "addFiles": "إضافة ملفات",
+    "sharedFiles": "الملفات المشتركة",
+    "file": "ملف",
+    "files": "ملفات",
+    "total": "الإجمالي",
+    "tip": "💡 تلميح: يمكنك أيضًا سحب الملفات وإفلاتها هنا لإضافتها",
+    "addMoreFiles": "إضافة المزيد من الملفات",
+    "supportedFormats": "يدعم الصور، الفيديو، الصوت، المستندات، ملفات الشيفرة وغير ذلك",
+    "supportedFormatsDesktop": "تطبيق سطح المكتب يدعم الصور، الفيديو، الصوت، المستندات، ملفات الشيفرة وغير ذلك",
+    "hashLabel": "Merkle Hash:",
+    "seeder": "seeder{count, plural, =1 {} other {s}}",
+    "leecher": "leecher{count, plural, =1 {} other {s}}",
+    "seeding": "جارٍ البذر (Seeding)",
+    "copyHash": "نسخ Merkle hash",
+    "hashCopied": "تم نسخ Merkle hash!",
+    "stopSharing": "إيقاف المشاركة",
+    "noFilesShared": "لا توجد ملفات مشتركة بعد",
+    "addFilesHint2": "أضف ملفات لبدء مشاركتها على الشبكة",
+    "duplicateSkipped": "{count, plural, one {تم تخطي ملف مكرر واحد.} other {تم تخطي {count} ملفات مكررة.}}",
+    "filesAdded": "{count, plural, one {تمت إضافة ملف واحد إلى قائمة المشاركة.} other {تمت إضافة {count} ملفات إلى قائمة المشاركة.}}",
+    "fileFailed": "فشل في مشاركة {name}: {error}",
+    "storage": {
+      "title": "التخزين المحلي",
+      "available": "{space} جيجابايت متاحة",
+      "unknown": "المساحة غير متاحة",
+      "lowBadge": "مساحة منخفضة",
+      "okBadge": "جيدة",
+      "unknownBadge": "غير معروف",
+      "refresh": "تحديث",
+      "lastChecked": "تم التحديث في {time}",
+      "error": "غير قادر على فحص مساحة القرص",
+      "checking": "جارٍ الفحص...",
+      "lowDescription": "المساحة المنخفضة قد تمنع عمليات الرفع الجديدة."
+    },
+    "encryption": {
+      "title": "مشاركة مشفّرة",
+      "subtitle": "شارك الملفات بشكل مشفّر لمستلمين محددين",
+      "enableForRecipient": "تفعيل المشاركة المشفّرة لمستلم محدد",
+      "recipientPublicKey": "المفتاح العام للمستلم",
+      "publicKeyPlaceholder": "أدخل المفتاح العام للمستلم X25519 (64 حرفًا بنظام hex)",
+      "publicKeyHint": "أدخل المفتاح العام X25519 للمستلم (صيغة hex، 64 حرفًا). سيتم تشفير الملف بحيث لا يستطيع فك تشفيره إلا هو. اتركه فارغًا لتشفيره لنفسك.",
+      "invalidPublicKey": "⚠️ صيغة مفتاح عام غير صالحة. يجب أن يكون 64 حرفًا بنظام hex.",
+      "encryptedBadge": "مشفر"
+    },
+    "currentProtocol": "البروتوكول الحالي",
+    "changeProtocol": "تغيير البروتوكول",
+    "selectProtocol": "اختيار البروتوكول",
+    "webrtcDescription": "نقل سريع من نظير لآخر باستخدام WebRTC",
+    "bitswapDescription": "بروتوكول تبادل كتل متوافق مع IPFS",
+    "requireAccount": "يرجى إنشاء أو استيراد حساب لرفع الملفات",
+    "uploadInProgress": "هناك عملية رفع قيد التنفيذ بالفعل. يرجى الانتظار حتى تكتمل.",
+    "desktopOnly": "رفع الملفات متاح فقط في تطبيق سطح المكتب",
+    "executableBlocked": "{name}: لا يُسمح بالملفات التنفيذية لأسباب أمنية",
+    "emptyFile": "{name}: الملف فارغ",
+    "publishedToDHT": "تم نشر الملفات إلى شبكة DHT للمشاركة!",
+    "storedLocally": "تم تخزين الملفات محليًا. ابدأ شبكة DHT لمشاركتها مع الآخرين.",
+    "uploadError": "خطأ في معالجة الملفات المسقطة. يرجى المحاولة مرة أخرى أو استخدام زر \"Add Files\".",
+    "fileManagementDesktopOnly": "إدارة الملفات متاحة فقط في تطبيق سطح المكتب",
+    "fileUpdated": "الملف {name} موجود بالفعل وتم تحديثه",
+    "fileUploadedNew": "تم رفع {name} بنجاح",
+    "hashCopiedClipboard": "تم نسخ Merkle hash إلى الحافظة!",
+    "desktopAppRequired": "يلزم تطبيق سطح المكتب",
+    "storageMonitoringDesktopOnly": "مراقبة التخزين تتطلب تطبيق سطح المكتب",
+    "dropFilesHere": "✨ أسقط الملفات هنا!",
+    "uploadingFiles": "🔄 جارٍ رفع الملفات...",
+    "releaseToUpload": "حرّر زر الفأرة لبدء رفع ملفاتك فورًا",
+    "dragDropWebNotAvailable": "السحب والإفلات غير متاح في نسخة الويب",
+    "pleaseWaitProcessing": "يرجى الانتظار بينما تتم معالجة ملفاتك...",
+    "dragDropRequiresDesktop": "السحب والإفلات يتطلب تطبيق سطح المكتب",
+    "uploading": "جارٍ الرفع...",
+    "fileUploadDesktopApp": "رفع الملفات يتطلب تطبيق سطح المكتب",
+    "downloadDesktopApp": "قم بتنزيل نسخة سطح المكتب لرفع الملفات ومشاركتها",
+    "desktopManagementRequired": "إدارة الملفات تتطلب تطبيق سطح المكتب",
+    "encryptedEndToEnd": "هذا الملف مشفر من طرف إلى طرف",
+    "active": "نشط",
+    "priceTooltip": "يتم حساب السعر ديناميكيًا بناءً على قوة الهاش في الشبكة",
+    "storedLocallyBadge": "مخزن محليًا",
+    "fileManagementTooltip": "إدارة الملفات تتطلب تطبيق سطح المكتب",
+    "fileManagementWebNotAvailable": "إدارة الملفات غير متاحة في نسخة الويب",
+    "fileDialogError": "فشل فتح مربع حوار اختيار الملفات"
+  },
+  "torrent": {
+    "title": "التورنت",
+    "magnetLink": {
+      "title": "من رابط Magnet",
+      "description": "ألصق رابط magnet لبدء التنزيل.",
+      "placeholder": "magnet:?xt=urn:btih:...",
+      "download": "تنزيل"
+    },
+    "or": "أو",
+    "torrentFile": {
+      "title": "من ملف .torrent",
+      "description": "ارفع ملف .torrent من جهازك.",
+      "choosePlaceholder": "اختر ملف .torrent...",
+      "download": "تنزيل",
+      "invalidFile": "يرجى اختيار ملف .torrent صالح."
+    },
+    "seed": {
+      "title": "إنشاء وبذر تورنت",
+      "description": "اختر ملفًا محليًا لمشاركته مع الشبكة.",
+      "choosePlaceholder": "اختر ملفًا للبذر...",
+      "button": "بدء البذر",
+      "shareMagnet": "شارك رابط magnet هذا:",
+      "noFileSelected": "يرجى اختيار ملف للبذر.",
+      "success": "تم بدء بذر {fileName} بنجاح!",
+      "error": "حدث خطأ أثناء بذر الملف: {error}"
+    },
+    "activeTransfers": {
+      "title": "النقلات النشطة",
+      "filterAll": "الكل",
+      "filterChiral": "Chiral",
+      "filterBitTorrent": "BitTorrent",
+      "noTransfers": "لا توجد نقلات نشطة.",
+      "peers": "الأقران:",
+      "eta": "الوقت المتبقي:"
+    },
+    "download": {
+      "error": "خطأ: {error}",
+      "noIdentifier": "يرجى إدخال رابط magnet أو اختيار ملف .torrent.",
+      "complete": "اكتمل التنزيل: {fileName}"
+    },
+    "clipboard": {
+      "copied": "تم النسخ إلى الحافظة!"
+    }
+  },
+  "bandwidthScheduling": {
+    "title": "جدولة النطاق الترددي",
+    "enable": "تفعيل جدولة النطاق الترددي",
+    "description": "قم بجدولة حدود مختلفة للنطاق الترددي لأوقات وأيام محددة",
+    "schedules": "الجداول المجدولة",
+    "scheduleName": "اسم الجدول",
+    "scheduleDefault": "الجدول {number}",
+    "addSchedule": "إضافة جدول",
+    "remove": "إزالة",
+    "startTime": "وقت البداية",
+    "endTime": "وقت الانتهاء",
+    "uploadSpeed": "سرعة الرفع",
+    "downloadSpeed": "سرعة التنزيل",
+    "uploadLimit": "حد الرفع (KB/s، 0 = غير محدود)",
+    "downloadLimit": "حد التنزيل (KB/s، 0 = غير محدود)",
+    "timeRange": "نطاق الوقت",
+    "daysOfWeek": "أيام الأسبوع",
+    "days": {
+      "sun": "الأحد",
+      "mon": "الاثنين",
+      "tue": "الثلاثاء",
+      "wed": "الأربعاء",
+      "thu": "الخميس",
+      "fri": "الجمعة",
+      "sat": "السبت"
+    }
+  },
+  "downloadHistory": {
+    "title": "سجل التنزيلات",
+    "subtitle": "عرض وإدارة سجل التنزيلات",
+    "showHistory": "عرض السجل",
+    "hideHistory": "إخفاء السجل",
+    "empty": "لا يوجد سجل للتنزيلات بعد",
+    "emptyDescription": "سيظهر هنا التنزيلات المكتملة والفاشلة والملغاة",
+    "search": "البحث في السجل...",
+    "filterAll": "الكل",
+    "filterCompleted": "مكتملة",
+    "filterFailed": "فاشلة",
+    "filterCanceled": "ملغاة",
+    "redownload": "إعادة التنزيل",
+    "remove": "إزالة",
+    "clearHistory": "مسح السجل",
+    "clearFailed": "مسح الفاشلة",
+    "exportHistory": "تصدير السجل",
+    "importHistory": "استيراد السجل",
+    "confirmClear": "هل أنت متأكد أنك تريد مسح كل سجل التنزيلات؟ لا يمكن التراجع عن هذا الإجراء.",
+    "confirmClearFailed": "مسح جميع التنزيلات الفاشلة من السجل؟",
+    "stats": {
+      "total": "إجمالي التنزيلات",
+      "completed": "المكتملة",
+      "failed": "الفاشلة",
+      "canceled": "الملغاة",
+      "totalSize": "إجمالي الحجم",
+      "totalPrice": "إجمالي المبلغ المنفق"
+    },
+    "messages": {
+      "historyCleared": "تم مسح سجل التنزيلات",
+      "failedCleared": "تم مسح التنزيلات الفاشلة",
+      "entryRemoved": "تمت إزالة الإدخال من السجل",
+      "exportSuccess": "تم تصدير السجل بنجاح",
+      "importSuccess": "تم استيراد {count} إدخالات في السجل",
+      "importError": "فشل في استيراد السجل: {error}",
+      "redownloadStarted": "تم بدء إعادة تنزيل {name}..."
+    }
+  },
+  "settingsBackup": {
+    "title": "النسخ الاحتياطي والاستعادة",
+    "description": "تصدير أو استيراد إعدادات التكوين",
+    "export": "تصدير الإعدادات",
+    "import": "استيراد الإعدادات",
+    "exportButton": "تصدير الإعدادات",
+    "importButton": "استيراد الإعدادات",
+    "downloadBackup": "تنزيل ملف النسخ الاحتياطي",
+    "selectFile": "اختيار ملف النسخ الاحتياطي",
+    "merge": "دمج مع الإعدادات الحالية",
+    "replace": "استبدال جميع الإعدادات",
+    "autoBackup": "نسخ احتياطي تلقائي",
+    "autoBackupDescription": "يتم إنشاء نسخ احتياطية تلقائيًا قبل التغييرات الكبيرة",
+    "restoreAutoBackup": "استعادة",
+    "messages": {
+      "exportSuccess": "تم تصدير الإعدادات بنجاح",
+      "exportError": "فشل في تصدير الإعدادات: {error}",
+      "importSuccess": "تم استيراد الإعدادات بنجاح",
+      "importWarnings": "تم استيراد الإعدادات مع تحذيرات: {warnings}",
+      "importError": "فشل في استيراد الإعدادات: {error}",
+      "autoBackupCreated": "تم إنشاء نسخ احتياطي تلقائي",
+      "autoBackupRestored": "تمت استعادة الإعدادات من النسخ الاحتياطي",
+      "invalidFile": "صيغة ملف نسخ احتياطي غير صالحة",
+      "confirmReplace": "سيتم استبدال جميع الإعدادات الحالية. هل تريد المتابعة؟"
+    }
+  },
+  "blockchain": {
+    "title": "مستكشف سلسلة الكتل",
+    "subtitle": "اعرض الكتل والمعاملات وأرصدة الحسابات على شبكة Chiral",
+    "refresh": "تحديث",
+    "refreshed": "تم تحديث البيانات",
+    "copied": "تم النسخ إلى الحافظة",
+    "stats": {
+      "totalBlocks": "إجمالي الكتل",
+      "hashrate": "معدل الهاش للشبكة",
+      "difficulty": "الصعوبة",
+      "peers": "أقران الشبكة"
+    },
+    "tabs": {
+      "blocks": "أحدث الكتل",
+      "search": "بحث",
+      "stats": "مدقق الرصيد"
+    },
+    "blocks": {
+      "latest": "أحدث الكتل",
+      "noBlocks": "لم يتم العثور على كتل"
+    },
+    "sync": {
+      "syncing": "جارٍ المزامنة",
+      "current": "الكتلة الحالية",
+      "highest": "أعلى كتلة",
+      "remaining": "المتبقي",
+      "eta": "الوقت المقدر",
+      "complete": "اكتملت المزامنة"
+    },
+    "search": {
+      "title": "البحث في سلسلة الكتل",
+      "address": "العنوان",
+      "transaction": "المعاملة",
+      "block": "الكتلة",
+      "emptyQuery": "يرجى إدخال عبارة بحث",
+      "error": "فشل البحث: {error}",
+      "unknownError": "خطأ غير معروف",
+      "invalidBlock": "رقم كتلة غير صالح",
+      "notFound": "غير موجود",
+      "addressDetails": "تفاصيل العنوان",
+      "addressLabel": "العنوان",
+      "balance": "الرصيد",
+      "txDetails": "تفاصيل المعاملة",
+      "status": "الحالة",
+      "blockNumber": "رقم الكتلة",
+      "from": "من",
+      "to": "إلى",
+      "value": "القيمة",
+      "blockDetails": "تفاصيل الكتلة",
+      "hash": "التجزئة",
+      "timestamp": "الطابع الزمني"
+    },
+    "balance": {
+      "checker": "مدقق الرصيد",
+      "address": "العنوان",
+      "check": "تحقق من الرصيد",
+      "result": "الرصيد",
+      "emptyAddress": "يرجى إدخال عنوان",
+      "error": "فشل التحقق من الرصيد: {error}",
+      "errorLabel": "خطأ"
+    },
+    "error": {
+      "fetchBlocks": "فشل في جلب الكتل"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "تم النسخ!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "تم اختيار الحساب {address}...",
+        "derived": "تم اشتقاق الحساب رقم #{index}",
+        "deriveError": "فشل الاشتقاق: {error}",
+        "keystorePrompt": "أدخل كلمة مرور keystore",
+        "keystoreSaved": "تم الحفظ في keystore",
+        "keystoreError": "فشل حفظ keystore: {error}"
+      },
+      "mnemonic": {
+        "ready": "المحفظة جاهزة",
+        "copied": "تم نسخ عبارة الاسترداد إلى الحافظة"
+      },
+      "transaction": {
+        "confirmed": "تم تأكيد المعاملة! تم إرسال {amount} CN إلى {address}... (الكتلة {block})",
+        "failed": "فشلت المعاملة في الكتلة {block}. لم يتم إرسال أموالك."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "تم إنشاء المحفظة التجريبية TestWallet!",
+        "testWalletError": "فشل إنشاء المحفظة التجريبية"
+      },
+      "addressCopied": "تم نسخ العنوان إلى الحافظة!",
+      "privateKey": {
+        "fetchError": "فشل في جلب المفتاح الخاص",
+        "copied": "تم نسخ المفتاح الخاص إلى الحافظة!",
+        "missing": "لا يوجد مفتاح خاص متاح"
+      },
+      "transaction": {
+        "cancelled": "تم إلغاء المعاملة",
+        "submitted": "تم إرسال المعاملة!",
+        "error": "فشلت المعاملة: {error}"
+      },
+      "created": "تم إنشاء الحساب بنجاح!",
+      "createError": "فشل إنشاء الحساب: {error}",
+      "import": {
+        "invalidFormat": "صيغة مفتاح خاص غير صالحة",
+        "success": "تم استيراد الحساب بنجاح!",
+        "error": "فشل استيراد الحساب: {error}",
+        "fileInvalid": "صيغة ملف غير صالحة: لم يتم العثور على الحقل privateKey",
+        "fileSuccess": "تم تحميل المفتاح الخاص من الملف بنجاح!",
+        "fileReadError": "خطأ في قراءة الملف: {error}",
+        "fileLoadError": "خطأ في تحميل الملف: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "المصادقة الثنائية 2FA متاحة فقط في تطبيق سطح المكتب.",
+        "setupError": "فشل بدء إعداد 2FA: {error}",
+        "enabled": "تم تفعيل المصادقة الثنائية!",
+        "disabled": "تم تعطيل المصادقة الثنائية.",
+        "disableError": "فشل تعطيل 2FA: {error}"
+      },
+      "logout": {
+        "locked": "تم قفل المحفظة ومسح الجلسة",
+        "error": "حدث خطأ أثناء تسجيل الخروج: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "اكتمل مزامنة سلسلة الكتل! التعدين نشط الآن."
+    },
+    "blockchain": {
+      "noBlocks": "لم يتم العثور على أي كتل. ابدأ التعدين لإنشاء كتل.",
+      "fetchError": "فشل في جلب الكتل: {error}"
+    },
+    "settings": {
+      "updated": "تم تحديث الإعدادات!",
+      "networkingError": "تم حفظ الإعدادات، لكن فشل تحديث إعدادات الشبكة",
+      "proxyRelayWarning": "أضف مرحّل وكيل واحد موثوق على الأقل قبل تفعيل إخفاء عنوان IP."
+    },
+    "analytics": {
+      "direction": {
+        "upload": "الرفع",
+        "download": "التنزيل"
+      },
+      "bandwidthWarning": "تحذير حد {direction}: تم استخدام {used} جيجابايت ({percent}% من {cap} جيجابايت).",
+      "bandwidthTitle": "تحذير حد {direction}"
+    },
+    "upload": {
+      "loginRequired": "يرجى تسجيل الدخول إلى حسابك قبل رفع الملفات",
+      "verifyAccountFailed": "فشل التحقق من حالة الحساب. يرجى تسجيل الدخول مرة أخرى.",
+      "dhtDisconnected": "شبكة DHT غير متصلة. يرجى تشغيل شبكة DHT قبل رفع الملفات.",
+      "fileSuccess": "تم رفع {name} بنجاح",
+      "torrentSeeding": "{name} يقوم الآن بالبذر كتورنت"
+    },
+    "network": {
+      "signalingConnected": "تم الاتصال بخادم الإشارات",
+      "signalingError": "فشل الاتصال بخادم الإشارات لاختبار وضع الويب",
+      "peerAddressRequired": "يرجى إدخال عنوان نظير",
+      "dhtRequired": "شبكة DHT غير متصلة. يرجى تشغيل DHT أولًا.",
+      "alreadyConnected": "النظير متصل بالفعل",
+      "connecting": "جارٍ الاتصال بالنظير عبر DHT...",
+      "connectionSuccess": "تم الاتصال بنجاح!",
+      "connectionFailed": "فشل الاتصال. قد يكون النظير غير متاح أو العنوان غير صالح.",
+      "connectError": "فشل الاتصال بالنظير: {error}",
+      "signalingMissing": "خادم الإشارات غير متصل. يرجى تشغيل DHT أولًا.",
+      "peerNotFound": "لم يتم العثور على النظير {peer} بين الأقران المكتشفين",
+      "messageReceived": "تم الاستلام من النظير: {message}",
+      "webrtcConnected": "تم الاتصال بالنظير بنجاح عبر WebRTC!",
+      "webrtcFailed": "فشل الاتصال بالنظير عبر WebRTC",
+      "dataChannelOpen": "قناة البيانات مفتوحة - يمكنك الآن إرسال الرسائل!",
+      "dataChannelClosed": "تم إغلاق قناة البيانات",
+      "webrtcError": "خطأ WebRTC: {error}",
+      "webrtcConnecting": "جارٍ الاتصال بالنظير: {peer}",
+      "webrtcCreateError": "فشل إنشاء اتصال WebRTC: {error}",
+      "noConnection": "لا يوجد اتصال WebRTC نشط",
+      "messageSent": "تم إرسال رسالة اختبار: {message}",
+      "sendError": "فشل إرسال الرسالة: {error}",
+      "gethInstalled": "Geth مثبت بالفعل",
+      "gethDownloadError": "فشل تنزيل Geth: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "لا يمكن معالجة الدفع: عنوان محفظة الرافع مفقود أو غير صالح",
+        "failed": "فشل الدفع: {error}",
+        "successWithHash": "تم الدفع بنجاح! المعاملة: {hash}...",
+        "success": "تم الدفع بنجاح!"
+      }
+    },
+    "transactions": {
+      "copied": "تم نسخ {label} إلى الحافظة",
+      "copyError": "فشل نسخ {label}",
+      "exported": "تم تصدير المعاملة"
+    }
+  }
+}

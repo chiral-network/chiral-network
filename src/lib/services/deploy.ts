@@ -1,3 +1,4 @@
+// @ts-nocheck - Hardhat deployment script, not used in production
 import { ethers } from "hardhat";
 
 async function main() {

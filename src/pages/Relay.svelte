@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { invoke } from '@tauri-apps/api/core';
   import { settings } from '$lib/stores';
+  import type { AppSettings } from '$lib/stores';
   import { dhtService } from '$lib/dht';
   import { relayErrorService } from '$lib/services/relayErrorService';
   import Card from '$lib/components/ui/card.svelte';
@@ -15,33 +16,73 @@
   let relayServerEnabled = false;
   let relayServerRunning = false;
   let isToggling = false;
-  let dhtIsRunning = false;
+  let dhtIsRunning: boolean | null = null;
   let relayServerAlias = '';
+  let isRestartingAutorelay = false;
 
   // AutoRelay client settings
   let autoRelayEnabled = true;
-  let preferredRelaysText = '';
+
+  let settingsUnsubscribe: (() => void) | null = null;
+
+  function applySettingsState(source: Partial<AppSettings>) {
+    if (typeof source.enableRelayServer === 'boolean') {
+      relayServerEnabled = source.enableRelayServer;
+    }
+    if (typeof source.enableAutorelay === 'boolean') {
+      autoRelayEnabled = source.enableAutorelay;
+    }
+    if (typeof source.relayServerAlias === 'string') {
+      relayServerAlias = source.relayServerAlias;
+    }
+  }
 
   async function loadSettings() {
+    // Start with current store values
+    applySettingsState(get(settings));
+
     // Load settings from localStorage
     const stored = localStorage.getItem('chiralSettings');
     if (stored) {
       try {
-        const loadedSettings = JSON.parse(stored);
-        relayServerEnabled = loadedSettings.enableRelayServer ?? false;
-        autoRelayEnabled = loadedSettings.enableAutorelay ?? true;
-        preferredRelaysText = (loadedSettings.preferredRelays || []).join('\n');
-        relayServerAlias = loadedSettings.relayServerAlias ?? '';
+        const loadedSettings = JSON.parse(stored) as Partial<AppSettings>;
+        applySettingsState(loadedSettings);
+        // Keep the shared settings store in sync with what we loaded
+        settings.update((prev) => ({ ...prev, ...loadedSettings }));
       } catch (e) {
         console.error('Failed to load settings:', e);
       }
     }
 
-    // Check if DHT is running
+    // Check if DHT is actually running
+    await checkDhtStatus();
+
+    // If DHT is running, trust the live health snapshot for AutoRelay state
+    if (dhtIsRunning) {
+      try {
+        const health = await dhtService.getHealth();
+        if (health) {
+          autoRelayEnabled = health.autorelayEnabled;
+          await saveSettings();
+        }
+      } catch (error) {
+        console.error('Failed to sync AutoRelay state from DHT health:', error);
+      }
+    }
+  }
+
+  async function checkDhtStatus() {
     try {
-      const peerId = await invoke<string | null>('get_dht_peer_id');
-      dhtIsRunning = peerId !== null;
-      relayServerRunning = dhtIsRunning && relayServerEnabled;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
+      dhtIsRunning = isRunning;
+      
+      // If DHT is running and relay server is enabled in settings, mark it as running
+      if (isRunning && relayServerEnabled) {
+        relayServerRunning = true;
+      } else {
+        relayServerRunning = false;
+      }
     } catch (error) {
       console.error('Failed to check DHT status:', error);
       dhtIsRunning = false;
@@ -64,15 +105,44 @@
       ...currentSettings,
       enableRelayServer: relayServerEnabled,
       enableAutorelay: autoRelayEnabled,
-      preferredRelays: preferredRelaysText
-        .split('\n')
-        .map((r) => r.trim())
-        .filter((r) => r.length > 0),
       relayServerAlias: relayServerAlias.trim(),
     };
 
     localStorage.setItem('chiralSettings', JSON.stringify(currentSettings));
     settings.set(currentSettings as any);
+  }
+
+  async function restartDhtWithSettings() {
+    const currentSettings = JSON.parse(localStorage.getItem('chiralSettings') || '{}');
+
+    const bootstrapNodes =
+      currentSettings.customBootstrapNodes && currentSettings.customBootstrapNodes.length > 0
+        ? currentSettings.customBootstrapNodes
+        : [];
+
+    await dhtService.stop();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    await dhtService.start({
+      port: currentSettings.port || 4001,
+      bootstrapNodes,
+      enableAutonat: currentSettings.enableAutonat,
+      autonatProbeIntervalSeconds: currentSettings.autonatProbeInterval,
+      autonatServers: currentSettings.autonatServers || [],
+      enableAutorelay: currentSettings.enableAutorelay,
+      preferredRelays: currentSettings.preferredRelays || [],
+      enableRelayServer: currentSettings.enableRelayServer,
+      relayServerAlias: currentSettings.relayServerAlias || '',
+      chunkSizeKb: currentSettings.chunkSize,
+      cacheSizeMb: currentSettings.cacheSize,
+    });
+
+    relayServerEnabled = currentSettings.enableRelayServer ?? relayServerEnabled;
+    relayServerRunning = currentSettings.enableRelayServer ?? false;
+    autoRelayEnabled = currentSettings.enableAutorelay ?? autoRelayEnabled;
+    dhtIsRunning = true;
+
+    return currentSettings;
   }
 
   async function toggleRelayServer() {
@@ -91,38 +161,7 @@
 
       // Restart DHT with new settings
       console.log('Restarting DHT with relay server:', relayServerEnabled);
-
-      // Get current DHT config
-      const currentSettings = JSON.parse(localStorage.getItem('chiralSettings') || '{}');
-
-      // Stop DHT
-      await dhtService.stop();
-
-      // Wait a bit for cleanup
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Use custom bootstrap nodes if configured, otherwise use defaults
-      const bootstrapNodes = currentSettings.customBootstrapNodes && currentSettings.customBootstrapNodes.length > 0
-        ? currentSettings.customBootstrapNodes
-        : [];
-
-      // Start with new config
-      await dhtService.start({
-        port: currentSettings.port || 4001,
-        bootstrapNodes, // Use custom or default bootstrap nodes
-        enableAutonat: currentSettings.enableAutonat,
-        autonatProbeIntervalSeconds: currentSettings.autonatProbeInterval,
-        autonatServers: currentSettings.autonatServers || [],
-        enableAutorelay: currentSettings.enableAutorelay,
-        preferredRelays: currentSettings.preferredRelays || [],
-        enableRelayServer: relayServerEnabled,
-        relayServerAlias: currentSettings.relayServerAlias || '',
-        chunkSizeKb: currentSettings.chunkSize,
-        cacheSizeMb: currentSettings.cacheSize,
-      });
-
-      relayServerRunning = relayServerEnabled;
-      dhtIsRunning = true;
+      await restartDhtWithSettings();
 
       console.log(`Relay server ${relayServerEnabled ? 'enabled' : 'disabled'}`);
     } catch (error) {
@@ -136,43 +175,84 @@
     }
   }
 
-  function updatePreferredRelays() {
-    saveSettings();
+  async function handleAutorelayToggle(event: Event) {
+    const target = event.target as HTMLInputElement;
+    const newValue = target.checked;
+    const previousValue = autoRelayEnabled;
+
+    isRestartingAutorelay = true;
+    try {
+      autoRelayEnabled = newValue;
+      await saveSettings();
+
+      const { invoke } = await import('@tauri-apps/api/core');
+      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
+
+      if (isRunning) {
+        await restartDhtWithSettings();
+      }
+    } catch (error) {
+      console.error('Failed to toggle AutoRelay:', error);
+      autoRelayEnabled = previousValue;
+      await saveSettings();
+      alert($t('relay.errors.toggleFailed', { values: { error } }));
+    } finally {
+      isRestartingAutorelay = false;
+    }
   }
 
-  onMount(async () => {
-    await loadSettings();
+  let statusCheckInterval: number | undefined;
 
-    // Initialize relay error service with preferred relays
-    const preferredRelays = preferredRelaysText
-      .split('\n')
-      .map((r) => r.trim())
-      .filter((r) => r.length > 0);
+  onMount(() => {
+    settingsUnsubscribe = settings.subscribe(applySettingsState);
 
-    if (preferredRelays.length > 0 || autoRelayEnabled) {
-      await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
+    // Load settings and start status checking
+    (async () => {
+      await loadSettings();
 
-      // Attempt to connect to best relay if AutoRelay is enabled
-      if (autoRelayEnabled && dhtIsRunning) {
-        try {
-          const result = await relayErrorService.connectToRelay();
-          if (result.success) {
-            console.log('Successfully connected to relay via error service');
-          } else {
-            console.warn('Failed to connect to relay:', result.error);
+      // Periodically check DHT status (every 3 seconds)
+      statusCheckInterval = window.setInterval(checkDhtStatus, 3000);
+
+      // Initialize relay error service with preferred relays
+      const preferredRelays = get(settings).preferredRelays || [];
+
+      if (preferredRelays.length > 0 || autoRelayEnabled) {
+        await relayErrorService.initialize(preferredRelays, autoRelayEnabled);
+
+        // Attempt to connect to best relay if AutoRelay is enabled
+        const stats = get(relayErrorService.relayStats);
+        const hasRelays = stats.totalRelays > 0;
+        if (autoRelayEnabled && dhtIsRunning && hasRelays) {
+          try {
+            const result = await relayErrorService.connectToRelay();
+            if (result.success) {
+              console.log('Successfully connected to relay via error service');
+            } else {
+              console.warn('Failed to connect to relay:', result.error);
+            }
+          } catch (error) {
+            console.error('Error connecting to relay:', error);
           }
-        } catch (error) {
-          console.error('Error connecting to relay:', error);
+        } else if (autoRelayEnabled && !hasRelays) {
+          console.info('AutoRelay enabled but no preferred relays configured; skipping relay connection attempt.');
         }
       }
-    }
+    })();
+
+    // Cleanup interval on unmount
+    return () => {
+      if (statusCheckInterval !== undefined) {
+        clearInterval(statusCheckInterval);
+      }
+      settingsUnsubscribe?.();
+    };
   });
 </script>
 
-<div class="p-6 max-w-7xl mx-auto">
+<div class="space-y-6">
   <div class="mb-8">
-    <h1 class="text-3xl font-bold text-gray-900">{$t('relay.title')}</h1>
-    <p class="mt-2 text-gray-600">{$t('relay.subtitle')}</p>
+    <h1 class="text-3xl font-bold">{$t('relay.title')}</h1>
+    <p class="text-muted-foreground mt-2">{$t('relay.subtitle')}</p>
   </div>
 
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -225,7 +305,7 @@
           </p>
         </div>
 
-        {#if !dhtIsRunning}
+        {#if dhtIsRunning === false}
           <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
             <p class="text-sm font-semibold text-yellow-900">
               {$t('relay.server.dhtNotRunning')}
@@ -234,12 +314,21 @@
               {$t('relay.server.dhtNotRunningHint')}
             </p>
           </div>
+        {:else if dhtIsRunning === null}
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p class="text-sm font-semibold text-blue-900">
+              Network Not Started
+            </p>
+            <p class="text-xs text-blue-700 mt-1">
+              Start the network from the Network page to enable relay functionality.
+            </p>
+          </div>
         {/if}
 
         <div class="flex items-center justify-between">
           <Button
             on:click={toggleRelayServer}
-            disabled={!dhtIsRunning || isToggling}
+            disabled={dhtIsRunning !== true || isToggling}
             variant={relayServerEnabled ? 'destructive' : 'default'}
             class="w-full"
           >
@@ -292,7 +381,8 @@
             type="checkbox"
             id="enable-autorelay"
             bind:checked={autoRelayEnabled}
-            on:change={saveSettings}
+            on:change={handleAutorelayToggle}
+            disabled={isRestartingAutorelay}
           />
           <Label for="enable-autorelay" class="cursor-pointer">
             {$t('relay.client.enableAutorelay')}
@@ -300,21 +390,6 @@
         </div>
 
         {#if autoRelayEnabled}
-          <div>
-            <Label for="preferred-relays">{$t('relay.client.preferredRelays')}</Label>
-            <textarea
-              id="preferred-relays"
-              bind:value={preferredRelaysText}
-              on:blur={updatePreferredRelays}
-              placeholder={$t('relay.client.preferredRelaysPlaceholder')}
-              rows="4"
-              class="font-mono text-sm w-full border rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            ></textarea>
-            <p class="text-xs text-gray-500 mt-1">
-              {$t('relay.client.preferredRelaysHint')}
-            </p>
-          </div>
-
           <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
             <p class="text-sm text-purple-900">
               <strong>{$t('relay.client.howItWorks')}</strong>
@@ -329,7 +404,7 @@
   </div>
 
   <!-- Relay Error Monitor -->
-  {#if autoRelayEnabled && dhtIsRunning}
+  {#if autoRelayEnabled && dhtIsRunning === true}
     <div class="mt-6">
       <h2 class="text-2xl font-bold text-gray-900 mb-4">{$t('relay.monitoring.title')}</h2>
       <RelayErrorMonitor />

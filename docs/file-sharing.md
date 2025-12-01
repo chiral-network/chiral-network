@@ -23,7 +23,6 @@ Chiral Network implements a BitTorrent-like file sharing model with instant seed
     - Instantly available when added (no upload process)
     - Identified by cryptographic hashes (SHA-256)
     - Discoverable through the DHT network
-    - Versioned for update tracking
 
 ### Basic File Sharing
 
@@ -69,6 +68,36 @@ Chiral Network supports downloading from multiple peers simultaneously:
 - **Bandwidth aggregation** for faster transfers
 - **Automatic failover** if peers disconnect
 - **Chunk verification** using merkle tree
+
+#### Multi-Peer Download Details:
+- Architecture:
+  - Files are split into pieces of equal length (except for the last piece). If peer acceleration is enabled, then WebRTC or Bitswap will be used for piece exchange. When one peer downloads a piece of the file they need, it informs the rest of the peers that “I have this piece” so that the rest of the peers can start downloading from this peer who now currently has this piece. In the same way, every other peer does the same thing
+  - We will support downloading a file from its original single source, either HTTP, FTP, BitTorrent or ed2k -- and optionally accelerate the download using Chiral Network's Private Peer Protocols WebRTC or Bitswap.
+  - It is important to note that multiple conventional sources are NOT combined (i.e. using more than different protocol simultaneously to download a file). Instead, the main download source is simply the original URL and peers simply assist with acceleration.
+
+- Problems: 
+  - How do we manage multi downloads and ensure its speed? 
+  - How do the pieces get transferred and what happens when a seeder suddenly dips after a piece? 
+- Solution: 
+  - Give the highest priority to the rarest piece of the file. We distribute the rarest piece of the file with a selected number of peers and then make sure to transfer the rest of the pieces with as many peers as possible so that it doesn’t matter whether the seeder is active or not
+  - As a result, we minimize the dependency on the original seeder for downloading the file and encouraging more P2P connections
+
+#### Strategies
+- Rarest-First Piece Selection: prioritize the download of the rarest piece among all peers
+  - Maxmize piece distribution across peers
+  - Ensure no piece becomes unavailable if the original source disconnects
+  - Improve speed - rare pieces are more sought out which results in more reciprocation and higher unchoke rates.
+How to compute the rarest piece? There are two ways (borrowed from BitTorrent Protocols)
+  - **Have** messages: When a peer downloads a piece, it broadcasts a dynamic message saying, 
+  I have piece X now."
+- **Bitfield** messages: during the initial handshake, a peer sends a Bitfield message that contains the pieces that it holds
+  - When 2 peers handshake, we send an array of bits with 0s or 1s where 1 represents the pieces that it has and 0 representing the pieces that it doesn’t have. After exchanging the bitfield messages, the peer computes the rarest piece and prioritizes downloading of that piece first. 
+  - Also prioritize downloading of all the blocks in the piece before moving onto the next piece.Every peer maintains the piece availability across its peer set and uses it to compute the rarest piece.
+
+Download Flow Summary:
+1. Download begins from the original single protocol URL (HTTP, FTP, BT, or ed2k)
+2. Peers can also use WebRTC or BitSwap for acceleration
+3. Peers can exchange bitfield messages and compute the rarest piece OR peers can download pieces and send have message announcements
 
 ### Download Queue Management
 
@@ -260,6 +289,31 @@ Objective: Maintain a single global configuration for determining the Chiral-to-
 
 2. Dynamic Hash-Power-Based Rate: Adjusts pricing based on the network’s mining difficulty.
 ```pricePerMB = (baseHashCost / avgHashPower) * normalizationFactor```
+
+##### Dynamic Hash-Power Based Pricing Explanation:
+
+| Variable             | What it means                             | Units (approx.)                |
+|----------------------|-------------------------------------------|--------------------------------|
+| `network_hashrate`   | Total computational power of network       | Hashes/second                  |
+| `active_miners`      | Number of active miners                    | count                          |
+| `power_usage`        | Power used by individual miner             | Watts                          |
+| `avgHashPower`       | Average hashrate per miner                 | Hashes/second per miner        |
+| `baseHashCost`       | Energy consumed per hash                   | Watts / (Hashes/second)        |
+| `normalizationFactor`| Tunable scaling factor                     | Dimensionless                  |
+| `pricePerMB`         | Final Chiral price per MB                  | Chiral / MB                    |
+
+
+- In order to calculate the price per MB (using the dynamic hashrate of the network) we use the formula: ` pricePerMB = (baseHashCost / avgHashPower) * network_difficulty * normalizationFactor`
+- Average Hash Power = Network Hash Rate / Active Miners:
+  - The average hash power per miner is calculated as the total network hashrate divided by the number of miners and this essentially gives a baseline for what an average miner contributes to the network
+- Base Hash Cost (Per Miner) = Power Usage / Max(Average Hash Power, 1)
+  - This represents the unit cost of computing one hash for the current miner, normalized to the network average. Essentially, how expensive is it for this miner to generate a hash relative to the average network power. A miner with low efficiency (High power usage and low hash output) will have a higher base hash cost.
+  - Dividing by Max(Average Hash Power, 1) ensures that we do not divide by 0 even when the network hashrate is low
+- Price Per MB = (Base Hash Cost / Average Hash Power) * Network_Difficulty * Normalization Factor`
+  - Adjust the miner’s cost by comparing it to the network average hash power and normalize the cost per hash
+  - Scale the mining difficulty based on how many hashes are needed to “mine” a block
+  - Multiply by the normalization factor (this is tunable) to convert the computational cost into price per MB
+  - Essentially gives a sense of how much it costs this miner to process data compared to the network.
 
 
 # Download Control & Payment Enforcement Protocol

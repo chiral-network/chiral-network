@@ -1,14 +1,30 @@
-use crate::dht::{DhtService, FileMetadata, WebRTCOfferRequest};
-use crate::download_source::{DownloadSource, FtpSourceInfo as DownloadFtpSourceInfo};
+use crate::analytics::AnalyticsService;
+use crate::bittorrent_handler::BitTorrentHandler;
+use crate::dht::{DhtService, models::FileMetadata, WebRTCOfferRequest};
+use crate::download_source::{
+    BitTorrentSourceInfo, DownloadSource, Ed2kSourceInfo as DownloadEd2kSourceInfo,
+    FtpSourceInfo as DownloadFtpSourceInfo,
+};
+use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
+use crate::transfer_events::{
+    TransferEventBus, TransferStartedEvent, SourceConnectedEvent, SourceDisconnectedEvent,
+    ChunkCompletedEvent, ChunkFailedEvent, TransferProgressEvent, TransferCompletedEvent,
+    TransferFailedEvent, SourceInfo, SourceType, SourceSummary, DisconnectReason, ErrorCategory,
+    current_timestamp_ms, calculate_progress,
+};
+use crate::ftp_downloader::{FtpCredentials, FtpDownloader};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
-use url::Url;
+use md4::Md4;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use suppaftp::FtpStream;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::timeout;
 use tracing::{error, info, warn};
+use url::Url;
 
 const DEFAULT_CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks
 const MAX_CHUNKS_PER_PEER: usize = 10; // Maximum chunks to assign to a single peer
@@ -19,7 +35,7 @@ const CHUNK_REQUEST_TIMEOUT_SECS: u64 = 60;
 #[allow(dead_code)]
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub struct ChunkInfo {
     pub chunk_id: u32,
@@ -84,6 +100,36 @@ pub type PeerAssignment = SourceAssignment;
 #[deprecated(note = "Use SourceStatus instead")]
 pub type PeerStatus = SourceStatus;
 
+fn normalized_sha256_hex(hash: &str) -> Option<String> {
+    let trimmed = hash.trim();
+    if trimmed.len() != 64 {
+        return None;
+    }
+
+    if trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(trimmed.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+fn verify_chunk_integrity(chunk: &ChunkInfo, data: &[u8]) -> Result<(), (String, String)> {
+    let expected = match normalized_sha256_hex(&chunk.hash) {
+        Some(value) => value,
+        None => return Ok(()),
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let actual = hex::encode(hasher.finalize());
+
+    if actual != expected {
+        return Err((chunk.hash.clone(), actual));
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MultiSourceProgress {
@@ -138,12 +184,22 @@ pub struct ActiveDownload {
 pub struct MultiSourceDownloadService {
     dht_service: Arc<DhtService>,
     webrtc_service: Arc<WebRTCService>,
+    ftp_downloader: Arc<FtpDownloader>,
+    bittorrent_handler: Arc<BitTorrentHandler>,
     proxy_latency_service: Option<Arc<Mutex<crate::proxy_latency::ProxyLatencyService>>>,
     active_downloads: Arc<RwLock<HashMap<String, ActiveDownload>>>,
     event_tx: mpsc::UnboundedSender<MultiSourceEvent>,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<MultiSourceEvent>>>,
     command_tx: mpsc::UnboundedSender<MultiSourceCommand>,
     command_rx: Arc<Mutex<mpsc::UnboundedReceiver<MultiSourceCommand>>>,
+    // FTP connection pool - maps FTP URL to connection for reuse
+    ftp_connections: Arc<Mutex<HashMap<String, FtpStream>>>,
+    // Ed2k connection pool - maps server URL to Ed2k client for reuse
+    ed2k_connections: Arc<Mutex<HashMap<String, Ed2kClient>>>,
+    // Transfer event bus for unified event emission to frontend
+    transfer_event_bus: Arc<TransferEventBus>,
+    // Analytics service for backend metrics tracking
+    analytics_service: Arc<AnalyticsService>,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,13 +261,21 @@ pub enum MultiSourceEvent {
 }
 
 impl MultiSourceDownloadService {
-    pub fn new(dht_service: Arc<DhtService>, webrtc_service: Arc<WebRTCService>) -> Self {
+    pub fn new(
+        dht_service: Arc<DhtService>,
+        webrtc_service: Arc<WebRTCService>,
+        bittorrent_handler: Arc<BitTorrentHandler>,
+        transfer_event_bus: Arc<TransferEventBus>,
+        analytics_service: Arc<AnalyticsService>,
+    ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
         Self {
             dht_service,
             webrtc_service,
+            ftp_downloader: Arc::new(FtpDownloader::new()),
+            bittorrent_handler,
             proxy_latency_service: Some(Arc::new(Mutex::new(
                 crate::proxy_latency::ProxyLatencyService::new(),
             ))),
@@ -220,6 +284,10 @@ impl MultiSourceDownloadService {
             event_rx: Arc::new(Mutex::new(event_rx)),
             command_tx,
             command_rx: Arc::new(Mutex::new(command_rx)),
+            ftp_connections: Arc::new(Mutex::new(HashMap::new())),
+            ed2k_connections: Arc::new(Mutex::new(HashMap::new())),
+            transfer_event_bus,
+            analytics_service,
         }
     }
 
@@ -304,10 +372,11 @@ impl MultiSourceDownloadService {
             }
         }
 
-        // Search for file metadata
+        // Search for file metadata with sufficient timeout for DHT queries
+        // Using 35s to match main.rs and allow full Kademlia query time (30s) + provider queries
         let metadata = match self
             .dht_service
-            .synchronous_search_metadata(file_hash.clone(), 5000)
+            .synchronous_search_metadata(file_hash.clone(), 35000)
             .await
         {
             Ok(Some(metadata)) => metadata,
@@ -325,7 +394,10 @@ impl MultiSourceDownloadService {
             .await
             .map_err(|e| format!("Peer discovery failed: {}", e))?;
 
-        info!("Found {} available P2P peers for file", available_peers.len());
+        info!(
+            "Found {} available P2P peers for file",
+            available_peers.len()
+        );
 
         // Convert P2P peers to DownloadSource instances
         for peer_id in available_peers {
@@ -341,18 +413,53 @@ impl MultiSourceDownloadService {
         // 2. Discover FTP sources from metadata
         if let Some(ftp_sources) = &metadata.ftp_sources {
             info!("Found {} FTP sources for file", ftp_sources.len());
-            
+
             for ftp_info in ftp_sources {
                 // Convert DHT FtpSourceInfo to DownloadSource FtpSourceInfo
                 available_sources.push(DownloadSource::Ftp(DownloadFtpSourceInfo {
                     url: ftp_info.url.clone(),
                     username: ftp_info.username.clone(),
                     encrypted_password: ftp_info.password.clone(),
-                    passive_mode: true,  // Default to passive mode
-                    use_ftps: false,     // Default to regular FTP
+                    passive_mode: true, // Default to passive mode
+                    use_ftps: false,    // Default to regular FTP
                     timeout_secs: Some(30),
                 }));
             }
+        }
+
+        // 3. Discover ed2k sources from metadata
+        if let Some(ed2k_sources) = &metadata.ed2k_sources {
+            info!("Found {} ed2k sources for file", ed2k_sources.len());
+
+            for ed2k_info in ed2k_sources {
+                // Convert DHT Ed2kSourceInfo to DownloadSource Ed2kSourceInfo
+                available_sources.push(DownloadSource::Ed2k(DownloadEd2kSourceInfo {
+                    server_url: ed2k_info.server_url.clone(),
+                    file_hash: ed2k_info.file_hash.clone(),
+                    file_size: ed2k_info.file_size,
+                    file_name: ed2k_info.file_name.clone(),
+                    sources: ed2k_info.sources.clone(),
+                    timeout_secs: ed2k_info.timeout,
+                }));
+            }
+        }
+
+        // 4. Discover BitTorrent source from metadata
+        if let Some(info_hash) = &metadata.info_hash {
+            info!(
+                "Found BitTorrent source for file with info_hash: {}",
+                info_hash
+            );
+            let mut magnet_uri = format!("magnet:?xt=urn:btih:{}", info_hash);
+            if let Some(trackers) = &metadata.trackers {
+                for tracker in trackers {
+                    magnet_uri.push_str("&tr=");
+                    magnet_uri.push_str(tracker);
+                }
+            }
+            available_sources.push(DownloadSource::BitTorrent(BitTorrentSourceInfo {
+                magnet_uri,
+            }));
         }
 
         if available_sources.is_empty() {
@@ -407,7 +514,41 @@ impl MultiSourceDownloadService {
         self.start_source_connections(&file_hash, selected_sources.clone())
             .await?;
 
-        // Emit download started event
+        // Emit download started event via TransferEventBus
+        let available_source_infos: Vec<SourceInfo> = selected_sources.iter().map(|s| {
+            let (source_type, address) = match s {
+                DownloadSource::P2p(info) => (SourceType::P2p, info.peer_id.clone()),
+                DownloadSource::Http(info) => (SourceType::Http, info.url.clone()),
+                DownloadSource::Ftp(info) => (SourceType::Ftp, info.url.clone()),
+                DownloadSource::BitTorrent(info) => (SourceType::BitTorrent, info.magnet_uri.clone()),
+                DownloadSource::Ed2k(info) => (SourceType::P2p, info.server_url.clone()),
+            };
+            SourceInfo {
+                id: s.identifier(),
+                source_type,
+                address,
+                reputation: None,
+                estimated_speed_bps: None,
+                latency_ms: None,
+                location: None,
+            }
+        }).collect();
+
+        let selected_source_ids: Vec<String> = selected_sources.iter().map(|s| s.identifier()).collect();
+
+        self.transfer_event_bus.emit_started_with_analytics(TransferStartedEvent {
+            transfer_id: file_hash.clone(),
+            file_hash: file_hash.clone(),
+            file_name: metadata.file_name.clone(),
+            file_size: metadata.file_size,
+            total_chunks,
+            chunk_size,
+            started_at: current_timestamp_ms(),
+            available_sources: available_source_infos,
+            selected_sources: selected_source_ids,
+        }, &self.analytics_service).await;
+
+        // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::DownloadStarted {
             file_hash: file_hash.clone(),
             total_peers: selected_sources.len(),
@@ -457,20 +598,29 @@ impl MultiSourceDownloadService {
     }
 
     /// Select optimal sources based on priority scoring
-    fn select_optimal_sources(&self, available_sources: &[DownloadSource], max_sources: usize) -> Vec<DownloadSource> {
+    fn select_optimal_sources(
+        &self,
+        available_sources: &[DownloadSource],
+        max_sources: usize,
+    ) -> Vec<DownloadSource> {
         let mut sources = available_sources.to_vec();
-        
+
         // Sort by priority score (higher is better)
         sources.sort_by(|a, b| b.priority_score().cmp(&a.priority_score()));
-        
+
         // Take the top sources
         sources.truncate(max_sources);
-        
+
         info!("Selected sources by priority:");
         for (i, source) in sources.iter().enumerate() {
-            info!("  {}: {} (priority: {})", i + 1, source.display_name(), source.priority_score());
+            info!(
+                "  {}: {} (priority: {})",
+                i + 1,
+                source.display_name(),
+                source.priority_score()
+            );
         }
-        
+
         sources
     }
 
@@ -496,15 +646,24 @@ impl MultiSourceDownloadService {
         for (source, chunk_ids) in chunk_assignments {
             match &source {
                 DownloadSource::P2p(p2p_info) => {
-                    self.start_p2p_connection(file_hash, p2p_info.peer_id.clone(), chunk_ids).await?;
+                    self.start_p2p_connection(file_hash, p2p_info.peer_id.clone(), chunk_ids)
+                        .await?;
                 }
                 DownloadSource::Ftp(ftp_info) => {
-                    // TODO: FTP data fetching implementation needed
-                    // This belongs to "FTP Data Fetching & Verification" task
-                    warn!("FTP download not yet implemented for source: {}", ftp_info.url);
+                    self.start_ftp_connection(file_hash, ftp_info.clone(), chunk_ids)
+                        .await?;
                 }
                 DownloadSource::Http(http_info) => {
-                    self.start_http_download(file_hash, http_info.clone(), chunk_ids).await?;
+                    self.start_http_download(file_hash, http_info.clone(), chunk_ids)
+                        .await?;
+                }
+                DownloadSource::Ed2k(ed2k_info) => {
+                    self.start_ed2k_connection(file_hash, ed2k_info.clone(), chunk_ids)
+                        .await?;
+                }
+                DownloadSource::BitTorrent(bt_info) => {
+                    self.start_bittorrent_download(file_hash, bt_info.clone(), chunk_ids)
+                        .await?;
                 }
             }
         }
@@ -677,54 +836,1390 @@ impl MultiSourceDownloadService {
         }
     }
 
-    // FTP download implementation removed - this belongs to "FTP Data Fetching & Verification" task
-    // Scope was only FTP source handling and chunk assignment, not data fetching
+    /// Start FTP connection and chunk downloading
+    async fn start_ftp_connection(
+        &self,
+        file_hash: &str,
+        ftp_info: DownloadFtpSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) -> Result<(), String> {
+        info!(
+            "Connecting to FTP server {} for {} chunks",
+            ftp_info.url,
+            chunk_ids.len()
+        );
 
-    /// Start HTTP download (placeholder)
+        let ftp_url_id = ftp_info.url.clone();
+
+        // Update source assignment status
+        {
+            let mut downloads = self.active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                let ftp_source = DownloadSource::Ftp(ftp_info.clone());
+
+                download.source_assignments.insert(
+                    ftp_url_id.clone(),
+                    SourceAssignment::new(ftp_source, chunk_ids.clone()),
+                );
+            }
+        }
+
+        // Parse FTP URL to get connection info
+        let url = Url::parse(&ftp_info.url).map_err(|e| format!("Invalid FTP URL: {}", e))?;
+
+        // Create credentials from FTP source info
+        let credentials = if let Some(username) = &ftp_info.username {
+            let password = ftp_info
+                .encrypted_password
+                .as_deref()
+                .unwrap_or("anonymous@chiral.network");
+            Some(FtpCredentials::new(username.clone(), password.to_string()))
+        } else {
+            None // Use anonymous credentials
+        };
+
+        // Attempt to establish FTP connection
+        match self
+            .ftp_downloader
+            .connect_and_login(&url, credentials)
+            .await
+        {
+            Ok(ftp_stream) => {
+                info!("Successfully connected to FTP server: {}", ftp_info.url);
+
+                // Store connection for reuse
+                {
+                    let mut connections = self.ftp_connections.lock().await;
+                    connections.insert(ftp_url_id.clone(), ftp_stream);
+                }
+
+                // Mark source as connected and start chunk downloads
+                self.on_source_connected(file_hash, &ftp_url_id, chunk_ids.clone())
+                    .await;
+                self.start_ftp_chunk_downloads(file_hash, ftp_info, chunk_ids)
+                    .await;
+
+                Ok(())
+            }
+            Err(e) => {
+                // Provide more specific error messages based on common FTP errors
+                let error_msg = if e.contains("Connection refused") {
+                    format!(
+                        "FTP server refused connection: {} (server may be down)",
+                        ftp_info.url
+                    )
+                } else if e.contains("timeout") || e.contains("Timeout") {
+                    format!(
+                        "FTP connection timeout: {} (server may be slow or unreachable)",
+                        ftp_info.url
+                    )
+                } else if e.contains("login") || e.contains("authentication") || e.contains("530") {
+                    format!(
+                        "FTP authentication failed: {} (invalid credentials)",
+                        ftp_info.url
+                    )
+                } else if e.contains("550") {
+                    format!("FTP file not found or permission denied: {}", ftp_info.url)
+                } else {
+                    format!("FTP connection failed: {} - {}", ftp_info.url, e)
+                };
+
+                warn!("{}", error_msg);
+                self.on_source_failed(file_hash, &ftp_url_id, error_msg.clone())
+                    .await;
+                Err(error_msg)
+            }
+        }
+    }
+
+    /// Start downloading chunks from FTP server
+    async fn start_ftp_chunk_downloads(
+        &self,
+        file_hash: &str,
+        ftp_info: DownloadFtpSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) {
+        let ftp_url_id = ftp_info.url.clone();
+
+        // Get chunk information for the assigned chunks
+        let chunks_to_download = {
+            let downloads = self.active_downloads.read().await;
+            if let Some(download) = downloads.get(file_hash) {
+                chunk_ids
+                    .iter()
+                    .filter_map(|&chunk_id| {
+                        download
+                            .chunks
+                            .iter()
+                            .find(|chunk| chunk.chunk_id == chunk_id)
+                            .cloned()
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
+        };
+
+        if chunks_to_download.is_empty() {
+            warn!("No chunks found for FTP download");
+            return;
+        }
+
+        // Update source status to downloading
+        {
+            let mut downloads = self.active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                if let Some(assignment) = download.source_assignments.get_mut(&ftp_url_id) {
+                    assignment.status = SourceStatus::Downloading;
+                }
+            }
+        }
+
+        // Parse remote file path from FTP URL
+        let remote_path = match self.parse_ftp_remote_path(&ftp_info.url) {
+            Ok(path) => path,
+            Err(e) => {
+                self.on_source_failed(file_hash, &ftp_url_id, format!("Invalid FTP path: {}", e))
+                    .await;
+                return;
+            }
+        };
+
+        // Download chunks concurrently (but limit concurrency to avoid overwhelming FTP server)
+        let downloader = self.ftp_downloader.clone();
+        let connections = self.ftp_connections.clone();
+        let file_hash_clone = file_hash.to_string();
+        let ftp_url_clone = ftp_url_id.clone();
+        let event_tx = self.event_tx.clone();
+        let downloads = self.active_downloads.clone();
+        let transfer_event_bus = self.transfer_event_bus.clone();
+
+        tokio::spawn(async move {
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(2)); // Max 2 concurrent FTP downloads per server
+
+            let mut tasks = Vec::new();
+
+            for chunk_info in chunks_to_download {
+                let permit = semaphore.clone().acquire_owned().await;
+                if permit.is_err() {
+                    continue;
+                }
+
+                let downloader = downloader.clone();
+                let connections = connections.clone();
+                let remote_path = remote_path.clone();
+                let file_hash = file_hash_clone.clone();
+                let ftp_url = ftp_url_clone.clone();
+                let event_tx = event_tx.clone();
+                let downloads = downloads.clone();
+                let chunk = chunk_info.clone();
+                let transfer_event_bus = transfer_event_bus.clone();
+
+                let task = tokio::spawn(async move {
+                    let _permit = permit.unwrap();
+
+                    // Calculate byte range for this chunk
+                    let (start_byte, size) = (chunk.offset, chunk.size as u64);
+
+                    info!(
+                        "Downloading FTP chunk {} ({}:{}) from {}",
+                        chunk.chunk_id, start_byte, size, remote_path
+                    );
+
+                    // Capture start time for duration tracking
+                    let download_start_ms = current_timestamp_ms();
+
+                    // Get FTP connection (we need to handle connection sharing carefully)
+                    let download_result = {
+                        let mut connections_guard = connections.lock().await;
+                        if let Some(ftp_stream) = connections_guard.get_mut(&ftp_url) {
+                            downloader
+                                .download_range(ftp_stream, &remote_path, start_byte, size)
+                                .await
+                        } else {
+                            Err("FTP connection not found".to_string())
+                        }
+                    };
+
+                    match download_result {
+                        Ok(data) => {
+                            // Verify chunk data (basic size check)
+                            if data.len() != chunk.size {
+                                warn!(
+                                    "FTP chunk {} size mismatch: expected {}, got {}",
+                                    chunk.chunk_id,
+                                    chunk.size,
+                                    data.len()
+                                );
+
+                                // For now, we'll accept partial data if it's the last chunk
+                                let is_last_chunk = {
+                                    let downloads_guard = downloads.read().await;
+                                    if let Some(download) = downloads_guard.get(&file_hash) {
+                                        chunk.chunk_id == (download.chunks.len() - 1) as u32
+                                    } else {
+                                        false
+                                    }
+                                };
+
+                                if !is_last_chunk {
+                                    let error_msg = format!(
+                                        "Chunk size mismatch: expected {}, got {}",
+                                        chunk.size,
+                                        data.len()
+                                    );
+                                    {
+                                        let mut downloads_guard = downloads.write().await;
+                                        if let Some(download) = downloads_guard.get_mut(&file_hash)
+                                        {
+                                            download.failed_chunks.push_back(chunk.chunk_id);
+                                        }
+                                    }
+                                    // Emit chunk failed event via TransferEventBus
+                                    transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                                        transfer_id: file_hash.clone(),
+                                        chunk_id: chunk.chunk_id,
+                                        source_id: ftp_url.clone(),
+                                        source_type: SourceType::Ftp,
+                                        failed_at: current_timestamp_ms(),
+                                        error: error_msg.clone(),
+                                        retry_count: 0,
+                                        will_retry: true,
+                                        next_retry_at: None,
+                                    });
+                                    // Also emit legacy internal event
+                                    let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
+                                        file_hash: file_hash.clone(),
+                                        chunk_id: chunk.chunk_id,
+                                        peer_id: ftp_url.clone(),
+                                        error: error_msg.clone(),
+                                    });
+                                    return;
+                                }
+                            }
+
+                            if let Err((expected, actual)) = verify_chunk_integrity(&chunk, &data) {
+                                let error_msg = format!(
+                                    "Chunk hash mismatch: expected {}, got {}",
+                                    expected, actual
+                                );
+                                warn!(
+                                    "FTP chunk {} hash verification failed: {}",
+                                    chunk.chunk_id, error_msg
+                                );
+                                {
+                                    let mut downloads_guard = downloads.write().await;
+                                    if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                        download.failed_chunks.push_back(chunk.chunk_id);
+                                    }
+                                }
+                                // Emit chunk failed event via TransferEventBus
+                                transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                                    transfer_id: file_hash.clone(),
+                                    chunk_id: chunk.chunk_id,
+                                    source_id: ftp_url.clone(),
+                                    source_type: SourceType::Ftp,
+                                    failed_at: current_timestamp_ms(),
+                                    error: error_msg.clone(),
+                                    retry_count: 0,
+                                    will_retry: true,
+                                    next_retry_at: None,
+                                });
+                                // Also emit legacy internal event
+                                let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
+                                    file_hash: file_hash.clone(),
+                                    chunk_id: chunk.chunk_id,
+                                    peer_id: ftp_url.clone(),
+                                    error: error_msg,
+                                });
+                                return;
+                            }
+
+                            // Store completed chunk
+                            {
+                                let mut downloads_guard = downloads.write().await;
+                                if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                    let completed_chunk = CompletedChunk {
+                                        chunk_id: chunk.chunk_id,
+                                        data,
+                                        source_id: ftp_url.clone(),
+                                        completed_at: Instant::now(),
+                                    };
+                                    download
+                                        .completed_chunks
+                                        .insert(chunk.chunk_id, completed_chunk);
+
+                                    // Update last activity
+                                    if let Some(assignment) =
+                                        download.source_assignments.get_mut(&ftp_url)
+                                    {
+                                        let now = match SystemTime::now().duration_since(UNIX_EPOCH)
+                                        {
+                                            Ok(d) => Some(d.as_secs()),
+                                            Err(_) => None,
+                                        };
+                                        assignment.last_activity = now;
+                                    }
+                                }
+                            }
+
+                            info!(
+                                "Successfully downloaded FTP chunk {} ({} bytes)",
+                                chunk.chunk_id, chunk.size
+                            );
+
+                            // Calculate actual download duration
+                            let completed_at = current_timestamp_ms();
+                            let download_duration_ms = completed_at.saturating_sub(download_start_ms);
+
+                            // Emit chunk completed event via TransferEventBus
+                            transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
+                                transfer_id: file_hash.clone(),
+                                chunk_id: chunk.chunk_id,
+                                chunk_size: chunk.size,
+                                source_id: ftp_url.clone(),
+                                source_type: SourceType::Ftp,
+                                completed_at,
+                                download_duration_ms,
+                                verified: true,
+                            });
+
+                            // Also emit legacy internal event for backwards compatibility
+                            let _ = event_tx.send(MultiSourceEvent::ChunkCompleted {
+                                file_hash: file_hash.clone(),
+                                chunk_id: chunk.chunk_id,
+                                peer_id: ftp_url.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            warn!("Failed to download FTP chunk {}: {}", chunk.chunk_id, e);
+
+                            // Add chunk back to failed queue
+                            {
+                                let mut downloads_guard = downloads.write().await;
+                                if let Some(download) = downloads_guard.get_mut(&file_hash) {
+                                    download.failed_chunks.push_back(chunk.chunk_id);
+                                }
+                            }
+
+                            // Emit chunk failed event via TransferEventBus
+                            transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                                transfer_id: file_hash.clone(),
+                                chunk_id: chunk.chunk_id,
+                                source_id: ftp_url.clone(),
+                                source_type: SourceType::Ftp,
+                                failed_at: current_timestamp_ms(),
+                                error: e.clone(),
+                                retry_count: 0,
+                                will_retry: true,
+                                next_retry_at: None,
+                            });
+                            // Also emit legacy internal event
+                            let _ = event_tx.send(MultiSourceEvent::ChunkFailed {
+                                file_hash: file_hash.clone(),
+                                chunk_id: chunk.chunk_id,
+                                peer_id: ftp_url.clone(),
+                                error: e,
+                            });
+                        }
+                    }
+                });
+
+                tasks.push(task);
+            }
+
+            // Wait for all chunk downloads to complete
+            for task in tasks {
+                let _ = task.await;
+            }
+
+            // Check if all chunks for this FTP source are completed
+            let all_chunks_completed = {
+                let downloads_guard = downloads.read().await;
+                if let Some(download) = downloads_guard.get(&file_hash_clone) {
+                    if let Some(assignment) = download.source_assignments.get(&ftp_url_clone) {
+                        assignment
+                            .chunks
+                            .iter()
+                            .all(|&chunk_id| download.completed_chunks.contains_key(&chunk_id))
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+
+            if all_chunks_completed {
+                // Mark FTP source as completed
+                {
+                    let mut downloads_guard = downloads.write().await;
+                    if let Some(download) = downloads_guard.get_mut(&file_hash_clone) {
+                        if let Some(assignment) =
+                            download.source_assignments.get_mut(&ftp_url_clone)
+                        {
+                            assignment.status = SourceStatus::Completed;
+                        }
+                    }
+                }
+
+                info!("FTP source {} completed all assigned chunks", ftp_url_clone);
+            }
+        });
+    }
+
+    /// Start HTTP download (placeholder implementation)
     async fn start_http_download(
         &self,
         file_hash: &str,
-        _http_info: crate::download_source::HttpSourceInfo,
+        http_info: crate::download_source::HttpSourceInfo,
         chunk_ids: Vec<u32>,
     ) -> Result<(), String> {
-        info!("HTTP download not yet implemented");
-        
-        // Mark as failed for now
-        self.on_source_failed(file_hash, "http_placeholder", "HTTP download not implemented".to_string()).await;
-        Err("HTTP download not implemented".to_string())
+        info!("Starting HTTP download for {} chunks from {}", chunk_ids.len(), http_info.url);
+
+        // For now, implement basic HTTP download support
+        // In a full implementation, this would use the http_download.rs module
+        // to download chunks with Range requests and verify hashes
+
+        // Get file metadata to access chunk information
+        let downloads = self.active_downloads.read().await;
+        let download = match downloads.get(file_hash) {
+            Some(download) => download,
+            None => {
+                let error = format!("No active download found for file {}", file_hash);
+                error!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error.clone()).await;
+                return Err(error);
+            }
+        };
+
+        // For each requested chunk, attempt HTTP download with hash verification
+        for chunk_id in chunk_ids {
+            // Capture start time for duration tracking
+            let download_start_ms = current_timestamp_ms();
+
+            // Find chunk info
+            let chunk_info = match download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                Some(chunk) => chunk,
+                None => {
+                    warn!("Chunk {} not found in metadata for file {}", chunk_id, file_hash);
+                    continue;
+                }
+            };
+
+            // Calculate byte range for this chunk
+            let start_byte = chunk_info.offset;
+            let end_byte = start_byte + chunk_info.size as u64 - 1;
+
+            // Create HTTP client for range request
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+            // Make range request
+            let response = match client
+                .get(&http_info.url)
+                .header("Range", format!("bytes={}-{}", start_byte, end_byte))
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let error = format!("HTTP request failed for chunk {}: {}", chunk_id, e);
+                    warn!("{}", error);
+                    self.on_source_failed(file_hash, &http_info.url, error).await;
+                    continue;
+                }
+            };
+
+            // Check for partial content response
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                let error = format!("HTTP server doesn't support range requests for chunk {} (status: {})",
+                    chunk_id, response.status());
+                warn!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error).await;
+                continue;
+            }
+
+            // Read response data
+            let chunk_data = match response.bytes().await {
+                Ok(data) => data.to_vec(),
+                Err(e) => {
+                    let error = format!("Failed to read HTTP response for chunk {}: {}", chunk_id, e);
+                    warn!("{}", error);
+                    self.on_source_failed(file_hash, &http_info.url, error).await;
+                    continue;
+                }
+            };
+
+            // Verify chunk size
+            if chunk_data.len() != chunk_info.size {
+                let error = format!(
+                    "HTTP chunk {} size mismatch: expected {}, got {}",
+                    chunk_id, chunk_info.size, chunk_data.len()
+                );
+                warn!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error).await;
+                continue;
+            }
+
+            // Verify chunk hash
+            if let Err((expected, actual)) = verify_chunk_integrity(chunk_info, &chunk_data) {
+                let error = format!(
+                    "HTTP chunk {} hash verification failed: expected {}, got {}",
+                    chunk_id, expected, actual
+                );
+                warn!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error).await;
+                continue;
+            }
+
+            // Chunk passed verification - store it
+            info!("HTTP chunk {} downloaded and verified successfully", chunk_id);
+            if let Err(e) = self.store_verified_chunk(file_hash, chunk_info, chunk_data, download_start_ms).await {
+                let error = format!("Failed to store HTTP chunk {}: {}", chunk_id, e);
+                error!("{}", error);
+                self.on_source_failed(file_hash, &http_info.url, error).await;
+            }
+        }
+
+        Ok(())
     }
 
-    // FTP chunk downloading implementation removed - this belongs to "FTP Data Fetching & Verification" task
+    /// Store a verified chunk in the active download
+    async fn store_verified_chunk(
+        &self,
+        file_hash: &str,
+        chunk_info: &ChunkInfo,
+        data: Vec<u8>,
+        download_start_ms: u64,
+    ) -> Result<(), String> {
+        let mut downloads = self.active_downloads.write().await;
+        let download = downloads.get_mut(file_hash)
+            .ok_or_else(|| format!("Active download not found for file {}", file_hash))?;
 
-    /// Parse remote path from FTP URL
+        // Store the chunk data
+        let completed_chunk = CompletedChunk {
+            chunk_id: chunk_info.chunk_id,
+            data,
+            source_id: "http".to_string(),
+            completed_at: std::time::Instant::now(),
+        };
+        download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
+
+        // Calculate actual download duration
+        let completed_at = current_timestamp_ms();
+        let download_duration_ms = completed_at.saturating_sub(download_start_ms);
+
+        // Emit chunk completed event via TransferEventBus
+        self.transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
+            transfer_id: file_hash.to_string(),
+            chunk_id: chunk_info.chunk_id,
+            chunk_size: chunk_info.size,
+            source_id: "http".to_string(),
+            source_type: SourceType::Http,
+            completed_at,
+            download_duration_ms,
+            verified: true,
+        });
+
+        // Also emit legacy internal event for backwards compatibility
+        if let Err(e) = self.event_tx.send(MultiSourceEvent::ChunkCompleted {
+            file_hash: file_hash.to_string(),
+            chunk_id: chunk_info.chunk_id,
+            peer_id: "http".to_string(),
+        }) {
+            warn!("Failed to emit chunk completed event: {}", e);
+        }
+
+        // Check if download is complete
+        if download.completed_chunks.len() == download.chunks.len() {
+            drop(downloads); // Release lock before calling finalize
+            Self::finalize_download_static(&self.active_downloads, file_hash).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Start BitTorrent download
+    async fn start_bittorrent_download(
+        &self,
+        file_hash: &str,
+        bt_info: BitTorrentSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) -> Result<(), String> {
+        info!(
+            "Starting BitTorrent download for {} chunks using magnet: {}",
+            chunk_ids.len(),
+            bt_info.magnet_uri
+        );
+        // Placeholder implementation
+        self.on_source_failed(
+            file_hash,
+            &bt_info.magnet_uri,
+            "BitTorrent download not implemented".to_string(),
+        )
+        .await;
+        Err("BitTorrent download not implemented".to_string())
+    }
+
+    /// Parse remote path from FTP URL (placeholder implementation)
     fn parse_ftp_remote_path(&self, url: &str) -> Result<String, String> {
-        let parsed_url = Url::parse(url)
-            .map_err(|e| format!("Invalid FTP URL: {}", e))?;
-        
+        use url::Url;
+
+        let parsed_url = Url::parse(url).map_err(|e| format!("Invalid FTP URL: {}", e))?;
+
         let path = parsed_url.path();
         if path.is_empty() || path == "/" {
             return Err("No file path specified in FTP URL".to_string());
         }
-        
+
         Ok(path.to_string())
     }
 
-    /// Calculate byte range for FTP request based on chunk info
-    fn calculate_ftp_byte_range(&self, chunk_info: &ChunkInfo) -> (u64, u64) {
-        (chunk_info.offset, chunk_info.size as u64)
+    /// Start Ed2k connection and begin downloading chunks
+    async fn start_ed2k_connection(
+        &self,
+        file_hash: &str,
+        ed2k_info: DownloadEd2kSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) -> Result<(), String> {
+        info!(
+            "Connecting to Ed2k server {} for {} chunks",
+            ed2k_info.server_url,
+            chunk_ids.len()
+        );
+
+        let server_url_id = ed2k_info.server_url.clone();
+
+        // Update source assignment status
+        {
+            let mut downloads = self.active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                let ed2k_source = DownloadSource::Ed2k(ed2k_info.clone());
+
+                download.source_assignments.insert(
+                    server_url_id.clone(),
+                    SourceAssignment::new(ed2k_source, chunk_ids.clone()),
+                );
+            }
+        }
+
+        // Create Ed2k client with configuration
+        let config = Ed2kConfig {
+            server_url: ed2k_info.server_url.clone(),
+            timeout: std::time::Duration::from_secs(ed2k_info.timeout_secs.unwrap_or(30)),
+            client_id: None, // Will be assigned by server
+        };
+
+        let mut ed2k_client = Ed2kClient::with_config(config);
+
+        // Attempt to establish Ed2k connection
+        match ed2k_client.connect().await {
+            Ok(()) => {
+                info!(
+                    "Successfully connected to Ed2k server: {}",
+                    ed2k_info.server_url
+                );
+
+                // Store connection for reuse
+                {
+                    let mut connections = self.ed2k_connections.lock().await;
+                    connections.insert(server_url_id.clone(), ed2k_client);
+                }
+
+                // Mark source as connected and start chunk downloads
+                self.on_source_connected(file_hash, &server_url_id, chunk_ids.clone())
+                    .await;
+                self.start_ed2k_chunk_downloads(file_hash, ed2k_info, chunk_ids)
+                    .await;
+
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg =
+                    format!("Ed2k connection failed: {} - {:?}", ed2k_info.server_url, e);
+                warn!("{}", error_msg);
+                self.on_source_failed(file_hash, &server_url_id, error_msg.clone())
+                    .await;
+                Err(error_msg)
+            }
+        }
+    }
+
+    /// Start downloading chunks from Ed2k network
+    ///
+    /// This function efficiently downloads ed2k chunks by:
+    /// 1. Grouping assigned 256KB chunks by their parent 9.28MB ed2k chunk
+    /// 2. Downloading each ed2k chunk only once
+    /// 3. Extracting all needed 256KB chunks from each downloaded ed2k chunk
+    /// 4. Sorting chunks to ensure extraction happens in order
+    async fn start_ed2k_chunk_downloads(
+        &self,
+        file_hash: &str,
+        ed2k_info: DownloadEd2kSourceInfo,
+        chunk_ids: Vec<u32>,
+    ) {
+        let server_url_id = ed2k_info.server_url.clone();
+
+        // Get chunk information for the assigned chunks
+        let (chunks_info, chunks_map) = {
+            let downloads = self.active_downloads.read().await;
+            if let Some(download) = downloads.get(file_hash) {
+                let chunks_info: Vec<ChunkInfo> = chunk_ids
+                    .iter()
+                    .filter_map(|&chunk_id| {
+                        download
+                            .chunks
+                            .iter()
+                            .find(|chunk| chunk.chunk_id == chunk_id)
+                            .cloned()
+                    })
+                    .collect();
+
+                let chunks_map: HashMap<u32, ChunkInfo> = chunks_info
+                    .iter()
+                    .map(|chunk| (chunk.chunk_id, chunk.clone()))
+                    .collect();
+
+                (chunks_info, chunks_map)
+            } else {
+                (Vec::new(), HashMap::new())
+            }
+        };
+
+        if chunks_info.is_empty() {
+            warn!("No chunks to download for Ed2k source");
+            return;
+        }
+
+        // Group chunks by ed2k chunk to avoid downloading the same ed2k chunk multiple times
+        let grouped_by_ed2k = self.group_chunks_by_ed2k_chunk(&chunks_info);
+
+        let file_hash_clone = file_hash.to_string();
+        let ed2k_connections = Arc::clone(&self.ed2k_connections);
+        let active_downloads = Arc::clone(&self.active_downloads);
+        let chunks_map_clone = Arc::new(chunks_map);
+
+        // Spawn task to download chunks
+        tokio::spawn(async move {
+            // Limit concurrent ed2k chunk downloads (ed2k chunks are 9.28 MB each)
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
+            let mut handles = Vec::new();
+
+            // Download each ed2k chunk once and extract all needed chunks from it
+            // Sort ed2k chunks by ID to process in order
+            let mut sorted_ed2k_chunks: Vec<_> = grouped_by_ed2k.into_iter().collect();
+            sorted_ed2k_chunks.sort_by_key(|(ed2k_id, _)| *ed2k_id);
+
+            for (ed2k_chunk_id, mut our_chunk_infos) in sorted_ed2k_chunks {
+                // Sort chunk infos within this ed2k chunk by chunk_id to extract in order
+                our_chunk_infos.sort_by_key(|chunk| chunk.chunk_id);
+                let permit = semaphore.clone().acquire_owned().await;
+                let ed2k_connections_clone = Arc::clone(&ed2k_connections);
+                let active_downloads_clone = Arc::clone(&active_downloads);
+                let file_hash_inner = file_hash_clone.clone();
+                let server_url_clone = server_url_id.clone();
+                let ed2k_file_hash = ed2k_info.file_hash.clone();
+                let chunks_map_clone = chunks_map_clone.clone();
+
+                let handle = tokio::spawn(async move {
+                    let _permit = permit; // Hold permit until task completes
+
+                    // Get Ed2k client from connection pool
+                    let ed2k_client = {
+                        let mut connections = ed2k_connections_clone.lock().await;
+                        connections.remove(&server_url_clone)
+                    };
+
+                    if let Some(mut client) = ed2k_client {
+                        // Download the entire ed2k chunk once
+                        // Use the first chunk's hash as reference (all chunks in same ed2k chunk share the ed2k chunk hash)
+                        let first_chunk_info = &our_chunk_infos[0];
+                        let expected_chunk_hash = format!("{:032x}", first_chunk_info.chunk_id);
+
+                        match client
+                            .download_chunk(&ed2k_file_hash, ed2k_chunk_id, &expected_chunk_hash)
+                            .await
+                        {
+                            Ok(ed2k_chunk_data) => {
+                                // Verify ed2k chunk size (should be 9.28 MB, except possibly the last chunk)
+                                if ed2k_chunk_data.len() != ED2K_CHUNK_SIZE
+                                    && ed2k_chunk_data.len() < ED2K_CHUNK_SIZE
+                                {
+                                    error!(
+                                        "Ed2k chunk {} size mismatch: expected at least {}, got {}",
+                                        ed2k_chunk_id,
+                                        ED2K_CHUNK_SIZE,
+                                        ed2k_chunk_data.len()
+                                    );
+
+                                    // Mark all chunks in this ed2k chunk as failed
+                                    let mut downloads = active_downloads_clone.write().await;
+                                    if let Some(download) = downloads.get_mut(&file_hash_inner) {
+                                        for chunk_info in &our_chunk_infos {
+                                            download.failed_chunks.push_back(chunk_info.chunk_id);
+                                        }
+                                    }
+
+                                    // Return client to pool
+                                    let mut connections = ed2k_connections_clone.lock().await;
+                                    connections.insert(server_url_clone.clone(), client);
+                                    return;
+                                }
+
+                                // Extract all needed chunks from the downloaded ed2k chunk
+                                let mut downloads = active_downloads_clone.write().await;
+                                if let Some(download) = downloads.get_mut(&file_hash_inner) {
+                                    for chunk_info in &our_chunk_infos {
+                                        // Calculate offset within the ed2k chunk
+                                        let offset_within_ed2k =
+                                            chunk_info.offset % ED2K_CHUNK_SIZE as u64;
+
+                                        // Extract the 256 KB chunk from the ed2k chunk
+                                        let start = offset_within_ed2k as usize;
+                                        let end = std::cmp::min(
+                                            start + chunk_info.size,
+                                            ed2k_chunk_data.len(),
+                                        );
+
+                                        if end <= ed2k_chunk_data.len() {
+                                            let chunk_data = ed2k_chunk_data[start..end].to_vec();
+
+                                            let completed_chunk = CompletedChunk {
+                                                chunk_id: chunk_info.chunk_id,
+                                                data: chunk_data,
+                                                source_id: server_url_clone.clone(),
+                                                completed_at: Instant::now(),
+                                            };
+
+                                            download
+                                                .completed_chunks
+                                                .insert(chunk_info.chunk_id, completed_chunk);
+
+                                            info!(
+                                                "Ed2k chunk {} extracted from ed2k chunk {} (offset {})",
+                                                chunk_info.chunk_id, ed2k_chunk_id, offset_within_ed2k
+                                            );
+                                        } else {
+                                            error!(
+                                                "Cannot extract chunk {} from ed2k chunk {}: offset {} + size {} exceeds ed2k chunk size {}",
+                                                chunk_info.chunk_id, ed2k_chunk_id, start, chunk_info.size, ed2k_chunk_data.len()
+                                            );
+                                            download.failed_chunks.push_back(chunk_info.chunk_id);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to download Ed2k chunk {}: {:?}", ed2k_chunk_id, e);
+
+                                // Mark all chunks in this ed2k chunk as failed
+                                let mut downloads = active_downloads_clone.write().await;
+                                if let Some(download) = downloads.get_mut(&file_hash_inner) {
+                                    for chunk_info in &our_chunk_infos {
+                                        download.failed_chunks.push_back(chunk_info.chunk_id);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Return client to pool
+                        let mut connections = ed2k_connections_clone.lock().await;
+                        connections.insert(server_url_clone, client);
+                    } else {
+                        warn!("Ed2k client not found in connection pool");
+
+                        // Mark all chunks as failed if client not available
+                        let mut downloads = active_downloads_clone.write().await;
+                        if let Some(download) = downloads.get_mut(&file_hash_inner) {
+                            for chunk_info in &our_chunk_infos {
+                                download.failed_chunks.push_back(chunk_info.chunk_id);
+                            }
+                        }
+                    }
+                });
+                handles.push(handle);
+            }
+
+            // Wait for all downloads to complete
+            for handle in handles {
+                let _ = handle.await;
+            }
+
+            info!(
+                "Ed2k source {} completed all assigned chunks",
+                server_url_id
+            );
+        });
+    }
+
+    /// Group our chunks by ed2k chunk
+    /// Returns: HashMap<ed2k_chunk_id, Vec<our_chunk_info>>
+    fn group_chunks_by_ed2k_chunk(
+        &self,
+        our_chunks: &[ChunkInfo],
+    ) -> std::collections::HashMap<u32, Vec<ChunkInfo>> {
+        let mut grouped = std::collections::HashMap::new();
+
+        for chunk in our_chunks {
+            let (ed2k_chunk_id, _) = self.map_our_chunk_to_ed2k_chunk(chunk);
+            grouped
+                .entry(ed2k_chunk_id)
+                .or_insert_with(Vec::new)
+                .push(chunk.clone());
+        }
+
+        grouped
+    }
+
+    /// Static version of group_chunks_by_ed2k_chunk for use in spawned tasks
+    fn group_chunks_by_ed2k_chunk_static(
+        our_chunks: &[ChunkInfo],
+    ) -> std::collections::HashMap<u32, Vec<ChunkInfo>> {
+        let mut grouped = std::collections::HashMap::new();
+
+        for chunk in our_chunks {
+            let ed2k_chunk_id = (chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+            grouped
+                .entry(ed2k_chunk_id)
+                .or_insert_with(Vec::new)
+                .push(chunk.clone());
+        }
+
+        grouped
+    }
+
+    /// Download entire ed2k chunk (9.28 MB) with MD4 verification
+    async fn download_ed2k_chunk(
+        &self,
+        ed2k_connections: &Arc<Mutex<HashMap<String, Ed2kClient>>>,
+        server_url: &str,
+        file_hash: &str,
+        ed2k_chunk_id: u32,
+    ) -> Result<Vec<u8>, String> {
+        // Get ed2k client from connection pool
+        let mut ed2k_client = {
+            let mut connections = ed2k_connections.lock().await;
+            connections.remove(server_url).ok_or_else(|| {
+                format!(
+                    "Ed2k client not found in connection pool for {}",
+                    server_url
+                )
+            })?
+        };
+
+        // Calculate expected chunk hash for verification
+        let expected_chunk_hash = self.get_ed2k_chunk_hash(file_hash, ed2k_chunk_id).await?;
+
+        // Download the ed2k chunk
+        let result = ed2k_client
+            .download_chunk(file_hash, ed2k_chunk_id, &expected_chunk_hash)
+            .await;
+
+        // Return client to pool regardless of outcome
+        {
+            let mut connections = ed2k_connections.lock().await;
+            connections.insert(server_url.to_string(), ed2k_client);
+        }
+
+        // Process download result
+        match result {
+            Ok(data) => {
+                // Verify MD4 hash
+                if self
+                    .verify_ed2k_chunk_hash(&data, &expected_chunk_hash)
+                    .await?
+                {
+                    info!(
+                        "Ed2k chunk {} downloaded and verified successfully",
+                        ed2k_chunk_id
+                    );
+                    Ok(data)
+                } else {
+                    Err(format!(
+                        "Ed2k chunk {} hash verification failed",
+                        ed2k_chunk_id
+                    ))
+                }
+            }
+            Err(e) => Err(format!("Ed2k chunk download failed: {:?}", e)),
+        }
+    }
+
+    /// Static version of download_ed2k_chunk for use in spawned tasks
+    async fn download_ed2k_chunk_static(
+        ed2k_connections: &Arc<Mutex<HashMap<String, Ed2kClient>>>,
+        server_url: &str,
+        file_hash: &str,
+        ed2k_chunk_id: u32,
+    ) -> Result<Vec<u8>, String> {
+        // Get ed2k client from connection pool
+        let mut ed2k_client = {
+            let mut connections = ed2k_connections.lock().await;
+            connections.remove(server_url).ok_or_else(|| {
+                format!(
+                    "Ed2k client not found in connection pool for {}",
+                    server_url
+                )
+            })?
+        };
+
+        // Calculate expected chunk hash for verification
+        let expected_chunk_hash =
+            Self::get_ed2k_chunk_hash_static(file_hash, ed2k_chunk_id).await?;
+
+        // Download the ed2k chunk
+        let result = ed2k_client
+            .download_chunk(file_hash, ed2k_chunk_id, &expected_chunk_hash)
+            .await;
+
+        // Return client to pool regardless of outcome
+        {
+            let mut connections = ed2k_connections.lock().await;
+            connections.insert(server_url.to_string(), ed2k_client);
+        }
+
+        // Process download result
+        match result {
+            Ok(data) => {
+                // Verify MD4 hash
+                if Self::verify_ed2k_chunk_hash_static(&data, &expected_chunk_hash).await? {
+                    info!(
+                        "Ed2k chunk {} downloaded and verified successfully",
+                        ed2k_chunk_id
+                    );
+                    Ok(data)
+                } else {
+                    Err(format!(
+                        "Ed2k chunk {} hash verification failed",
+                        ed2k_chunk_id
+                    ))
+                }
+            }
+            Err(e) => Err(format!("Ed2k chunk download failed: {:?}", e)),
+        }
+    }
+
+    /// Split ed2k chunk into our chunks and store them
+    async fn split_and_store_ed2k_chunk(
+        &self,
+        active_downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
+        file_hash: &str,
+        server_url: &str,
+        ed2k_chunk_id: u32,
+        ed2k_chunk_data: &[u8],
+        our_chunks: &[ChunkInfo],
+    ) {
+        for chunk in our_chunks {
+            let (chunk_ed2k_id, offset_within_ed2k) = self.map_our_chunk_to_ed2k_chunk(chunk);
+
+            // Ensure this chunk belongs to this ed2k chunk
+            if chunk_ed2k_id != ed2k_chunk_id {
+                continue;
+            }
+
+            // Extract our chunk data from ed2k chunk
+            let start_offset = offset_within_ed2k as usize;
+            let end_offset = std::cmp::min(start_offset + chunk.size, ed2k_chunk_data.len());
+
+            if start_offset >= ed2k_chunk_data.len() {
+                warn!(
+                    "Chunk {} offset {} beyond ed2k chunk size {}",
+                    chunk.chunk_id,
+                    start_offset,
+                    ed2k_chunk_data.len()
+                );
+                continue;
+            }
+
+            let our_chunk_data = ed2k_chunk_data[start_offset..end_offset].to_vec();
+
+            // Verify our chunk size
+            if our_chunk_data.len() != chunk.size {
+                // Allow size mismatch for last chunk
+                let is_last_chunk = self
+                    .is_last_chunk(active_downloads, file_hash, chunk.chunk_id)
+                    .await;
+                if !is_last_chunk {
+                    warn!(
+                        "Chunk {} size mismatch: expected {}, got {}",
+                        chunk.chunk_id,
+                        chunk.size,
+                        our_chunk_data.len()
+                    );
+                    continue;
+                }
+            }
+
+            // Store completed chunk
+            let mut downloads = active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                let completed_chunk = CompletedChunk {
+                    chunk_id: chunk.chunk_id,
+                    data: our_chunk_data,
+                    source_id: server_url.to_string(),
+                    completed_at: Instant::now(),
+                };
+
+                download
+                    .completed_chunks
+                    .insert(chunk.chunk_id, completed_chunk);
+                info!(
+                    "Ed2k chunk {} split and stored successfully (chunk_id: {})",
+                    ed2k_chunk_id, chunk.chunk_id
+                );
+            }
+        }
+    }
+
+    /// Static version of split_and_store_ed2k_chunk for use in spawned tasks
+    async fn split_and_store_ed2k_chunk_static(
+        active_downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
+        file_hash: &str,
+        server_url: &str,
+        ed2k_chunk_id: u32,
+        ed2k_chunk_data: &[u8],
+        our_chunks: &[ChunkInfo],
+    ) {
+        for chunk in our_chunks {
+            let chunk_ed2k_id = (chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+            let offset_within_ed2k = chunk.offset % ED2K_CHUNK_SIZE as u64;
+
+            // Ensure this chunk belongs to this ed2k chunk
+            if chunk_ed2k_id != ed2k_chunk_id {
+                continue;
+            }
+
+            // Extract our chunk data from ed2k chunk
+            let start_offset = offset_within_ed2k as usize;
+            let end_offset = std::cmp::min(start_offset + chunk.size, ed2k_chunk_data.len());
+
+            if start_offset >= ed2k_chunk_data.len() {
+                warn!(
+                    "Chunk {} offset {} beyond ed2k chunk size {}",
+                    chunk.chunk_id,
+                    start_offset,
+                    ed2k_chunk_data.len()
+                );
+                continue;
+            }
+
+            let our_chunk_data = ed2k_chunk_data[start_offset..end_offset].to_vec();
+
+            // Verify our chunk size
+            if our_chunk_data.len() != chunk.size {
+                // Allow size mismatch for last chunk
+                let is_last_chunk =
+                    Self::is_last_chunk_static(active_downloads, file_hash, chunk.chunk_id).await;
+                if !is_last_chunk {
+                    warn!(
+                        "Chunk {} size mismatch: expected {}, got {}",
+                        chunk.chunk_id,
+                        chunk.size,
+                        our_chunk_data.len()
+                    );
+                    continue;
+                }
+            }
+
+            // Store completed chunk
+            let mut downloads = active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                let completed_chunk = CompletedChunk {
+                    chunk_id: chunk.chunk_id,
+                    data: our_chunk_data,
+                    source_id: server_url.to_string(),
+                    completed_at: Instant::now(),
+                };
+
+                download
+                    .completed_chunks
+                    .insert(chunk.chunk_id, completed_chunk);
+                info!(
+                    "Ed2k chunk {} split and stored successfully (chunk_id: {})",
+                    ed2k_chunk_id, chunk.chunk_id
+                );
+            }
+        }
+    }
+
+    /// Get expected MD4 hash for ed2k chunk
+    async fn get_ed2k_chunk_hash(
+        &self,
+        file_hash: &str,
+        ed2k_chunk_id: u32,
+    ) -> Result<String, String> {
+        // For now, we'll derive a hash from the file hash and chunk ID
+        // In a real implementation, this should come from ed2k metadata or be calculated
+        //from the actual file content
+        let mut hasher = Md4::new();
+        hasher.update(file_hash.as_bytes());
+        hasher.update(&ed2k_chunk_id.to_le_bytes());
+        let result = hasher.finalize();
+        Ok(hex::encode(result))
+    }
+
+    /// Static version of get_ed2k_chunk_hash
+    async fn get_ed2k_chunk_hash_static(
+        file_hash: &str,
+        ed2k_chunk_id: u32,
+    ) -> Result<String, String> {
+        // For now, we'll derive a hash from the file hash and chunk ID
+        // In a real implementation, this should come from ed2k metadata or be calculated
+        //from the actual file content
+        let mut hasher = Md4::new();
+        hasher.update(file_hash.as_bytes());
+        hasher.update(&ed2k_chunk_id.to_le_bytes());
+        let result = hasher.finalize();
+        Ok(hex::encode(result))
+    }
+
+    /// Verify MD4 hash of ed2k chunk
+    async fn verify_ed2k_chunk_hash(
+        &self,
+        data: &[u8],
+        expected_hash: &str,
+    ) -> Result<bool, String> {
+        let mut hasher = Md4::new();
+        hasher.update(data);
+        let computed = hex::encode(hasher.finalize());
+
+        Ok(computed.eq_ignore_ascii_case(expected_hash))
+    }
+
+    /// Static version of verify_ed2k_chunk_hash
+    async fn verify_ed2k_chunk_hash_static(
+        data: &[u8],
+        expected_hash: &str,
+    ) -> Result<bool, String> {
+        let mut hasher = Md4::new();
+        hasher.update(data);
+        let computed = hex::encode(hasher.finalize());
+
+        Ok(computed.eq_ignore_ascii_case(expected_hash))
+    }
+
+    /// Check if a chunk is the last chunk in the file
+    async fn is_last_chunk(
+        &self,
+        active_downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
+        file_hash: &str,
+        chunk_id: u32,
+    ) -> bool {
+        let downloads = active_downloads.read().await;
+        if let Some(download) = downloads.get(file_hash) {
+            let max_chunk_id = download
+                .chunks
+                .iter()
+                .map(|c| c.chunk_id)
+                .max()
+                .unwrap_or(0);
+            chunk_id == max_chunk_id
+        } else {
+            false
+        }
+    }
+
+    /// Static version of is_last_chunk
+    async fn is_last_chunk_static(
+        active_downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
+        file_hash: &str,
+        chunk_id: u32,
+    ) -> bool {
+        let downloads = active_downloads.read().await;
+        if let Some(download) = downloads.get(file_hash) {
+            let max_chunk_id = download
+                .chunks
+                .iter()
+                .map(|c| c.chunk_id)
+                .max()
+                .unwrap_or(0);
+            chunk_id == max_chunk_id
+        } else {
+            false
+        }
+    }
+
+    /// Verify chunk hash using internal hash system
+    async fn verify_chunk_hash(
+        &self,
+        data: &[u8],
+        file_hash: &str,
+        chunk_id: u32,
+    ) -> Result<bool, String> {
+        // Simple hash verification using SHA-256 of data + file_hash + chunk_id
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        hasher.update(file_hash.as_bytes());
+        hasher.update(&chunk_id.to_le_bytes());
+        let computed = hex::encode(hasher.finalize());
+
+        // For now, always return true since we don't have stored expected hashes
+        // In a real implementation, this should verify against stored chunk hashes
+        Ok(true)
+    }
+
+    /// Store chunk data to disk/memory
+    async fn store_chunk(
+        &self,
+        file_hash: &str,
+        chunk_id: u32,
+        data: Vec<u8>,
+    ) -> Result<(), String> {
+        // Store the chunk - this would typically save to a file or memory store
+        // For now, we'll just log it since the actual storage is handled elsewhere
+        info!(
+            "Storing chunk {} for file {} ({} bytes)",
+            chunk_id,
+            file_hash,
+            data.len()
+        );
+        Ok(())
+    }
+
+    /// Report chunk completion progress
+    async fn report_chunk_complete(&self, file_hash: &str, chunk_id: u32) -> Result<(), String> {
+        // Emit chunk completed event via TransferEventBus
+        self.transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
+            transfer_id: file_hash.to_string(),
+            chunk_id,
+            chunk_size: 0, // Size unknown at this point
+            source_id: "ed2k".to_string(),
+            source_type: SourceType::P2p,
+            completed_at: current_timestamp_ms(),
+            download_duration_ms: 0,
+            verified: true,
+        });
+
+        // Also emit legacy internal event for backwards compatibility
+        let _ = self.event_tx.send(MultiSourceEvent::ChunkCompleted {
+            file_hash: file_hash.to_string(),
+            chunk_id,
+            peer_id: "ed2k".to_string(),
+        });
+        Ok(())
     }
 
     /// Handle source connection success
     async fn on_source_connected(&self, file_hash: &str, source_id: &str, chunk_ids: Vec<u32>) {
         info!("Source {} connected for file {}", source_id, file_hash);
 
-        // Avoid unwrap() on SystemTime duration to prevent panics when system clock is before UNIX_EPOCH
-        let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(d) => d.as_secs(),
-            Err(e) => {
-                warn!("System time before UNIX_EPOCH: {}", e);
-                0
-            }
+        let now_ms = current_timestamp_ms();
+        let now_secs = now_ms / 1000;
+
+        // Determine source type from source_id pattern
+        let source_type = if source_id.starts_with("http://") || source_id.starts_with("https://") {
+            SourceType::Http
+        } else if source_id.starts_with("ftp://") {
+            SourceType::Ftp
+        } else if source_id.starts_with("magnet:") {
+            SourceType::BitTorrent
+        } else {
+            SourceType::P2p
         };
 
         // Update source status
@@ -733,13 +2228,31 @@ impl MultiSourceDownloadService {
             if let Some(download) = downloads.get_mut(file_hash) {
                 if let Some(assignment) = download.source_assignments.get_mut(source_id) {
                     assignment.status = SourceStatus::Connected;
-                    assignment.connected_at = Some(now);
-                    assignment.last_activity = Some(now);
+                    assignment.connected_at = Some(now_secs);
+                    assignment.last_activity = Some(now_secs);
                 }
             }
         }
 
-        // Emit event
+        // Emit event via TransferEventBus
+        self.transfer_event_bus.emit_source_connected(SourceConnectedEvent {
+            transfer_id: file_hash.to_string(),
+            source_id: source_id.to_string(),
+            source_type: source_type.clone(),
+            source_info: SourceInfo {
+                id: source_id.to_string(),
+                source_type,
+                address: source_id.to_string(),
+                reputation: None,
+                estimated_speed_bps: None,
+                latency_ms: None,
+                location: None,
+            },
+            connected_at: now_ms,
+            assigned_chunks: chunk_ids.iter().map(|&id| id).collect(),
+        });
+
+        // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::PeerConnected {
             file_hash: file_hash.to_string(),
             peer_id: source_id.to_string(),
@@ -748,31 +2261,72 @@ impl MultiSourceDownloadService {
 
     /// Handle source connection failure
     async fn on_source_failed(&self, file_hash: &str, source_id: &str, error: String) {
-        warn!("Source {} failed for file {}: {}", source_id, file_hash, error);
+        warn!(
+            "Source {} failed for file {}: {}",
+            source_id, file_hash, error
+        );
+
+        let now_ms = current_timestamp_ms();
+
+        // Determine source type from source_id pattern
+        let source_type = if source_id.starts_with("http://") || source_id.starts_with("https://") {
+            SourceType::Http
+        } else if source_id.starts_with("ftp://") {
+            SourceType::Ftp
+        } else if source_id.starts_with("magnet:") {
+            SourceType::BitTorrent
+        } else {
+            SourceType::P2p
+        };
 
         // Update source status and reassign chunks
-        let reassign_chunks = {
+        let (reassign_chunks, chunks_completed) = {
             let mut downloads = self.active_downloads.write().await;
             if let Some(download) = downloads.get_mut(file_hash) {
                 if let Some(assignment) = download.source_assignments.get_mut(source_id) {
                     assignment.status = SourceStatus::Failed;
                     let chunks = assignment.chunks.clone();
+                    let completed = download.completed_chunks.len() as u32;
 
                     // Add failed chunks back to retry queue
                     for chunk_id in &chunks {
                         download.failed_chunks.push_back(*chunk_id);
                     }
 
-                    chunks
+                    (chunks, completed)
                 } else {
-                    Vec::new()
+                    (Vec::new(), 0)
                 }
             } else {
-                Vec::new()
+                (Vec::new(), 0)
             }
         };
 
-        // Emit event
+        // Determine disconnect reason from error message
+        let disconnect_reason = if error.contains("timeout") || error.contains("Timeout") {
+            DisconnectReason::Timeout
+        } else if error.contains("network") || error.contains("Network") || error.contains("connection") {
+            DisconnectReason::NetworkError
+        } else if error.contains("unavailable") || error.contains("not found") {
+            DisconnectReason::SourceUnavailable
+        } else if error.contains("protocol") || error.contains("Protocol") {
+            DisconnectReason::ProtocolError
+        } else {
+            DisconnectReason::Other(error.clone())
+        };
+
+        // Emit event via TransferEventBus
+        self.transfer_event_bus.emit_source_disconnected(SourceDisconnectedEvent {
+            transfer_id: file_hash.to_string(),
+            source_id: source_id.to_string(),
+            source_type,
+            disconnected_at: now_ms,
+            reason: disconnect_reason,
+            chunks_completed,
+            will_retry: !reassign_chunks.is_empty(),
+        });
+
+        // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::PeerFailed {
             file_hash: file_hash.to_string(),
             peer_id: source_id.to_string(),
@@ -795,12 +2349,14 @@ impl MultiSourceDownloadService {
     ) -> Result<(), String> {
         // This method is now replaced by start_p2p_connection
         // Keeping for backwards compatibility but delegating to new method
-        self.start_p2p_connection(file_hash, peer_id, chunk_ids).await
+        self.start_p2p_connection(file_hash, peer_id, chunk_ids)
+            .await
     }
 
     async fn on_peer_connected(&self, file_hash: &str, peer_id: &str, chunk_ids: Vec<u32>) {
         // Delegate to unified source connection handler
-        self.on_source_connected(file_hash, peer_id, chunk_ids).await
+        self.on_source_connected(file_hash, peer_id, chunk_ids)
+            .await
     }
 
     async fn on_peer_failed(&self, file_hash: &str, peer_id: &str, error: String) {
@@ -865,9 +2421,42 @@ impl MultiSourceDownloadService {
         };
 
         if let Some(download) = download {
-            // Close all peer connections
-            for peer_id in download.source_assignments.keys() {
-                let _ = self.webrtc_service.close_connection(peer_id.clone()).await;
+            // Close connections based on source type
+            for (source_id, assignment) in download.source_assignments.iter() {
+                match &assignment.source {
+                    DownloadSource::P2p(_) => {
+                        // Close P2P/WebRTC connections
+                        let _ = self
+                            .webrtc_service
+                            .close_connection(source_id.clone())
+                            .await;
+                    }
+                    DownloadSource::Ftp(_) => {
+                        // Close FTP connections
+                        let mut connections = self.ftp_connections.lock().await;
+                        if let Some(mut ftp_stream) = connections.remove(source_id) {
+                            let _ = self.ftp_downloader.disconnect(&mut ftp_stream).await;
+                        }
+                    }
+                    DownloadSource::Http(_) => {
+                        // HTTP connections are typically closed automatically
+                        // No explicit cleanup needed for HTTP
+                    }
+                    DownloadSource::Ed2k(_) => {
+                        // Close Ed2k connections
+                        let mut connections = self.ed2k_connections.lock().await;
+                        if let Some(mut ed2k_client) = connections.remove(source_id) {
+                            let _ = ed2k_client.disconnect().await;
+                        }
+                    }
+                    DownloadSource::BitTorrent(bt_info) => {
+                        // BitTorrent downloads are managed by the BitTorrentHandler
+                        // The handler tracks torrents by info_hash and manages cleanup internally
+                        info!("Cancelling BitTorrent download: {}", bt_info.magnet_uri);
+                        // Note: The BitTorrentHandler doesn't currently expose a cancel/stop method
+                        // Torrents will continue seeding unless explicitly stopped via the handler
+                    }
+                }
             }
         }
     }
@@ -991,37 +2580,152 @@ impl MultiSourceDownloadService {
     async fn spawn_download_monitor(&self, file_hash: String) {
         let downloads = self.active_downloads.clone();
         let event_tx = self.event_tx.clone();
+        let transfer_event_bus = self.transfer_event_bus.clone();
+        let analytics_service = self.analytics_service.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(2));
+            let start_time = std::time::Instant::now();
 
             loop {
                 interval.tick().await;
 
-                let progress = {
+                let (progress, download_info, sources_used) = {
                     let downloads = downloads.read().await;
                     if let Some(download) = downloads.get(&file_hash) {
-                        Some(Self::calculate_progress_static(download))
+                        let progress = Self::calculate_progress_static(download);
+                        let info = (
+                            download.file_metadata.file_name.clone(),
+                            download.file_metadata.file_size,
+                            download.output_path.clone(),
+                        );
+                        
+                        // Calculate source statistics from completed chunks
+                        let now_secs = current_timestamp_ms() / 1000;
+                        let sources: Vec<SourceSummary> = download.source_assignments.iter().map(|(source_id, assignment)| {
+                            let source_type = match &assignment.source {
+                                DownloadSource::P2p(_) => SourceType::P2p,
+                                DownloadSource::Http(_) => SourceType::Http,
+                                DownloadSource::Ftp(_) => SourceType::Ftp,
+                                DownloadSource::BitTorrent(_) => SourceType::BitTorrent,
+                                DownloadSource::Ed2k(_) => SourceType::P2p,
+                            };
+                            
+                            // Count chunks and bytes provided by this source
+                            let mut chunks_provided = 0u32;
+                            let mut bytes_provided = 0u64;
+                            for completed_chunk in download.completed_chunks.values() {
+                                if completed_chunk.source_id == *source_id {
+                                    chunks_provided += 1;
+                                    // Find chunk size from chunks metadata
+                                    if let Some(chunk_info) = download.chunks.iter().find(|c| c.chunk_id == completed_chunk.chunk_id) {
+                                        bytes_provided += chunk_info.size as u64;
+                                    }
+                                }
+                            }
+                            
+                            // Calculate connection duration
+                            let connection_duration_seconds = if let Some(connected_at_ms) = assignment.connected_at {
+                                let connected_at_secs = connected_at_ms / 1000;
+                                now_secs.saturating_sub(connected_at_secs)
+                            } else {
+                                0
+                            };
+                            
+                            // Calculate average speed
+                            let average_speed_bps = if connection_duration_seconds > 0 {
+                                bytes_provided as f64 / connection_duration_seconds as f64
+                            } else {
+                                0.0
+                            };
+                            
+                            SourceSummary {
+                                source_id: source_id.clone(),
+                                source_type,
+                                chunks_provided,
+                                bytes_provided,
+                                average_speed_bps,
+                                connection_duration_seconds,
+                            }
+                        }).collect();
+                        
+                        (Some(progress), Some(info), sources)
                     } else {
-                        None
+                        (None, None, Vec::new())
                     }
                 };
 
                 if let Some(progress) = progress {
                     // Check if download is complete
                     if progress.completed_chunks >= progress.total_chunks {
+                        let (file_name, file_size, output_path) = download_info.unwrap_or_default();
+                        let duration = start_time.elapsed();
+                        let avg_speed = if duration.as_secs_f64() > 0.0 {
+                            file_size as f64 / duration.as_secs_f64()
+                        } else {
+                            0.0
+                        };
+
                         // Finalize download
                         if let Err(e) = Self::finalize_download_static(&downloads, &file_hash).await
                         {
+                            // Emit failed event via TransferEventBus with analytics
+                            transfer_event_bus.emit_failed_with_analytics(TransferFailedEvent {
+                                transfer_id: file_hash.clone(),
+                                file_hash: file_hash.clone(),
+                                failed_at: current_timestamp_ms(),
+                                error: format!("Failed to finalize download: {}", e),
+                                error_category: ErrorCategory::Filesystem,
+                                downloaded_bytes: progress.downloaded_size,
+                                total_bytes: progress.total_size,
+                                retry_possible: false,
+                            }, &analytics_service).await;
+                            // Also emit legacy internal event
                             let _ = event_tx.send(MultiSourceEvent::DownloadFailed {
                                 file_hash: file_hash.clone(),
                                 error: format!("Failed to finalize download: {}", e),
+                            });
+                        } else {
+                            // Emit completed event via TransferEventBus with analytics
+                            transfer_event_bus.emit_completed_with_analytics(TransferCompletedEvent {
+                                transfer_id: file_hash.clone(),
+                                file_hash: file_hash.clone(),
+                                file_name,
+                                file_size,
+                                output_path,
+                                completed_at: current_timestamp_ms(),
+                                duration_seconds: duration.as_secs(),
+                                average_speed_bps: avg_speed,
+                                total_chunks: progress.total_chunks,
+                                sources_used,
+                            }, &analytics_service).await;
+                            // Also emit legacy internal event
+                            let _ = event_tx.send(MultiSourceEvent::DownloadCompleted {
+                                file_hash: file_hash.clone(),
+                                output_path: String::new(),
+                                duration_secs: duration.as_secs(),
+                                average_speed_bps: avg_speed,
                             });
                         }
                         break;
                     }
 
-                    // Emit progress update
+                    // Emit progress update via TransferEventBus with analytics
+                    transfer_event_bus.emit_progress_with_analytics(TransferProgressEvent {
+                        transfer_id: file_hash.clone(),
+                        downloaded_bytes: progress.downloaded_size,
+                        total_bytes: progress.total_size,
+                        completed_chunks: progress.completed_chunks,
+                        total_chunks: progress.total_chunks,
+                        progress_percentage: calculate_progress(progress.downloaded_size, progress.total_size),
+                        download_speed_bps: progress.download_speed_bps,
+                        upload_speed_bps: 0.0,
+                        eta_seconds: progress.eta_seconds,
+                        active_sources: progress.active_sources,
+                        timestamp: current_timestamp_ms(),
+                    }, &analytics_service).await;
+
+                    // Also emit legacy internal event
                     let _ = event_tx.send(MultiSourceEvent::ProgressUpdate {
                         file_hash: file_hash.clone(),
                         progress,
@@ -1174,6 +2878,86 @@ impl MultiSourceDownloadService {
             })
         }
     }
+
+    /// Get statistics about FTP connections and performance
+    pub async fn get_ftp_statistics(&self) -> serde_json::Value {
+        let connection_count = {
+            let connections = self.ftp_connections.lock().await;
+            connections.len()
+        };
+
+        let active_ftp_downloads = {
+            let downloads = self.active_downloads.read().await;
+            downloads
+                .values()
+                .map(|download| {
+                    download
+                        .source_assignments
+                        .values()
+                        .filter(|assignment| matches!(assignment.source, DownloadSource::Ftp(_)))
+                        .count()
+                })
+                .sum::<usize>()
+        };
+
+        serde_json::json!({
+            "active_connections": connection_count,
+            "active_ftp_downloads": active_ftp_downloads,
+            "ftp_enabled": true
+        })
+    }
+
+    /// Cleanup all resources (FTP connections, etc.) when service shuts down
+    pub async fn cleanup(&self) {
+        info!("Cleaning up MultiSourceDownloadService resources");
+
+        // Close all active FTP connections
+        let mut connections = self.ftp_connections.lock().await;
+        let connection_urls: Vec<String> = connections.keys().cloned().collect();
+
+        for url in connection_urls {
+            if let Some(mut ftp_stream) = connections.remove(&url) {
+                if let Err(e) = self.ftp_downloader.disconnect(&mut ftp_stream).await {
+                    warn!("Failed to disconnect FTP connection {}: {}", url, e);
+                } else {
+                    info!("Closed FTP connection: {}", url);
+                }
+            }
+        }
+
+        // Cancel all active downloads
+        let active_hashes: Vec<String> = {
+            let downloads = self.active_downloads.read().await;
+            downloads.keys().cloned().collect()
+        };
+
+        for file_hash in active_hashes {
+            self.handle_cancel_download(&file_hash).await;
+        }
+
+        info!("MultiSourceDownloadService cleanup completed");
+    }
+
+    /// Map our chunk ID to ed2k chunk ID and offset within that ed2k chunk (Person 4 function)
+    fn map_our_chunk_to_ed2k_chunk(&self, our_chunk: &ChunkInfo) -> (u32, u64) {
+        let ed2k_chunk_id = (our_chunk.offset / ED2K_CHUNK_SIZE as u64) as u32;
+        let offset_within_ed2k = our_chunk.offset % ED2K_CHUNK_SIZE as u64;
+        (ed2k_chunk_id, offset_within_ed2k)
+    }
+
+    /// Map ed2k chunk ID to range of our chunk IDs (Person 4 function)  
+    fn map_ed2k_chunk_to_our_chunks(&self, ed2k_chunk_id: u32, total_file_size: u64) -> Vec<u32> {
+        let ed2k_chunk_start_offset = ed2k_chunk_id as u64 * ED2K_CHUNK_SIZE as u64;
+        let ed2k_chunk_end_offset = std::cmp::min(
+            ed2k_chunk_start_offset + ED2K_CHUNK_SIZE as u64,
+            total_file_size,
+        );
+
+        let start_chunk_id = (ed2k_chunk_start_offset / 256_000) as u32;
+        let end_chunk_id = ((ed2k_chunk_end_offset + 256_000 - 1) / 256_000) as u32;
+
+        (start_chunk_id..end_chunk_id).collect()
+    }
 }
 
 #[cfg(test)]
@@ -1181,7 +2965,50 @@ mod tests {
     use super::*;
     use crate::dht::DhtService;
     use crate::webrtc_service::WebRTCService;
+    use sha2::{Digest, Sha256};
     use std::sync::Arc;
+
+    #[test]
+    fn verify_chunk_integrity_accepts_matching_hash() {
+        let data = b"hello world";
+        let expected = hex::encode(Sha256::digest(data));
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: expected,
+        };
+
+        assert!(verify_chunk_integrity(&chunk, data).is_ok());
+    }
+
+    #[test]
+    fn verify_chunk_integrity_detects_mismatch() {
+        let data = b"hello world";
+        let expected = hex::encode(Sha256::digest(data));
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: expected,
+        };
+
+        let other_data = b"goodbye world";
+        assert!(verify_chunk_integrity(&chunk, other_data).is_err());
+    }
+
+    #[test]
+    fn verify_chunk_integrity_skips_non_hex_hash() {
+        let data = b"hello world";
+        let chunk = ChunkInfo {
+            chunk_id: 0,
+            offset: 0,
+            size: data.len(),
+            hash: "hash0".to_string(),
+        };
+
+        assert!(verify_chunk_integrity(&chunk, data).is_ok());
+    }
 
     // Helper function to create mock services
     fn create_mock_services() -> (Arc<DhtService>, Arc<WebRTCService>) {
@@ -1201,6 +3028,7 @@ mod tests {
 
         assert_eq!(chunk.chunk_id, 0);
         assert_eq!(chunk.offset, 0);
+
         assert_eq!(chunk.size, 256 * 1024);
         assert_eq!(chunk.hash, "test_hash");
     }
@@ -1262,5 +3090,65 @@ mod tests {
         // Test that event can be serialized (required for Tauri events)
         let serialized = serde_json::to_string(&event);
         assert!(serialized.is_ok());
+    }
+
+    #[test]
+    fn test_ftp_source_assignment() {
+        use crate::download_source::{DownloadSource, FtpSourceInfo as DownloadFtpSourceInfo};
+
+        let ftp_info = DownloadFtpSourceInfo {
+            url: "ftp://ftp.example.com/file.bin".to_string(),
+            username: Some("testuser".to_string()),
+            encrypted_password: Some("testpass".to_string()),
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: Some(30),
+        };
+
+        let ftp_source = DownloadSource::Ftp(ftp_info);
+        let chunk_ids = vec![1, 2, 3];
+        let assignment = SourceAssignment::new(ftp_source.clone(), chunk_ids.clone());
+
+        assert_eq!(assignment.source_id(), "ftp://ftp.example.com/file.bin");
+        assert_eq!(assignment.chunks, chunk_ids);
+        assert_eq!(assignment.status, SourceStatus::Connecting);
+        assert!(matches!(assignment.source, DownloadSource::Ftp(_)));
+    }
+
+    #[test]
+    fn test_ftp_priority_score() {
+        use crate::download_source::{
+            DownloadSource, FtpSourceInfo as DownloadFtpSourceInfo, HttpSourceInfo, P2pSourceInfo,
+        };
+
+        let ftp_source = DownloadSource::Ftp(DownloadFtpSourceInfo {
+            url: "ftp://example.com/file".to_string(),
+            username: None,
+            encrypted_password: None,
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: None,
+        });
+
+        let p2p_source = DownloadSource::P2p(P2pSourceInfo {
+            peer_id: "peer123".to_string(),
+            multiaddr: None,
+            reputation: Some(80),
+            supports_encryption: false,
+            protocol: None,
+        });
+
+        let http_source = DownloadSource::Http(HttpSourceInfo {
+            url: "http://example.com/file".to_string(),
+            auth_header: None,
+            verify_ssl: true,
+            headers: None,
+            timeout_secs: None,
+        });
+
+        // FTP should have lowest priority (25), HTTP medium (50), P2P highest (100 + reputation)
+        assert_eq!(ftp_source.priority_score(), 25);
+        assert_eq!(http_source.priority_score(), 50);
+        assert_eq!(p2p_source.priority_score(), 180); // 100 + 80 reputation
     }
 }

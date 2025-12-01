@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { TrustLevel, type PeerReputation, type ReputationAnalytics } from '$lib/types/reputation';
   import ReputationCard from '$lib/components/ReputationCard.svelte';
@@ -48,7 +48,20 @@
 
   // State
   let peers: PeerReputation[] = [];
-  let analytics: ReputationAnalytics;
+  let analytics: ReputationAnalytics = {
+    totalPeers: 0,
+    trustedPeers: 0,
+    averageScore: 0,
+    topPerformers: [],
+    recentEvents: [],
+    trustLevelDistribution: {
+      [TrustLevel.Trusted]: 0,
+      [TrustLevel.High]: 0,
+      [TrustLevel.Medium]: 0,
+      [TrustLevel.Low]: 0,
+      [TrustLevel.Unknown]: 0
+    }
+  };
   let sortBy: 'score' | 'interactions' | 'lastSeen' = 'score';
   let searchQuery = '';
   let debouncedSearchQuery = ''; // Debounced version for filtering
@@ -88,11 +101,9 @@
   $: updateDebouncedSearch(searchQuery);
 
   // Persist UI toggles when they change
+  // Persist UI toggles when they change (consolidated)
   $: {
     persistToggle(STORAGE_KEY_SHOW_ANALYTICS, showAnalytics);
-  }
-  
-  $: {
     persistToggle(STORAGE_KEY_SHOW_RELAY_LEADERBOARD, showRelayLeaderboard);
   }
 
@@ -155,11 +166,47 @@
   async function loadPeersFromBackend() {
     try {
       const metrics: BackendPeerMetrics[] = await PeerSelectionService.getPeerMetrics();
+      console.log(`📊 Loading ${metrics.length} peers from backend`);
 
-      const mappedPeers: PeerReputation[] = metrics.map((m) => {
-        const score = PeerSelectionService.compositeScoreFromMetrics(m);
-        const totalInteractions = Math.max(1, m.transfer_count);
-        const successfulInteractions = Math.min(totalInteractions, m.successful_transfers);
+      // Fetch reputation verdicts for all peers in parallel
+      const mappedPeersPromises = metrics.map(async (m) => {
+        let score = PeerSelectionService.compositeScoreFromMetrics(m);
+        let totalInteractions = Math.max(1, m.transfer_count);
+        let successfulInteractions = Math.min(totalInteractions, m.successful_transfers);
+        
+        console.log(`📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}`);
+        
+        // Try to get reputation verdicts to augment interaction count AND score
+        try {
+          console.log(`🔍 Fetching verdicts for peer: ${m.peer_id}`);
+          const verdicts = await invoke('get_reputation_verdicts', { peerId: m.peer_id });
+          console.log(`🔍 Got verdicts response:`, verdicts);
+          
+          if (Array.isArray(verdicts) && verdicts.length > 0) {
+            // Add verdict count to interactions
+            const verdictCount = verdicts.length;
+            const goodVerdicts = verdicts.filter((v: any) => v.outcome === 'good').length;
+            const badVerdicts = verdicts.filter((v: any) => v.outcome === 'bad').length;
+            const disputedVerdicts = verdicts.filter((v: any) => v.outcome === 'disputed').length;
+            
+            totalInteractions = Math.max(totalInteractions, verdictCount);
+            successfulInteractions = Math.max(successfulInteractions, goodVerdicts);
+            
+            // Recalculate score based on verdicts (good=1.0, disputed=0.5, bad=0.0)
+            if (verdictCount > 0) {
+              const verdictScore = (goodVerdicts * 1.0 + disputedVerdicts * 0.5 + badVerdicts * 0.0) / verdictCount;
+              // Blend verdict score with peer metrics score (70% verdicts, 30% metrics)
+              score = verdictScore * 0.7 + score * 0.3;
+            }
+            
+            console.log(`✅ Peer ${m.peer_id.substring(0, 20)}...: ${verdictCount} verdicts (${goodVerdicts} good, ${badVerdicts} bad, ${disputedVerdicts} disputed) -> score: ${score.toFixed(2)}, interactions: ${successfulInteractions}/${totalInteractions}`);
+          } else {
+            console.log(`❌ No verdicts found for peer ${m.peer_id.substring(0, 20)}...`);
+          }
+        } catch (err) {
+          console.error(`❌ Failed to fetch verdicts for ${m.peer_id}:`, err);
+        }
+        
         const trustLevel = score >= 0.8 ? TrustLevel.Trusted :
                           score >= 0.6 ? TrustLevel.High :
                           score >= 0.4 ? TrustLevel.Medium :
@@ -184,15 +231,24 @@
         };
       });
 
+      const mappedPeers = await Promise.all(mappedPeersPromises);
+
       // Build analytics
       const totalPeers = mappedPeers.length;
       const trustedPeers = mappedPeers.filter(p => p.trustLevel === TrustLevel.Trusted).length;
       const averageScore = totalPeers > 0 ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers : 0;
       const topPerformers = [...mappedPeers].sort((a, b) => b.score - a.score).slice(0, 10);
-      const trustLevelDistribution = Object.values(TrustLevel).reduce((acc, level) => {
+      // Build trust level distribution deterministically from the known options
+      const trustLevelDistribution = trustLevelOptions.reduce((acc, level) => {
         acc[level] = mappedPeers.filter(p => p.trustLevel === level).length;
         return acc;
-      }, {} as Record<TrustLevel, number>);
+      }, {
+        [TrustLevel.Trusted]: 0,
+        [TrustLevel.High]: 0,
+        [TrustLevel.Medium]: 0,
+        [TrustLevel.Low]: 0,
+        [TrustLevel.Unknown]: 0
+      } as Record<TrustLevel, number>);
 
       analytics = {
         totalPeers,
@@ -357,8 +413,8 @@
     <div class="mb-8">
       <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 class="text-3xl font-bold text-gray-900">{$t('reputation.title')}</h1>
-          <p class="mt-2 text-gray-600">{$t('reputation.subtitle')}</p>
+          <h1 class="text-3xl font-bold">{$t('reputation.title')}</h1>
+          <p class="text-muted-foreground mt-2">{$t('reputation.subtitle')}</p>
         </div>
         <div class="flex flex-wrap gap-2 sm:justify-end">
           <Button on:click={refreshData} disabled={isLoading} variant="outline" class="w-full sm:w-auto">

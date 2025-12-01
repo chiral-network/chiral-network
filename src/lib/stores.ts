@@ -1,10 +1,23 @@
 import { writable, derived } from "svelte/store";
 import { normalizeRegion, GEO_REGIONS, UNKNOWN_REGION_ID } from "$lib/geo";
 
+// ============================================================================
+// Network Constants (fetched from backend)
+// ============================================================================
+
+/** Block reward in Chiral - fetched from backend on app init.
+ * Default value is used until the backend responds. */
+export const blockReward = writable<number>(2);
+
+// ============================================================================
+// Types & Interfaces
+// ============================================================================
+
 export interface FileItem {
   id: string;
   name: string;
-  hash: string;
+  hash: string; // Content hash (Merkle root) for grouping
+  protocolHash?: string; // Protocol-specific hash/link (magnet, ed2k, ftp url, etc.)
   size: number;
   status:
     | "downloading"
@@ -29,8 +42,6 @@ export interface FileItem {
   timeRemaining?: number;
   visualOrder?: number; // For maintaining user's intended visual order
   downloadPath?: string; // Path where the file was downloaded
-  version?: number; // File version number for versioning system
-  isNewVersion?: boolean; // Whether this is a new version of an existing file
   speed?: string; // Download/upload speed display
   eta?: string; // Estimated time remaining display
   isEncrypted?: boolean;
@@ -40,7 +51,35 @@ export interface FileItem {
   downloadedChunks?: number[];
   totalChunks?: number;
   downloadStartTime?: number;
-  price?: number; // Price in Chiral for this file
+  price: number; // Price in Chiral for this file
+  protocol?: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
+}
+
+export interface ProtocolEntry {
+  protocol: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP";
+  hash: string; // Protocol-specific hash (Merkle, magnet, ed2k, etc.)
+  fileItem: FileItem; // Reference to the original file item
+  technicalInfo: {
+    seederCount?: number;
+    leechers?: number;
+    uploadDate: Date;
+    price: number;
+    status: string;
+  };
+}
+
+export interface CoalescedFileItem {
+  contentHash: string; // Merkle hash that identifies the content
+  name: string;
+  size: number;
+  protocols: ProtocolEntry[]; // All protocols this content is available on
+  totalSeeders: number;
+  totalLeechers: number;
+  earliestUploadDate: Date;
+  latestUploadDate: Date;
+  averagePrice: number;
+  isSeeding: boolean; // True if at least one protocol is seeding
+  primaryProtocol?: ProtocolEntry; // The first/most recent protocol entry
 }
 
 export interface ProxyNode {
@@ -65,6 +104,7 @@ export interface WalletInfo {
   reputation?: number;
   totalEarned?: number;
   totalSpent?: number;
+  totalReceived?: number;
 }
 
 export interface ETCAccount {
@@ -110,16 +150,6 @@ export const suspiciousActivity = writable<
   }[]
 >([]);
 
-export interface ChatMessage {
-  id: string;
-  peerId: string;
-  peerNickname: string;
-  content: string;
-  timestamp: Date;
-  type: "sent" | "received";
-  read: boolean;
-}
-
 export interface NetworkStats {
   totalPeers: number;
   onlinePeers: number;
@@ -132,14 +162,40 @@ export interface NetworkStats {
 
 export interface Transaction {
   id: number;
-  type: "sent" | "received";
+  type: "sent" | "received" | "mining";
   amount: number;
   to?: string;
   from?: string;
   txHash?: string;
+  hash?: string; // Transaction hash (primary identifier)
   date: Date;
   description: string;
-  status: "pending" | "completed";
+  status: "submitted" | "pending" | "success" | "failed"; // Match API statuses
+  transaction_hash?: string;
+  gas_used?: number;
+  gas_price?: number; // in Wei
+  confirmations?: number;
+  block_number?: number;
+  nonce?: number;
+  fee?: number; // Total fee in Wei
+  timestamp?: number;
+  error_message?: string;
+}
+
+export interface TransactionPaginationState {
+  accountAddress: string | null; // The account this pagination state belongs to
+  oldestBlockScanned: number | null; // The oldest block we've scanned so far
+  isLoading: boolean; // Whether we're currently loading more transactions
+  hasMore: boolean; // Whether there are more transactions to load
+  batchSize: number; // Number of blocks to scan per batch (default: 5000)
+}
+
+export interface MiningPaginationState {
+  accountAddress: string | null; // The account this pagination state belongs to
+  oldestBlockScanned: number | null; // The oldest block we've scanned for mining rewards
+  isLoading: boolean; // Whether we're currently loading more mining rewards
+  hasMore: boolean; // Whether there are more mining rewards to load
+  batchSize: number; // Number of blocks to scan per batch (default: 5000)
 }
 
 export interface BlacklistEntry {
@@ -147,33 +203,10 @@ export interface BlacklistEntry {
   reason: string;
   timestamp: Date;
 }
-
-// Sample dummy data
-const dummyFiles: FileItem[] = [
-  {
-    id: "0",
-    name: "Video.mp4",
-    hash: "QmZ4tDuvesekqMF",
-    size: 50331648,
-    status: "paused",
-    progress: 30,
-    visualOrder: 1,
-  },
-  {
-    id: "1",
-    name: "Document.pdf",
-    hash: "QmZ4tDuvesekqMD",
-    size: 2048576,
-    status: "completed",
-    progress: 100,
-    visualOrder: 2,
-  },
-];
-
 const dummyWallet: WalletInfo = {
-  address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
-  balance: 1000.5,
-  pendingTransactions: 5,
+  address: "",
+  balance: 0,
+  pendingTransactions: 0,
 };
 
 // Additional dummy data
@@ -205,7 +238,7 @@ const dummyTransactions: Transaction[] = [
     from: "0x8765...4321",
     date: new Date("2024-03-15"),
     description: "Storage reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 2,
@@ -214,7 +247,7 @@ const dummyTransactions: Transaction[] = [
     to: "0x1234...5678",
     date: new Date("2024-03-14"),
     description: "Proxy service",
-    status: "completed",
+    status: "success",
   },
   {
     id: 3,
@@ -223,7 +256,7 @@ const dummyTransactions: Transaction[] = [
     from: "0xabcd...ef12",
     date: new Date("2024-03-13"),
     description: "Upload reward",
-    status: "completed",
+    status: "success",
   },
   {
     id: 4,
@@ -232,15 +265,183 @@ const dummyTransactions: Transaction[] = [
     to: "0x9876...5432",
     date: new Date("2024-03-12"),
     description: "File download",
-    status: "completed",
+    status: "success",
   },
 ];
 
 // Stores
-export const files = writable<FileItem[]>(dummyFiles);
+export const files = writable<FileItem[]>([]);
+
+// Coalesced files view - groups files by content hash and shows all protocols
+export const coalescedFiles = derived(files, ($files): CoalescedFileItem[] => {
+  const fileGroups = new Map<string, FileItem[]>();
+
+  // Group files by their content hash (Merkle hash)
+  $files
+    .filter((f) => f.status === "seeding" || f.status === "uploaded")
+    .forEach((file) => {
+      if (!file.hash) return; // Skip files without hash
+
+      if (!fileGroups.has(file.hash)) {
+        fileGroups.set(file.hash, []);
+      }
+      fileGroups.get(file.hash)!.push(file);
+    });
+
+  // Convert groups to coalesced file items
+  const coalescedItems: CoalescedFileItem[] = [];
+
+  for (const [contentHash, fileItems] of fileGroups.entries()) {
+    if (fileItems.length === 0) continue;
+
+    // Sort by upload date (most recent first)
+    fileItems.sort((a, b) => {
+      const dateA = a.uploadDate?.getTime() || 0;
+      const dateB = b.uploadDate?.getTime() || 0;
+      return dateB - dateA;
+    });
+
+    const primaryFile = fileItems[0];
+    const uploadDates = fileItems
+      .map((f) => f.uploadDate?.getTime() || 0)
+      .filter((d) => d > 0)
+      .sort((a, b) => a - b);
+
+    // Create protocol entries
+    const protocols: ProtocolEntry[] = fileItems.map((file) => ({
+      protocol: file.protocol || "Bitswap", // Default to Bitswap if not specified
+      hash: file.protocolHash || file.hash, // Use protocol-specific hash if available, otherwise content hash
+      fileItem: file,
+      technicalInfo: {
+        seederCount: file.seeders || 0,
+        leechers: file.leechers || 0,
+        uploadDate: file.uploadDate || new Date(),
+        price: file.price || 0,
+        status: file.status,
+      },
+    }));
+
+    // Calculate aggregate stats
+    const totalSeeders = protocols.reduce(
+      (sum, p) => sum + (p.technicalInfo.seederCount || 0),
+      0
+    );
+    const totalLeechers = protocols.reduce(
+      (sum, p) => sum + (p.technicalInfo.leechers || 0),
+      0
+    );
+    const totalPrice = protocols.reduce(
+      (sum, p) => sum + p.technicalInfo.price,
+      0
+    );
+    const averagePrice =
+      protocols.length > 0 ? totalPrice / protocols.length : 0;
+    const isSeeding = protocols.some(
+      (p) => p.technicalInfo.status === "seeding"
+    );
+
+    coalescedItems.push({
+      contentHash,
+      name: primaryFile.name,
+      size: primaryFile.size,
+      protocols,
+      totalSeeders,
+      totalLeechers,
+      earliestUploadDate:
+        uploadDates.length > 0 ? new Date(uploadDates[0]) : new Date(),
+      latestUploadDate:
+        uploadDates.length > 0
+          ? new Date(uploadDates[uploadDates.length - 1])
+          : new Date(),
+      averagePrice,
+      isSeeding,
+      primaryProtocol: protocols[0],
+    });
+  }
+
+  // Sort by latest upload date (most recent first)
+  coalescedItems.sort(
+    (a, b) => b.latestUploadDate.getTime() - a.latestUploadDate.getTime()
+  );
+
+  return coalescedItems;
+});
 export const wallet = writable<WalletInfo>(dummyWallet);
 export const activeDownloads = writable<number>(1);
 export const transactions = writable<Transaction[]>(dummyTransactions);
+
+// Load pagination state from localStorage
+const storedPagination =
+  typeof window !== "undefined"
+    ? localStorage.getItem("transactionPagination")
+    : null;
+
+const initialPaginationState: TransactionPaginationState = storedPagination
+  ? JSON.parse(storedPagination)
+  : {
+      accountAddress: null,
+      oldestBlockScanned: null,
+      isLoading: false,
+      hasMore: true,
+      batchSize: 5000,
+    };
+
+export const transactionPagination = writable<TransactionPaginationState>(
+  initialPaginationState
+);
+
+// Persist pagination state to localStorage
+if (typeof window !== "undefined") {
+  transactionPagination.subscribe((state) => {
+    localStorage.setItem(
+      "transactionPagination",
+      JSON.stringify({
+        accountAddress: state.accountAddress,
+        oldestBlockScanned: state.oldestBlockScanned,
+        hasMore: state.hasMore,
+        batchSize: state.batchSize,
+        // Don't persist isLoading state
+      })
+    );
+  });
+}
+
+// Load mining pagination state from localStorage
+const storedMiningPagination =
+  typeof window !== "undefined"
+    ? localStorage.getItem("miningPagination")
+    : null;
+
+const initialMiningPaginationState: MiningPaginationState =
+  storedMiningPagination
+    ? JSON.parse(storedMiningPagination)
+    : {
+        accountAddress: null,
+        oldestBlockScanned: null,
+        isLoading: false,
+        hasMore: true,
+        batchSize: 5000,
+      };
+
+export const miningPagination = writable<MiningPaginationState>(
+  initialMiningPaginationState
+);
+
+// Persist mining pagination state to localStorage
+if (typeof window !== "undefined") {
+  miningPagination.subscribe((state) => {
+    localStorage.setItem(
+      "miningPagination",
+      JSON.stringify({
+        accountAddress: state.accountAddress,
+        oldestBlockScanned: state.oldestBlockScanned,
+        hasMore: state.hasMore,
+        batchSize: state.batchSize,
+        // Don't persist isLoading state
+      })
+    );
+  });
+}
 
 // Import real network status
 import { networkStatus } from "./services/networkService";
@@ -308,7 +509,6 @@ export const peerGeoDistribution = derived(
   }
 );
 
-export const chatMessages = writable<ChatMessage[]>([]);
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
 export const downloadQueue = writable<FileItem[]>([]);
 export const userLocation = writable<string>("US-East");
@@ -359,14 +559,41 @@ export const miningState = writable<MiningState>({
 
 export const miningProgress = writable({ cumulative: 0, lastBlock: 0 });
 
-export const totalEarned = derived(
-  miningState,
-  ($miningState) => $miningState.totalRewards
+// Accurate totals from full blockchain scan
+export interface AccurateTotals {
+  blocksMined: number;
+  totalReceived: number;
+  totalSent: number;
+}
+
+export interface AccurateTotalsProgress {
+  currentBlock: number;
+  totalBlocks: number;
+  percentage: number;
+}
+
+export const accurateTotals = writable<AccurateTotals | null>(null);
+export const isCalculatingAccurateTotals = writable<boolean>(false);
+export const accurateTotalsProgress = writable<AccurateTotalsProgress | null>(
+  null
+);
+
+// Calculate total mined from loaded mining reward transactions (partial - based on loaded data)
+export const totalEarned = derived(transactions, ($txs) =>
+  $txs
+    .filter((tx) => tx.type === "mining")
+    .reduce((sum, tx) => sum + tx.amount, 0)
 );
 
 export const totalSpent = derived(transactions, ($txs) =>
   $txs
     .filter((tx) => tx.type === "sent")
+    .reduce((sum, tx) => sum + tx.amount, 0)
+);
+
+export const totalReceived = derived(transactions, ($txs) =>
+  $txs
+    .filter((tx) => tx.type === "received")
     .reduce((sum, tx) => sum + tx.amount, 0)
 );
 
@@ -434,14 +661,15 @@ export interface AppSettings {
   preferredRelays: string[]; // Preferred relay node multiaddrs
   enableRelayServer: boolean; // Act as a relay server for other peers
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
-  autoStartDht: boolean; // Automatically start DHT network on app launch
   anonymousMode: boolean;
   shareAnalytics: boolean;
+  enableWalletAutoLock: boolean;
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
+  notifyOnBandwidthCap: boolean;
+  notifyOnBandwidthCapDesktop: boolean;
   soundAlerts: boolean;
-  enableDHT: boolean;
   enableIPFS: boolean;
   chunkSize: number; // KB
   cacheSize: number; // MB
@@ -449,8 +677,15 @@ export interface AppSettings {
   autoUpdate: boolean;
   enableBandwidthScheduling: boolean;
   bandwidthSchedules: BandwidthScheduleEntry[];
+  monthlyUploadCapGb: number; // 0 = no cap
+  monthlyDownloadCapGb: number; // 0 = no cap
+  capWarningThresholds: number[]; // Percentages, e.g. [75, 90]
+  enableFileLogging: boolean; // Enable file-based logging
+  maxLogSizeMB: number; // Maximum size of a single log file in MB
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
+  autoStartDHT: boolean; // Whether to automatically start DHT on app launch
+  selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol selected for file uploads
 }
 
 // Export the settings store
@@ -472,21 +707,22 @@ export const settings = writable<AppSettings>({
   ipPrivacyMode: "off",
   trustedProxyRelays: [],
   disableDirectNatTraversal: false,
-  enableAutonat: true, // Enable AutoNAT by default
+  enableAutonat: true, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: true, // Enable AutoRelay by default
+  enableAutorelay: false, // Disabled by default - enable if you need relay connections
   preferredRelays: [], // Use bootstrap nodes as relays by default
-  enableRelayServer: true, // Enabled by default - helps strengthen the network
+  enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
-  autoStartDht: false, // Disabled by default - user must opt-in
   anonymousMode: false,
   shareAnalytics: true,
+  enableWalletAutoLock: false,
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
+  notifyOnBandwidthCap: true,
+  notifyOnBandwidthCapDesktop: false,
   soundAlerts: false,
-  enableDHT: true,
   enableIPFS: false,
   chunkSize: 256,
   cacheSize: 1024,
@@ -494,10 +730,118 @@ export const settings = writable<AppSettings>({
   autoUpdate: true,
   enableBandwidthScheduling: false,
   bandwidthSchedules: [],
+  monthlyUploadCapGb: 0,
+  monthlyDownloadCapGb: 0,
+  capWarningThresholds: [75, 90],
+  enableFileLogging: false, // Disabled by default
+  maxLogSizeMB: 10, // 10 MB per log file by default
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
+  autoStartDHT: false, // Don't auto-start DHT by default
+  selectedProtocol: "Bitswap", // Default to Bitswap
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
   defaultActiveBandwidthLimits
 );
+
+// Transaction polling functionality
+import {
+  pollTransactionStatus,
+  type TransactionStatus as ApiTransactionStatus,
+} from "./services/transactionService";
+
+// Active polling tracker
+const activePollingTasks = new Map<string, boolean>();
+
+/**
+ * Add a transaction and start polling for status updates
+ */
+export async function addTransactionWithPolling(
+  transaction: Transaction
+): Promise<void> {
+  if (!transaction.transaction_hash) {
+    throw new Error("Transaction must have a hash for polling");
+  }
+
+  const txHash = transaction.transaction_hash;
+
+  // Prevent duplicate polling
+  if (activePollingTasks.has(txHash)) {
+    console.warn(`Already polling transaction ${txHash}`);
+    return;
+  }
+
+  // Add to store immediately with 'submitted' status
+  transactions.update((txs) => [transaction, ...txs]);
+
+  // Mark as actively polling
+  activePollingTasks.set(txHash, true);
+
+  try {
+    // Start polling with status updates
+    await pollTransactionStatus(
+      txHash,
+      (status: ApiTransactionStatus) => {
+        // Update transaction in store on each status change
+        transactions.update((txs) =>
+          txs.map((tx) => {
+            if (tx.transaction_hash === txHash) {
+              return {
+                ...tx,
+                status:
+                  status.status === "success"
+                    ? "success"
+                    : status.status === "failed"
+                      ? "failed"
+                      : status.status === "pending"
+                        ? "pending"
+                        : "submitted",
+                confirmations: status.confirmations || 0,
+                block_number: status.block_number || undefined,
+                gas_used: status.gas_used || undefined,
+                error_message: status.error_message || undefined,
+              };
+            }
+            return tx;
+          })
+        );
+      },
+      120, // 2 minutes max polling
+      2000 // 2 second intervals
+    );
+  } catch (error) {
+    console.error(`Failed to poll transaction ${txHash}:`, error);
+
+    // Mark as failed on error
+    transactions.update((txs) =>
+      txs.map((tx) => {
+        if (tx.transaction_hash === txHash) {
+          return {
+            ...tx,
+            status: "failed",
+            error_message:
+              error instanceof Error ? error.message : "Polling failed",
+          };
+        }
+        return tx;
+      })
+    );
+  } finally {
+    activePollingTasks.delete(txHash);
+  }
+}
+
+/**
+ * Helper to update transaction status manually
+ */
+export function updateTransactionStatus(
+  txHash: string,
+  updates: Partial<Transaction>
+): void {
+  transactions.update((txs) =>
+    txs.map((tx) =>
+      tx.transaction_hash === txHash ? { ...tx, ...updates } : tx
+    )
+  );
+}

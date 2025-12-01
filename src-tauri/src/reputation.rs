@@ -1,4 +1,6 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ethers::prelude::*;
+use ethers::signers::Signer as EthSigner;
 use rand::rngs::OsRng;
 use rs_merkle::{Hasher, MerkleTree};
 use serde::{Deserialize, Serialize};
@@ -6,6 +8,40 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+// Generate contract bindings for the ReputationEpoch contract
+// The contract should have these functions:
+// - submitEpoch(uint64 epochId, bytes32 merkleRoot, uint64 timestamp, uint256 eventCount)
+// - getEpoch(uint64 epochId) returns (bytes32 merkleRoot, uint64 timestamp, uint256 eventCount, address submitter)
+// - verifyEventProof(bytes32 eventHash, bytes32[] proof, uint64 epochId) returns (bool)
+abigen!(
+    ReputationEpochContract,
+    r#"[
+        function submitEpoch(uint64 epochId, bytes32 merkleRoot, uint64 timestamp, uint256 eventCount) external
+        function getEpoch(uint64 epochId) external view returns (bytes32 merkleRoot, uint64 timestamp, uint256 eventCount, address submitter)
+        function verifyEventProof(bytes32 eventHash, bytes32[] calldata proof, uint64 epochId) external view returns (bool)
+        event EpochSubmitted(uint64 indexed epochId, bytes32 merkleRoot, address submitter)
+    ]"#
+);
+
+// ============================================================================
+// REPUTATION CONFIGURATION
+// ============================================================================
+
+/// Default deadline for signed transaction messages (seconds from handshake)
+pub const PAYMENT_DEADLINE_DEFAULT: u64 = 3600; // 1 hour
+
+/// Additional wait time after deadline before filing non-payment complaint (seconds)
+pub const PAYMENT_GRACE_PERIOD: u64 = 1800; // 30 minutes
+
+/// How long to track used nonces to prevent replay attacks (seconds)
+pub const SIGNED_MESSAGE_NONCE_TTL: u64 = 86400; // 24 hours
+
+/// Required balance as multiple of file price (e.g., 1.2 = 120% of price)
+pub const MIN_BALANCE_MULTIPLIER: f64 = 1.2;
+
+/// Cryptographic signature scheme for signed transaction messages
+pub const SIGNATURE_ALGORITHM: &str = "ed25519";
 
 // ============================================================================
 // REPUTATION TYPES
@@ -22,6 +58,264 @@ pub struct ReputationEvent {
     pub impact: f64,
     pub signature: String,
     pub epoch: Option<u64>,
+}
+
+/// Transaction verdicts published to DHT to summarize an issuer's view of a
+/// particular on-chain transaction involving `target_id`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum VerdictOutcome {
+    Good,
+    Disputed,
+    Bad,
+}
+
+/// Signed transaction message: downloader's off-chain payment promise
+/// This serves as cryptographic proof of payment obligation before file transfer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedTransactionMessage {
+    pub from: String,                 // downloader's address
+    pub to: String,                   // seeder's address
+    pub amount: u64,                  // payment amount in smallest currency unit
+    pub file_hash: String,            // target file identifier (merkle_root)
+    pub nonce: String,                // unique identifier to prevent replay attacks
+    pub deadline: u64,                // unix timestamp - maximum time for transfer completion
+    pub downloader_signature: String, // hex-encoded ed25519 signature
+}
+
+impl SignedTransactionMessage {
+    /// Create and sign a new transaction message
+    pub fn new(
+        from: String,
+        to: String,
+        amount: u64,
+        file_hash: String,
+        deadline: u64,
+        signing_key: &SigningKey,
+    ) -> Result<Self, String> {
+        use uuid::Uuid;
+
+        let nonce = Uuid::new_v4().to_string();
+
+        let mut message = Self {
+            from,
+            to,
+            amount,
+            file_hash,
+            nonce,
+            deadline,
+            downloader_signature: String::new(),
+        };
+
+        message.sign(signing_key)?;
+        Ok(message)
+    }
+
+    /// Sign this message using the provided signing key
+    pub fn sign(&mut self, signing_key: &SigningKey) -> Result<(), String> {
+        let signable = serde_json::json!({
+            "from": self.from,
+            "to": self.to,
+            "amount": self.amount,
+            "file_hash": self.file_hash,
+            "nonce": self.nonce,
+            "deadline": self.deadline,
+        });
+
+        let serialized = serde_json::to_vec(&signable).map_err(|e| e.to_string())?;
+        let signature = signing_key.sign(&serialized);
+        self.downloader_signature = hex::encode(signature.to_bytes());
+        Ok(())
+    }
+
+    /// Verify the signature on this message
+    pub fn verify_signature(&self, verifying_key: &VerifyingKey) -> Result<bool, String> {
+        let signable = serde_json::json!({
+            "from": self.from,
+            "to": self.to,
+            "amount": self.amount,
+            "file_hash": self.file_hash,
+            "nonce": self.nonce,
+            "deadline": self.deadline,
+        });
+
+        let serialized = serde_json::to_vec(&signable).map_err(|e| e.to_string())?;
+
+        let signature_bytes = hex::decode(&self.downloader_signature).map_err(|e| e.to_string())?;
+        if signature_bytes.len() != 64 {
+            return Err("invalid signature length".into());
+        }
+        let mut signature_bytes_array: [u8; 64] = [0u8; 64];
+        signature_bytes_array.copy_from_slice(&signature_bytes[..64]);
+
+        let signature = Signature::from_bytes(&signature_bytes_array);
+        Ok(verifying_key.verify(&serialized, &signature).is_ok())
+    }
+
+    /// Check if deadline has passed
+    pub fn is_expired(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        now > self.deadline
+    }
+
+    /// Validate message fields
+    pub fn validate(&self) -> Result<(), String> {
+        if self.from.is_empty() {
+            return Err("from address missing".into());
+        }
+        if self.to.is_empty() {
+            return Err("to address missing".into());
+        }
+        if self.amount == 0 {
+            return Err("amount must be greater than 0".into());
+        }
+        if self.file_hash.is_empty() {
+            return Err("file_hash missing".into());
+        }
+        if self.nonce.is_empty() {
+            return Err("nonce missing".into());
+        }
+        if self.deadline == 0 {
+            return Err("deadline missing".into());
+        }
+        if self.is_expired() {
+            return Err("deadline has already passed".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionVerdict {
+    pub target_id: String,
+    /// Optional: NULL for non-payment complaints where payment never reached blockchain
+    pub tx_hash: Option<String>,
+    pub outcome: VerdictOutcome,
+    pub details: Option<String>,
+    pub metric: Option<String>,
+    pub issued_at: u64,
+    pub issuer_id: String,
+    pub issuer_seq_no: u64,
+    /// hex-encoded ed25519 signature over the canonical signable payload
+    pub issuer_sig: String,
+    /// optional on-chain receipt pointer (compact representation)
+    pub tx_receipt: Option<String>,
+    /// optional evidence blobs (references or small encoded blobs)
+    /// Critical for non-payment complaints: includes signed_transaction_message,
+    /// delivery_proof, and protocol logs
+    pub evidence_blobs: Option<Vec<String>>,
+}
+
+impl TransactionVerdict {
+    /// Basic validation performed client-side before accepting a verdict.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.issuer_id.is_empty() {
+            return Err("issuer_id missing".into());
+        }
+        if self.target_id.is_empty() {
+            return Err("target_id missing".into());
+        }
+        // tx_hash is now optional (NULL for non-payment complaints)
+        if self.issuer_id == self.target_id {
+            return Err("issuer_id must not equal target_id".into());
+        }
+        Ok(())
+    }
+
+    /// Compute the DHT key for a specific verdict: H(issuer_id || target_id || "tx-rep")
+    /// This allows each issuer to store their own verdict about a target
+    pub fn dht_key_for_verdict(issuer_id: &str, target_id: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(issuer_id.as_bytes());
+        hasher.update(b"||");
+        hasher.update(target_id.as_bytes());
+        hasher.update(b"||tx-rep");
+        hex::encode(hasher.finalize())
+    }
+
+    /// Legacy method - kept for backwards compatibility but now generates issuer-specific key
+    /// If called without issuer context, falls back to target-only key
+    pub fn dht_key_for_target(target_id: &str) -> String {
+        println!(
+            "🔑 Computing DHT key for target: '{}' (len={} bytes)",
+            target_id,
+            target_id.len()
+        );
+        let mut hasher = Sha256::new();
+        hasher.update(target_id.as_bytes());
+        hasher.update(b"tx-rep");
+        let hash = hex::encode(hasher.finalize());
+        println!("🔑 Computed target-only key: {}", hash);
+        hash
+    }
+
+    /// Sign this verdict using the provided signing key. This will set
+    /// `issuer_id`, `issuer_seq_no`, and `issuer_sig` on the struct.
+    pub fn sign_with(
+        &mut self,
+        signing_key: &SigningKey,
+        issuer_id: &str,
+        issuer_seq_no: u64,
+    ) -> Result<(), String> {
+        self.issuer_id = issuer_id.to_string();
+        self.issuer_seq_no = issuer_seq_no;
+
+        // Build a deterministic signable payload. Use explicit field order.
+        let signable = serde_json::json!({
+            "target_id": self.target_id,
+            "tx_hash": &self.tx_hash,
+            "outcome": &self.outcome,
+            "details": self.details,
+            "metric": self.metric,
+            "issued_at": self.issued_at,
+            "issuer_id": self.issuer_id,
+            "issuer_seq_no": self.issuer_seq_no,
+            "tx_receipt": self.tx_receipt,
+            "evidence_blobs": self.evidence_blobs,
+        });
+
+        let serialized = serde_json::to_vec(&signable).map_err(|e| e.to_string())?;
+
+        let signature = signing_key.sign(&serialized);
+        self.issuer_sig = hex::encode(signature.to_bytes());
+        Ok(())
+    }
+
+    /// Verify the signature on this verdict using the provided verifying key.
+    pub fn verify_signature(&self, verifying_key: &VerifyingKey) -> Result<bool, String> {
+        let signable = serde_json::json!({
+            "target_id": self.target_id,
+            "tx_hash": &self.tx_hash,
+            "outcome": &self.outcome,
+            "details": self.details,
+            "metric": self.metric,
+            "issued_at": self.issued_at,
+            "issuer_id": self.issuer_id,
+            "issuer_seq_no": self.issuer_seq_no,
+            "tx_receipt": self.tx_receipt,
+            "evidence_blobs": self.evidence_blobs,
+        });
+
+        let serialized = serde_json::to_vec(&signable).map_err(|e| e.to_string())?;
+
+        let signature_bytes = hex::decode(&self.issuer_sig).map_err(|e| e.to_string())?;
+        if signature_bytes.len() != 64 {
+            return Err("invalid signature length".into());
+        }
+        let mut signature_bytes_array: [u8; 64] = [0u8; 64];
+        signature_bytes_array.copy_from_slice(&signature_bytes[..64]);
+
+        // ed25519_dalek in this workspace exposes `Signature::from_bytes` returning
+        // a `Signature` directly (not a `Result`), so we construct it and pass to
+        // the verifier. If the API returns a `Result` in other versions this
+        // would need to be adapted, but this matches the dependency pinned here.
+        let signature = Signature::from_bytes(&signature_bytes_array);
+
+        Ok(verifying_key.verify(&serialized, &signature).is_ok())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -343,7 +637,7 @@ impl ReputationDhtService {
             serde_json::to_vec(event).map_err(|e| format!("Serialization error: {}", e))?;
 
         // Store in DHT (using existing file metadata structure as template)
-        let metadata = crate::dht::FileMetadata {
+        let metadata = crate::dht::models::FileMetadata {
             merkle_root: key.clone(),
             file_name: format!("reputation_{}.json", event.id),
             file_size: serialized.len() as u64,
@@ -356,16 +650,16 @@ impl ReputationDhtService {
             key_fingerprint: None,
             parent_hash: None,
             cids: None, // Not needed for reputation events
-            version: Some(1),
             encrypted_key_bundle: None,
             is_root: true,
             download_path: None,
-            price: None,
+            price: 0.0,
             uploader_address: None,
             ftp_sources: None,
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata, None).await
@@ -382,11 +676,244 @@ impl ReputationDhtService {
 
         // Search for reputation events for this peer
         let search_key = format!("reputation:{}", peer_id);
-        dht_service.search_file(search_key).await?;
+        
+        // Use synchronous search with timeout to get actual results
+        let timeout_ms = 5000; // 5 second timeout
+        match dht_service.synchronous_search_metadata(search_key.clone(), timeout_ms).await {
+            Ok(Some(metadata)) => {
+                // Deserialize the reputation events from the file data
+                match serde_json::from_slice::<Vec<ReputationEvent>>(&metadata.file_data) {
+                    Ok(events) => {
+                        tracing::info!(
+                            "Retrieved {} reputation events for peer {}",
+                            events.len(),
+                            peer_id
+                        );
+                        Ok(events)
+                    }
+                    Err(e) => {
+                        // If deserialization fails, try as a single event
+                        match serde_json::from_slice::<ReputationEvent>(&metadata.file_data) {
+                            Ok(event) => {
+                                tracing::info!("Retrieved single reputation event for peer {}", peer_id);
+                                Ok(vec![event])
+                            }
+                            Err(_) => {
+                                tracing::warn!(
+                                    "Failed to deserialize reputation data for peer {}: {}",
+                                    peer_id,
+                                    e
+                                );
+                                Ok(vec![])
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(None) => {
+                // No data found in DHT
+                tracing::debug!("No reputation events found for peer {} in DHT", peer_id);
+                Ok(vec![])
+            }
+            Err(e) => {
+                tracing::warn!("DHT search failed for peer {}: {}", peer_id, e);
+                Ok(vec![])
+            }
+        }
+    }
 
-        // TODO: Need to handle the search results and deserialize the events.
-        // For now, return empty vector as placeholder.
-        Ok(vec![])
+    /// Store a TransactionVerdict into the DHT for the given target.
+    /// Stores under TWO keys:
+    /// 1. Issuer+Target key (for querying "verdicts I issued")
+    /// 2. Target-only key (for querying "verdicts about this peer")
+    pub async fn store_transaction_verdict(
+        &self,
+        verdict: &TransactionVerdict,
+    ) -> Result<(), String> {
+        let dht_service = self
+            .dht_service
+            .as_ref()
+            .ok_or("DHT service not initialized")?;
+
+        // Validate before storing
+        verdict
+            .validate()
+            .map_err(|e| format!("Invalid verdict: {}", e))?;
+
+        let serialized =
+            serde_json::to_vec(verdict).map_err(|e| format!("Serialization error: {}", e))?;
+
+        let tx_hash_str = verdict
+            .tx_hash
+            .as_ref()
+            .map(|h| h.as_str())
+            .unwrap_or("no_tx");
+
+        println!("📊 STORING VERDICT:");
+        println!("   Issuer (who wrote this): {}", verdict.issuer_id);
+        println!("   Target (who this is about): {}", verdict.target_id);
+        println!("   Outcome: {:?}", verdict.outcome);
+
+        // Store under issuer+target key (for "verdicts I issued")
+        let issuer_target_key =
+            TransactionVerdict::dht_key_for_verdict(&verdict.issuer_id, &verdict.target_id);
+        println!(
+            "📊 Storing verdict in DHT with issuer+target key: {}",
+            issuer_target_key
+        );
+        println!(
+            "📊 Verdict: issuer={}, target={}, outcome={:?}",
+            verdict.issuer_id, verdict.target_id, verdict.outcome
+        );
+        tracing::info!(
+            "📊 Storing verdict in DHT with issuer+target key: {}",
+            issuer_target_key
+        );
+
+        let metadata1 = crate::dht::models::FileMetadata {
+            merkle_root: issuer_target_key.clone(),
+            file_name: format!("tx_verdict_{}_{}.json", verdict.issuer_id, tx_hash_str),
+            file_size: serialized.len() as u64,
+            file_data: serialized.clone(),
+            seeders: vec![verdict.issuer_id.clone()],
+            created_at: verdict.issued_at,
+            mime_type: Some("application/json".to_string()),
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
+            parent_hash: None,
+            cids: None,
+            encrypted_key_bundle: None,
+            is_root: true,
+            download_path: None,
+            price: 0.0,
+            uploader_address: None,
+            ftp_sources: None,
+            ed2k_sources: None,
+            http_sources: None,
+            info_hash: None,
+            trackers: None,
+            ..Default::default()
+        };
+        dht_service.publish_file(metadata1, None).await?;
+
+        // ALSO store under target-only key (for "verdicts about this peer")
+        let target_only_key = TransactionVerdict::dht_key_for_target(&verdict.target_id);
+        println!(
+            "📊 ALSO storing verdict with target-only key: {}",
+            target_only_key
+        );
+        tracing::info!(
+            "📊 ALSO storing verdict with target-only key: {}",
+            target_only_key
+        );
+
+        let metadata2 = crate::dht::models::FileMetadata {
+            merkle_root: target_only_key.clone(),
+            file_name: format!(
+                "tx_verdict_about_{}_{}.json",
+                verdict.target_id, tx_hash_str
+            ),
+            file_size: serialized.len() as u64,
+            file_data: serialized,
+            seeders: vec![verdict.issuer_id.clone()],
+            created_at: verdict.issued_at,
+            mime_type: Some("application/json".to_string()),
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
+            parent_hash: None,
+            cids: None,
+            encrypted_key_bundle: None,
+            is_root: true,
+            download_path: None,
+            price: 0.0,
+            uploader_address: None,
+            ftp_sources: None,
+            ed2k_sources: None,
+            http_sources: None,
+            info_hash: None,
+            trackers: None,
+            ..Default::default()
+        };
+        dht_service.publish_file(metadata2, None).await?;
+
+        println!("✅ Verdict stored successfully under both keys");
+        tracing::info!("✅ Verdict stored successfully under both keys");
+        Ok(())
+    }
+
+    /// Retrieve TransactionVerdict entries for a target by querying the DHT.
+    /// Looks up verdicts ABOUT the target peer (where they are the subject of reputation).
+    pub async fn retrieve_transaction_verdicts(
+        &self,
+        target_id: &str,
+    ) -> Result<Vec<TransactionVerdict>, String> {
+        let dht_service = self
+            .dht_service
+            .as_ref()
+            .ok_or("DHT service not initialized")?;
+
+        println!("🔍 RETRIEVING VERDICTS ABOUT: '{}'", target_id);
+
+        // Use target-only key to find verdicts ABOUT this peer
+        let search_key = TransactionVerdict::dht_key_for_target(target_id);
+
+        println!("🔍 Searching for verdicts ABOUT target: {}", target_id);
+        println!("🔍 Using DHT key: {}", search_key);
+        tracing::info!(
+            "🔍 Searching for verdicts ABOUT target: {}, key: {}",
+            target_id,
+            search_key
+        );
+
+        // synchronous_search_metadata already checks local cache first
+        println!("🔍 Calling synchronous_search_metadata with 5000ms timeout");
+        match dht_service
+            .synchronous_search_metadata(search_key.clone(), 5000)
+            .await
+        {
+            Ok(Some(metadata)) => {
+                println!(
+                    "✅ Found verdict metadata, size={} bytes",
+                    metadata.file_data.len()
+                );
+                tracing::info!(
+                    "✅ Found verdict metadata, size={} bytes",
+                    metadata.file_data.len()
+                );
+                // Try to deserialize the file data as a TransactionVerdict
+                match serde_json::from_slice::<TransactionVerdict>(&metadata.file_data) {
+                    Ok(verdict) => {
+                        println!(
+                            "✅ Deserialized verdict: issuer={}, outcome={:?}",
+                            verdict.issuer_id, verdict.outcome
+                        );
+                        tracing::info!(
+                            "✅ Found verdict: issuer={}, outcome={:?}",
+                            verdict.issuer_id,
+                            verdict.outcome
+                        );
+                        Ok(vec![verdict])
+                    }
+                    Err(e) => {
+                        println!("❌ Failed to deserialize verdict: {}", e);
+                        tracing::warn!("❌ Failed to deserialize verdict: {}", e);
+                        Ok(vec![])
+                    }
+                }
+            }
+            Ok(None) => {
+                println!("❌ No verdicts found about target: {}", target_id);
+                tracing::info!("❌ No verdicts found about target: {}", target_id);
+                Ok(vec![])
+            }
+            Err(e) => {
+                println!("❌ DHT search failed: {}", e);
+                tracing::warn!("❌ DHT search failed: {}", e);
+                Ok(vec![]) // Return empty instead of error to not break UI
+            }
+        }
     }
 
     pub async fn store_merkle_root(&self, epoch: &ReputationEpoch) -> Result<(), String> {
@@ -400,7 +927,7 @@ impl ReputationDhtService {
         let serialized =
             serde_json::to_vec(epoch).map_err(|e| format!("Serialization error: {}", e))?;
 
-        let metadata = crate::dht::FileMetadata {
+        let metadata = crate::dht::models::FileMetadata {
             merkle_root: epoch.merkle_root.clone(),
             file_name: format!("merkle_root_{}.json", epoch.epoch_id),
             file_size: serialized.len() as u64,
@@ -413,16 +940,16 @@ impl ReputationDhtService {
             key_fingerprint: None,
             parent_hash: None,
             cids: None, // Not needed for merkle roots
-            version: Some(1),
             encrypted_key_bundle: None,
             is_root: true,
             download_path: None,
-            price: None,
+            price: 0.0,
             uploader_address: None,
             ftp_sources: None,
             http_sources: None,
             info_hash: None,
             trackers: None,
+            ..Default::default()
         };
 
         dht_service.publish_file(metadata, None).await
@@ -435,14 +962,24 @@ impl ReputationDhtService {
 
 pub struct ReputationContract {
     contract_address: Option<String>,
-    network_id: u64,
+    rpc_url: String,
+    chain_id: u64,
 }
 
 impl ReputationContract {
-    pub fn new(network_id: u64) -> Self {
+    pub fn new(chain_id: u64) -> Self {
         Self {
             contract_address: None,
-            network_id,
+            rpc_url: "http://127.0.0.1:8545".to_string(),
+            chain_id,
+        }
+    }
+
+    pub fn with_rpc_url(chain_id: u64, rpc_url: String) -> Self {
+        Self {
+            contract_address: None,
+            rpc_url,
+            chain_id,
         }
     }
 
@@ -450,57 +987,171 @@ impl ReputationContract {
         self.contract_address = Some(address);
     }
 
+    pub fn set_rpc_url(&mut self, rpc_url: String) {
+        self.rpc_url = rpc_url;
+    }
+
+    /// Get a provider connected to the Ethereum network
+    fn get_provider(&self) -> Result<Provider<Http>, String> {
+        Provider::<Http>::try_from(&self.rpc_url)
+            .map_err(|e| format!("Failed to connect to Ethereum RPC: {}", e))
+    }
+
+    /// Get the contract instance
+    fn get_contract<M: Middleware>(&self, client: Arc<M>) -> Result<ReputationEpochContract<M>, String> {
+        let address = self.contract_address.as_ref()
+            .ok_or("Contract address not set")?;
+        
+        let contract_address: Address = address.parse()
+            .map_err(|e| format!("Invalid contract address: {}", e))?;
+        
+        Ok(ReputationEpochContract::new(contract_address, client))
+    }
+
+    /// Submit a reputation epoch to the blockchain
     pub async fn submit_epoch(
         &self,
         epoch: &ReputationEpoch,
-        _private_key: &str,
+        private_key: &str,
     ) -> Result<String, String> {
-        // TODO: Implement actual Ethereum transaction submission
-        // In a real implementation, this would:
-        // 1. Connect to Ethereum network
-        // 2. Create transaction to submitEpoch function
-        // 3. Sign transaction with private key
-        // 4. Send transaction and wait for confirmation
-        // 5. Return transaction hash
+        // Parse and validate private key
+        let private_key_clean = private_key.strip_prefix("0x").unwrap_or(private_key);
+        let wallet: LocalWallet = private_key_clean.parse()
+            .map_err(|e| format!("Invalid private key: {}", e))?;
+        let wallet = wallet.with_chain_id(self.chain_id);
 
-        // For now, return a mock transaction hash
-        Ok(format!("0x{:x}", epoch.epoch_id))
+        // Connect to provider
+        let provider = self.get_provider()?;
+        let client = Arc::new(SignerMiddleware::new(provider, wallet));
+
+        // Get contract instance
+        let contract = self.get_contract(client)?;
+
+        // Convert merkle root to bytes32
+        let merkle_root_bytes = hex::decode(epoch.merkle_root.strip_prefix("0x").unwrap_or(&epoch.merkle_root))
+            .map_err(|e| format!("Invalid merkle root hex: {}", e))?;
+        if merkle_root_bytes.len() != 32 {
+            return Err("Merkle root must be 32 bytes".to_string());
+        }
+        let mut merkle_root: [u8; 32] = [0u8; 32];
+        merkle_root.copy_from_slice(&merkle_root_bytes);
+
+        // Call submitEpoch on the contract
+        let tx = contract.submit_epoch(
+            epoch.epoch_id,
+            merkle_root,
+            epoch.timestamp,
+            U256::from(epoch.event_count),
+        );
+
+        let pending_tx = tx.send().await
+            .map_err(|e| format!("Failed to send transaction: {}", e))?;
+
+        let tx_hash = format!("{:?}", pending_tx.tx_hash());
+
+        // Wait for confirmation (optional - can be removed for async behavior)
+        let _receipt = pending_tx.await
+            .map_err(|e| format!("Transaction failed: {}", e))?;
+
+        Ok(tx_hash)
     }
 
-    pub async fn get_epoch(&self, _epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
-        // TODO: Implement actual Ethereum contract call
-        // In a real implementation, this would:
-        // 1. Connect to Ethereum network
-        // 2. Call getEpoch function on contract
-        // 3. Parse returned data into ReputationEpoch
-        // 4. Return epoch data
+    /// Get a reputation epoch from the blockchain
+    pub async fn get_epoch(&self, epoch_id: u64) -> Result<Option<ReputationEpoch>, String> {
+        // Connect to provider
+        let provider = self.get_provider()?;
+        let client = Arc::new(provider);
 
-        // For now, return None as placeholder
-        Ok(None)
+        // Get contract instance
+        let contract = self.get_contract(client)?;
+
+        // Call getEpoch on the contract
+        let result = contract.get_epoch(epoch_id).call().await;
+
+        match result {
+            Ok((merkle_root, timestamp, event_count, submitter)) => {
+                // Check if epoch exists (merkle_root is not zero)
+                if merkle_root == [0u8; 32] {
+                    return Ok(None);
+                }
+
+                Ok(Some(ReputationEpoch {
+                    epoch_id,
+                    merkle_root: format!("0x{}", hex::encode(merkle_root)),
+                    timestamp,
+                    block_number: None, // Could be fetched separately if needed
+                    event_count: event_count.as_usize(),
+                    submitter: format!("{:?}", submitter),
+                }))
+            }
+            Err(e) => {
+                // If the call reverts or epoch doesn't exist, return None
+                if e.to_string().contains("revert") || e.to_string().contains("not found") {
+                    Ok(None)
+                } else {
+                    Err(format!("Failed to get epoch: {}", e))
+                }
+            }
+        }
     }
 
+    /// Verify a Merkle proof for an event on the blockchain
     pub async fn verify_event_proof(
         &self,
-        _event_hash: &str,
-        _proof: Vec<String>,
-        _epoch_id: u64,
+        event_hash: &str,
+        proof: Vec<String>,
+        epoch_id: u64,
     ) -> Result<bool, String> {
-        // TODO: Implement actual Ethereum contract call
-        // In a real implementation, this would:
-        // 1. Connect to Ethereum network
-        // 2. Call verifyEvent function on contract
-        // 3. Return verification result
+        // Connect to provider
+        let provider = self.get_provider()?;
+        let client = Arc::new(provider);
 
-        // For now, return true as placeholder
-        Ok(true)
+        // Get contract instance
+        let contract = self.get_contract(client)?;
+
+        // Convert event hash to bytes32
+        let event_hash_bytes = hex::decode(event_hash.strip_prefix("0x").unwrap_or(event_hash))
+            .map_err(|e| format!("Invalid event hash hex: {}", e))?;
+        if event_hash_bytes.len() != 32 {
+            return Err("Event hash must be 32 bytes".to_string());
+        }
+        let mut event_hash_arr: [u8; 32] = [0u8; 32];
+        event_hash_arr.copy_from_slice(&event_hash_bytes);
+
+        // Convert proof to Vec<[u8; 32]>
+        let proof_bytes: Result<Vec<[u8; 32]>, String> = proof.iter()
+            .map(|hash| {
+                let bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(hash))
+                    .map_err(|e| format!("Invalid proof hash hex: {}", e))?;
+                if bytes.len() != 32 {
+                    return Err("Proof hash must be 32 bytes".to_string());
+                }
+                let mut arr: [u8; 32] = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                Ok(arr)
+            })
+            .collect();
+        let proof_bytes = proof_bytes?;
+
+        // Call verifyEventProof on the contract
+        let result = contract.verify_event_proof(event_hash_arr, proof_bytes, epoch_id)
+            .call()
+            .await
+            .map_err(|e| format!("Failed to verify event proof: {}", e))?;
+
+        Ok(result)
     }
 
     pub fn get_contract_address(&self) -> Option<&String> {
         self.contract_address.as_ref()
     }
 
-    pub fn get_network_id(&self) -> u64 {
-        self.network_id
+    pub fn get_chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    pub fn get_rpc_url(&self) -> &str {
+        &self.rpc_url
     }
 }
 
@@ -824,18 +1475,73 @@ impl ReputationVerifier {
 
     pub fn verify_event_against_merkle_root(
         &self,
-        _event: &ReputationEvent,
-        _merkle_root: &str,
-        _proof: Vec<String>,
+        event: &ReputationEvent,
+        merkle_root: &str,
+        proof: &MerkleProof,
     ) -> Result<bool, String> {
-        // TODO: Implement actual Merkle proof verification
-        // In a real implementation, this would:
-        // 1. Recreate the event hash
-        // 2. Verify the Merkle proof against the root
-        // 3. Return verification result
+        // 1. Hash the event to get the leaf hash
+        let leaf_hash = self.hash_event(event)?;
+        
+        // 2. Parse the merkle root from hex
+        let root_bytes = hex::decode(merkle_root)
+            .map_err(|e| format!("Invalid merkle root hex: {}", e))?;
+        if root_bytes.len() != 32 {
+            return Err("Merkle root must be 32 bytes".to_string());
+        }
+        let mut expected_root = [0u8; 32];
+        expected_root.copy_from_slice(&root_bytes);
+        
+        // 3. Walk through the proof using the leaf index to determine ordering
+        // At each level: if index is even, we're on the left; if odd, we're on the right
+        let mut current_hash = leaf_hash;
+        let mut index = proof.leaf_index;
+        
+        for proof_hash_hex in &proof.proof_hashes {
+            let sibling_bytes = hex::decode(proof_hash_hex)
+                .map_err(|e| format!("Invalid proof hash hex: {}", e))?;
+            if sibling_bytes.len() != 32 {
+                return Err("Proof hash must be 32 bytes".to_string());
+            }
+            
+            let mut sibling: [u8; 32] = [0u8; 32];
+            sibling.copy_from_slice(&sibling_bytes);
+            
+            // Combine hashes based on position
+            let mut combined = Vec::with_capacity(64);
+            if index % 2 == 0 {
+                // Current node is on the left
+                combined.extend_from_slice(&current_hash);
+                combined.extend_from_slice(&sibling);
+            } else {
+                // Current node is on the right
+                combined.extend_from_slice(&sibling);
+                combined.extend_from_slice(&current_hash);
+            }
+            
+            current_hash = Sha256Hasher::hash(&combined);
+            index /= 2; // Move to parent level
+        }
+        
+        // 4. Compare final hash with merkle root
+        Ok(current_hash == expected_root)
+    }
+    
+    /// Hash a reputation event for Merkle tree inclusion
+    fn hash_event(&self, event: &ReputationEvent) -> Result<[u8; 32], String> {
+        let event_data = serde_json::json!({
+            "id": event.id,
+            "peer_id": event.peer_id,
+            "rater_peer_id": event.rater_peer_id,
+            "event_type": event.event_type,
+            "timestamp": event.timestamp,
+            "data": event.data,
+            "impact": event.impact,
+        });
 
-        // For now, return true as placeholder
-        Ok(true)
+        let serialized =
+            serde_json::to_vec(&event_data).map_err(|e| format!("Serialization error: {}", e))?;
+
+        Ok(Sha256Hasher::hash(&serialized))
     }
 
     pub fn verify_epoch_integrity(
@@ -1191,7 +1897,7 @@ mod tests {
     #[test]
     fn test_reputation_contract_creation() {
         let contract = ReputationContract::new(98765);
-        assert_eq!(contract.get_network_id(), 98765);
+        assert_eq!(contract.get_chain_id(), 98765);
         assert!(contract.get_contract_address().is_none());
     }
 
@@ -1208,7 +1914,7 @@ mod tests {
     #[test]
     fn test_reputation_system_creation() {
         let system = ReputationSystem::new(98765);
-        assert_eq!(system.contract.get_network_id(), 98765);
+        assert_eq!(system.contract.get_chain_id(), 98765);
         assert_eq!(system.current_epoch, 0);
     }
 

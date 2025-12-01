@@ -1,3 +1,4 @@
+use chiral_network::config::{CHAIN_ID, NETWORK_ID};
 use chrono;
 use ethers::prelude::*;
 use once_cell::sync::Lazy;
@@ -6,14 +7,21 @@ use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use tokio::sync::Mutex;
+use tauri::Emitter;
 
 // ============================================================================
 // Configuration & Shared Resources
 // ============================================================================
+
+/// Block reward in Chiral - the amount awarded for mining a block.
+/// This is the single source of truth for block rewards throughout the codebase.
+pub const BLOCK_REWARD: f64 = 2.0;
 
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
@@ -26,25 +34,19 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             rpc_endpoint: "http://127.0.0.1:8545".to_string(),
-            chain_id: 98765,
-            network_id: 98765,
+            chain_id: *CHAIN_ID,
+            network_id: *NETWORK_ID,
         }
     }
 }
 
-// Global configuration - can be updated via environment variables
+// Global configuration - reads from genesis.json or environment variables
 pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
     NetworkConfig {
         rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
             .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: std::env::var("CHIRAL_CHAIN_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
-        network_id: std::env::var("CHIRAL_NETWORK_ID")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(98765),
+        chain_id: *CHAIN_ID,
+        network_id: *NETWORK_ID,
     }
 });
 
@@ -100,28 +102,41 @@ impl GethProcess {
             return true;
         }
 
-        // Also check if geth is actually running on port 8545
-        // This handles cases where the app restarted but geth is still running
-        if let Ok(response) = std::process::Command::new("curl")
-            .arg("-s")
-            .arg("-X")
-            .arg("POST")
-            .arg("-H")
-            .arg("Content-Type: application/json")
-            .arg("--data")
-            .arg(r#"{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}"#)
-            .arg("http://127.0.0.1:8545")
-            .output()
-        {
-            if response.status.success() && !response.stdout.is_empty() {
-                // Try to parse as JSON and check if it's a valid response
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&response.stdout) {
-                    return json.get("result").is_some();
-                }
-            }
+        // Check if geth is actually running by trying an RPC call
+        // This is more reliable than just checking if port 8545 is listening
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        // First check if port is listening (quick check)
+        let port_open = TcpStream::connect_timeout(
+            &"127.0.0.1:8545".parse().unwrap(),
+            Duration::from_millis(500)
+        ).is_ok();
+
+        if !port_open {
+            return false;
         }
 
-        false
+        // Port is open, now verify it's actually Geth responding correctly
+        // Try a simple RPC call with a short timeout
+        match std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-m", "1",  // 1 second timeout
+                "-X", "POST",
+                "-H", "Content-Type: application/json",
+                "--data", r#"{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}"#,
+                "http://127.0.0.1:8545"
+            ])
+            .output()
+        {
+            Ok(output) => {
+                // Check if we got a valid JSON-RPC response
+                let response = String::from_utf8_lossy(&output.stdout);
+                response.contains("\"jsonrpc\"") && response.contains("\"result\"")
+            }
+            Err(_) => false,
+        }
     }
 
     fn resolve_data_dir(&self, data_dir: &str) -> Result<PathBuf, String> {
@@ -230,8 +245,52 @@ impl GethProcess {
 
         // Resolve data directory relative to the executable dir if it's relative
         let data_path = self.resolve_data_dir(data_dir)?;
-        if !data_path.join("geth").exists() {
-            // Initialize with genesis
+
+        // Check if we need to initialize or reinitialize blockchain
+        let needs_init = !data_path.join("geth").exists();
+        let mut needs_reinit = false;
+
+        // Check for blockchain corruption by looking at recent logs
+        if !needs_init {
+            let log_path = data_path.join("geth.log");
+            if log_path.exists() {
+                // Read last 50 lines of log to check for corruption errors
+                if let Ok(file) = File::open(&log_path) {
+                    let reader = BufReader::new(file);
+                    let all_lines: Vec<String> = reader
+                        .lines()
+                        .filter_map(Result::ok)
+                        .collect();
+                    let lines: Vec<String> = all_lines.iter().rev().take(50).cloned().collect();
+
+                    // Look for signs of blockchain corruption
+                    for line in &lines {
+                        if line.contains("Truncating ancient chain")
+                            || line.contains("ERROR") && line.contains("ancient")
+                            || line.contains("Rewinding blockchain")
+                            || line.contains("database corruption") {
+                            eprintln!("⚠️  Detected corrupted blockchain, will reinitialize...");
+                            needs_reinit = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove corrupted blockchain data if needed
+        if needs_reinit {
+            let geth_dir = data_path.join("geth");
+            if geth_dir.exists() {
+                eprintln!("Removing corrupted blockchain data...");
+                std::fs::remove_dir_all(&geth_dir)
+                    .map_err(|e| format!("Failed to remove corrupted blockchain: {}", e))?;
+            }
+        }
+
+        // Initialize with genesis if needed
+        if needs_init || needs_reinit {
+            eprintln!("Initializing blockchain with genesis block...");
             let init_output = Command::new(&geth_path)
                 .arg("--datadir")
                 .arg(&data_path)
@@ -246,16 +305,24 @@ impl GethProcess {
                     String::from_utf8_lossy(&init_output.stderr)
                 ));
             }
+
+            eprintln!("✅ Blockchain initialized successfully");
         }
 
-        // Bootstrap node
-        let bootstrap_enode = "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303,enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303";
+        // Get bootstrap nodes - use cached/fallback to avoid blocking startup
+        // The health check is performed asynchronously, so we use the synchronous fallback here
+        // and the async health-checked version will be used for reconnection attempts
+        let bootstrap_enode = crate::geth_bootstrap::get_all_bootstrap_enode_string();
+        
+        // Log bootstrap configuration
+        let node_count = bootstrap_enode.matches("enode://").count();
+        eprintln!("Starting Geth with {} bootstrap node(s)", node_count);
 
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")
             .arg(&data_path)
             .arg("--networkid")
-            .arg("98765")
+            .arg(NETWORK_CONFIG.network_id.to_string())
             .arg("--bootnodes")
             .arg(bootstrap_enode)
             .arg("--http")
@@ -268,6 +335,8 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
+            .arg("snap")
+            .arg("--gcmode")
             .arg("full")
             .arg("--maxpeers")
             .arg("50")
@@ -306,6 +375,36 @@ impl GethProcess {
             .map_err(|e| format!("Failed to start geth: {}", e))?;
 
         self.child = Some(child);
+
+        eprintln!("✅ Geth process started successfully");
+        eprintln!("    Logs: {}", log_path.display());
+        eprintln!("    RPC: http://127.0.0.1:8545");
+        eprintln!("    Waiting for RPC to be ready...");
+
+        // Give Geth a moment to start up
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Verify the process is still running (didn't crash immediately)
+        if let Some(child) = &mut self.child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // Process has already exited - something went wrong
+                    self.child = None;
+                    return Err(format!(
+                        "Geth process exited immediately with status: {}. Check logs at: {}",
+                        status, log_path.display()
+                    ));
+                }
+                Ok(None) => {
+                    // Process is still running - good!
+                    eprintln!("✅ Geth is running");
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Warning: Could not check geth process status: {}", e);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -336,10 +435,10 @@ impl GethProcess {
                 .output();
 
             match result {
-                Ok(output) => {
+                Ok(_output) => {
                     // pkill completed
                 }
-                Err(e) => {
+                Err(_e) => {
                     // Failed to run pkill
                 }
             }
@@ -355,6 +454,187 @@ impl GethProcess {
 
         Ok(())
     }
+}
+
+// ============================================================================
+// Async Geth Management Functions
+// ============================================================================
+
+/// Start Geth with health-checked bootstrap nodes
+/// 
+/// This function performs bootstrap node health checks before starting Geth,
+/// ensuring we connect to the most reliable nodes available.
+pub async fn start_geth_with_health_check(
+    geth: &mut GethProcess,
+    data_dir: &str,
+    miner_address: Option<&str>,
+) -> Result<crate::geth_bootstrap::BootstrapHealthReport, String> {
+    // First, perform health check on bootstrap nodes
+    let health_report = crate::geth_bootstrap::check_all_bootstrap_nodes().await;
+    
+    if !health_report.healthy {
+        eprintln!(
+            "Warning: Bootstrap health check failed - {} of {} nodes reachable",
+            health_report.reachable_nodes,
+            health_report.total_nodes
+        );
+        if let Some(ref recommendation) = health_report.recommendation {
+            eprintln!("Recommendation: {}", recommendation);
+        }
+    } else {
+        eprintln!(
+            "Bootstrap health OK: {} of {} nodes reachable",
+            health_report.reachable_nodes,
+            health_report.total_nodes
+        );
+    }
+    
+    // Start Geth (it will use the fallback bootstrap string if health check found issues)
+    geth.start(data_dir, miner_address)?;
+    
+    Ok(health_report)
+}
+
+/// Add a new peer to the running Geth node via admin_addPeer RPC
+pub async fn add_peer(enode: &str) -> Result<bool, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "admin_addPeer",
+        "params": [enode],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send add_peer request: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse add_peer response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error adding peer: {}", error));
+    }
+
+    Ok(json_response["result"].as_bool().unwrap_or(false))
+}
+
+/// Get list of currently connected peers
+pub async fn get_peers() -> Result<Vec<serde_json::Value>, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "admin_peers",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send get_peers request: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse get_peers response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error getting peers: {}", error));
+    }
+
+    let peers = json_response["result"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(peers)
+}
+
+/// Reconnect to bootstrap nodes if peer count is low
+/// 
+/// This function checks the current peer count and if it's below the threshold,
+/// attempts to add healthy bootstrap nodes as peers.
+pub async fn reconnect_to_bootstrap_if_needed(min_peers: u32) -> Result<u32, String> {
+    let current_peers = get_peer_count().await.unwrap_or(0);
+    
+    if current_peers >= min_peers {
+        return Ok(current_peers);
+    }
+    
+    eprintln!(
+        "Peer count ({}) below threshold ({}), attempting to reconnect to bootstrap nodes",
+        current_peers,
+        min_peers
+    );
+    
+    // Get healthy bootstrap nodes
+    let healthy_enodes = crate::geth_bootstrap::get_healthy_bootstrap_enode_string().await;
+    
+    let mut added = 0;
+    for enode in healthy_enodes.split(',') {
+        if enode.is_empty() {
+            continue;
+        }
+        
+        match add_peer(enode).await {
+            Ok(true) => {
+                eprintln!("Successfully added bootstrap peer");
+                added += 1;
+            }
+            Ok(false) => {
+                // Peer already connected or couldn't be added
+            }
+            Err(e) => {
+                eprintln!("Failed to add bootstrap peer: {}", e);
+            }
+        }
+    }
+    
+    // Give peers time to connect
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    
+    let new_peer_count = get_peer_count().await.unwrap_or(current_peers);
+    eprintln!(
+        "Peer count after reconnection attempt: {} (added {} bootstrap nodes)",
+        new_peer_count,
+        added
+    );
+    
+    Ok(new_peer_count)
+}
+
+/// Get Geth node info including enode
+pub async fn get_node_info() -> Result<serde_json::Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "admin_nodeInfo",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send nodeInfo request: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse nodeInfo response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error getting node info: {}", error));
+    }
+
+    Ok(json_response["result"].clone())
 }
 
 impl Drop for GethProcess {
@@ -630,6 +910,96 @@ pub async fn get_mining_status() -> Result<bool, String> {
         .ok_or("Invalid mining status response")?;
 
     Ok(is_mining)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncStatus {
+    pub syncing: bool,
+    pub current_block: u64,
+    pub highest_block: u64,
+    pub starting_block: u64,
+    pub progress_percent: f64,
+    pub blocks_remaining: u64,
+    pub estimated_seconds_remaining: Option<u64>,
+}
+
+pub async fn get_sync_status() -> Result<SyncStatus, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_syncing",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get sync status: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    // eth_syncing returns false if not syncing, or an object if syncing
+    let result = &json_response["result"];
+    
+    if result.is_boolean() && result.as_bool() == Some(false) {
+        // Not syncing - fully synced
+        let block_number = get_block_number().await?;
+        return Ok(SyncStatus {
+            syncing: false,
+            current_block: block_number,
+            highest_block: block_number,
+            starting_block: block_number,
+            progress_percent: 100.0,
+            blocks_remaining: 0,
+            estimated_seconds_remaining: Some(0),
+        });
+    }
+
+    // Parse sync progress
+    let current_hex = result["currentBlock"].as_str().ok_or("Missing currentBlock")?;
+    let highest_hex = result["highestBlock"].as_str().ok_or("Missing highestBlock")?;
+    let starting_hex = result["startingBlock"].as_str().ok_or("Missing startingBlock")?;
+
+    let current_block = u64::from_str_radix(current_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid currentBlock: {}", e))?;
+    let highest_block = u64::from_str_radix(highest_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid highestBlock: {}", e))?;
+    let starting_block = u64::from_str_radix(starting_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Invalid startingBlock: {}", e))?;
+
+    let blocks_remaining = highest_block.saturating_sub(current_block);
+    let total_blocks = highest_block.saturating_sub(starting_block);
+    let progress_percent = if total_blocks > 0 {
+        ((current_block - starting_block) as f64 / total_blocks as f64) * 100.0
+    } else {
+        100.0
+    };
+
+    // Estimate time remaining based on ~850 blocks per 8 seconds (observed rate)
+    let estimated_seconds_remaining = if blocks_remaining > 0 {
+        Some((blocks_remaining as f64 / 850.0 * 8.0) as u64)
+    } else {
+        Some(0)
+    };
+
+    Ok(SyncStatus {
+        syncing: true,
+        current_block,
+        highest_block,
+        starting_block,
+        progress_percent,
+        blocks_remaining,
+        estimated_seconds_remaining,
+    })
 }
 
 pub async fn get_hashrate() -> Result<String, String> {
@@ -1245,8 +1615,9 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
     Ok(all_lines[start..].to_vec())
 }
 
-pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> {
-    let mut blocks_mined = 0u64;
+pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str) -> Result<u64, String> {
+
+    println!("🔍 get_mined_blocks_count called for address: {}", miner_address);
 
     // Get the current block number
     let block_number_payload = json!({
@@ -1279,13 +1650,67 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
     let current_block = u64::from_str_radix(&block_hex[2..], 16)
         .map_err(|e| format!("Failed to parse block number: {}", e))?;
 
-    // Check recent blocks (last 100 or current block count, whichever is smaller)
-    let blocks_to_check = std::cmp::min(1000, current_block);
-    let start_block = current_block.saturating_sub(blocks_to_check).max(1);
-
     // Normalize the miner address for comparison
     let normalized_miner = miner_address.to_lowercase();
 
+    // Maintain cumulative count per address - only increases, never decreases
+    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+    // Incremental scanning: only scan blocks we haven't checked yet
+    // Much more efficient than rescanning the same blocks repeatedly
+    static LAST_SCANNED_BLOCK: Lazy<Mutex<u64>> = Lazy::new(|| Mutex::new(0));
+
+    // Start from the last scanned block, or very recent blocks if this is first scan
+    let start_block = {
+        let last_scanned = LAST_SCANNED_BLOCK.lock().await;
+        if *last_scanned == 0 {
+            // First scan: check minimal recent blocks since mining happens at tip
+            // For active mining, our blocks are at the very end - minimal scanning needed
+            current_block.saturating_sub(1)
+        } else {
+            // Incremental: start from where we left off
+            *last_scanned
+        }
+    };
+
+    // Get current cumulative count for this address (atomic with update)
+    let current_cumulative = {
+        let counts = CUMULATIVE_COUNTS.lock().await;
+        *counts.get(miner_address).unwrap_or(&0)
+    };
+
+    // Update the last scanned block for next time
+    {
+        let mut last_scanned = LAST_SCANNED_BLOCK.lock().await;
+        *last_scanned = current_block;
+    }
+
+    // Only scan recent blocks for efficiency
+
+    // Process blocks one at a time for maximum incremental updates
+    // Each block discovery triggers immediate UI feedback
+    const BATCH_SIZE: usize = 1;
+    let mut newly_discovered_blocks = 0u64;
+
+    // Scan from newest to oldest for active mining (recent blocks more likely to be mined)
+    // Process in smaller batches for more responsive incremental updates
+    let mut scanned_blocks = 0u64;
+
+    // Calculate batches from newest to oldest
+    let mut batch_starts = Vec::new();
+    let mut current_start = start_block;
+    while current_start <= current_block {
+        batch_starts.push(current_start);
+        if current_start + BATCH_SIZE as u64 > current_block {
+            break;
+        }
+        current_start += BATCH_SIZE as u64;
+    }
+    // Reverse to scan newest first
+    batch_starts.reverse();
+
+    // Process blocks sequentially for truly incremental discovery
+    // Each block is checked individually with small delays between discoveries
     for block_num in start_block..=current_block {
         let block_payload = json!({
             "jsonrpc": "2.0",
@@ -1294,25 +1719,78 @@ pub async fn get_mined_blocks_count(miner_address: &str) -> Result<u64, String> 
             "id": 1
         });
 
-        if let Ok(response) = HTTP_CLIENT
-            .post(&NETWORK_CONFIG.rpc_endpoint)
-            .json(&block_payload)
-            .send()
-            .await
-        {
-            if let Ok(json_response) = response.json::<serde_json::Value>().await {
-                if let Some(block) = json_response.get("result") {
-                    if let Some(miner) = block.get("miner").and_then(|m| m.as_str()) {
-                        if miner.to_lowercase() == normalized_miner {
-                            blocks_mined += 1;
+        // Check this block
+        let mut block_result = 0u64;
+        for attempt in 0..3 {
+            if let Ok(response) = HTTP_CLIENT
+                .post(&NETWORK_CONFIG.rpc_endpoint)
+                .json(&block_payload)
+                .send()
+                .await
+            {
+                if let Ok(json_response) = response.json::<serde_json::Value>().await {
+                    if let Some(block) = json_response.get("result") {
+                        if let Some(block_miner) = block.get("miner").and_then(|m| m.as_str()) {
+                            if block_miner.to_lowercase() == normalized_miner {
+                                block_result = 1;
+                                break;
+                            }
                         }
                     }
                 }
             }
+
+            // Wait before retry
+            if attempt < 2 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
+
+        scanned_blocks += 1;
+
+        // If we found a mined block, update immediately
+        if block_result > 0 {
+            newly_discovered_blocks += block_result;
+
+            // Update cumulative count immediately (drop guard before await)
+            {
+                let mut counts = CUMULATIVE_COUNTS.lock().await;
+                let existing_count = *counts.get(miner_address).unwrap_or(&0);
+                let new_total = existing_count + block_result;
+                counts.insert(miner_address.to_string(), new_total);
+
+                println!("🔍 Found 1 NEW block! (cumulative total: {}, scanned {} blocks)",
+                         new_total, scanned_blocks);
+
+                // Emit event to frontend for real-time UI updates
+                let _ = app.emit("mining_scan_progress", serde_json::json!({
+                    "address": miner_address,
+                    "blocks_found_in_batch": 1,
+                    "total_scanned": scanned_blocks,
+                    "timestamp": chrono::Utc::now().timestamp()
+                }));
+            }
+
+            // Small delay between discoveries for better visual feedback
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         }
     }
 
-    Ok(blocks_mined)
+    // Update the cumulative count with any newly discovered blocks
+    let final_total = if newly_discovered_blocks > 0 {
+        let mut counts = CUMULATIVE_COUNTS.lock().await;
+        let existing_count = *counts.get(miner_address).unwrap_or(&0);
+        let new_total = existing_count + newly_discovered_blocks;
+        counts.insert(miner_address.to_string(), new_total);
+        new_total
+    } else {
+        current_cumulative
+    };
+
+    // Return the cumulative count (existing + newly discovered)
+    println!("🔍 get_mined_blocks_count returning: {} total blocks for address: {} (discovered {} new, previous total: {})",
+             final_total, miner_address, newly_discovered_blocks, current_cumulative);
+    Ok(final_total)
 }
 
 //Fetching Recent Blocks Mined by address, scanning backwards from latest
@@ -1463,9 +1941,7 @@ pub async fn get_recent_mined_blocks(
         //     }
         // };
 
-        // Since Geth's default reward (2.0) doesn't match the intended Chiral Network
-        // reward, we hardcode the intended value of 5.0 here.
-        let reward = Some(2.0);
+        let reward = Some(BLOCK_REWARD);
 
         out.push(MinedBlock {
             hash,
@@ -1478,6 +1954,281 @@ pub async fn get_recent_mined_blocks(
     }
 
     Ok(out)
+}
+
+// Range-based mining blocks fetch (for progressive loading)
+pub async fn get_mined_blocks_range(
+    miner_address: &str,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<MinedBlock>, String> {
+    let target = miner_address.to_lowercase();
+    let mut out: Vec<MinedBlock> = Vec::new();
+
+    for n in (from_block..=to_block).rev() {
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [format!("0x{:x}", n), false],
+                "id": 1
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("RPC send: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("RPC parse: {e}"))?;
+
+        if block_v.get("result").is_none() {
+            continue;
+        }
+        let b = &block_v["result"];
+
+        let miner = b
+            .get("author")
+            .and_then(|x| x.as_str())
+            .or_else(|| b.get("miner").and_then(|x| x.as_str()))
+            .unwrap_or("")
+            .to_lowercase();
+
+        if miner != target {
+            continue;
+        }
+
+        let hash = b
+            .get("hash")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let nonce = b
+            .get("nonce")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        let difficulty = b
+            .get("difficulty")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        let timestamp = b
+            .get("timestamp")
+            .and_then(|x| x.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+        let number = b
+            .get("number")
+            .and_then(|x| x.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(n);
+
+        let reward = Some(BLOCK_REWARD);
+
+        out.push(MinedBlock {
+            hash,
+            nonce,
+            difficulty,
+            timestamp,
+            number,
+            reward,
+        });
+    }
+
+    Ok(out)
+}
+
+// Get total mining rewards by summing actual rewards from all mined blocks
+// This is more accurate than blocksFound * 2 and returns just a number
+pub async fn get_total_mining_rewards(miner_address: &str) -> Result<f64, String> {
+    let target = miner_address.to_lowercase();
+    let mut total_rewards = 0.0;
+
+    // Get the current block number
+    let current_block = get_block_number().await?;
+
+    // Scan all blocks from 0 to current
+    // This could be slow for many blocks, but it's a one-time calculation
+    for n in 0..=current_block {
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [format!("0x{:x}", n), false],
+                "id": 1
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("RPC send: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("RPC parse: {e}"))?;
+
+        if block_v.get("result").is_none() {
+            continue;
+        }
+        let b = &block_v["result"];
+
+        let miner = b
+            .get("author")
+            .and_then(|x| x.as_str())
+            .or_else(|| b.get("miner").and_then(|x| x.as_str()))
+            .unwrap_or("")
+            .to_lowercase();
+
+        if miner == target {
+            total_rewards += BLOCK_REWARD;
+        }
+    }
+
+    Ok(total_rewards)
+}
+
+// Struct to return accurate totals from blockchain scan
+#[derive(Debug, Serialize, Clone)]
+pub struct AccurateTotals {
+    pub blocks_mined: u64,
+    pub total_received: f64,
+    pub total_sent: f64,
+}
+
+// Progress event for accurate totals calculation
+#[derive(Debug, Serialize, Clone)]
+pub struct AccurateTotalsProgress {
+    pub current_block: u64,
+    pub total_blocks: u64,
+    pub percentage: u8,
+}
+
+/// Scans the entire blockchain once and calculates:
+/// - Total blocks mined by the address
+/// - Total Chiral received (incoming transactions)
+/// - Total Chiral sent (outgoing transactions)
+/// Emits progress events via Tauri event system
+pub async fn calculate_accurate_totals(
+    address: &str,
+    app_handle: tauri::AppHandle,
+) -> Result<AccurateTotals, String> {
+    let target_address = address.to_lowercase();
+    let mut blocks_mined = 0u64;
+    let mut total_received = 0.0;
+    let mut total_sent = 0.0;
+
+    // Get the current block number
+    let current_block = get_block_number().await?;
+
+    // Emit initial progress
+    let _ = app_handle.emit(
+        "accurate-totals-progress",
+        AccurateTotalsProgress {
+            current_block: 0,
+            total_blocks: current_block,
+            percentage: 0,
+        },
+    );
+
+    // Scan ALL blocks from genesis for maximum accuracy
+    for n in 0..=current_block {
+        // Emit progress every 100 blocks
+        if n % 100 == 0 {
+            let percentage = ((n as f64 / current_block as f64) * 100.0) as u8;
+            let _ = app_handle.emit(
+                "accurate-totals-progress",
+                AccurateTotalsProgress {
+                    current_block: n,
+                    total_blocks: current_block,
+                    percentage,
+                },
+            );
+        }
+
+        // Get block with full transaction data
+        let block_v = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": [format!("0x{:x}", n), true], // true = include full transaction objects
+                "id": 1
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("RPC send: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("RPC parse: {e}"))?;
+
+        if block_v.get("result").is_none() {
+            continue;
+        }
+        let b = &block_v["result"];
+
+        // Check if this address mined this block
+        let miner = b
+            .get("author")
+            .and_then(|x| x.as_str())
+            .or_else(|| b.get("miner").and_then(|x| x.as_str()))
+            .unwrap_or("")
+            .to_lowercase();
+
+        if miner == target_address {
+            blocks_mined += 1;
+        }
+
+        // Process all transactions in this block
+        if let Some(txs) = b.get("transactions").and_then(|t| t.as_array()) {
+            for tx in txs {
+                let from = tx
+                    .get("from")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let to = tx
+                    .get("to")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let value_hex = tx
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0x0");
+
+                // Parse value (Wei to Chiral: divide by 10^18)
+                if let Ok(value_wei) = u128::from_str_radix(&value_hex.trim_start_matches("0x"), 16) {
+                    let value_chiral = value_wei as f64 / 1e18;
+
+                    // Check if this is a received transaction
+                    if to == target_address && value_chiral > 0.0 {
+                        println!("DEBUG: Received transaction: {} Chiral (from: {}, to: {})", value_chiral, from, to);
+                        total_received += value_chiral;
+                    }
+
+                    // Check if this is a sent transaction
+                    if from == target_address && value_chiral > 0.0 {
+                        println!("DEBUG: Sent transaction: {} Chiral (from: {}, to: {})", value_chiral, from, to);
+                        total_sent += value_chiral;
+                    }
+                }
+            }
+        }
+    }
+
+    // Emit final progress (100%)
+    let _ = app_handle.emit(
+        "accurate-totals-progress",
+        AccurateTotalsProgress {
+            current_block: current_block,
+            total_blocks: current_block,
+            percentage: 100,
+        },
+    );
+
+    println!("DEBUG: Accurate totals calculation complete - blocks_mined: {}, total_received: {}, total_sent: {}", blocks_mined, total_received, total_sent);
+
+    Ok(AccurateTotals {
+        blocks_mined,
+        total_received,
+        total_sent,
+    })
 }
 
 #[tauri::command]
@@ -1562,13 +2313,55 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     let difficulty = u128::from_str_radix(&difficulty_hex[2..], 16)
         .map_err(|e| format!("Failed to parse difficulty: {}", e))?;
 
-    // For Chiral private network, estimate network hashrate from difficulty
-    // The relationship between hashrate and difficulty depends on the algorithm
-    // For Ethash on a private network with CPU mining:
-    // Network Hashrate ≈ Difficulty / Block Time
-    // This gives us the hash rate needed to mine a block at this difficulty
-    let estimated_block_time = 15.0; // seconds (Ethereum default)
-    let hashrate = difficulty as f64 / estimated_block_time;
+    // Get actual block time from recent blocks instead of using a hard-coded estimate
+    let latest_block_number_hex = json_response["result"]["number"]
+        .as_str()
+        .ok_or("Invalid block number response")?;
+    let latest_block_number = u64::from_str_radix(&latest_block_number_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse block number: {}", e))?;
+    
+    let latest_timestamp_hex = json_response["result"]["timestamp"]
+        .as_str()
+        .ok_or("Invalid timestamp response")?;
+    let latest_timestamp = u64::from_str_radix(&latest_timestamp_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse timestamp: {}", e))?;
+
+    // Calculate actual average block time from the last 100 blocks (or fewer if network is new)
+    let lookback_blocks = 100.min(latest_block_number.saturating_sub(1));
+    let mut actual_block_time = 15.0; // Default fallback
+    
+    if lookback_blocks > 0 {
+        let previous_block_number = latest_block_number.saturating_sub(lookback_blocks);
+        let previous_block = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [format!("0x{:x}", previous_block_number), false],
+            "id": 1
+        });
+
+        if let Ok(prev_response) = HTTP_CLIENT
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&previous_block)
+            .send()
+            .await
+        {
+            if let Ok(prev_json) = prev_response.json::<serde_json::Value>().await {
+                if let Some(prev_timestamp_hex) = prev_json["result"]["timestamp"].as_str() {
+                    if let Ok(prev_timestamp) = u64::from_str_radix(&prev_timestamp_hex[2..], 16) {
+                        let time_diff = latest_timestamp.saturating_sub(prev_timestamp);
+                        if time_diff > 0 {
+                            actual_block_time = time_diff as f64 / lookback_blocks as f64;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // For Chiral private network, estimate network hashrate from difficulty and actual block time
+    // Network Hashrate = Difficulty / Block Time
+    // This gives us the hash rate needed to mine a block at this difficulty in the observed time
+    let hashrate = difficulty as f64 / actual_block_time;
 
     // Convert to human-readable format
     let formatted = if hashrate >= 1_000_000_000_000.0 {
@@ -1610,8 +2403,7 @@ pub async fn send_transaction(
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
 
-    let chain_id = 98765u64;
-    let wallet = wallet.with_chain_id(chain_id);
+    let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
     let client = SignerMiddleware::new(provider.clone(), wallet);
 
@@ -1686,4 +2478,175 @@ pub async fn get_block_details_by_number(
     }
 
     Ok(json_response["result"].clone().into())
+}
+
+// ============================================================================
+// Transaction History Scanning
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionHistoryItem {
+    pub hash: String,
+    pub from: String,
+    pub to: Option<String>,
+    pub value: String,  // Wei as string
+    pub block_number: u64,
+    pub timestamp: u64,
+    pub status: String,  // "success" or "failed"
+    pub tx_type: String, // "sent" or "received"
+    pub gas_used: Option<String>,
+    pub gas_price: Option<String>,
+}
+
+/// Scan blocks for transactions involving a specific address
+/// Returns transactions from newest to oldest
+pub async fn get_transaction_history(
+    address: &str,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<TransactionHistoryItem>, String> {
+    let client = reqwest::Client::new();
+    let address_lower = address.to_lowercase();
+    let mut transactions = Vec::new();
+
+    // Scan blocks from newest to oldest
+    for block_num in (from_block..=to_block).rev() {
+        // Fetch block with full transaction objects
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [format!("0x{:x}", block_num), true],
+            "id": 1
+        });
+
+        let response = client
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch block {}: {}", block_num, e))?;
+
+        let json_response: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse block {}: {}", block_num, e))?;
+
+        if let Some(error) = json_response.get("error") {
+            return Err(format!("RPC error for block {}: {}", block_num, error));
+        }
+
+        let block = match json_response["result"].as_object() {
+            Some(b) => b,
+            None => continue, // No block data
+        };
+
+        // Get block timestamp
+        let timestamp = block.get("timestamp")
+            .and_then(|t| t.as_str())
+            .and_then(|t| u64::from_str_radix(t.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+
+        // Check all transactions in this block
+        if let Some(txs) = block.get("transactions").and_then(|t| t.as_array()) {
+            for tx in txs {
+                let tx_obj = match tx.as_object() {
+                    Some(obj) => obj,
+                    None => continue,
+                };
+
+                let tx_hash = tx_obj.get("hash")
+                    .and_then(|h| h.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let from = tx_obj.get("from")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                let to = tx_obj.get("to")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_lowercase());
+
+                let value = tx_obj.get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0x0")
+                    .to_string();
+
+                let gas_price = tx_obj.get("gasPrice")
+                    .and_then(|g| g.as_str())
+                    .map(|s| s.to_string());
+
+                // Check if this transaction involves our address
+                let is_from_us = from == address_lower;
+                let is_to_us = to.as_ref().map_or(false, |t| t == &address_lower);
+
+                if !is_from_us && !is_to_us {
+                    continue; // Skip transactions not involving our address
+                }
+
+                // Get transaction receipt to check status
+                let receipt_payload = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "eth_getTransactionReceipt",
+                    "params": [tx_hash],
+                    "id": 1
+                });
+
+                let receipt_response = client
+                    .post(&NETWORK_CONFIG.rpc_endpoint)
+                    .json(&receipt_payload)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Failed to fetch receipt: {}", e))?;
+
+                let receipt_json: serde_json::Value = receipt_response
+                    .json()
+                    .await
+                    .map_err(|e| format!("Failed to parse receipt: {}", e))?;
+
+                let receipt = receipt_json["result"].as_object();
+
+                let status = receipt
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| if s == "0x1" { "success" } else { "failed" })
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let gas_used = receipt
+                    .and_then(|r| r.get("gasUsed"))
+                    .and_then(|g| g.as_str())
+                    .map(|s| s.to_string());
+
+                transactions.push(TransactionHistoryItem {
+                    hash: tx_hash,
+                    from: from.clone(),
+                    to,
+                    value,
+                    block_number: block_num,
+                    timestamp,
+                    status,
+                    tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
+                    gas_used,
+                    gas_price,
+                });
+            }
+        }
+    }
+
+    Ok(transactions)
+}
+
+/// Reset the incremental block scanning state
+/// Call this when switching accounts or when cache is cleared
+pub async fn reset_incremental_scanning() {
+    static LAST_SCANNED_BLOCK: Lazy<Mutex<u64>> = Lazy::new(|| Mutex::new(0));
+    let mut last_scanned = LAST_SCANNED_BLOCK.lock().await;
+    *last_scanned = 0;
+
+    // Also reset cumulative counts
+    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+    let mut counts = CUMULATIVE_COUNTS.lock().await;
+    counts.clear();
 }

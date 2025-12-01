@@ -1,30 +1,55 @@
 <script lang="ts">
-  import Card from '$lib/components/ui/card.svelte'
-  import Badge from '$lib/components/ui/badge.svelte'
-  import Progress from '$lib/components/ui/progress.svelte'
-  import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-  import { files, wallet } from '$lib/stores';
-  import { proxyNodes } from '$lib/proxy';
-  import { onMount, onDestroy } from 'svelte'
-  import { t } from 'svelte-i18n'
-  import { suspiciousActivity } from '$lib/stores'; // only import
-  import type { FileItem } from '$lib/stores';
-  import { miningState } from '$lib/stores';
-  import { miningProgress } from '$lib/stores';
-  import { analyticsService } from '$lib/services/analyticsService';
-  import type { BandwidthStats, NetworkActivity } from '$lib/services/analyticsService';
+import Card from '$lib/components/ui/card.svelte'
+import Badge from '$lib/components/ui/badge.svelte'
+import Progress from '$lib/components/ui/progress.svelte'
+import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
+import { files, wallet, settings } from '$lib/stores';
+import { proxyNodes } from '$lib/proxy';
+import { onMount, onDestroy } from 'svelte'
+import { t } from 'svelte-i18n'
+import { suspiciousActivity } from '$lib/stores';
+import type { FileItem } from '$lib/stores';
+import { toHumanReadableSize } from '$lib/utils';
+import { miningState } from '$lib/stores';
+import { miningProgress } from '$lib/stores';
+import { analyticsService } from '$lib/services/analyticsService';
+import type { BandwidthStats, NetworkActivity } from '$lib/services/analyticsService';
+import { reputationRateLimiter, type RateLimitStatus } from '$lib/services/reputationRateLimiter';
+import { showToast } from '$lib/toast';
+import { get } from 'svelte/store';
+import type { AppSettings } from '$lib/stores';
   
   let uploadedFiles: FileItem[] = []
   let downloadedFiles: FileItem[] = []
   let totalUploaded = 0
-  let totalDownloaded = 0
-  // let earningsHistory: any[] = []
-  let storageUsed = 0
-  let bandwidthUsed = { upload: 0, download: 0 }
+let totalDownloaded = 0
+// let earningsHistory: any[] = []
+let storageUsed = 0
+let bandwidthUsed = { upload: 0, download: 0 }
 
-  // Real analytics data
-  let realBandwidthStats: BandwidthStats | null = null
-  let realNetworkActivity: NetworkActivity | null = null
+let uploadCapPercent: number | null = null
+let downloadCapPercent: number | null = null
+let uploadUsedGb = 0
+let downloadUsedGb = 0
+let uploadRemainingGb: number | null = null
+let downloadRemainingGb: number | null = null
+let uploadAlertLevel: number | null = null
+let downloadAlertLevel: number | null = null
+
+let settingsSnapshot: AppSettings = get(settings)
+let capThresholds: number[] = settingsSnapshot.capWarningThresholds ?? []
+
+const triggeredUploadThresholds = new Set<number>()
+const triggeredDownloadThresholds = new Set<number>()
+let previousUploadPercent = 0
+let previousDownloadPercent = 0
+let lastThresholdSignature = capThresholds.join(',')
+let notificationPermissionRequested = false
+
+// Real analytics data
+let realBandwidthStats: BandwidthStats | null = null
+let realNetworkActivity: NetworkActivity | null = null
+let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
   
   // Latency analytics (derived from proxy nodes)
   let avgLatency = 0
@@ -54,6 +79,118 @@
     p95Latency = latencies[idx] || 0
     bestLatency = latencies[0] || 0
   }
+
+  function clampPercent(value: number) {
+    if (!Number.isFinite(value)) {
+      return 0
+    }
+    return Math.min(100, Math.max(0, value))
+  }
+
+  function formatGb(value: number) {
+    if (!Number.isFinite(value)) {
+      return '0.0'
+    }
+    if (value >= 100) return value.toFixed(0)
+    if (value >= 10) return value.toFixed(1)
+    return value.toFixed(2)
+  }
+
+  function formatDuration(ms?: number | null) {
+    if (!ms || ms <= 0) return 'Now'
+    const seconds = Math.ceil(ms / 1000)
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    const remainingMinutes = minutes % 60
+    return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`
+  }
+
+  async function pushDesktopNotification(title: string, body: string) {
+    if (typeof window === 'undefined') return
+
+    if (!('Notification' in window)) {
+      return
+    }
+
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body })
+      return
+    }
+
+    if (!notificationPermissionRequested && Notification.permission !== 'denied') {
+      notificationPermissionRequested = true
+      const permission = await Notification.requestPermission()
+      if (permission === 'granted') {
+        new Notification(title, { body })
+      }
+    }
+  }
+
+  function maybeFireBandwidthAlert(
+    direction: 'upload' | 'download',
+    percent: number,
+    capGb: number
+  ) {
+    const config = settingsSnapshot
+    if (!config?.enableNotifications) return
+
+    const toastEnabled = config.notifyOnBandwidthCap
+    const desktopEnabled = config.notifyOnBandwidthCapDesktop
+    if (!toastEnabled && !desktopEnabled) return
+
+    const usedGb = direction === 'upload' ? uploadUsedGb : downloadUsedGb
+    const roundedPercent = Math.round(percent)
+    const directionLabel = direction === 'upload' ? 'Upload' : 'Download'
+    const message = `${formatGb(usedGb)} GB consumed (${roundedPercent}% of ${capGb} GB).`
+
+    if (toastEnabled) {
+      showToast(`${directionLabel} cap warning: ${message}`, 'warning')
+    }
+
+    if (desktopEnabled) {
+      pushDesktopNotification(`${directionLabel} cap warning`, message)
+    }
+  }
+
+  function processCap(
+    direction: 'upload' | 'download',
+    percent: number | null,
+    capGb: number,
+    previousPercent: number,
+    triggeredSet: Set<number>
+  ) {
+    if (percent === null || capGb <= 0 || capThresholds.length === 0) {
+      triggeredSet.clear()
+      return { alertLevel: null as number | null, previous: percent ?? 0 }
+    }
+
+    if (!Number.isFinite(percent)) {
+      return { alertLevel: null as number | null, previous: previousPercent }
+    }
+
+    if (percent + 5 < previousPercent) {
+      triggeredSet.clear()
+    }
+
+    let alertLevel: number | null = null
+
+    for (const threshold of capThresholds) {
+      if (percent >= threshold) {
+        alertLevel = threshold
+        if (!triggeredSet.has(threshold)) {
+          triggeredSet.add(threshold)
+          maybeFireBandwidthAlert(direction, percent, capGb)
+        }
+      } else if (triggeredSet.has(threshold) && percent + 1 < threshold) {
+        triggeredSet.delete(threshold)
+      }
+    }
+
+    return { alertLevel, previous: percent }
+  }
+
 
   type Earning = {
     date: string;
@@ -85,6 +222,68 @@
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+  }
+
+  $: settingsSnapshot = $settings;
+
+  $: capThresholds = Array.isArray(settingsSnapshot.capWarningThresholds)
+    ? [...settingsSnapshot.capWarningThresholds].sort((a, b) => a - b)
+    : [];
+
+  $: {
+    const signature = capThresholds.join(',');
+    if (signature !== lastThresholdSignature) {
+      lastThresholdSignature = signature;
+      triggeredUploadThresholds.clear();
+      triggeredDownloadThresholds.clear();
+    }
+  }
+
+  $: uploadUsedGb = bandwidthUsed.upload / 1024;
+  $: downloadUsedGb = bandwidthUsed.download / 1024;
+
+  $: uploadRemainingGb =
+    settingsSnapshot.monthlyUploadCapGb > 0
+      ? Math.max(0, settingsSnapshot.monthlyUploadCapGb - uploadUsedGb)
+      : null;
+
+  $: downloadRemainingGb =
+    settingsSnapshot.monthlyDownloadCapGb > 0
+      ? Math.max(0, settingsSnapshot.monthlyDownloadCapGb - downloadUsedGb)
+      : null;
+
+  $: uploadCapPercent =
+    settingsSnapshot.monthlyUploadCapGb > 0
+      ? clampPercent((uploadUsedGb / settingsSnapshot.monthlyUploadCapGb) * 100)
+      : null;
+
+  $: downloadCapPercent =
+    settingsSnapshot.monthlyDownloadCapGb > 0
+      ? clampPercent((downloadUsedGb / settingsSnapshot.monthlyDownloadCapGb) * 100)
+      : null;
+
+  $: {
+    const result = processCap(
+      'upload',
+      uploadCapPercent,
+      settingsSnapshot.monthlyUploadCapGb,
+      previousUploadPercent,
+      triggeredUploadThresholds
+    );
+    uploadAlertLevel = result.alertLevel;
+    previousUploadPercent = result.previous;
+  }
+
+  $: {
+    const result = processCap(
+      'download',
+      downloadCapPercent,
+      settingsSnapshot.monthlyDownloadCapGb,
+      previousDownloadPercent,
+      triggeredDownloadThresholds
+    );
+    downloadAlertLevel = result.alertLevel;
+    previousDownloadPercent = result.previous;
   }
 
   $: periodPresets = [
@@ -263,6 +462,7 @@
 
   // Fetch real analytics data
   async function fetchAnalyticsData() {
+
     realBandwidthStats = await analyticsService.getBandwidthStats();
     realNetworkActivity = await analyticsService.getNetworkActivity();
 
@@ -273,6 +473,8 @@
         download: realBandwidthStats.downloadBytes / (1024 * 1024)
       };
     }
+
+    rateLimitStatus = reputationRateLimiter.getStatus();
   }
 
   // Generate mock latency history once on mount
@@ -381,18 +583,8 @@
     }
   }
 
-  function formatSize(bytes: number): string {
-    const units = ['B', 'KB', 'MB', 'GB', 'TB']
-    let size = bytes
-    let unitIndex = 0
-
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024
-      unitIndex++
-    }
-
-    return `${size.toFixed(2)} ${units[unitIndex]}`
-  }
+  // Use centralized file size formatting for consistency
+  const formatSize = toHumanReadableSize;
 
   // Calculate top performers
   $: topEarners = uploadedFiles
@@ -512,15 +704,49 @@
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">{$t('analytics.bandwidthUsage')}</h2>
+
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div class="bg-blue-50 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-sm text-muted-foreground mb-1">{$t('analytics.upload')}</span>
-        <span class="text-2xl font-bold text-blue-600">{formatSize(bandwidthUsed.upload * 1048576)}</span>
-      </div>
-      <div class="bg-green-50 rounded-lg p-4 flex flex-col items-center">
-        <span class="text-sm text-muted-foreground mb-1">{$t('analytics.download')}</span>
-        <span class="text-2xl font-bold text-green-600">{formatSize(bandwidthUsed.download * 1048576)}</span>
-      </div>
+        <div class="bg-blue-50 rounded-lg p-4 flex flex-col items-center">
+          <span class="text-sm text-muted-foreground mb-1">{$t('analytics.upload')}</span>
+          <span class="text-2xl font-bold text-blue-600">{formatSize(bandwidthUsed.upload * 1048576)}</span>
+
+          {#if uploadCapPercent !== null}
+            <div class="w-full mt-3 space-y-1">
+              <div class="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{Math.round(uploadCapPercent)}% of {settingsSnapshot.monthlyUploadCapGb} GB cap</span>
+                <span>{formatGb(uploadRemainingGb ?? 0)} GB left</span>
+              </div>
+              <Progress value={uploadCapPercent ?? 0} class="h-2" indicatorClass="bg-blue-500" />
+            </div>
+          {/if}
+
+          {#if uploadAlertLevel !== null}
+            <Badge variant="destructive" class="mt-3">
+              {uploadAlertLevel}% threshold crossed
+            </Badge>
+          {/if}
+        </div>
+
+        <div class="bg-green-50 rounded-lg p-4 flex flex-col items-center">
+          <span class="text-sm text-muted-foreground mb-1">{$t('analytics.download')}</span>
+          <span class="text-2xl font-bold text-green-600">{formatSize(bandwidthUsed.download * 1048576)}</span>
+
+          {#if downloadCapPercent !== null}
+            <div class="w-full mt-3 space-y-1">
+              <div class="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{Math.round(downloadCapPercent)}% of {settingsSnapshot.monthlyDownloadCapGb} GB cap</span>
+                <span>{formatGb(downloadRemainingGb ?? 0)} GB left</span>
+              </div>
+              <Progress value={downloadCapPercent ?? 0} class="h-2" indicatorClass="bg-green-500" />
+            </div>
+          {/if}
+
+          {#if downloadAlertLevel !== null}
+            <Badge variant="destructive" class="mt-3">
+              {downloadAlertLevel}% threshold crossed
+            </Badge>
+          {/if}
+        </div>
       </div>
       <div class="pt-4 border-t mt-4 flex items-center justify-between text-sm">
         <span class="text-muted-foreground flex items-center gap-1">
@@ -564,6 +790,55 @@
           <Badge variant="secondary">{realNetworkActivity?.uniquePeersAllTime ?? 0}</Badge>
         </div>
       </div>
+    </Card>
+
+    <Card class="p-6">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <h2 class="text-lg font-semibold mb-1">Reputation rate limits</h2>
+          <p class="text-sm text-muted-foreground">
+            {rateLimitStatus.enabled ? 'Enabled' : 'Disabled'} · {rateLimitStatus.mode === 'enforce' ? 'Enforced' : 'Log-only monitor'}
+          </p>
+        </div>
+        <Badge variant={rateLimitStatus.shadowBlocked ? 'destructive' : 'secondary'}>
+          {rateLimitStatus.mode === 'enforce' ? 'Enforce' : 'Shadow'}
+        </Badge>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+        <div class="bg-slate-50 rounded-lg p-3">
+          <p class="text-xs text-muted-foreground mb-1">Daily usage</p>
+          <p class="text-xl font-semibold">{rateLimitStatus.dailyUsed}/{rateLimitStatus.dailyCap}</p>
+          <p class="text-xs text-muted-foreground">Resets in {formatDuration(rateLimitStatus.nextDailyResetMs)}</p>
+        </div>
+        <div class="bg-slate-50 rounded-lg p-3">
+          <p class="text-xs text-muted-foreground mb-1">Per-peer</p>
+          <p class="text-xl font-semibold">{rateLimitStatus.perTargetUsed}/{rateLimitStatus.perTargetCap}</p>
+          <p class="text-xs text-muted-foreground">
+            {rateLimitStatus.perTargetCooldownRemainingMs > 0
+              ? `Cooldown ends in ${formatDuration(rateLimitStatus.perTargetCooldownRemainingMs)}`
+              : 'No active cooldown'}
+          </p>
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mt-4 text-sm">
+        <div class="flex items-center gap-2 text-muted-foreground">
+          <span class="inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
+          Burst window: {rateLimitStatus.burstCount} in last {formatDuration(rateLimitStatus.burstWindowMs)}
+        </div>
+        <div class="text-sm font-medium">
+          {rateLimitStatus.burstCooldownRemainingMs > 0
+            ? `Cooldown: ${formatDuration(rateLimitStatus.burstCooldownRemainingMs)}`
+            : 'No active cooldown'}
+        </div>
+      </div>
+
+      {#if rateLimitStatus.lastDecision}
+        <div class="mt-3 border-t pt-3 text-xs text-muted-foreground">
+          Last check: {new Date(rateLimitStatus.lastDecision.ts).toLocaleTimeString()} — {rateLimitStatus.lastDecision.allowed ? 'allowed' : 'blocked'}{rateLimitStatus.lastDecision.reason ? ` (${rateLimitStatus.lastDecision.reason})` : ''}
+        </div>
+      {/if}
     </Card>
   </div>
 
@@ -1011,3 +1286,8 @@
 </Card>
 
 </div>
+
+
+
+
+

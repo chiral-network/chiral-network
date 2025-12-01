@@ -1,3 +1,16 @@
+<script context="module" lang="ts">
+  export interface PeerInfo {
+    peerId: string;
+    location?: string;
+    latency_ms?: number;
+    bandwidth_kbps?: number;
+    reliability_score: number;
+    price_per_mb: number;
+    selected: boolean;
+    percentage: number;
+  }
+</script>
+
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import Card from '$lib/components/ui/card.svelte';
@@ -12,23 +25,13 @@
   export let peers: PeerInfo[];
   export let mode: 'auto' | 'manual' = 'auto';
   export let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
-  export let protocol: 'http' | 'webrtc' = 'http'; // Default to HTTP for WebRTC flow
+  export let protocol: 'http' | 'webrtc' | 'bitswap' | 'bittorrent' | 'ed2k' | 'ftp' = 'http'; 
+  export let isTorrent = false; // Flag to indicate torrent download (no peer selection needed)
 
   const dispatch = createEventDispatcher<{
     confirm: void;
     cancel: void;
   }>();
-
-  export interface PeerInfo {
-    peerId: string;
-    location?: string;
-    latency_ms?: number;
-    bandwidth_kbps?: number;
-    reliability_score: number;
-    price_per_mb: number;
-    selected: boolean;
-    percentage: number;
-  }
 
   // Calculate total cost
   $: totalCost = peers
@@ -105,21 +108,33 @@
       <div class="space-y-6">
         <!-- Header -->
         <div>
-          <h2 class="text-2xl font-bold mb-2">Select Download Peers</h2>
+          <h2 class="text-2xl font-bold mb-2">{isTorrent ? 'Confirm Download' : 'Select Download Peers'}</h2>
           <div class="flex items-center gap-2 text-muted-foreground flex-wrap">
             <span class="font-medium">{fileName}</span>
-            <span>•</span>
-            <span>{toHumanReadableSize(fileSize)}</span>
-            <span>•</span>
-            <Badge variant="secondary">
-              {peers.length} {peers.length === 1 ? 'Peer' : 'Peers'} Available
-            </Badge>
+            {#if fileSize > 0}
+              <span>•</span>
+              <span>{toHumanReadableSize(fileSize)}</span>
+            {/if}
+            {#if !isTorrent}
+              <span>•</span>
+              <Badge variant="secondary">
+                {peers.length} {peers.length === 1 ? 'Peer' : 'Peers'} Available
+              </Badge>
+            {/if}
           </div>
         </div>
 
-        <!-- Protocol Selection (HTTP vs WebRTC only - Bitswap doesn't use peer selection) -->
+        {#if isTorrent}
+          <!-- Simple torrent confirmation -->
+          <div class="bg-muted/30 p-4 rounded-lg border">
+            <p class="text-sm text-muted-foreground">
+              Ready to start BitTorrent download. The torrent client will connect to peers automatically.
+            </p>
+          </div>
+        {:else}
+        <!-- Protocol Selection -->
         <div class="space-y-2">
-          <label class="text-sm font-semibold text-foreground/90">Transfer Protocol</label>
+          <div class="text-sm font-semibold text-foreground/90">Transfer Protocol</div>
           <div class="flex gap-2">
             <Button
               variant={protocol === 'http' ? 'default' : 'outline'}
@@ -137,12 +152,22 @@
               <Wifi class="h-4 w-4 mr-2" />
               WebRTC
             </Button>
+            <Button
+              variant={protocol === 'bitswap' ? 'default' : 'outline'}
+              size="sm"
+              on:click={() => protocol = 'bitswap'}
+            >
+              <Zap class="h-4 w-4 mr-2" />
+              Bitswap
+            </Button>
           </div>
           <p class="text-xs text-muted-foreground">
             {#if protocol === 'http'}
               HTTP: Simple and fast for nodes with public IP addresses
             {:else if protocol === 'webrtc'}
               WebRTC: Peer-to-peer with NAT traversal (works behind firewalls)
+            {:else if protocol === 'bitswap'}
+              Bitswap: A peer-to-peer data exchange protocol for content-addressed data.
             {/if}
           </p>
         </div>
@@ -255,11 +280,13 @@
                 </tr>
               </thead>
               <tbody>
-                {#each peers as peer, index}
+                {#each peers as peer}
                   <tr class="border-t hover:bg-muted/50 transition-colors {mode === 'auto' ? 'bg-muted/30' : ''}">
                     {#if mode === 'manual'}
                       <td class="p-3">
+                        <label class="sr-only" for="peer-select-{peer.peerId.slice(0, 12)}">Select peer {peer.peerId.slice(0, 12)}...</label>
                         <input
+                          id="peer-select-{peer.peerId.slice(0, 12)}"
                           type="checkbox"
                           checked={peer.selected}
                           on:change={() => togglePeer(peer.peerId)}
@@ -300,7 +327,9 @@
                       <td class="p-3">
                         {#if peer.selected}
                           <div class="flex items-center gap-1">
+                            <label class="sr-only" for="peer-percentage-{peer.peerId.slice(0, 12)}">Allocation percentage for peer {peer.peerId.slice(0, 12)}...</label>
                             <input
+                              id="peer-percentage-{peer.peerId.slice(0, 12)}"
                               type="number"
                               bind:value={peer.percentage}
                               min="1"
@@ -321,7 +350,11 @@
           </div>
         </div>
 
+        {/if}
+        <!-- End of conditional peer selection content -->
+
         <!-- Summary -->
+        {#if !isTorrent}
         <div class="bg-muted/50 p-4 rounded-lg border space-y-2">
           <div class="flex justify-between items-center">
             <span class="font-medium text-sm">Selected Peers:</span>
@@ -350,6 +383,7 @@
             {/if}
           {/if}
         </div>
+        {/if}
 
         <!-- Actions -->
         <div class="flex justify-end gap-3 pt-2">
@@ -361,10 +395,10 @@
           </Button>
           <Button
             on:click={handleConfirm}
-            disabled={mode === 'manual' && (!isValidAllocation || selectedPeerCount === 0)}
+            disabled={!isTorrent && mode === 'manual' && (!isValidAllocation || selectedPeerCount === 0)}
           >
             <Download class="h-4 w-4 mr-2" />
-            Start Download ({selectedPeerCount} {selectedPeerCount === 1 ? 'peer' : 'peers'})
+            {isTorrent ? 'Start Download' : `Start Download (${selectedPeerCount} ${selectedPeerCount === 1 ? 'peer' : 'peers'})`}
           </Button>
         </div>
       </div>

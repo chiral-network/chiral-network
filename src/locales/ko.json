@@ -23,6 +23,8 @@
   "privacy.proxyHint": "SOCKS5 프록시 주소를 입력하세요 (예: Tor의 경우 127.0.0.1:9050)",
   "privacy.anonymousMode": "익명 모드 (모든 식별 정보 숨기기)",
   "privacy.shareAnalytics": "익명 사용 분석 공유",
+  "privacy.autoLockWallet": "Auto-lock wallet after inactivity",
+  "privacy.autoLockWalletHint": "Logs you out automatically after one hour without activity.",
   "storage.locationPick": "저장 위치 선택",
   "storage.selectLocationTitle": "저장 위치 선택",
   "storage.enterPathPrompt": "저장 경로를 입력하세요",
@@ -156,6 +158,9 @@
         "title": "릴레이 상태",
         "enabled": "자동 릴레이 활성화됨",
         "disabled": "자동 릴레이 비활성화됨",
+        "timeline": "자동 릴레이 타임라인",
+        "enabledAt": "마지막 활성화",
+        "disabledAt": "마지막 비활성화",
         "noPeer": "릴레이에 연결되지 않음",
         "activePeer": "활성 릴레이",
         "status": "상태",
@@ -164,6 +169,8 @@
         "renewals": "예약 갱신",
         "evictions": "예약 제거",
         "never": "없음",
+        "neverEnabled": "활성화된 적 없음",
+        "neverDisabled": "비활성화된 적 없음",
         "noEvictions": "제거 없음",
         "accepted": "예약 수락됨",
         "pending": "대기 중",
@@ -312,6 +319,11 @@
   "language.chinese": "中文",
   "language.korean": "한국어",
   "language.russian": "Русский",
+  "language.portuguese": "Português",
+  "language.hindi": "हिन्दी",
+  "language.french": "Français",
+  "language.bengali": "বাংলা",
+  "language.arabic": "العربية",
   "nav": {
     "expandSidebar": "사이드바 확장",
     "collapseSidebar": "사이드바 축소",
@@ -319,7 +331,6 @@
     "download": "다운로드",
     "upload": "업로드",
     "torrents": "토렌트",
-    "messages": "메시지",
     "network": "네트워크",
     "relay": "릴레이",
     "mining": "채굴",
@@ -404,6 +415,7 @@
     "balance": "잔액",
     "totalEarned": "총 수익",
     "totalSpent": "총 지출",
+    "totalReceived": "총 수신",
     "address": "카이럴 주소",
     "qrModal": {
       "title": "나의 카이럴 주소",
@@ -448,6 +460,12 @@
       "noDetails": "표시할 보류 중 트랜잭션이 없습니다.",
       "count": "보류 중 {count}건",
       "none": "보류 중 트랜잭션"
+    },
+    "fees": {
+      "low": "낮음",
+      "market": "시장",
+      "fast": "빠름",
+      "estimated": "예상 수수료"
     }
   },
   "transactions": {
@@ -460,6 +478,19 @@
     "item": {
       "from": "보낸 사람",
       "to": "받는 사람"
+    },
+    "receipt": {
+      "title": "트랜잭션 영수증",
+      "from": "보낸 사람",
+      "to": "받는 사람",
+      "hash": "트랜잭션 해시",
+      "blockNumber": "블록 번호",
+      "gasInfo": "가스 정보",
+      "gasUsed": "가스 사용량",
+      "gasPrice": "가스 가격",
+      "fee": "트랜잭션 수수료",
+      "timestamp": "타임스탬프",
+      "close": "영수증 닫기"
     },
     "searchPlaceholder": "주소, 설명 또는 ID로 검색..."
   },
@@ -625,10 +656,6 @@
     },
     "exportFailed": "내보내기에 실패했습니다. 다시 시도하세요.",
     "createAccount": "계정 생성 실패: {error}"
-  },
-  "messages": {
-    "copied": "복사됨!",
-    "failed": "실패!"
   },
   "analytics": {
     "title": "분석 대시보드",
@@ -1147,18 +1174,19 @@
     "dropFilesHint": "이 카드 어디든 파일을 드래그 앤 드롭하거나 아래 \"파일 추가\"를 클릭하세요",
     "addFiles": "파일 추가",
     "sharedFiles": "공유된 파일",
+    "file": "개 파일",
     "files": "개 파일",
     "total": "총",
     "tip": "팁: 파일을 여기에 드래그 앤 드롭하여 추가할 수도 있습니다",
     "addMoreFiles": "파일 더 추가",
     "supportedFormats": "이미지, 비디오, 오디오, 문서, 코드 파일 등 지원",
     "supportedFormatsDesktop": "데스크톱 앱은 이미지, 비디오, 오디오, 문서, 코드 파일 등을 지원합니다",
-    "hash": "해시",
+    "hashLabel": "Merkle 해시:",
     "seeder": "시더",
     "leecher": "리처",
     "seeding": "시딩 중",
-    "copyHash": "해시 복사",
-    "hashCopied": "해시 복사됨!",
+    "copyHash": "Merkle 해시 복사",
+    "hashCopied": "Merkle 해시 복사됨!",
     "stopSharing": "공유 중지",
     "noFilesShared": "아직 공유된 파일이 없습니다",
     "addFilesHint2": "네트워크에서 공유를 시작하려면 파일을 추가하세요",
@@ -1202,12 +1230,9 @@
     "storedLocally": "파일이 로컬에 저장되었습니다. 다른 사용자와 공유하려면 DHT 네트워크를 시작하세요.",
     "uploadError": "드롭한 파일 처리 중 오류가 발생했습니다. 다시 시도하거나 \"파일 추가\" 버튼을 사용하세요.",
     "fileManagementDesktopOnly": "파일 관리는 데스크톱 앱에서만 사용할 수 있습니다",
-    "fileUpdated": "{name}이(가) 이미 존재합니다; v{version}(으)로 업데이트되었습니다",
-    "fileUploadedNew": "{name}이(가) v{version}(으)로 업로드되었습니다 (새 파일)",
-    "hashCopiedClipboard": "파일 해시가 클립보드에 복사되었습니다!",
-    "noVersionHistory": "이 파일에 대한 버전 기록을 찾을 수 없습니다",
-    "versionHistoryTitle": "{name}에 대한 버전 기록:\n{list}",
-    "versionHistoryError": "버전 기록을 불러오지 못했습니다",
+    "fileUpdated": "{name}이(가) 이미 존재하며 업데이트되었습니다",
+    "fileUploadedNew": "{name}이(가) 성공적으로 업로드되었습니다",
+    "hashCopiedClipboard": "Merkle 해시가 클립보드에 복사되었습니다!",
     "desktopAppRequired": "데스크톱 앱 필요",
     "storageMonitoringDesktopOnly": "저장 공간 모니터링은 데스크톱 애플리케이션이 필요합니다",
     "dropFilesHere": "✨ 여기에 파일을 드롭하세요!",
@@ -1220,26 +1245,13 @@
     "fileUploadDesktopApp": "파일 업로드는 데스크톱 앱이 필요합니다",
     "downloadDesktopApp": "파일을 업로드하고 공유하려면 데스크톱 버전을 다운로드하세요",
     "desktopManagementRequired": "파일 관리를 위해 데스크톱 앱이 필요합니다",
-    "versionHistoryTooltip": "v{version} - 버전 기록을 보려면 클릭하세요",
     "encryptedEndToEnd": "이 파일은 종단 간 암호화되어 있습니다",
     "active": "활성",
-    "hashLabel": "해시:",
     "priceTooltip": "네트워크 해시 파워를 기반으로 가격이 동적으로 계산됩니다",
     "storedLocallyBadge": "로컬에 저장됨",
     "fileManagementTooltip": "파일 관리는 데스크톱 앱이 필요합니다",
     "fileManagementWebNotAvailable": "웹 버전에서는 파일 관리를 사용할 수 없습니다",
     "fileDialogError": "파일 대화 상자를 열지 못했습니다"
-  },
-  "messages": {
-    "title": "메시지",
-    "subtitle": "피어와 안전하게 통신하세요.",
-    "conversations": "연락처",
-    "searchPlaceholder": "연락처 검색...",
-    "inputPlaceholder": "암호화된 메시지를 입력하세요...",
-    "selectConversation": "대화를 선택하여 메시지를 시작하세요",
-    "peer": "피어",
-    "endToEndEncrypted": "종단 간 암호화",
-    "refreshPeerList": "피어 목록 새로고침"
   },
   "torrent": {
     "title": "토렌트",
@@ -1289,8 +1301,8 @@
     "title": "파일 다운로드",
     "subtitle": "해시를 사용하여 Chiral 네트워크에서 파일 다운로드",
     "addNew": "새 다운로드 추가",
-    "addNewSubtitle": "네트워크에서 파일을 검색하고 다운로드하려면 파일 해시를 입력하세요",
-    "placeholder": "파일 해시 입력 (예: QmZ4tDuvesekqMD...)",
+    "addNewSubtitle": "새 다운로드를 시작하려면 Merkle 해시 또는 CID를 입력하세요",
+    "placeholder": "Merkle 해시 또는 CID 입력",
     "searchByHash": "해시로 검색",
     "searchByName": "이름으로 검색",
     "autoClear": "자동 정리",
@@ -1325,7 +1337,7 @@
       "noFailed": "실패한 다운로드 없음."
     },
     "file": {
-      "hash": "해시",
+      "hash": "Merkle 해시",
       "queue": "큐",
       "progress": "진행률"
     },
@@ -1345,7 +1357,7 @@
       "showInFolder": "폴더에 표시"
     },
     "notifications": {
-      "enterHash": "파일 해시를 입력하세요",
+      "enterHash": "Merkle 해시 또는 CID를 입력하세요",
       "alreadyExists": "파일이 이미 다운로드 목록에 있습니다",
       "searching": "파일 검색 중...",
       "notFound": "파일을 찾을 수 없습니다. 해시를 확인하세요",
@@ -1405,5 +1417,198 @@
     "selectProtocol": "프로토콜 선택",
     "currentProtocol": "현재 프로토콜",
     "changeProtocol": "프로토콜 변경"
+  },
+  "blockchain": {
+    "title": "블록체인 탐색기",
+    "subtitle": "카이럴 네트워크의 블록, 트랜잭션 및 계정 잔액을 확인하세요",
+    "refresh": "새로 고침",
+    "refreshed": "데이터가 새로 고쳐졌습니다",
+    "copied": "클립보드에 복사됨",
+    "stats": {
+      "totalBlocks": "전체 블록 수",
+      "hashrate": "네트워크 해시레이트",
+      "difficulty": "난이도",
+      "peers": "네트워크 피어"
+    },
+    "tabs": {
+      "blocks": "최신 블록",
+      "search": "검색",
+      "stats": "잔액 확인"
+    },
+    "blocks": {
+      "latest": "최신 블록",
+      "noBlocks": "블록을 찾을 수 없습니다"
+    },
+    "sync": {
+      "syncing": "동기화 중",
+      "current": "현재 블록",
+      "highest": "최고 블록",
+      "remaining": "남음",
+      "eta": "예상 시간",
+      "complete": "동기화 완료"
+    },
+    "search": {
+      "title": "블록체인 검색",
+      "address": "주소",
+      "transaction": "트랜잭션",
+      "block": "블록",
+      "emptyQuery": "검색어를 입력하세요",
+      "error": "검색에 실패했습니다: {error}",
+      "unknownError": "알 수 없는 오류",
+      "invalidBlock": "잘못된 블록 번호",
+      "notFound": "찾을 수 없음",
+      "addressDetails": "주소 상세 정보",
+      "addressLabel": "주소",
+      "balance": "잔액",
+      "txDetails": "트랜잭션 상세 정보",
+      "status": "상태",
+      "blockNumber": "블록 번호",
+      "from": "보낸 사람",
+      "to": "받는 사람",
+      "value": "값",
+      "blockDetails": "블록 상세 정보",
+      "hash": "해시",
+      "timestamp": "타임스탬프"
+    },
+    "balance": {
+      "checker": "잔액 확인",
+      "address": "주소",
+      "check": "잔액 확인하기",
+      "result": "잔액",
+      "emptyAddress": "주소를 입력하세요",
+      "error": "잔액 확인에 실패했습니다: {error}",
+      "errorLabel": "오류"
+    },
+    "error": {
+      "fetchBlocks": "블록을 가져오지 못했습니다"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "복사되었습니다!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "블록을 찾을 수 없습니다. 블록을 생성하려면 채굴을 시작하세요.",
+      "fetchError": "블록을 가져오지 못했습니다: {error}"
+    },
+    "settings": {
+      "updated": "설정이 업데이트되었습니다!",
+      "networkingError": "설정은 저장되었지만 네트워크 업데이트에 실패했습니다",
+      "proxyRelayWarning": "내 IP 숨기기를 사용하기 전에 신뢰할 수 있는 프록시 릴레이를 최소 하나 추가하세요."
+    },
+    "analytics": {
+      "direction": {
+        "upload": "업로드",
+        "download": "다운로드"
+      },
+      "bandwidthWarning": "{direction} 한도 경고: {used}GB 사용됨 ({cap}GB 중 {percent}%).",
+      "bandwidthTitle": "{direction} 한도 경고"
+    },
+    "upload": {
+      "loginRequired": "파일을 업로드하기 전에 계정에 로그인하세요",
+      "verifyAccountFailed": "계정 상태를 확인하지 못했습니다. 다시 로그인해주세요.",
+      "dhtDisconnected": "DHT 네트워크가 연결되어 있지 않습니다. 파일을 업로드하기 전에 DHT 네트워크를 시작하세요.",
+      "fileSuccess": "{name} 업로드 완료",
+      "torrentSeeding": "{name}이(가) 이제 토렌트로 시딩 중입니다"
+    },
+    "network": {
+      "signalingConnected": "시그널링 서버에 연결되었습니다",
+      "signalingError": "웹 모드 테스트를 위해 시그널링 서버에 연결하지 못했습니다",
+      "peerAddressRequired": "피어 주소를 입력하세요",
+      "dhtRequired": "DHT가 연결되어 있지 않습니다. 먼저 DHT를 시작하세요.",
+      "alreadyConnected": "피어가 이미 연결되어 있습니다",
+      "connecting": "DHT를 통해 피어에 연결 중...",
+      "connectionSuccess": "연결 성공!",
+      "connectionFailed": "연결에 실패했습니다. 피어가 응답하지 않거나 주소가 잘못되었을 수 있습니다.",
+      "connectError": "피어에 연결하지 못했습니다: {error}",
+      "signalingMissing": "시그널링 서버가 연결되어 있지 않습니다. 먼저 DHT를 시작하세요.",
+      "peerNotFound": "발견된 피어 중 {peer}를 찾을 수 없습니다",
+      "messageReceived": "피어로부터 수신됨: {message}",
+      "webrtcConnected": "피어와 성공적으로 연결되었습니다!",
+      "webrtcFailed": "피어 연결에 실패했습니다",
+      "dataChannelOpen": "데이터 채널이 열렸습니다 - 이제 메시지를 보낼 수 있습니다!",
+      "dataChannelClosed": "데이터 채널이 닫혔습니다",
+      "webrtcError": "WebRTC 오류: {error}",
+      "webrtcConnecting": "피어에 연결 중: {peer}",
+      "webrtcCreateError": "연결을 생성하지 못했습니다: {error}",
+      "noConnection": "활성 WebRTC 연결이 없습니다",
+      "messageSent": "테스트 메시지를 보냈습니다: {message}",
+      "sendError": "메시지를 보내지 못했습니다: {error}",
+      "gethInstalled": "Geth가 이미 설치되어 있습니다",
+      "gethDownloadError": "Geth 다운로드에 실패했습니다: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "결제를 처리할 수 없습니다: 업로더 지갑 주소가 없거나 잘못되었습니다",
+        "failed": "결제 실패: {error}",
+        "successWithHash": "결제 성공! 트랜잭션: {hash}...",
+        "success": "결제 성공!"
+      }
+    },
+    "transactions": {
+      "copied": "{label}이(가) 클립보드에 복사되었습니다",
+      "copyError": "{label}을(를) 복사하지 못했습니다",
+      "exported": "트랜잭션이 내보내졌습니다"
+    }
   }
 }

@@ -1,4 +1,5 @@
 # HTTP File Transfer Protocol Implementation
+
 ## Technical Specification Document
 
 **Project:** Chiral Network
@@ -30,6 +31,7 @@ The HTTP protocol implementation was designed with the following objectives:
 ### 1.2 Scope
 
 This implementation covers:
+
 - HTTP file server with Range request support (RFC 7233)
 - HTTP download client with parallel chunk retrieval
 - DHT integration for automatic HTTP URL publishing
@@ -37,6 +39,7 @@ This implementation covers:
 - File metadata management
 
 Out of scope:
+
 - File encryption
 - Authentication/authorization
 - HTTPS/TLS support
@@ -50,12 +53,14 @@ Out of scope:
 Chiral Network implements a **decoupled layered architecture** with multiple transport protocols:
 
 **Style 1: Public Protocols with Out-of-Band Payment (Primary)**
+
 - HTTP/HTTPS - Default for public IP nodes (this implementation)
 - WebTorrent - Default for NAT'd nodes (planned)
 - BitTorrent - Efficient P2P swarming (planned)
 - ed2k - Multi-source downloads (planned)
 
 **Style 2: Private Protocol with In-Band Payment (Future)**
+
 - Bitswap-like or WebRPC protocol (design phase)
 
 The key architectural principle is **complete decoupling** of the payment layer from data transfer protocols. All protocols share a common blockchain-based payment settlement mechanism that operates independently of the chosen transfer protocol.
@@ -110,6 +115,7 @@ Client (Downloader):
 ```
 
 **Problems with this approach:**
+
 - Increased storage overhead (original file + encrypted chunks)
 - Complex state management (manifest generation, chunk tracking)
 - Extra encryption/decryption steps
@@ -135,6 +141,7 @@ Client (Downloader):
 ```
 
 **Advantages of Range-based approach:**
+
 - Standard HTTP semantics (RFC 7233)
 - On-demand chunking (no pre-processing)
 - Simpler server logic
@@ -159,6 +166,7 @@ File encryption is planned for later phases as an **optional feature**.
 
 **Framework:** Axum 0.7
 **Rationale:** Axum provides:
+
 - High-performance async HTTP server
 - Type-safe routing with extractors
 - Excellent integration with Tokio ecosystem
@@ -201,9 +209,11 @@ Content-Length: 0
 
 **Purpose:** Retrieve file metadata before download
 **Parameters:**
-  - `file_hash` (path) - Merkle root identifier
+
+- `file_hash` (path) - Merkle root identifier
 
 **Response Body:**
+
 ```json
 {
   "hash": "QmXYZ123...",
@@ -214,6 +224,7 @@ Content-Length: 0
 ```
 
 **Status Codes:**
+
 - 200 OK - File found
 - 404 Not Found - File not registered
 
@@ -221,10 +232,12 @@ Content-Length: 0
 
 **Purpose:** Serve file with Range request support
 **Parameters:**
-  - `file_hash` (path) - Merkle root identifier
-  - `Range` (header, optional) - Byte range to retrieve
+
+- `file_hash` (path) - Merkle root identifier
+- `Range` (header, optional) - Byte range to retrieve
 
 **Without Range Header (Full File):**
+
 ```http
 GET /files/QmXYZ123 HTTP/1.1
 Host: localhost:8080
@@ -237,6 +250,7 @@ Content-Type: application/octet-stream
 ```
 
 **With Range Header (Partial Content):**
+
 ```http
 GET /files/QmXYZ123 HTTP/1.1
 Host: localhost:8080
@@ -251,6 +265,7 @@ Content-Type: application/octet-stream
 ```
 
 **Status Codes:**
+
 - 200 OK - Full file returned (no Range header)
 - 206 Partial Content - Range request successful
 - 404 Not Found - File not registered
@@ -260,6 +275,7 @@ Content-Type: application/octet-stream
 ### 4.4 State Management
 
 **HttpServerState Structure:**
+
 ```rust
 pub struct HttpServerState {
     /// Path to file storage directory
@@ -271,6 +287,7 @@ pub struct HttpServerState {
 ```
 
 **File Registration Flow:**
+
 1. User uploads file via `upload_and_publish_file` command
 2. File stored in `storage_dir/{merkle_root}`
 3. `HttpServerState::register_file(metadata)` called
@@ -284,6 +301,7 @@ pub struct HttpServerState {
 
 **HTTP Library:** Reqwest 0.11
 **Rationale:**
+
 - Pure Rust async HTTP client
 - Excellent ergonomics and type safety
 - Built-in timeout support
@@ -296,12 +314,14 @@ The download process follows a four-step pipeline:
 
 **Step 1: Fetch File Metadata**
 Make a GET request to `/files/{hash}/metadata` to retrieve:
+
 - File name (for display and final save)
 - File size (for chunk calculation)
 - Encryption status (for potential decryption layer)
 
 **Step 2: Calculate Byte Ranges**
 For a 1MB file (1,048,576 bytes):
+
 - Chunk 0: bytes 0-262143 (256KB)
 - Chunk 1: bytes 262144-524287 (256KB)
 - Chunk 2: bytes 524288-786431 (256KB)
@@ -309,6 +329,7 @@ For a 1MB file (1,048,576 bytes):
 
 **Step 3: Download Chunks in Parallel**
 **Concurrency Control:**
+
 - Tokio Semaphore limits to 5 concurrent downloads
 - Conservative limit accounts for multi-source scenarios
 - Example: 3 seeders × 5 chunks each = 15 total parallel downloads
@@ -318,6 +339,7 @@ For a 1MB file (1,048,576 bytes):
 ### 5.3 Progress Tracking
 
 **Progress States:**
+
 ```rust
 pub enum DownloadStatus {
     FetchingMetadata,  // Step 1: Getting file info
@@ -329,6 +351,7 @@ pub enum DownloadStatus {
 ```
 
 **Progress Data:**
+
 ```rust
 pub struct HttpDownloadProgress {
     pub file_hash: String,
@@ -345,6 +368,7 @@ pub struct HttpDownloadProgress {
 **Timeout Handling:**
 
 Each chunk request has a 30-second timeout. If a chunk fails:
+
 1. Request times out after 30s
 2. Error propagated to download task
 3. Entire download fails (no retry in v1)
@@ -352,9 +376,10 @@ Each chunk request has a 30-second timeout. If a chunk fails:
 **Future Enhancement:** Implement per-chunk retry with exponential backoff.
 
 **Validation:**
+
 - Verify 206 Partial Content response
 - Verify chunk size matches expected range
-- TODO: Hash verification of final file
+- Hash verification of downloaded chunks (implemented in multi_source_download.rs)
 
 ---
 
@@ -363,6 +388,7 @@ Each chunk request has a 30-second timeout. If a chunk fails:
 ### 6.1 FileMetadata Schema Extension
 
 **Extended Schema with HTTP Sources:**
+
 ```rust
 pub struct FileMetadata {
     // ... existing fields
@@ -379,6 +405,7 @@ pub struct HttpSourceInfo {
 ```
 
 **Design Decisions:**
+
 - Array of sources - supports multiple HTTP seeders per file
 - Future-proof fields - auth_header, verify_ssl, headers for Phase 2+
 - Automatic publishing on file upload in `main.rs`: `upload_and_publish_file` command
@@ -398,11 +425,13 @@ pub struct HttpSourceInfo {
 **Component:** `PeerSelectionModal.svelte`
 
 **New Prop:**
+
 ```typescript
-export let protocol: 'http' | 'webrtc' = 'http';
+export let protocol: "http" | "webrtc" = "http";
 ```
 
 **Visual Design:**
+
 - Active protocol: Default button styling (highlighted)
 - Inactive protocol: Outline styling (subtle)
 
@@ -411,14 +440,16 @@ export let protocol: 'http' | 'webrtc' = 'http';
 **Component:** `DownloadSearchSection.svelte`
 
 **State Variables:**
+
 ```typescript
-let selectedProtocol: 'http' | 'webrtc' = 'http';
+let selectedProtocol: "http" | "webrtc" = "http";
 let showPeerSelectionModal = false;
 let selectedFile: FileMetadata | null = null;
 let availablePeers: PeerInfo[] = [];
 ```
 
 **Download Initiation:**
+
 ```typescript
 async function confirmPeerSelection() {
   const selectedPeerIds = /* get selected peer IDs */;
@@ -433,20 +464,86 @@ async function confirmPeerSelection() {
 }
 ```
 
-### 7.3 Known UI Limitations
+### 7.3 Transfer Event Bus Integration ✅
 
-**Issue #1: Download Progress Not Visible**
-- **Problem:** HTTP downloads complete successfully but don't appear in `Download.svelte` file list
-- **Impact:** No progress bars, no speed indicators, no download history
-- **Root Cause:** Backend doesn't emit Tauri events during HTTP downloads
-- **Planned Fix:** Add event emission in `download_file_http` command, listen in frontend
+The HTTP protocol handlers are now fully integrated with the Transfer Event Bus, enabling real-time UI updates for all HTTP downloads.
+
+**Event-Aware Constructors:**
+
+```rust
+use crate::protocols::http::HttpProtocolHandler;
+
+// Without event bus (existing behavior)
+let handler = HttpProtocolHandler::new();
+
+// With event bus (enables UI updates)
+let handler = HttpProtocolHandler::with_event_bus(app_handle.clone());
+
+// With custom timeout and event bus
+let handler = HttpProtocolHandler::with_timeout_and_event_bus(60, app_handle.clone());
+```
+
+**HTTP Download Client Integration:**
+
+```rust
+use crate::http_download::HttpDownloadClient;
+
+// With event bus
+let client = HttpDownloadClient::new_with_event_bus(app_handle.clone());
+
+// With peer ID for source identification
+let client = HttpDownloadClient::new_with_peer_id_and_event_bus(
+    "peer-123".to_string(),
+    app_handle.clone()
+);
+
+// Download with full event lifecycle
+client.download_file_with_events(&url, &output_path, config).await?;
+
+// Resume download with events
+client.resume_download_with_events(&url, &output_path, offset, config).await?;
+```
+
+**Events Emitted:**
+
+| Method | Events |
+|--------|--------|
+| `download_with_progress()` | TransferStarted → SourceConnected → TransferProgress (every 2s) → TransferCompleted/TransferFailed |
+| `cancel_download()` | TransferCanceled |
+| `download_chunks_with_events()` | ChunkCompleted, ChunkFailed (per chunk) |
+| `resume_download_with_events()` | TransferResumed → SourceConnected → TransferProgress → TransferCompleted/TransferFailed |
+
+**ChunkFailed Event Points:**
+
+The HTTP download client emits `ChunkFailed` events at 4 failure points:
+
+1. **Network request failure** - HTTP request fails to send
+2. **Non-206 HTTP response** - Server doesn't return Partial Content status
+3. **Failed to read response bytes** - Chunk data cannot be read
+4. **Chunk size mismatch** - Downloaded size doesn't match expected
+
+**Error Categorization:**
+
+Failures are categorized for proper UI display:
+- `ErrorCategory::Network` - Connection failures, HTTP errors
+- `ErrorCategory::Filesystem` - File creation/write errors
+
+### 7.4 Known UI Limitations
+
+**Issue #1: Download Progress** ✅ **RESOLVED**
+
+- **Previous Problem:** HTTP downloads didn't appear in UI
+- **Resolution:** Transfer Event Bus integration now emits all lifecycle events
+- **Current State:** HTTP downloads show progress bars, speed, ETA in Download.svelte
 
 **Issue #2: No Server Status Indicator**
+
 - **Problem:** No UI element showing HTTP server running/stopped state
 - **Impact:** Users can't verify server is active
 - **Planned Fix:** Add status card in Settings or Network page
 
 **Issue #3: File Save Dialog Bug (macOS)**
+
 - **Problem:** Using `filters: [{ extensions: ['*'] }]` appends `.*` to filename
 - **Example:** Saving `document.pdf` creates `document.pdf.*`
 - **Workaround:** Remove filters parameter or use file extension detection
@@ -461,6 +558,7 @@ async function confirmPeerSelection() {
 **⚠️ WARNING:** This implementation is **not suitable for public internet use** in its current state.
 
 **Missing Security Features:**
+
 1. **No encryption** - Files transmitted in plaintext
 2. **No authentication** - Anyone with URL can download
 3. **No HTTPS** - HTTP traffic not encrypted
@@ -468,11 +566,13 @@ async function confirmPeerSelection() {
 5. **No access control** - No permission system
 
 **Acceptable Use Cases (Current State):**
+
 - Local testing (127.0.0.1)
 - Trusted LAN (private network)
 - Development environment
 
 **NOT Acceptable:**
+
 - Public internet
 - Sensitive data
 - Production use
@@ -481,25 +581,30 @@ async function confirmPeerSelection() {
 ### 8.2 Privacy Analysis
 
 **IP Address Exposure:**
+
 - HTTP URLs in DHT contain seeder's IP address
 - Downloader's IP visible to seeder in HTTP logs
 
 **Download Pattern Analysis:**
+
 - HTTP server logs reveal what files are downloaded
 
 ---
 
 ## 9. Future Work
 
-### 9.1 UI Progress Tracking
-- **Goal:** Display HTTP downloads in Download.svelte file list
-- **Tasks:**
-  - Emit Tauri events in `download_file_http` command
-  - Listen to `http_download_progress` events in frontend
-  - Add download entry to file list with progress bar
-  - Show speed, ETA, bytes transferred
+### 9.1 UI Progress Tracking ✅ **COMPLETED**
+
+- **Status:** Implemented via Transfer Event Bus integration
+- **What was done:**
+  - Added event-aware constructors to HTTP handlers
+  - Implemented `download_file_with_events()` and `resume_download_with_events()`
+  - Added ChunkFailed event emission at 4 failure points
+  - Integrated progress throttling (2-second intervals)
+  - Connected to frontend via `subscribeToTransferEvents()` in App.svelte
 
 ### 9.2 Multi-Source HTTP Integration
+
 - **Goal:** Download different chunks from multiple HTTP seeders
 - **Tasks:**
   - Extend chunk scheduler to support HTTP sources
@@ -508,6 +613,7 @@ async function confirmPeerSelection() {
   - Aggregate bandwidth from all sources
 
 ### 9.3 Automatic Protocol Selection
+
 - **Goal:** Auto-select HTTP/WebTorrent based on network capability
 - **Tasks:**
   - Detect public IP vs NAT status (use existing AutoNAT v2)

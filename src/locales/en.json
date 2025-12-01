@@ -79,7 +79,27 @@
       "logUnavailable": "Log file not found.",
       "logTruncated": "Showing the last {count} lines.",
       "errorGeneric": "Could not load Geth status.",
-      "lastUpdated": "Updated {time}"
+      "lastUpdated": "Updated {time}",
+      "bootstrap": {
+        "title": "Bootstrap Node Health",
+        "description": "Bootstrap nodes help your Chiral node discover and connect to other peers in the blockchain network. Check their reachability to diagnose connectivity issues.",
+        "checkNow": "Check Bootstrap Health",
+        "checking": "Checking...",
+        "totalNodes": "Total",
+        "reachable": "Reachable",
+        "unreachable": "Unreachable",
+        "nodeDetails": "Node Details",
+        "error": "Error",
+        "allNodesDown": "All bootstrap nodes are unreachable",
+        "cannotConnect": "Your Chiral node may have difficulty connecting to the blockchain network. Check your internet connection or firewall settings.",
+        "someNodesDown": "Some bootstrap nodes are unreachable",
+        "usingAvailable": "Your Chiral node will use the available nodes. Network connectivity should be stable.",
+        "allNodesHealthy": "All bootstrap nodes are healthy and reachable",
+        "lastChecked": "Last checked",
+        "reconnecting": "Reconnecting...",
+        "reconnect": "Reconnect to Bootstrap",
+        "consecutiveFailures": "consecutive failures"
+      }
     },
     "dht": {
       "title": "DHT Network",
@@ -88,6 +108,8 @@
       "retry": "Retry Connection",
       "connect": "Connect to DHT Network",
       "stop": "Stop DHT",
+      "cancel": "Cancel Connection",
+      "connectionCancelled": "Connection cancelled",
       "log": "Connection Log",
       "connectingToBootstrap": "Connecting to bootstrap node...",
       "attempt": "Attempt #{connectionAttempts}",
@@ -143,6 +165,9 @@
         "title": "Relay Status",
         "enabled": "AutoRelay Enabled",
         "disabled": "AutoRelay Disabled",
+        "timeline": "AutoRelay timeline",
+        "enabledAt": "Last enabled",
+        "disabledAt": "Last disabled",
         "noPeer": "Not connected to relay",
         "activePeer": "Active Relay",
         "status": "Status",
@@ -151,6 +176,8 @@
         "renewals": "Reservations renewed",
         "evictions": "Reservations evicted",
         "never": "Never",
+        "neverEnabled": "Never enabled",
+        "neverDisabled": "Never disabled",
         "noEvictions": "No evictions",
         "accepted": "Reservation accepted",
         "pending": "Pending",
@@ -305,8 +332,8 @@
     "title": "Download Files",
     "subtitle": "Download files from the Chiral Network",
     "addNew": "Add New Download",
-    "addNewSubtitle": "Enter a file hash (e.g., Qm... or a magnet link) to start a new download.",
-    "placeholder": "Enter file hash or magnet link",
+    "addNewSubtitle": "Enter a Merkle hash or CID to start a new download.",
+    "placeholder": "Enter Merkle hash or CID",
     "clearInput": "Clear input",
     "searchAndDownload": "Search & Download",
     "searchByHash": "Search by Hash",
@@ -345,7 +372,7 @@
       "noFailed": "No failed downloads."
     },
     "file": {
-      "hash": "Hash",
+      "hash": "Merkle Hash",
       "queue": "Queue",
       "progress": "Progress"
     },
@@ -364,13 +391,15 @@
       "retry": "Retry"
     },
     "notifications": {
-      "enterHash": "Please enter a file hash to start downloading.",
+      "enterHash": "Please enter a Merkle hash or CID to start downloading.",
       "searching": "Searching for file metadata in the DHT...",
       "addedToQueue": "File added to the download queue.",
       "autostart": "Download automatically started.",
       "searchFailed": "Search failed: {error}",
       "downloadFailed": "Download failed for {name}.",
-      "downloadComplete": "Download complete for {name}."
+      "downloadComplete": "Download complete for {name}.",
+      "resumedSingle": "Restored 1 interrupted download. Resume it from the Downloads page.",
+      "resumedMultiple": "Restored {count} interrupted downloads. Resume them from the Downloads page."
     },
     "search": {
       "status": {
@@ -433,12 +462,16 @@
   "language.chinese": "中文",
   "language.korean": "한국어",
   "language.russian": "Русский",
+  "language.portuguese": "Português",
+  "language.hindi": "हिन्दी",
+  "language.french": "Français",
+  "language.bengali": "বাংলা",
+  "language.arabic": "العربية",
   "nav": {
     "menu": "Menu",
     "download": "Download",
     "upload": "Upload",
     "torrents": "Torrents",
-    "messages": "Messages",
     "network": "Network",
     "relay": "Relay",
     "mining": "Mining",
@@ -446,13 +479,16 @@
     "proxySelfTest": "Proxy Self-Test",
     "analytics": "Analytics",
     "reputation": "Reputation",
+    "blockchain": "Blockchain",
     "account": "Account",
     "settings": "Settings",
     "connected": "Connected",
     "disconnected": "Disconnected",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
-    "closeSidebarMenu": "Close sidebar menu"
+    "closeSidebarMenu": "Close sidebar menu",
+    "blockchainUnavailable": "Blockchain is unavailable. Please start the Chiral node from the",
+    "networkPageLink": "Network page"
   },
   "privacy.title": "Privacy & Security",
   "privacy.enableProxy": "Enable proxy routing for anonymity",
@@ -460,6 +496,8 @@
   "privacy.proxyHint": "Enter SOCKS5 proxy address (e.g., Tor at 127.0.0.1:9050)",
   "privacy.anonymousMode": "Anonymous mode (hide all identifying information)",
   "privacy.shareAnalytics": "Share anonymous usage analytics",
+  "privacy.autoLockWallet": "Auto-lock wallet after inactivity",
+  "privacy.autoLockWalletHint": "Logs you out automatically after one hour without activity.",
   "notifications.title": "Notifications",
   "notifications.enable": "Enable desktop notifications",
   "notifications.notifyComplete": "Notify when downloads complete",
@@ -496,13 +534,27 @@
   },
   "account": {
     "title": "Account",
-    "subtitle": "Manage your wallet and account settings"
+    "subtitle": "Manage your wallet and account settings",
+    "balanceWarning": "Your balance may show as 0 until connected.",
+    "firstRun": {
+      "welcome": "Welcome to Chiral Network!",
+      "description": "To start mining and earning rewards, you'll need to create a wallet account.",
+      "whyAccount": "Why do I need an account?",
+      "reason1": "Receive mining rewards to your wallet",
+      "reason2": "Secure your funds with encrypted recovery phrase",
+      "reason3": "Transfer coins to other users on the network",
+      "createWallet": "Create New Wallet",
+      "requiresWallet": "A wallet is required to mine, earn rewards, and transfer Chiral. Your recovery phrase will be generated in the next step.",
+      "accountCreated": "Wallet created successfully! You can now start mining.",
+      "error": "Failed to create account. Please try again."
+    }
   },
   "wallet": {
     "title": "Chiral Network Wallet",
     "balance": "Balance",
     "totalEarned": "Total Mined",
     "totalSpent": "Total Spent",
+    "totalReceived": "Total Received",
     "address": "Chiral Address",
     "qrModal": {
       "title": "Your Chiral Address",
@@ -547,11 +599,18 @@
       "noDetails": "No pending transaction details available.",
       "count": "{count, plural, one {# Pending Transaction} other {# Pending Transactions}}",
       "none": "Pending Transactions"
+    },
+    "fees": {
+      "low": "Low",
+      "market": "Market",
+      "fast": "Fast",
+      "estimated": "Estimated fee"
     }
   },
   "transactions": {
     "title": "Transaction History",
     "manual": "Manual transaction",
+    "scanInfo": "Showing transactions from the last 1,000 blocks (mining rewards from last 2,000 blocks). Real blockchain data.",
     "empty": {
       "title": "No transactions yet",
       "desc": "Transactions will appear here once you send or receive Chiral"
@@ -559,6 +618,19 @@
     "item": {
       "from": "From",
       "to": "To"
+    },
+    "receipt": {
+      "title": "Transaction Receipt",
+      "from": "From",
+      "to": "To",
+      "hash": "Transaction Hash",
+      "blockNumber": "Block Number",
+      "gasInfo": "Gas Information",
+      "gasUsed": "Gas Used",
+      "gasPrice": "Gas Price",
+      "fee": "Transaction Fee",
+      "timestamp": "Timestamp",
+      "close": "Close Receipt"
     },
     "searchPlaceholder": "Search by address, description, or ID..."
   },
@@ -663,6 +735,7 @@
     "typeAll": "All",
     "typeSent": "Sent",
     "typeReceived": "Received",
+    "typeMining": "Mining Rewards",
     "from": "From",
     "to": "To",
     "sort": "Sort",
@@ -739,10 +812,6 @@
     },
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
-  },
-  "messages": {
-    "copied": "Copied!",
-    "failed": "Failed!"
   },
   "analytics": {
     "title": "Analytics Dashboard",
@@ -929,7 +998,7 @@
     "stop": "Stop Mining",
     "start": "Start Mining",
     "showLogs": "Show mining logs",
-    "networkPage": "Network page",
+    "networkPage": "Network Page.",
     "accountPage": "Account page",
     "networkStats": "Network Statistics",
     "networkHashRate": "Network Hash Rate",
@@ -1020,10 +1089,52 @@
       "intensity": "Intensity must be between 1 and 100",
       "noAccount": "Please create a Chiral Network account first in the Account page",
       "noAccountToStart": "Please create a Chiral Network account from the Account page to start mining",
-      "gethNotRunning": "Chiral node is not running. Please start it from the Network page",
+      "gethNotRunning": "Chiral node is not running. Please start it from the",
       "noAccountLink": "Please create a Chiral Network account from the"
     },
-    "starting": "Starting mining... (may restart node if needed)"
+    "starting": "Starting mining... (may restart node if needed)",
+    "temporaryAccount": {
+      "title": "⚠️ Temporary Account - Mining Rewards at Risk!",
+      "description": "You're mining with a temporary account. Mining rewards will be lost when you close the app unless you save your account.",
+      "createWallet": "Create Permanent Wallet",
+      "goToAccount": "Go to Account Page"
+    },
+    "calculator": {
+      "title": "Profitability Calculator",
+      "show": "Show",
+      "hide": "Hide",
+      "electricityCost": "Electricity Cost ($/kWh)",
+      "electricityCostHint": "Average US rate: $0.12/kWh",
+      "powerUsage": "Estimated Power Usage (Watts)",
+      "powerUsageHint": "CPU mining typically 50-150W",
+      "chiralPrice": "Chiral Price (USD)",
+      "chiralPriceHint": "Update with current market price",
+      "hashRate": "Hash Rate (H/s)",
+      "useCurrent": "Use Current",
+      "usingCurrent": "Using your current mining hashrate",
+      "enterCustom": "Enter custom hashrate",
+      "estimatedProfitability": "Estimated Profitability",
+      "daily": "Daily",
+      "monthly": "Monthly",
+      "yearly": "Yearly",
+      "revenue": "Revenue",
+      "cost": "Cost",
+      "profitMargin": "Profit Margin",
+      "profitable": "✓ Profitable",
+      "notProfitable": "✗ Not Profitable",
+      "profitableDesc": "Mining earnings exceed electricity costs",
+      "notProfitableDesc": "Electricity costs exceed mining earnings",
+      "calculationDetails": "Calculation Details:",
+      "yourHashrate": "Your hashrate",
+      "networkDiff": "Network difficulty",
+      "expectedBlocks": "Expected blocks/day",
+      "chiralEach": "Chiral each",
+      "powerConsumption": "Power consumption",
+      "kwhPerDay": "kWh/day",
+      "breakEvenPrice": "Break-even Chiral price",
+      "perChiral": "/Chiral",
+      "enableMining": "Enable mining to see profitability estimates"
+    }
   },
   "reputation": {
     "title": "Reputation System",
@@ -1171,7 +1282,7 @@
       "title": "Relay Health & Monitoring"
     },
     "errors": {
-      "dhtNotRunning": "DHT is not running. Please start the network first from the Network page.",
+      "dhtNotRunning": "DHT is not running. Please start the network from the ",
       "toggleFailed": "Failed to toggle relay server: {error}"
     },
     "monitor": {
@@ -1254,18 +1365,19 @@
     "dropFilesHint": "Drag and drop files anywhere on this card, or click \"Add Files\" below",
     "addFiles": "Add Files",
     "sharedFiles": "Shared Files",
+    "file": "file",
     "files": "files",
     "total": "total",
     "tip": "💡 Tip: You can also drag and drop files here to add them",
     "addMoreFiles": "Add More Files",
     "supportedFormats": "Supports images, videos, audio, documents, code files and more",
     "supportedFormatsDesktop": "Desktop app supports images, videos, audio, documents, code files and more",
-    "hash": "Hash",
+    "hashLabel": "Merkle Hash:",
     "seeder": "seeder{count, plural, =1 {} other {s}}",
     "leecher": "leecher{count, plural, =1 {} other {s}}",
     "seeding": "Seeding",
-    "copyHash": "Copy hash",
-    "hashCopied": "Hash copied!",
+    "copyHash": "Copy Merkle hash",
+    "hashCopied": "Merkle hash copied!",
     "stopSharing": "Stop sharing",
     "noFilesShared": "No files shared yet",
     "addFilesHint2": "Add files to start sharing on the network",
@@ -1309,12 +1421,9 @@
     "storedLocally": "Files stored locally. Start DHT network to share with others.",
     "uploadError": "Error processing dropped files. Please try again or use the \"Add Files\" button instead.",
     "fileManagementDesktopOnly": "File management is only available in the desktop app",
-    "fileUpdated": "{name} already exists; updated to v{version}",
-    "fileUploadedNew": "{name} uploaded as v{version} (new file)",
-    "hashCopiedClipboard": "File hash copied to clipboard!",
-    "noVersionHistory": "No version history found for this file",
-    "versionHistoryTitle": "Version history for {name}:\n{list}",
-    "versionHistoryError": "Failed to load version history",
+    "fileUpdated": "{name} already exists and has been updated",
+    "fileUploadedNew": "{name} uploaded successfully",
+    "hashCopiedClipboard": "Merkle hash copied to clipboard!",
     "desktopAppRequired": "Desktop App Required",
     "storageMonitoringDesktopOnly": "Storage monitoring requires the desktop application",
     "dropFilesHere": "✨ Drop files here!",
@@ -1327,26 +1436,13 @@
     "fileUploadDesktopApp": "File upload requires the desktop app",
     "downloadDesktopApp": "Download the desktop version to upload and share files",
     "desktopManagementRequired": "Desktop app required for file management",
-    "versionHistoryTooltip": "v{version} - Click to view version history",
     "encryptedEndToEnd": "This file is encrypted end-to-end",
     "active": "Active",
-    "hashLabel": "Hash:",
     "priceTooltip": "Price calculated dynamically based on network hash power",
     "storedLocallyBadge": "Stored Locally",
     "fileManagementTooltip": "File management requires desktop app",
     "fileManagementWebNotAvailable": "File management not available in web version",
     "fileDialogError": "Failed to open file dialog"
-  },
-  "messages": {
-    "title": "Messages",
-    "subtitle": "Communicate securely with your peers.",
-    "conversations": "Contacts",
-    "searchPlaceholder": "Search contacts...",
-    "inputPlaceholder": "Type an encrypted message...",
-    "selectConversation": "Select a conversation to start messaging",
-    "peer": "Peer",
-    "endToEndEncrypted": "End-to-end encrypted",
-    "refreshPeerList": "Refresh peer list"
   },
   "torrent": {
     "title": "Torrents",
@@ -1417,6 +1513,316 @@
       "thu": "Thu",
       "fri": "Fri",
       "sat": "Sat"
+    }
+  },
+  "downloadHistory": {
+    "title": "Download History",
+    "subtitle": "View and manage your download history",
+    "showHistory": "Show History",
+    "hideHistory": "Hide History",
+    "empty": "No download history yet",
+    "emptyDescription": "Completed, failed, and canceled downloads will appear here",
+    "search": "Search history...",
+    "filterAll": "All",
+    "filterCompleted": "Completed",
+    "filterFailed": "Failed",
+    "filterCanceled": "Canceled",
+    "redownload": "Re-download",
+    "remove": "Remove",
+    "clearHistory": "Clear History",
+    "clearFailed": "Clear Failed",
+    "clearCanceled": "Clear Canceled",
+    "exportHistory": "Export History",
+    "importHistory": "Import History",
+    "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
+    "confirmClearFailed": "Clear all failed downloads from history?",
+    "confirmClearCanceled": "Clear all canceled downloads from history?",
+    "stats": {
+      "total": "Total Downloads",
+      "completed": "Completed",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "totalSize": "Total Size",
+      "totalPrice": "Total Spent"
+    },
+    "messages": {
+      "historyCleared": "Download history cleared",
+      "failedCleared": "Failed downloads cleared",
+      "canceledCleared": "Canceled downloads cleared",
+      "entryRemoved": "Entry removed from history",
+      "exportSuccess": "History exported successfully",
+      "importSuccess": "Imported {count} history entries",
+      "importError": "Failed to import history: {error}",
+      "redownloadStarted": "Re-downloading {name}..."
+    }
+  },
+  "settingsBackup": {
+    "title": "Backup & Restore",
+    "description": "Export or import your settings configuration",
+    "export": "Export Settings",
+    "import": "Import Settings",
+    "exportButton": "Export Settings",
+    "importButton": "Import Settings",
+    "downloadBackup": "Download Backup File",
+    "selectFile": "Select Backup File",
+    "merge": "Merge with Current Settings",
+    "replace": "Replace All Settings",
+    "autoBackup": "Automatic Backups",
+    "autoBackupDescription": "Automatic backups are created before major changes",
+    "restoreAutoBackup": "Restore",
+    "messages": {
+      "exportSuccess": "Settings exported successfully",
+      "exportError": "Failed to export settings: {error}",
+      "importSuccess": "Settings imported successfully",
+      "importWarnings": "Settings imported with warnings: {warnings}",
+      "importError": "Failed to import settings: {error}",
+      "autoBackupCreated": "Automatic backup created",
+      "autoBackupRestored": "Settings restored from backup",
+      "invalidFile": "Invalid backup file format",
+      "confirmReplace": "This will replace all current settings. Continue?"
+    }
+  },
+  "blockchain": {
+    "title": "Blockchain Explorer",
+    "subtitle": "View blocks, transactions, and account balances on the Chiral Network",
+    "refresh": "Refresh",
+    "refreshed": "Data refreshed",
+    "copied": "Copied to clipboard",
+    "stats": {
+      "totalBlocks": "Total Blocks",
+      "hashrate": "Network Hashrate",
+      "difficulty": "Difficulty",
+      "peers": "Network Peers"
+    },
+    "tabs": {
+      "blocks": "Latest Blocks",
+      "search": "Search",
+      "stats": "Balance Checker"
+    },
+    "blocks": {
+      "latest": "Latest Blocks",
+      "noBlocks": "No blocks found"
+    },
+    "sync": {
+      "syncing": "Syncing",
+      "current": "Current Block",
+      "highest": "Highest Block",
+      "remaining": "Remaining",
+      "eta": "ETA",
+      "complete": "Sync Complete"
+    },
+    "search": {
+      "title": "Search Blockchain",
+      "address": "Address",
+      "transaction": "Transaction",
+      "block": "Block",
+      "emptyQuery": "Please enter a search query",
+      "error": "Search failed: {error}",
+      "unknownError": "Unknown error",
+      "invalidBlock": "Invalid block number",
+      "notFound": "Not found",
+      "addressDetails": "Address Details",
+      "addressLabel": "Address",
+      "balance": "Balance",
+      "txDetails": "Transaction Details",
+      "status": "Status",
+      "blockNumber": "Block Number",
+      "from": "From",
+      "to": "To",
+      "value": "Value",
+      "blockDetails": "Block Details",
+      "hash": "Hash",
+      "timestamp": "Timestamp"
+    },
+    "balance": {
+      "checker": "Balance Checker",
+      "address": "Address",
+      "check": "Check Balance",
+      "result": "Balance",
+      "emptyAddress": "Please enter an address",
+      "error": "Failed to check balance: {error}",
+      "errorLabel": "Error"
+    },
+    "error": {
+      "fetchBlocks": "Failed to fetch blocks"
+    }
+  },
+  "toasts": {
+    "common": {
+      "copied": "Copied!"
+    },
+    "wallet": {
+      "accountList": {
+        "selected": "Selected account {address}...",
+        "derived": "Derived account #{index}",
+        "deriveError": "Derivation failed: {error}",
+        "keystorePrompt": "Enter keystore password",
+        "keystoreSaved": "Saved to keystore",
+        "keystoreError": "Keystore save failed: {error}"
+      },
+      "mnemonic": {
+        "ready": "Wallet ready",
+        "copied": "Recovery phrase copied to clipboard"
+      },
+      "transaction": {
+        "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
+        "failed": "Transaction failed in block {block}. Your funds were not sent."
+      }
+    },
+    "account": {
+      "firstRun": {
+        "testWalletCreated": "Test wallet \"TestWallet\" created!",
+        "testWalletError": "Failed to create test wallet"
+      },
+      "addressCopied": "Address copied to clipboard!",
+      "privateKey": {
+        "fetchError": "Failed to retrieve private key",
+        "copied": "Private key copied to clipboard!",
+        "missing": "No private key available"
+      },
+      "transaction": {
+        "cancelled": "Transaction cancelled",
+        "submitted": "Transaction submitted!",
+        "error": "Transaction failed: {error}"
+      },
+      "created": "Account Created Successfully!",
+      "createError": "Failed to create account: {error}",
+      "import": {
+        "invalidFormat": "Invalid private key format",
+        "success": "Account imported successfully!",
+        "error": "Failed to import account: {error}",
+        "fileInvalid": "Invalid file format: privateKey field not found",
+        "fileSuccess": "Private key loaded from file successfully!",
+        "fileReadError": "Error reading file: {error}",
+        "fileLoadError": "Error loading file: {error}"
+      },
+      "2fa": {
+        "desktopOnly": "2FA is only available in the desktop app.",
+        "setupError": "Failed to start 2FA setup: {error}",
+        "enabled": "Two-Factor Authentication has been enabled!",
+        "disabled": "Two-Factor Authentication has been disabled.",
+        "disableError": "Failed to disable 2FA: {error}"
+      },
+      "logout": {
+        "locked": "Wallet locked and session cleared",
+        "error": "Error during logout: {error}"
+      }
+    },
+    "mining": {
+      "syncComplete": "Blockchain sync complete! Mining is now active."
+    },
+    "blockchain": {
+      "noBlocks": "No blocks found. Start mining to create blocks.",
+      "fetchError": "Failed to fetch blocks: {error}"
+    },
+    "settings": {
+      "updated": "Settings Updated!",
+      "networkingError": "Settings saved, but networking update failed",
+      "proxyRelayWarning": "Add at least one trusted proxy relay before enabling Hide My IP."
+    },
+    "analytics": {
+      "direction": {
+        "upload": "Upload",
+        "download": "Download"
+      },
+      "bandwidthWarning": "{direction} cap warning: {used} GB consumed ({percent}% of {cap} GB).",
+      "bandwidthTitle": "{direction} cap warning"
+    },
+    "upload": {
+      "loginRequired": "Please log in to your account before uploading files",
+      "verifyAccountFailed": "Failed to verify account status. Please try logging in again.",
+      "dhtDisconnected": "DHT network is not connected. Please start the DHT network before uploading files.",
+      "fileSuccess": "{name} uploaded successfully",
+      "torrentSeeding": "{name} is now seeding as a torrent"
+    },
+    "network": {
+      "signalingConnected": "Connected to signaling server",
+      "signalingError": "Failed to connect to signaling server for web mode testing",
+      "peerAddressRequired": "Please enter a peer address",
+      "dhtRequired": "DHT not connected. Please start DHT first.",
+      "alreadyConnected": "Peer is already connected",
+      "connecting": "Connecting to peer via DHT...",
+      "connectionSuccess": "Connection Success!",
+      "connectionFailed": "Connection failed. Peer may be unreachable or address invalid.",
+      "connectError": "Failed to connect to peer: {error}",
+      "signalingMissing": "Signaling server not connected. Please start DHT first.",
+      "peerNotFound": "Peer {peer} not found in discovered peers",
+      "messageReceived": "Received from peer: {message}",
+      "webrtcConnected": "Successfully connected to peer!",
+      "webrtcFailed": "Connection to peer failed",
+      "dataChannelOpen": "Data channel open - you can now send messages!",
+      "dataChannelClosed": "Data channel closed",
+      "webrtcError": "WebRTC error: {error}",
+      "webrtcConnecting": "Connecting to peer: {peer}",
+      "webrtcCreateError": "Failed to create connection: {error}",
+      "noConnection": "No active WebRTC connection",
+      "messageSent": "Test message sent: {message}",
+      "sendError": "Failed to send message: {error}",
+      "gethInstalled": "Geth is already installed",
+      "gethDownloadError": "Failed to download Geth: {error}"
+    },
+    "download": {
+      "payment": {
+        "invalidAddress": "Cannot process payment: uploader wallet address is missing or invalid",
+        "failed": "Payment failed: {error}",
+        "successWithHash": "Payment successful! Transaction: {hash}...",
+        "success": "Payment successful!"
+      }
+    },
+    "transactions": {
+      "copied": "{label} copied to clipboard",
+      "copyError": "Failed to copy {label}",
+      "exported": "Transaction exported"
+    }
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "close": "Close",
+    "tip": "Press ? or F1 anytime to view this help",
+    "categories": {
+      "navigation": "Navigation",
+      "application": "Application",
+      "window": "Window"
+    },
+    "navigation": {
+      "download": "Go to Download page",
+      "upload": "Go to Upload page",
+      "network": "Go to Network page",
+      "mining": "Go to Mining page",
+      "account": "Go to Account page",
+      "settings": "Open Settings"
+    },
+    "application": {
+      "commandPalette": "Open Command Palette",
+      "showHelp": "Show keyboard shortcuts",
+      "closeModal": "Close modal/dialog",
+      "refresh": "Refresh current page",
+      "reload": "Reload application"
+    },
+    "window": {
+      "fullscreen": "Toggle fullscreen",
+      "quit": "Quit application"
+    }
+  },
+  "commandPalette": {
+    "searchPlaceholder": "Search for actions or pages...",
+    "searchLabel": "Command palette search",
+    "noResults": "No results found",
+    "tryDifferentQuery": "Try a different search term",
+    "navigate": "Navigate",
+    "select": "Select",
+    "close": "Close",
+    "actions": {
+      "goToDownload": "Go to Download",
+      "goToUpload": "Go to Upload",
+      "goToNetwork": "Go to Network",
+      "goToMining": "Go to Mining",
+      "goToRelay": "Go to Relay",
+      "goToAnalytics": "Go to Analytics",
+      "goToReputation": "Go to Reputation",
+      "goToBlockchain": "Go to Blockchain",
+      "goToAccount": "Go to Account",
+      "goToSettings": "Go to Settings"
     }
   }
 }
