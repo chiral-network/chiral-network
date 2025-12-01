@@ -7,12 +7,6 @@
 
 // Modules unique to the binary
 pub mod blockchain_listener;
-pub mod dht;
-pub mod peer_cache;
-pub mod download_scheduler;
-pub mod download_source;
-pub mod ed2k_client;
-pub mod encryption;
 pub mod commands;
 pub mod ethereum;
 pub mod geth_bootstrap;
@@ -26,8 +20,8 @@ pub mod reassembly;
 
 // Re-export modules from the lib crate
 use chiral_network::{
-    analytics, bandwidth, bittorrent_handler, download_restart,
-    dht, ed2k_client, encryption, file_transfer,
+    analytics, bandwidth, bittorrent_handler, download_restart, download_scheduler, download_source,
+    dht, ed2k_client, encryption, file_transfer, ftp_client, peer_cache,
     http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
