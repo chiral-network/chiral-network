@@ -1695,9 +1695,9 @@
             <p class="text-[10px] sm:text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
-              <p class="text-sm sm:text-base font-semibold text-green-600 dark:text-green-400 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
+              <p class="text-sm sm:text-base font-semibold text-foreground break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
             {:else}
-              <p class="text-sm sm:text-base font-semibold text-green-600 dark:text-green-400 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
+              <p class="text-sm sm:text-base font-semibold text-foreground opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
             {/if}
           </div>
           <!-- Total Spent -->
@@ -1709,9 +1709,9 @@
             <p class="text-[10px] sm:text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
-              <p class="text-sm sm:text-base font-semibold text-red-600 dark:text-red-400 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
+              <p class="text-sm sm:text-base font-semibold text-foreground break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
             {:else}
-              <p class="text-sm sm:text-base font-semibold text-red-600 dark:text-red-400 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
+              <p class="text-sm sm:text-base font-semibold text-foreground opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
             {/if}
           </div>
         </div>
