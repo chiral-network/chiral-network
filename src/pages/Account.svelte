@@ -1846,11 +1846,16 @@
               id="recipient"
               bind:value={recipientAddress}
               placeholder={$t('transfer.recipient.placeholder')}
-              class="pr-10" 
+              class="pr-20 {isAddressValid ? 'border-green-500 focus:ring-green-500' : recipientAddress && !isAddressValid ? 'border-red-500 focus:ring-red-500' : ''}" 
               data-form-type="other"
               data-lpignore="true"
               aria-autocomplete="none"
             />
+            {#if isAddressValid}
+              <div class="absolute right-12 top-1/2 -translate-y-1/2 text-green-600">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              </div>
+            {/if}
             <Button
               type="button"
               variant="ghost"
@@ -1899,7 +1904,8 @@
               type="text"
               inputmode="decimal"
               bind:value={rawAmountInput}
-              class="mt-2"
+              placeholder="0.00"
+              class="{isAmountValid ? 'border-green-500 focus:ring-green-500' : rawAmountInput && !isAmountValid ? 'border-red-500 focus:ring-red-500' : ''}"
               data-form-type="other"
               data-lpignore="true"
               aria-autocomplete="none"
@@ -1908,7 +1914,7 @@
               type="button"
               variant="outline"
               size="sm"
-              class="absolute right-1 top-1/2 transform -translate-y-1/2 h-8 px-3"
+              class="absolute right-1 top-1/2 transform -translate-y-1/2 h-8 px-3 text-xs"
               on:click={setMaxAmount}
               disabled={$wallet.balance <= 0}
             >
@@ -1924,50 +1930,93 @@
             {/if}
           </div>
           
-          <!-- Fee selector (UI stub) -->
+          <!-- Fee selector -->
           <div class="mt-3">
-            <div class="inline-flex rounded-md border overflow-hidden">
-              <button type="button" class="px-3 py-1 text-xs {feePreset === 'low' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'low'}>{$t('transfer.fees.low')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'market' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'market'}>{$t('transfer.fees.market')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'fast' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'fast'}>{$t('transfer.fees.fast')}</button>
+            <Label class="text-xs mb-2 block">{$t('transfer.fees.estimated')}</Label>
+            <div class="inline-flex rounded-md border border-gray-300 dark:border-gray-600 overflow-hidden">
+              <button 
+                type="button" 
+                class="px-4 py-2 text-xs font-medium transition-colors {feePreset === 'low' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
+                on:click={() => feePreset = 'low'}
+              >
+                {$t('transfer.fees.low')}
+              </button>
+              <button 
+                type="button" 
+                class="px-4 py-2 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors {feePreset === 'market' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
+                on:click={() => feePreset = 'market'}
+              >
+                {$t('transfer.fees.market')}
+              </button>
+              <button 
+                type="button" 
+                class="px-4 py-2 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors {feePreset === 'fast' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
+                on:click={() => feePreset = 'fast'}
+              >
+                {$t('transfer.fees.fast')}
+              </button>
             </div>
-            <p class="text-xs text-muted-foreground mt-2">{$t('transfer.fees.estimated')}: {estimatedFeeDisplay}</p>
+            <p class="text-xs text-muted-foreground mt-2">
+              <span class="font-medium">Fee:</span> {estimatedFeeDisplay}
+            </p>
           </div>
         
         </div>
 
         <Button
           type="button"
-          class="w-full"
+          class="w-full font-semibold transition-all {isConfirming ? 'bg-orange-600 hover:bg-orange-700' : ''}"
           on:click={handleSendClick}
           disabled={!isAddressValid || !isAmountValid || rawAmountInput === ''}>
-          <ArrowUpRight class="h-4 w-4 mr-2" />
           {#if isConfirming}
-            {$t('transfer.sendingIn', { values: { seconds: countdown } })}
+            <div class="flex items-center justify-center gap-2">
+              <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+              {$t('transfer.sendingIn', { values: { seconds: countdown } })}
+            </div>
           {:else}
-            {$t('transfer.send')}
+            <div class="flex items-center justify-center gap-2">
+              <ArrowUpRight class="h-4 w-4" />
+              {$t('transfer.send')}
+            </div>
           {/if}
         </Button>
 
-        <Button type="button" class="w-full justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded transition-colors py-2 font-normal" on:click={() => showPending = !showPending} aria-label={$t('transfer.viewPending')}>
+        <Button type="button" class="w-full justify-center border border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-950/30 text-gray-800 dark:text-gray-200 rounded transition-colors py-2 font-medium" on:click={() => showPending = !showPending} aria-label={$t('transfer.viewPending')}>
           <span class="flex items-center gap-2">
-            <svg class="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <circle cx="12" cy="10" r="8" />
-              <polyline points="12,6 12,10 16,14" />
-            </svg>
+            <div class="relative">
+              <svg class="h-4 w-4 text-orange-600 dark:text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <circle cx="12" cy="10" r="8" />
+                <polyline points="12,6 12,10 16,14" />
+              </svg>
+              {#if $pendingCount > 0}
+                <span class="absolute -top-1 -right-1 bg-orange-600 text-white text-[9px] font-bold rounded-full h-3.5 w-3.5 flex items-center justify-center">{$pendingCount}</span>
+              {/if}
+            </div>
             {$t('transfer.pending.count', { values: { count: $pendingCount } })}
           </span>
         </Button>
         {#if showPending}
-          <div class="mt-2 p-3 bg-gray-50 rounded shadow">
-            <h3 class="text-sm mb-2 text-gray-700 font-normal">{$t('transfer.pending.title')}</h3>
-            <ul class="space-y-1">
+          <div class="mt-2 p-3 border border-gray-200 dark:border-gray-700 rounded-md shadow-sm">
+            <h3 class="text-sm mb-2 text-foreground font-semibold flex items-center gap-2">
+              <History class="h-4 w-4 text-orange-600" />
+              {$t('transfer.pending.title')}
+            </h3>
+            <ul class="space-y-2">
               {#each $transactions.filter(tx => tx.status === 'pending') as tx}
-                <li class="text-xs text-gray-800 font-normal">
-                  {tx.description} ({tx.type === 'sent' ? $t('transactions.item.to') : $t('transactions.item.from')}: {tx.type === 'sent' ? tx.to : tx.from}) - {tx.amount} Chiral
+                <li class="text-xs border border-orange-200 dark:border-orange-800 rounded p-2">
+                  <div class="flex items-start gap-2">
+                    <span class="bg-orange-600 text-white text-[9px] px-1.5 py-0.5 rounded font-semibold">PENDING</span>
+                    <div class="flex-1 min-w-0">
+                      <div class="font-medium text-foreground">{tx.description}</div>
+                      <div class="text-muted-foreground truncate mt-0.5">
+                        {tx.type === 'sent' ? $t('transactions.item.to') : $t('transactions.item.from')}: {tx.type === 'sent' ? tx.to : tx.from}
+                      </div>
+                      <div class="font-semibold text-orange-700 dark:text-orange-500 mt-0.5">{tx.amount} Chiral</div>
+                    </div>
+                  </div>
                 </li>
               {:else}
-                <li class="text-xs text-gray-500 font-normal">{$t('transfer.pending.noDetails')}</li>
+                <li class="text-xs text-center py-2 text-muted-foreground">{$t('transfer.pending.noDetails')}</li>
               {/each}
             </ul>
           </div>
