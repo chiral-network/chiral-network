@@ -374,6 +374,7 @@ mod tests {
             file_name: Some("ubuntu.iso".to_string()),
             sources: Some(vec!["192.168.1.1:4662".to_string()]),
             timeout_secs: Some(30),
+            chunk_hashes: None,
         });
 
         assert_eq!(source.source_type(), "ED2K");
@@ -391,6 +392,7 @@ mod tests {
             file_name: None,
             sources: None,
             timeout_secs: Some(30),
+            chunk_hashes: None,
         });
 
         assert_eq!(source.display_name(), "ED2K: 31D6CFE0");
@@ -406,6 +408,7 @@ mod tests {
             file_name: None,
             sources: None,
             timeout_secs: None,
+            chunk_hashes: None,
         });
 
         let ftp = DownloadSource::Ftp(FtpSourceInfo {
@@ -472,6 +475,7 @@ mod tests {
             file_name: Some("test.iso".to_string()),
             sources: Some(vec!["192.168.1.1:4662".to_string()]),
             timeout_secs: Some(60),
+            chunk_hashes: None,
         };
 
         let source = DownloadSource::Ed2k(ed2k_info);

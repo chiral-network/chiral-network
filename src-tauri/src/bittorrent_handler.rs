@@ -403,22 +403,17 @@ impl BitTorrentHandler {
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
-        let info_hash: Option<String>;
-
         let add_torrent = if identifier.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| {
                 error!("Magnet link validation failed: {}", e);
                 e
             })?;
-            info_hash = Some(Self::extract_info_hash(identifier).ok_or(BitTorrentError::InvalidMagnetLink { url: identifier.to_string() })?);
             AddTorrent::from_url(identifier)
         } else {
             Self::validate_torrent_file(identifier).map_err(|e| {
                 error!("Torrent file validation failed: {}", e);
                 e
             })?;
-            // For .torrent files, we'll extract info_hash after adding to session
-            info_hash = None;
             AddTorrent::from_local_filename(identifier).map_err(|e| {
                 error!("Failed to load torrent file: {}", e);
                 BitTorrentError::TorrentFileError {
