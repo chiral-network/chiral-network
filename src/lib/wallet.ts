@@ -347,47 +347,34 @@ export class WalletService {
     }
 
     try {
-      // Get actual total blocks mined from miningState (set by refreshTransactions)
-      const currentMiningState = get(miningState);
-      const actualBlocksFound = currentMiningState.blocksFound ?? 0;
-
-      // Calculate total rewards based on ACTUAL blocks found, not recentBlocks length
-      const totalEarned = actualBlocksFound * 2;
-
-      // Try to get balance from geth
+      // Get real balance directly from geth - this is the source of truth
       let realBalance = 0;
       try {
         const balanceStr = (await invoke("get_account_balance", {
           address: accountAddress,
         })) as string;
         realBalance = parseFloat(balanceStr);
+        console.log(`[refreshBalance] Got balance from geth: ${realBalance} CHIRAL for ${accountAddress}`);
       } catch (e) {
-        // Expected when Geth is not running
+        console.error("[refreshBalance] Failed to get balance from geth:", e);
+        return; // Can't get balance, don't update
       }
 
-      // Calculate pending sent transactions
-      const pendingSent = get(transactions)
-        .filter((tx) => tx.status === "pending" && tx.type === "sent")
-        .reduce((sum, tx) => sum + tx.amount, 0);
-
-      // Use real balance from Geth, or totalEarned if blocks haven't matured yet
-      // In test networks or when blocks are immature, realBalance may be 0 even though we've mined
-      const actualBalance = realBalance > 0 ? realBalance : totalEarned;
-      const availableBalance = Math.max(0, actualBalance - pendingSent);
-
+      // Update wallet with the real blockchain balance
       wallet.update((current) => ({
         ...current,
-        balance: availableBalance,
-        actualBalance,
+        balance: realBalance,
+        actualBalance: realBalance,
       }));
 
-      // Pending transactions are now updated via updatePendingTransactions() which checks receipts
-
-      // Update mining state totalRewards (don't override blocksFound - it's set by refreshTransactions)
+      // Also update mining state totalRewards based on blocks found
+      const currentMiningState = get(miningState);
+      const actualBlocksFound = currentMiningState.blocksFound ?? 0;
+      const totalEarned = actualBlocksFound * 2;
+      
       miningState.update((state) => ({
         ...state,
         totalRewards: totalEarned,
-        // blocksFound is already correctly set by refreshTransactions
       }));
     } catch (error) {
       console.error("Failed to refresh balance:", error);

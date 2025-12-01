@@ -1959,6 +1959,14 @@ pub async fn send_transaction(
                                         tracing::info!("   Amount: {} CHIRAL", amount_clone);
                                         tracing::info!("   Gas Used: {}", gas_used);
                                         tracing::info!("   Status: SUCCESS ✅");
+                                        
+                                        // Check balances after mining to verify transfer
+                                        if let Ok(sender_balance) = get_balance(&from_clone).await {
+                                            tracing::info!("   Sender balance after: {} CHIRAL", sender_balance);
+                                        }
+                                        if let Ok(receiver_balance) = get_balance(&to_clone).await {
+                                            tracing::info!("   Receiver balance after: {} CHIRAL", receiver_balance);
+                                        }
                                     } else {
                                         tracing::error!("❌ TRANSACTION MINED BUT FAILED!");
                                         tracing::error!("   Hash: {}", tx_hash_clone);
