@@ -1755,29 +1755,38 @@
                 </Button>
                 {#if showQrCodeModal}
                   <div
-                    class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+                    class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
                     role="button"
                     tabindex="0"
                     on:click={() => showQrCodeModal = false}
                     on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showQrCodeModal = false; }}
                   >
                     <div
-                      class="bg-white p-8 rounded-lg shadow-xl w-full max-w-xs text-center"
+                      class="bg-white dark:bg-gray-800 p-8 rounded-xl shadow-2xl w-full max-w-md text-center border border-gray-200 dark:border-gray-700"
                       on:click|stopPropagation
                       role="dialog"
                       tabindex="0"
                       aria-modal="true"
                       on:keydown={(e) => { if (e.key === 'Escape') showQrCodeModal = false; }}
                     >
-                      <h3 class="text-lg font-semibold mb-4">{$t('wallet.qrModal.title')}</h3>
+                      <div class="flex items-center justify-center gap-2 mb-4">
+                        <div class="bg-purple-100 p-2 rounded-lg">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                        </div>
+                        <h3 class="text-xl font-bold">{$t('wallet.qrModal.title')}</h3>
+                      </div>
                       
-                      <img src={qrCodeDataUrl} alt={$t('wallet.qrModal.alt')} class="mx-auto rounded-md border" />
+                      <div class="bg-white p-4 rounded-lg border-2 border-purple-200 shadow-sm inline-block mb-4">
+                        <img src={qrCodeDataUrl} alt={$t('wallet.qrModal.alt')} class="mx-auto rounded" />
+                      </div>
                       
-                      <p class="text-xs text-gray-600 mt-4 break-all font-mono">
-                        {$etcAccount?.address}
-                      </p>
+                      <div class="bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg p-3 mb-4">
+                        <p class="text-xs text-gray-600 dark:text-gray-300 break-all font-mono">
+                          {$etcAccount?.address}
+                        </p>
+                      </div>
 
-                      <Button class="mt-6 w-full" variant="outline" on:click={() => showQrCodeModal = false}>
+                      <Button class="w-full font-semibold" variant="outline" on:click={() => showQrCodeModal = false}>
                         {$t('actions.close')}
                       </Button>
                     </div>
@@ -1869,13 +1878,18 @@
             </Button>
           </div>
           {#if showScannerModal}
-            <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-              <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
-                <h3 class="text-lg font-semibold mb-4 text-center">{$t('transfer.recipient.scanQrTitle')}</h3>
+            <div class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+              <div class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-gray-700">
+                <div class="flex items-center justify-center gap-2 mb-4">
+                  <div class="bg-purple-100 p-2 rounded-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                  </div>
+                  <h3 class="text-xl font-bold">{$t('transfer.recipient.scanQrTitle')}</h3>
+                </div>
                 
-                <div id="qr-reader" class="w-full"></div>
+                <div id="qr-reader" class="w-full border-2 border-purple-200 rounded-lg overflow-hidden"></div>
                 
-                <Button class="mt-4 w-full" variant="outline" on:click={() => showScannerModal = false}>
+                <Button class="mt-4 w-full font-semibold" variant="outline" on:click={() => showScannerModal = false}>
                   {$t('actions.cancel')}
                 </Button>
               </div>
@@ -2295,31 +2309,50 @@
   {#if $etcAccount}
   <Card class="p-6">
       <div class="flex items-center justify-between mb-4">
-        <div>
-          <h2 class="text-lg font-semibold">{$t('security.2fa.title')}</h2>
-          <p class="text-sm text-muted-foreground mt-1">{$t('security.2fa.subtitle_clear')}</p>
+        <div class="flex items-center gap-3">
+          <div class="bg-blue-100 p-2 rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          </div>
+          <div>
+            <h2 class="text-lg font-semibold">{$t('security.2fa.title')}</h2>
+            <p class="text-sm text-muted-foreground">{$t('security.2fa.subtitle_clear')}</p>
+          </div>
         </div>
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
       </div>
       <div class="space-y-4">
         {#if is2faEnabled}
-          <div class="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
+          <div class="flex items-center justify-between p-4 bg-green-50 border-l-4 border-l-green-500 border-y border-r border-green-200 rounded-lg shadow-sm">
             <div class="flex items-center gap-3">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              <div class="bg-green-100 p-2 rounded-full">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              </div>
               <div>
                 <p class="font-semibold text-green-800">{$t('security.2fa.status.enabled')}</p>
                 <p class="text-sm text-green-700">{$t('security.2fa.status.enabled_desc')}</p>
               </div>
             </div>
-            <Button variant="destructive" on:click={disable2FA}>{$t('security.2fa.disable')}</Button>
+            <Button variant="destructive" on:click={disable2FA} class="font-semibold">{$t('security.2fa.disable')}</Button>
           </div>
         {:else}
-          <div class="flex items-center justify-between p-4 border-2 border-dashed rounded-lg">
-            <p class="text-sm text-muted-foreground">{$t('security.2fa.status.disabled_desc')}</p>
-            <Button on:click={setup2FA}>{$t('security.2fa.enable')}</Button>
+          <div class="flex items-center justify-between p-4 bg-yellow-50 border-l-4 border-l-yellow-500 border-y border-r border-yellow-200 rounded-lg shadow-sm">
+            <div class="flex items-center gap-3">
+              <div class="bg-yellow-100 p-2 rounded-full">
+                <AlertCircle class="h-5 w-5 text-yellow-600" />
+              </div>
+              <div>
+                <p class="font-semibold text-yellow-900">Not Protected</p>
+                <p class="text-sm text-yellow-700">{$t('security.2fa.status.disabled_desc')}</p>
+              </div>
+            </div>
+            <Button on:click={setup2FA} class="bg-blue-600 hover:bg-blue-700 text-white font-semibold">{$t('security.2fa.enable')}</Button>
           </div>
         {/if}
-        <p class="text-sm text-muted-foreground">{$t('security.2fa.how_it_works')}</p>
+        <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+          <div class="flex items-start gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600 mt-0.5 flex-shrink-0"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
+            <p class="text-sm text-muted-foreground">{$t('security.2fa.how_it_works')}</p>
+          </div>
+        </div>
       </div>
   </Card>
   {/if}
@@ -2650,66 +2683,101 @@
   <!-- 2FA Setup Modal -->
   {#if show2faSetupModal && totpSetupInfo}
     <div
-      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
       role="button"
       tabindex="0"
       on:click={() => show2faSetupModal = false}
       on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') show2faSetupModal = false; }}
     >
       <div
-        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-md text-card-foreground"
+        class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-lg border border-gray-200 dark:border-gray-700"
         on:click|stopPropagation
         role="dialog"
         aria-modal="true"
         tabindex="-1"
         on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
       >
-        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.setup.title')}</h3>
-        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.setup.step1_scan')}</p>
+        <!-- Header with Icon -->
+        <div class="flex items-center gap-3 mb-4">
+          <div class="bg-blue-100 p-2 rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          </div>
+          <div>
+            <h3 class="text-xl font-bold">{$t('security.2fa.setup.title')}</h3>
+            <p class="text-xs text-blue-600 font-medium">Step 1 of 2</p>
+          </div>
+        </div>
         
-        <div class="flex flex-col md:flex-row gap-4 items-center bg-background p-4 rounded-lg">
-          <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded-md border bg-white p-1" />
-          <div class="space-y-2">
-            <p class="text-sm">{$t('security.2fa.setup.scanAlt')}</p>
+        <div class="bg-blue-50 border-l-4 border-l-blue-500 p-3 rounded-lg mb-4">
+          <p class="text-sm text-blue-900">{$t('security.2fa.setup.step1_scan')}</p>
+        </div>
+        
+        <div class="flex flex-col md:flex-row gap-4 items-center border border-gray-200 dark:border-gray-700 p-4 rounded-lg mb-4">
+          <div class="bg-white p-3 rounded-lg border-2 border-blue-200 shadow-sm">
+            <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded" />
+          </div>
+          <div class="space-y-2 flex-1">
+            <p class="text-sm font-medium">{$t('security.2fa.setup.scanAlt')}</p>
             <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.step2_manual')}</p>
-            <div class="flex items-center gap-2 bg-secondary p-2 rounded">
-              <code class="text-sm font-mono break-all">{totpSetupInfo.secret}</code>
-              <!-- <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast('Copied!', 'success'); }}> -->
-              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast(tr('toasts.common.copied'), 'success'); }}>
+            <div class="flex items-center gap-2 bg-gray-100 dark:bg-gray-700 p-2 rounded border border-gray-300 dark:border-gray-600">
+              <code class="text-sm font-mono break-all text-blue-600 dark:text-blue-400 flex-1">{totpSetupInfo.secret}</code>
+              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast(tr('toasts.common.copied'), 'success'); }} class="flex-shrink-0">
                 <Copy class="h-4 w-4" />
               </Button>
             </div>
           </div>
         </div>
 
-        <p class="text-sm text-muted-foreground my-4">{$t('security.2fa.setup.step3_verify')}</p>
-        <div class="space-y-2">
-          <Label for="totp-verify">{$t('security.2fa.setup.verifyLabel')}</Label>
-          <Input
-            id="totp-verify"
-            type="text"
-            bind:value={totpVerificationCode}
-            placeholder="123456"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            maxlength={6}
-          />
-          <Label for="totp-password-setup" class="mt-4">{$t('keystore.load.password')}</Label>
-          <Input
-            id="totp-password-setup"
-            type="password"
-            bind:value={twoFaPassword}
-            placeholder={$t('placeholders.unlockPassword')}
-          />
+        <div class="bg-purple-50 border-l-4 border-l-purple-500 p-3 rounded-lg mb-4">
+          <p class="text-xs text-purple-900 font-medium mb-1">Step 2 of 2</p>
+          <p class="text-sm text-purple-700">{$t('security.2fa.setup.step3_verify')}</p>
+        </div>
+        
+        <div class="space-y-3">
+          <div>
+            <Label for="totp-verify" class="text-sm font-semibold">{$t('security.2fa.setup.verifyLabel')}</Label>
+            <Input
+              id="totp-verify"
+              type="text"
+              bind:value={totpVerificationCode}
+              placeholder="123456"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength={6}
+              class="text-center text-lg font-mono tracking-wider mt-1"
+            />
+          </div>
+          <div>
+            <Label for="totp-password-setup" class="text-sm font-semibold">{$t('keystore.load.password')}</Label>
+            <Input
+              id="totp-password-setup"
+              type="password"
+              bind:value={twoFaPassword}
+              placeholder={$t('placeholders.unlockPassword')}
+              class="mt-1"
+            />
+          </div>
           {#if twoFaErrorMessage}
-            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
+            <div class="bg-red-50 border-l-4 border-l-red-500 p-3 rounded-lg">
+              <p class="text-sm text-red-700 flex items-center gap-2">
+                <AlertCircle class="h-4 w-4" />
+                {twoFaErrorMessage}
+              </p>
+            </div>
           {/if}
         </div>
 
         <div class="mt-6 flex justify-end gap-2">
           <Button variant="outline" on:click={() => show2faSetupModal = false}>{$t('actions.cancel')}</Button>
-          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6 || !twoFaPassword}>
-            {isVerifying2fa ? $t('actions.verifying') : $t('security.2fa.setup.verifyAndEnable')}
+          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6 || !twoFaPassword} class="bg-green-600 hover:bg-green-700 text-white font-semibold">
+            {#if isVerifying2fa}
+              <div class="flex items-center gap-2">
+                <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                {$t('actions.verifying')}
+              </div>
+            {:else}
+              {$t('security.2fa.setup.verifyAndEnable')}
+            {/if}
           </Button>
         </div>
       </div>
@@ -2719,51 +2787,76 @@
   <!-- 2FA Action Prompt Modal -->
   {#if show2faPromptModal}
     <div
-      class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
       role="button"
       tabindex="0"
       on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
       on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { show2faPromptModal = false; actionToConfirm = null; } }}
     >
       <div
-        class="bg-card p-6 rounded-lg shadow-xl w-full max-w-sm text-card-foreground"
+        class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-gray-700"
         on:click|stopPropagation
         role="dialog"
         aria-modal="true"
         tabindex="-1"
         on:keydown={(e) => { if (e.key === 'Escape' ) { show2faPromptModal = false; actionToConfirm = null; } }}
       >
-        <h3 class="text-xl font-semibold mb-2">{$t('security.2fa.prompt.title')}</h3>
-        <p class="text-sm text-muted-foreground mb-4">{$t('security.2fa.prompt.enter_code')}</p>
+        <div class="flex items-center gap-3 mb-4">
+          <div class="bg-blue-100 p-2 rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          </div>
+          <div>
+            <h3 class="text-xl font-bold">{$t('security.2fa.prompt.title')}</h3>
+            <p class="text-sm text-muted-foreground">{$t('security.2fa.prompt.enter_code')}</p>
+          </div>
+        </div>
         
-        <div class="space-y-2">
-          <Label for="totp-action">{$t('security.2fa.prompt.label')}</Label>
-          <Input
-            id="totp-action"
-            type="text"
-            bind:value={totpActionCode}
-            placeholder="123456"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            maxlength={6}
-            autofocus
-          />
-          <Label for="totp-password-action" class="mt-4">{$t('keystore.load.password')}</Label>
-          <Input
-            id="totp-password-action"
-            type="password"
-            bind:value={twoFaPassword}
-            placeholder={$t('placeholders.unlockPassword')}
-          />
+        <div class="space-y-3">
+          <div>
+            <Label for="totp-action" class="text-sm font-semibold">{$t('security.2fa.prompt.label')}</Label>
+            <Input
+              id="totp-action"
+              type="text"
+              bind:value={totpActionCode}
+              placeholder="123456"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength={6}
+              autofocus
+              class="text-center text-lg font-mono tracking-wider mt-1"
+            />
+          </div>
+          <div>
+            <Label for="totp-password-action" class="text-sm font-semibold">{$t('keystore.load.password')}</Label>
+            <Input
+              id="totp-password-action"
+              type="password"
+              bind:value={twoFaPassword}
+              placeholder={$t('placeholders.unlockPassword')}
+              class="mt-1"
+            />
+          </div>
           {#if twoFaErrorMessage}
-            <p class="text-sm text-red-500">{twoFaErrorMessage}</p>
+            <div class="bg-red-50 border-l-4 border-l-red-500 p-3 rounded-lg">
+              <p class="text-sm text-red-700 flex items-center gap-2">
+                <AlertCircle class="h-4 w-4" />
+                {twoFaErrorMessage}
+              </p>
+            </div>
           {/if}
         </div>
 
         <div class="mt-6 flex justify-end gap-2">
           <Button variant="outline" on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}>{$t('actions.cancel')}</Button>
-          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6 || !twoFaPassword}>
-            {isVerifyingAction ? $t('actions.verifying') : $t('actions.confirm')}
+          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6 || !twoFaPassword} class="bg-blue-600 hover:bg-blue-700 text-white font-semibold">
+            {#if isVerifyingAction}
+              <div class="flex items-center gap-2">
+                <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                {$t('actions.verifying')}
+              </div>
+            {:else}
+              {$t('actions.confirm')}
+            {/if}
           </Button>
         </div>
       </div>
