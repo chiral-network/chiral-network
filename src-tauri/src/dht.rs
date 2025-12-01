@@ -4842,16 +4842,9 @@ async fn handle_identify_event(
                         Ok(_) => {
                             info!("Success: Listening on relay address {}: {}", i + 1, addr);
 
-                            // Advertise this circuit address to others
-                            // Format: /ip4/{relay_ip}/tcp/{port}/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}
-                            let external_addr = addr
-                                .clone()
-                                .with(Protocol::P2p(peer_id))
-                                .with(Protocol::P2pCircuit)
-                                .with(Protocol::P2p(*local_peer_id));
-
-                            swarm.add_external_address(external_addr.clone());
-                            info!("✅ Advertising relay circuit address: {}", external_addr);
+                            // Don't manually advertise here - NewListenAddr event will handle it
+                            // This prevents creating nested relay circuits
+                            // libp2p will emit NewListenAddr with the complete circuit address
 
                             success = true;
                             break; // Exit the loop immediately on success
