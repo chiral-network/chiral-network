@@ -1762,7 +1762,7 @@
                     on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showQrCodeModal = false; }}
                   >
                     <div
-                      class="bg-white dark:bg-gray-900 p-8 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md text-center border border-purple-200 dark:border-purple-800 animate-in zoom-in-95 duration-200"
+                      class="bg-white p-8 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md text-center border border-purple-200 animate-in zoom-in-95 duration-200"
                       on:click|stopPropagation
                       role="dialog"
                       tabindex="0"
@@ -1775,11 +1775,11 @@
                           <div class="bg-purple-100 p-2.5 rounded-xl shadow-sm">
                             <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                           </div>
-                          <h3 class="text-2xl font-bold text-gray-900 dark:text-white">{$t('wallet.qrModal.title')}</h3>
+                          <h3 class="text-2xl font-bold text-gray-900">{$t('wallet.qrModal.title')}</h3>
                         </div>
                         <button
                           on:click={() => showQrCodeModal = false}
-                          class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                          class="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-lg hover:bg-gray-100"
                           aria-label="Close"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -1792,15 +1792,16 @@
                       </div>
                       
                       <!-- Address -->
-                      <div class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 mb-6">
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium">Wallet Address</p>
-                        <p class="text-sm text-gray-800 dark:text-gray-200 break-all font-mono leading-relaxed">
+                      <div class="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6">
+                        <p class="text-xs text-gray-500 mb-1 font-medium">Wallet Address</p>
+                        <p class="text-sm text-gray-800 break-all font-mono leading-relaxed">
                           {$etcAccount?.address}
                         </p>
                       </div>
 
                       <Button 
-                        class="w-full font-semibold bg-purple-600 hover:bg-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-200" 
+                        variant="outline"
+                        class="w-full font-semibold hover:bg-gray-100 transition-all duration-200" 
                         on:click={() => showQrCodeModal = false}
                       >
                         {$t('actions.close')}
