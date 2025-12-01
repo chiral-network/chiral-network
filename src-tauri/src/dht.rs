@@ -12,8 +12,10 @@ use x25519_dalek::PublicKey;
 
 /// Merges two FileMetadata instances for the same file uploaded via different protocols.
 /// This preserves all protocol-specific information while keeping the most recent common fields.
-fn merge_file_metadata(existing: crate::dht::models::FileMetadata, new: crate::dht::models::FileMetadata) -> crate::dht::models::FileMetadata {
-
+fn merge_file_metadata(
+    existing: crate::dht::models::FileMetadata,
+    new: crate::dht::models::FileMetadata,
+) -> crate::dht::models::FileMetadata {
     // Keep the most recent metadata as base, but merge protocol-specific fields
     let mut merged = new.clone();
 
@@ -42,11 +44,9 @@ fn merge_file_metadata(existing: crate::dht::models::FileMetadata, new: crate::d
         let mut merged_ed2k = existing_ed2k.clone();
         merged_ed2k.extend(new_ed2k.clone());
         // Remove duplicates based on server_url and file_hash
-        merged_ed2k.sort_by(|a, b| {
-            match a.server_url.cmp(&b.server_url) {
-                std::cmp::Ordering::Equal => a.file_hash.cmp(&b.file_hash),
-                other => other,
-            }
+        merged_ed2k.sort_by(|a, b| match a.server_url.cmp(&b.server_url) {
+            std::cmp::Ordering::Equal => a.file_hash.cmp(&b.file_hash),
+            other => other,
         });
         merged_ed2k.dedup_by(|a, b| a.server_url == b.server_url && a.file_hash == b.file_hash);
         merged.ed2k_sources = Some(merged_ed2k);
@@ -247,13 +247,12 @@ use libp2p::{
         Event as KademliaEvent, GetRecordOk, Mode, PutRecordOk, QueryResult, Record,
     },
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
+    multiaddr::Protocol,
+    noise,
     ping::{self, Behaviour as Ping, Event as PingEvent},
     relay, request_response as rr,
-    multiaddr::Protocol,
-    noise, tcp, yamux,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
-    upnp,
-    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
+    tcp, upnp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
 use rand::rngs::OsRng;
 const EXPECTED_PROTOCOL_VERSION: &str = "/chiral/1.0.0";
@@ -822,7 +821,10 @@ fn merge_dht_metadata(existing: &serde_json::Value, new: &serde_json::Value) -> 
 
         // For single-value fields, prefer the new value if it exists
         for (key, value) in new_obj {
-            if !matches!(key.as_str(), "cids" | "seeders" | "http_sources" | "ftp_sources" | "ed2k_sources" | "trackers") {
+            if !matches!(
+                key.as_str(),
+                "cids" | "seeders" | "http_sources" | "ftp_sources" | "ed2k_sources" | "trackers"
+            ) {
                 merged_obj.insert(key.clone(), value.clone());
             }
         }
@@ -832,13 +834,15 @@ fn merge_dht_metadata(existing: &serde_json::Value, new: &serde_json::Value) -> 
 }
 
 /// Helper function to merge array fields in DHT metadata
-fn merge_array_field(merged: &mut serde_json::Map<String, serde_json::Value>,
-                     new: &serde_json::Map<String, serde_json::Value>,
-                     field_name: &str) {
-    if let (Some(existing_array), Some(new_array)) =
-        (merged.get(field_name).and_then(|v| v.as_array()),
-         new.get(field_name).and_then(|v| v.as_array())) {
-
+fn merge_array_field(
+    merged: &mut serde_json::Map<String, serde_json::Value>,
+    new: &serde_json::Map<String, serde_json::Value>,
+    field_name: &str,
+) {
+    if let (Some(existing_array), Some(new_array)) = (
+        merged.get(field_name).and_then(|v| v.as_array()),
+        new.get(field_name).and_then(|v| v.as_array()),
+    ) {
         let mut combined = existing_array.clone();
         for item in new_array {
             if !combined.contains(item) {
@@ -848,7 +852,10 @@ fn merge_array_field(merged: &mut serde_json::Map<String, serde_json::Value>,
         merged.insert(field_name.to_string(), serde_json::Value::Array(combined));
     } else if let Some(new_array) = new.get(field_name).and_then(|v| v.as_array()) {
         // Only new has this field, use it
-        merged.insert(field_name.to_string(), serde_json::Value::Array(new_array.clone()));
+        merged.insert(
+            field_name.to_string(),
+            serde_json::Value::Array(new_array.clone()),
+        );
     }
     // If only existing has it, keep existing
 }
@@ -2498,18 +2505,18 @@ async fn run_dht_node(
                             Some(DhtCommand::ReBootstrap { sender }) => {
                                 info!("🔄 Re-bootstrapping DHT to discover new peers...");
                                 let initial_peer_count = connected_peers.lock().await.len();
-                                
+
                                 // Trigger Kademlia bootstrap
                                 match swarm.behaviour_mut().kademlia.bootstrap() {
                                     Ok(query_id) => {
                                         info!("✅ Re-bootstrap initiated (query_id: {:?})", query_id);
-                                        
+
                                         // Update metrics
                                         {
                                             let mut m = metrics.lock().await;
                                             m.last_bootstrap = Some(SystemTime::now());
                                         }
-                                        
+
                                         // Wait a bit for bootstrap to find peers
                                         tokio::spawn(async move {
                                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -2532,18 +2539,18 @@ async fn run_dht_node(
                             Some(DhtCommand::HealthCheck { min_peers, auto_recover, sender }) => {
                                 let peer_count = connected_peers.lock().await.len();
                                 let m = metrics.lock().await;
-                                
+
                                 let last_bootstrap_secs_ago = m.last_bootstrap.map(|t| {
                                     SystemTime::now()
                                         .duration_since(t)
                                         .map(|d| d.as_secs())
                                         .unwrap_or(0)
                                 });
-                                
+
                                 let healthy = peer_count >= min_peers;
                                 let bootstrap_failures = m.bootstrap_failures;
                                 drop(m);
-                                
+
                                 let recommendation = if !healthy {
                                     if peer_count == 0 {
                                         Some("No peers connected. Check network connectivity and bootstrap nodes.".to_string())
@@ -2556,9 +2563,9 @@ async fn run_dht_node(
                                 } else {
                                     None
                                 };
-                                
+
                                 let mut recovery_triggered = false;
-                                
+
                                 // Auto-recover if unhealthy and requested
                                 if !healthy && auto_recover {
                                     info!("🔄 Auto-recovery: triggering re-bootstrap (peers: {}, min: {})", peer_count, min_peers);
@@ -2568,7 +2575,7 @@ async fn run_dht_node(
                                         m.last_bootstrap = Some(SystemTime::now());
                                     }
                                 }
-                                
+
                                 let _ = sender.send(DhtHealthStatus {
                                     healthy,
                                     peer_count,
@@ -3165,7 +3172,7 @@ async fn run_dht_node(
                                 if let Ok(mut m) = metrics.try_lock() {
                                     m.last_success = Some(SystemTime::now());
                                 }
-                                
+
                                 // Log connection type for diagnostics
                                 if is_relay {
                                     info!("✅ Connected to {} via relay (connection #{})", peer_id, num_established);
@@ -3174,7 +3181,7 @@ async fn run_dht_node(
                                     info!("✅ Connected to {} via direct connection (connection #{})", peer_id, num_established);
                                 }
                                 info!("   Total connected peers: {}", peers_count);
-                                
+
                                 let _ = event_tx
                                     .send(DhtEvent::PeerConnected {
                                         peer_id: peer_id.to_string(),
@@ -3314,8 +3321,16 @@ async fn run_dht_node(
                                         if let Ok(mut m) = metrics.try_lock() {
                                             m.record_listen_addr(&address);
                                         }
-                                        swarm.add_external_address(address.clone());
-                                        info!("✅ Advertising reachable address: {}", address);
+
+                                        // Only advertise if it doesn't already contain p2p-circuit
+                                        // This prevents advertising nested relay circuits
+                                        let circuit_count = address.iter().filter(|p| matches!(p, Protocol::P2pCircuit)).count();
+                                        if circuit_count <= 1 {
+                                            swarm.add_external_address(address.clone());
+                                            info!("✅ Advertising reachable address: {}", address);
+                                        } else {
+                                            debug!("Skipping nested relay circuit address: {}", address);
+                                        }
                                     }
                                     // Allow public addresses, reject private
                                 }
@@ -3822,7 +3837,6 @@ fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
     None
 }
 
-
 fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4073,7 +4087,6 @@ async fn handle_kademlia_event(
                                 return; // End processing for this event here.
                             }
 
-
                             // Construct FileMetadata from the JSON
                             if let (
                                 Some(file_hash),
@@ -4306,7 +4319,10 @@ async fn handle_kademlia_event(
                                         .get("is_root")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(true),
-                                    price: metadata_json.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                    price: metadata_json
+                                        .get("price")
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.0),
                                     http_sources: metadata_json.get("http_sources").and_then(|v| {
                                         serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(
                                             v.clone(),
@@ -4326,7 +4342,6 @@ async fn handle_kademlia_event(
                                     ..Default::default()
                                 };
 
-
                                 let notify_metadata = metadata.clone();
                                 let file_hash = notify_metadata.merkle_root.clone();
 
@@ -4335,9 +4350,13 @@ async fn handle_kademlia_event(
                                 let mut cache = file_metadata_cache.lock().await;
                                 if let Some(existing) = cache.get(&file_hash) {
                                     // Merge if both exist to preserve any local-only fields
-                                    let merged = merge_file_metadata(existing.clone(), metadata.clone());
+                                    let merged =
+                                        merge_file_metadata(existing.clone(), metadata.clone());
                                     cache.insert(file_hash.clone(), merged);
-                                    info!("Merged DHT discovery with existing cache for file {}", file_hash);
+                                    info!(
+                                        "Merged DHT discovery with existing cache for file {}",
+                                        file_hash
+                                    );
                                 } else {
                                     // No existing cache entry, just store DHT data
                                     cache.insert(file_hash.clone(), metadata.clone());
@@ -4372,12 +4391,10 @@ async fn handle_kademlia_event(
                             return; // End processing for this event here.
                         }
 
-
                         // No additional records; do nothing here for other queries
                     }
                 },
                 QueryResult::GetRecord(Err(err)) => {
-
                     warn!("GetRecord error: {:?}", err);
 
                     // Check if this was a failed DHT value query
@@ -4479,14 +4496,17 @@ async fn handle_kademlia_event(
                             }
 
                             // Try to connect using parallel address strategy for better success rate
-                            let reachable_addrs: Vec<_> = peer_info.addrs.iter()
+                            let reachable_addrs: Vec<_> = peer_info
+                                .addrs
+                                .iter()
                                 .filter(|addr| ma_plausibly_reachable(addr))
                                 .collect();
 
                             if !reachable_addrs.is_empty() {
                                 info!(
                                     "Attempting {} parallel connections to peer {}",
-                                    reachable_addrs.len(), peer_info.peer_id
+                                    reachable_addrs.len(),
+                                    peer_info.peer_id
                                 );
 
                                 // Add all addresses to Kademlia routing table first
@@ -4803,6 +4823,16 @@ async fn handle_identify_event(
                 for i in indices {
                     let addr = &reachable_addrs[i];
 
+                    // Only process base addresses (no circuit relay protocols)
+                    // This prevents nested relay circuits
+                    if addr.iter().any(|p| matches!(p, Protocol::P2pCircuit)) {
+                        debug!(
+                            "Skipping relay address that already contains p2p-circuit: {}",
+                            addr
+                        );
+                        continue;
+                    }
+
                     let relay_addr = addr
                         .clone()
                         .with(Protocol::P2p(peer_id))
@@ -4813,9 +4843,15 @@ async fn handle_identify_event(
                             info!("Success: Listening on relay address {}: {}", i + 1, addr);
 
                             // Advertise this circuit address to others
-                            swarm.add_external_address(
-                                relay_addr.with(Protocol::P2p(*local_peer_id)),
-                            );
+                            // Format: /ip4/{relay_ip}/tcp/{port}/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}
+                            let external_addr = addr
+                                .clone()
+                                .with(Protocol::P2p(peer_id))
+                                .with(Protocol::P2pCircuit)
+                                .with(Protocol::P2p(*local_peer_id));
+
+                            swarm.add_external_address(external_addr.clone());
+                            info!("✅ Advertising relay circuit address: {}", external_addr);
 
                             success = true;
                             break; // Exit the loop immediately on success
@@ -4888,8 +4924,7 @@ async fn handle_identify_event(
             //     }
             // }
         }
-        IdentifyEvent::Pushed { peer_id, info, .. } => {
-        }
+        IdentifyEvent::Pushed { peer_id, info, .. } => {}
         IdentifyEvent::Sent { peer_id, .. } => {
             debug!("Sent identify info to {}", peer_id);
         }
@@ -5060,8 +5095,9 @@ async fn handle_dcutr_event(
             metrics_guard.dcutr_hole_punch_successes += 1;
             metrics_guard.last_dcutr_success = Some(SystemTime::now());
             let success_rate = if metrics_guard.dcutr_hole_punch_attempts > 0 {
-                (metrics_guard.dcutr_hole_punch_successes as f64 
-                    / metrics_guard.dcutr_hole_punch_attempts as f64 * 100.0)
+                (metrics_guard.dcutr_hole_punch_successes as f64
+                    / metrics_guard.dcutr_hole_punch_attempts as f64
+                    * 100.0)
             } else {
                 0.0
             };
@@ -5084,14 +5120,15 @@ async fn handle_dcutr_event(
             metrics_guard.dcutr_hole_punch_failures += 1;
             metrics_guard.last_dcutr_failure = Some(SystemTime::now());
             let success_rate = if metrics_guard.dcutr_hole_punch_attempts > 0 {
-                (metrics_guard.dcutr_hole_punch_successes as f64 
-                    / metrics_guard.dcutr_hole_punch_attempts as f64 * 100.0)
+                (metrics_guard.dcutr_hole_punch_successes as f64
+                    / metrics_guard.dcutr_hole_punch_attempts as f64
+                    * 100.0)
             } else {
                 0.0
             };
             let attempts = metrics_guard.dcutr_hole_punch_attempts;
             let failures = metrics_guard.dcutr_hole_punch_failures;
-            
+
             // Only log as warning if this is a repeated failure
             if failures % 3 == 0 {
                 warn!(
@@ -5130,10 +5167,10 @@ async fn handle_upnp_event(
     match event {
         upnp::Event::NewExternalAddr(addr) => {
             info!("🌐 UPnP: Successfully mapped external address: {}", addr);
-            
+
             // Add the external address to the swarm
             swarm.add_external_address(addr.clone());
-            
+
             // Notify the UI
             let _ = event_tx
                 .send(DhtEvent::Info(format!(
@@ -5144,7 +5181,7 @@ async fn handle_upnp_event(
         }
         upnp::Event::ExpiredExternalAddr(addr) => {
             warn!("⏰ UPnP: External address expired: {}", addr);
-            
+
             let _ = event_tx
                 .send(DhtEvent::Warning(format!(
                     "UPnP port mapping expired: {}",
@@ -5157,10 +5194,10 @@ async fn handle_upnp_event(
             warn!("    - Make sure your router supports UPnP/IGD");
             warn!("    - Check if UPnP is enabled in router settings");
             warn!("    - Falling back to relay connections");
-            
+
             let _ = event_tx
                 .send(DhtEvent::Info(
-                    "UPnP not available - using relay for NAT traversal".to_string()
+                    "UPnP not available - using relay for NAT traversal".to_string(),
                 ))
                 .await;
         }
@@ -5168,10 +5205,10 @@ async fn handle_upnp_event(
             warn!("⚠️  UPnP: Gateway is not routable");
             warn!("    - Your router may be behind another NAT (carrier-grade NAT)");
             warn!("    - Direct connections may not be possible");
-            
+
             let _ = event_tx
                 .send(DhtEvent::Warning(
-                    "UPnP gateway not routable - behind CGNAT?".to_string()
+                    "UPnP gateway not routable - behind CGNAT?".to_string(),
                 ))
                 .await;
         }
@@ -6434,7 +6471,10 @@ impl DhtService {
         {
             let cache = self.file_metadata_cache.lock().await;
             if let Some(metadata) = cache.get(&file_hash) {
-                info!("Found file {} in local cache, skipping DHT query", file_hash);
+                info!(
+                    "Found file {} in local cache, skipping DHT query",
+                    file_hash
+                );
                 return Ok(Some(metadata.clone()));
             }
         }
@@ -6561,7 +6601,7 @@ impl DhtService {
             .map(|peer_id| peer_id.to_string())
             .collect()
     }
-    
+
     /// Trigger a re-bootstrap to discover new peers
     /// Returns the number of new peers discovered
     pub async fn re_bootstrap(&self) -> Result<usize, String> {
@@ -6570,22 +6610,23 @@ impl DhtService {
             .send(DhtCommand::ReBootstrap { sender: tx })
             .await
             .map_err(|e| format!("Failed to send re-bootstrap command: {}", e))?;
-        
+
         rx.await
             .map_err(|e| format!("Re-bootstrap response error: {}", e))?
     }
-    
+
     /// Check DHT health and optionally trigger automatic recovery
-    /// 
+    ///
     /// # Arguments
     /// * `min_peers` - Minimum number of peers required for healthy status
     /// * `auto_recover` - Whether to automatically trigger re-bootstrap if unhealthy
-    /// 
+    ///
     /// # Returns
     /// Health status including peer count and recommendations
     pub async fn check_health(&self, min_peers: usize, auto_recover: bool) -> DhtHealthStatus {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx
+        if self
+            .cmd_tx
             .send(DhtCommand::HealthCheck {
                 min_peers,
                 auto_recover,
@@ -6615,15 +6656,15 @@ impl DhtService {
             }
         }
     }
-    
+
     /// Check if the DHT is healthy (has minimum required peers)
     pub async fn is_healthy(&self, min_peers: usize) -> bool {
         let peer_count = self.connected_peers.lock().await.len();
         peer_count >= min_peers
     }
-    
+
     /// Start a background health monitoring task
-    /// 
+    ///
     /// This task periodically checks DHT health and triggers recovery if needed.
     /// Returns a handle to cancel the monitoring task.
     pub fn start_health_monitor(
@@ -6632,36 +6673,41 @@ impl DhtService {
         min_peers: usize,
     ) -> tokio::task::JoinHandle<()> {
         let dht_service = Arc::clone(self);
-        
+
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(
-                std::time::Duration::from_secs(check_interval_secs)
-            );
-            
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
+
             // Skip the first tick (which fires immediately)
             interval.tick().await;
-            
+
             loop {
                 interval.tick().await;
-                
+
                 let peer_count = dht_service.connected_peers.lock().await.len();
-                
+
                 if peer_count < min_peers {
                     warn!(
                         "DHT health check: peer count ({}) below minimum ({}), triggering recovery",
                         peer_count, min_peers
                     );
-                    
+
                     // Check full health and trigger auto-recovery
                     let status = dht_service.check_health(min_peers, true).await;
-                    
+
                     if status.recovery_triggered {
                         info!("DHT recovery triggered, waiting for bootstrap to complete...");
                     } else if !status.healthy {
-                        warn!("DHT recovery was not triggered: {:?}", status.recommendation);
+                        warn!(
+                            "DHT recovery was not triggered: {:?}",
+                            status.recommendation
+                        );
                     }
                 } else {
-                    debug!("DHT health check: {} peers connected (min: {})", peer_count, min_peers);
+                    debug!(
+                        "DHT health check: {} peers connected (min: {})",
+                        peer_count, min_peers
+                    );
                 }
             }
         })
@@ -6846,9 +6892,7 @@ impl DhtService {
         DhtMetricsSnapshot::from(metrics, peer_count)
     }
 
-    pub async fn autorelay_history(
-        &self,
-    ) -> (Option<SystemTime>, Option<SystemTime>) {
+    pub async fn autorelay_history(&self) -> (Option<SystemTime>, Option<SystemTime>) {
         let metrics = self.metrics.lock().await;
         (
             metrics.last_autorelay_enabled_at.clone(),
