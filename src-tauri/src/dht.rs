@@ -4478,50 +4478,68 @@ async fn handle_kademlia_event(
                                 continue;
                             }
 
-                            // Try to connect using parallel address strategy for better success rate
-                            let reachable_addrs: Vec<_> = peer_info.addrs.iter()
+                            // Sort addresses by hole-punch score (direct connections first)
+                            let mut scored_addrs: Vec<_> = peer_info.addrs.iter()
                                 .filter(|addr| ma_plausibly_reachable(addr))
+                                .map(|addr| (addr, score_address_for_holepunch(addr)))
                                 .collect();
+                            
+                            // Sort by score descending (best addresses first)
+                            scored_addrs.sort_by(|a, b| b.1.cmp(&a.1));
 
-                            if !reachable_addrs.is_empty() {
+                            if !scored_addrs.is_empty() {
                                 info!(
-                                    "Attempting {} parallel connections to peer {}",
-                                    reachable_addrs.len(), peer_info.peer_id
+                                    "Attempting {} connections to peer {} (prioritizing direct paths)",
+                                    scored_addrs.len(), peer_info.peer_id
                                 );
 
-                                // Add all addresses to Kademlia routing table first
-                                for addr in &reachable_addrs {
+                                // Add all addresses to Kademlia routing table
+                                for (addr, _score) in &scored_addrs {
                                     swarm
                                         .behaviour_mut()
                                         .kademlia
                                         .add_address(&peer_info.peer_id, (*addr).clone());
                                 }
 
-                                // Dial all reachable addresses in parallel - libp2p will use fastest
+                                // Try direct addresses first (high score), relay last (low score)
                                 let mut dial_success = false;
-                                for addr in reachable_addrs {
+                                for (addr, score) in scored_addrs {
+                                    let is_relay = addr.iter().any(|p| matches!(p, Protocol::P2pCircuit));
+                                    
                                     match swarm.dial(addr.clone()) {
                                         Ok(_) => {
-                                            debug!(
-                                                "Initiated connection to peer {} at {}",
-                                                peer_info.peer_id, addr
-                                            );
+                                            if is_relay {
+                                                debug!(
+                                                    "Initiated relay connection to peer {} at {} (score: {})",
+                                                    peer_info.peer_id, addr, score
+                                                );
+                                            } else {
+                                                info!(
+                                                    "✅ Initiated direct connection to peer {} at {} (score: {})",
+                                                    peer_info.peer_id, addr, score
+                                                );
+                                            }
                                             connection_attempts += 1;
                                             dial_success = true;
+                                            
+                                            // Try best 3 addresses in parallel for faster connection
+                                            if connection_attempts >= 3 {
+                                                break;
+                                            }
                                         }
                                         Err(e) => {
                                             debug!(
-                                                "Failed to dial peer {} at {}: {}",
-                                                peer_info.peer_id, addr, e
+                                                "Failed to dial peer {} at {} (score: {}): {}",
+                                                peer_info.peer_id, addr, score, e
                                             );
                                         }
                                     }
                                 }
 
-                                if dial_success {
+                                if !dial_success {
                                     info!(
-                                        "✅ Initiated {} connection attempts to peer {}",
-                                        connection_attempts, peer_info.peer_id
+                                        "Could not initiate any connections to peer {}",
+                                        peer_info.peer_id
                                     );
                                 }
                             } else {
@@ -7547,6 +7565,68 @@ fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
         return !v4.is_private();
     }
     false
+}
+
+/// Score addresses for connection priority (higher score = better for hole punching)
+/// This helps establish direct connections without relay by prioritizing:
+/// 1. Direct TCP/UDP connections over relay circuits
+/// 2. Public IPs over NAT-traversed addresses
+/// 3. TCP over QUIC (more reliable for initial hole punch)
+fn score_address_for_holepunch(ma: &Multiaddr) -> i32 {
+    let mut score = 0;
+    let mut has_ip = false;
+    let mut is_relay = false;
+    let mut is_public = false;
+    let mut protocol_bonus = 0;
+
+    for protocol in ma.iter() {
+        match protocol {
+            // Relay circuit = lowest priority (we want direct!)
+            Protocol::P2pCircuit => {
+                is_relay = true;
+                score -= 100;
+            }
+            // Public IP = high priority
+            Protocol::Ip4(v4) => {
+                has_ip = true;
+                if !v4.is_private() && !v4.is_loopback() {
+                    is_public = true;
+                    score += 50;
+                } else if v4.is_private() {
+                    // Private IPs can work if both peers are behind same NAT
+                    score += 10;
+                }
+            }
+            Protocol::Ip6(v6) => {
+                has_ip = true;
+                if !v6.is_loopback() {
+                    is_public = true;
+                    score += 45; // IPv6 slightly lower than IPv4 for compatibility
+                }
+            }
+            // TCP = most reliable for hole punching
+            Protocol::Tcp(_) => {
+                protocol_bonus = 30;
+            }
+            // UDP/QUIC = good but TCP is more reliable for initial punch
+            Protocol::Udp(_) => {
+                protocol_bonus = 20;
+            }
+            Protocol::QuicV1 => {
+                protocol_bonus = 25;
+            }
+            _ => {}
+        }
+    }
+
+    score += protocol_bonus;
+
+    // Bonus for having direct reachable address
+    if has_ip && !is_relay && is_public {
+        score += 20; // Direct public address = best for hole punching
+    }
+
+    score
 }
 
 /// Parsing multiaddr from error string is heuristic and may not be reliable
