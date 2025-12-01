@@ -20,6 +20,7 @@ pub mod dht;
 pub mod file_transfer;
 pub mod ftp_downloader;
 pub mod peer_selection;
+pub mod peer_cache;
 pub mod webrtc_service;
 
 // Required modules for encryption and keystore functionality

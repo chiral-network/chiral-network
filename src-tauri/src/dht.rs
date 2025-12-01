@@ -6754,6 +6754,193 @@ impl DhtService {
         }
     }
 
+    /// Save peer cache to disk for faster startup on next run
+    pub async fn save_peer_cache(&self) -> Result<(), String> {
+        use crate::peer_cache::{get_peer_cache_path, PeerCache, PeerCacheEntry};
+        
+        info!("Saving peer cache...");
+        
+        // Get peer metrics from peer selection service
+        let peer_selection = self.peer_selection.lock().await;
+        let metrics_list = peer_selection.get_all_metrics();
+        
+        // Convert metrics to cache entries
+        let mut cache_entries: Vec<PeerCacheEntry> = Vec::new();
+        
+        for metrics in metrics_list.iter() {
+            // Only cache peers we've actually connected to
+            if metrics.transfer_count == 0 {
+                continue;
+            }
+            
+            // Check if peer supports relay by looking at protocols
+            let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
+            let supports_relay = metrics.protocols.iter().any(|p| p == hop_proto);
+            
+            let entry = PeerCacheEntry::from_metrics(
+                metrics.peer_id.clone(),
+                metrics.address.clone(),
+                metrics.transfer_count as u32,
+                metrics.successful_transfers as u32,
+                metrics.failed_transfers as u32,
+                metrics.total_bytes_transferred,
+                metrics.latency_ms,
+                metrics.reliability_score,
+                metrics.last_seen,
+                false, // Bootstrap status not currently tracked in PeerMetrics
+                supports_relay,
+            );
+            
+            cache_entries.push(entry);
+        }
+        
+        drop(peer_selection); // Release lock
+        
+        if cache_entries.is_empty() {
+            info!("No peers to cache (no active connections)");
+            return Ok(());
+        }
+        
+        // Create cache and apply filters
+        let mut cache = PeerCache::from_peers(cache_entries);
+        cache.filter_stale_peers();
+        cache.sort_and_limit();
+        
+        // Get cache file path
+        let cache_path = get_peer_cache_path()?;
+        
+        // Save to file
+        cache.save_to_file(&cache_path).await?;
+        
+        info!("Successfully saved {} peers to cache at {:?}", cache.peers.len(), cache_path);
+        Ok(())
+    }
+    
+    /// Load peer cache from disk and attempt to reconnect to cached peers
+    pub async fn load_peer_cache(&self) -> Result<Vec<crate::peer_cache::PeerCacheEntry>, String> {
+        use crate::peer_cache::{get_peer_cache_path, PeerCache};
+        
+        info!("Loading peer cache...");
+        
+        // Get cache file path
+        let cache_path = get_peer_cache_path()?;
+        
+        // Try to load cache
+        let mut cache = match PeerCache::load_from_file(&cache_path).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to load peer cache: {}", e);
+                // Delete corrupted cache file
+                let _ = PeerCache::delete_file(&cache_path).await;
+                return Ok(Vec::new());
+            }
+        };
+        
+        // Log cache statistics before filtering
+        let initial_stats = cache.get_stats();
+        info!(
+            "Loaded cache: {} peers, {} relay-capable, avg reliability: {:.2}",
+            initial_stats.total_peers,
+            initial_stats.relay_capable_peers,
+            initial_stats.average_reliability
+        );
+        
+        // Filter stale peers
+        cache.filter_stale_peers();
+        
+        if cache.peers.is_empty() {
+            info!("No valid cached peers found after filtering");
+            return Ok(Vec::new());
+        }
+        
+        // Log final statistics
+        let final_stats = cache.get_stats();
+        info!(
+            "After filtering: {} valid peers, {} relay-capable, avg reliability: {:.2}",
+            final_stats.total_peers,
+            final_stats.relay_capable_peers,
+            final_stats.average_reliability
+        );
+        
+        Ok(cache.peers)
+    }
+    
+    /// Reconnect to cached peers in parallel
+    pub async fn reconnect_cached_peers(&self, cached_peers: Vec<crate::peer_cache::PeerCacheEntry>) {
+        use futures::future::join_all;
+        
+        if cached_peers.is_empty() {
+            return;
+        }
+        
+        info!("Attempting to reconnect to {} cached peers...", cached_peers.len());
+        
+        // Prioritize relay-capable peers and high-reliability peers
+        let mut sorted_peers = cached_peers;
+        sorted_peers.sort_by(|a, b| {
+            // First by relay support (relay-capable first)
+            b.supports_relay.cmp(&a.supports_relay)
+                // Then by reliability score
+                .then_with(|| b.reliability_score.partial_cmp(&a.reliability_score).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        
+        let relay_count = sorted_peers.iter().filter(|p| p.supports_relay).count();
+        info!("Cache contains {} relay-capable peers", relay_count);
+        
+        // Collect all addresses to try
+        let mut addresses_to_try = Vec::new();
+        for peer in sorted_peers.iter() {
+            for addr in peer.addresses.iter() {
+                addresses_to_try.push(addr.clone());
+            }
+        }
+        
+        // Create connection tasks for each address
+        let connection_tasks: Vec<_> = addresses_to_try
+            .into_iter()
+            .map(|addr| {
+                let cmd_tx = self.cmd_tx.clone();
+                async move {
+                    match tokio::time::timeout(
+                        Duration::from_secs(5),
+                        cmd_tx.send(DhtCommand::ConnectPeer(addr.clone()))
+                    ).await {
+                        Ok(Ok(_)) => {
+                            debug!("Successfully reconnected to cached peer: {}", addr);
+                            true
+                        }
+                        Ok(Err(e)) => {
+                            debug!("Failed to send connect command for {}: {}", addr, e);
+                            false
+                        }
+                        Err(_) => {
+                            debug!("Timeout reconnecting to {}", addr);
+                            false
+                        }
+                    }
+                }
+            })
+            .collect();
+        
+        // Execute all connection attempts in parallel
+        let results = join_all(connection_tasks).await;
+        
+        let successful = results.iter().filter(|&&r| r).count();
+        let total = results.len();
+        let hit_rate = if total > 0 {
+            (successful as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        info!(
+            "Peer cache reconnection: {}/{} addresses ({:.1}% hit rate)",
+            successful,
+            total,
+            hit_rate
+        );
+    }
+
     /// Shutdown the Dht service
     pub async fn shutdown(&self) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
