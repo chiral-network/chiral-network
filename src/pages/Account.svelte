@@ -2544,17 +2544,17 @@
           </div>
 
           <div>
-            <Label class="text-xs mb-2 block">{$t('blacklist.quickReasons.label')}</Label>
+            <Label class="text-xs mb-2 block font-semibold">{$t('blacklist.quickReasons.label')}</Label>
             <div class="flex flex-wrap gap-2">
-            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harassment'), $t('blacklist.quickReasons.scam')] as reason}
-              <button
-                type="button"
-                  class="px-3 py-1.5 text-xs font-medium border rounded-full transition-all {newBlacklistEntry.reason === reason ? 'bg-red-600 text-white border-red-600' : 'bg-white border-gray-300 hover:border-red-300 hover:bg-red-50'}"
-                on:click={() => newBlacklistEntry.reason = reason}
-              >
-                {reason}
-              </button>
-            {/each}
+              {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harassment'), $t('blacklist.quickReasons.scam')] as reason}
+                <button
+                  type="button"
+                  class="px-3 py-1.5 text-xs font-semibold border-2 rounded-full transition-all shadow-sm {newBlacklistEntry.reason === reason ? 'bg-red-600 text-white border-red-600 shadow-md scale-105' : 'bg-white border-gray-300 hover:border-red-400 hover:bg-red-50 hover:shadow-md hover:scale-105'}"
+                  on:click={() => newBlacklistEntry.reason = reason}
+                >
+                  {reason}
+                </button>
+              {/each}
             </div>
           </div>
 
@@ -2583,18 +2583,18 @@
           
           <div class="flex gap-2">
             <div class="relative">
-              <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
               </svg>
               <Input
                 bind:value={blacklistSearch}
                 placeholder={$t('placeholders.searchBlacklist')}
-                class="w-96 text-sm pl-10 pr-10"
+                class="w-96 text-sm pl-10 pr-10 border-gray-300 focus:border-red-400 focus:ring-red-400"
               />
               {#if blacklistSearch}
                 <button
                   type="button"
-                  class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors"
+                  class="absolute right-2 top-1/2 -translate-y-1/2 text-red-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition-colors"
                   on:click={clearBlacklistSearch}
                   title={$t('tooltips.clearSearch')}
                   aria-label="Clear search"
@@ -2609,11 +2609,11 @@
                 size="sm" 
                 variant="outline" 
                 on:click={clearAllBlacklist}
-                class="bg-red-50 text-red-700 border-red-300 hover:bg-red-100 hover:border-red-400 font-semibold"
+                class="bg-red-50 text-red-700 border-red-300 hover:bg-red-100 hover:border-red-400 font-semibold shadow-sm"
               >
-                <div class="flex items-center gap-1">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="m19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                {$t('blacklist.actions.clearAll')}
+                <div class="flex items-center gap-1.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="m19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                  {$t('blacklist.actions.clearAll')}
                 </div>
               </Button>
             {/if}
@@ -2621,14 +2621,17 @@
         </div>
 
         {#if filteredBlacklist.length === 0 && $blacklist.length === 0}
-          <div class="text-center py-8 text-muted-foreground border-2 border-dashed border-gray-200 rounded-lg">
-            <BadgeX class="h-12 w-12 mx-auto mb-2 opacity-20" />
-            <p class="font-medium">{$t('blacklist.list.emptyTitle')}</p>
-            <p class="text-sm mt-1">{$t('blacklist.list.emptyDesc')}</p>
+          <div class="text-center py-8 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
+            <div class="bg-gray-200 rounded-full p-3 w-16 h-16 mx-auto mb-3 flex items-center justify-center">
+              <BadgeX class="h-8 w-8 text-gray-400" />
+            </div>
+            <p class="font-semibold text-gray-700">{$t('blacklist.list.emptyTitle')}</p>
+            <p class="text-sm mt-1 text-gray-500">{$t('blacklist.list.emptyDesc')}</p>
           </div>
         {:else if filteredBlacklist.length === 0 && blacklistSearch}
-          <div class="text-center py-6 text-muted-foreground">
-            <p>{$t('blacklist.list.noMatch', { values: { q: blacklistSearch } })}</p>
+          <div class="text-center py-6 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-yellow-600 mx-auto mb-2"><circle cx="12" cy="12" r="10"></circle><path d="m16 16-4-4-4 4"></path><path d="m8 8 4 4 4-4"></path></svg>
+            <p class="text-yellow-800 font-medium">{$t('blacklist.list.noMatch', { values: { q: blacklistSearch } })}</p>
           </div>
         {:else}
           <div class="space-y-2 max-h-64 overflow-y-auto">
@@ -2644,36 +2647,39 @@
                       <p class="text-sm font-mono font-semibold text-red-900 truncate">
                       {entry.chiral_address}
                     </p>
-                    <button
-                      type="button"
-                        class="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-red-200 rounded flex-shrink-0"
-                      on:click={() => copyToClipboard(entry.chiral_address)}
-                      title={$t('blacklist.actions.copyAddress')}
+                      <button
+                        type="button"
+                        class="opacity-0 group-hover:opacity-100 transition-all p-1.5 bg-red-100 hover:bg-red-200 border border-red-300 hover:border-red-400 rounded flex-shrink-0 shadow-sm hover:shadow-md"
+                        on:click={() => copyToClipboard(entry.chiral_address)}
+                        title={$t('blacklist.actions.copyAddress')}
                         aria-label="Copy address"
-                    >
+                      >
                         <Copy class="h-3.5 w-3.5 text-red-700" />
-                    </button>
+                      </button>
                   </div>
 
-                  {#if editingEntry === index}
-                      <div class="space-y-2 bg-white p-3 rounded-lg border border-red-200">
-                      <Input
-                        bind:value={editReason}
-                        placeholder={$t('placeholders.reason')}
-                        maxlength={200}
-                          class="text-sm"
-                        on:keydown={handleEditKeydown}
-                        autofocus
-                      />
-                      <div class="flex gap-2">
-                          <Button size="sm" on:click={saveEdit} disabled={!editReason.trim()} class="bg-green-600 hover:bg-green-700 text-white">
-                          {$t('actions.save')}
-                        </Button>
-                        <Button size="sm" variant="outline" on:click={cancelEdit}>
-                          {$t('actions.cancel')}
-                        </Button>
+                    {#if editingEntry === index}
+                      <div class="space-y-2 bg-white p-3 rounded-lg border-2 border-blue-300 shadow-md">
+                        <Input
+                          bind:value={editReason}
+                          placeholder={$t('placeholders.reason')}
+                          maxlength={200}
+                          class="text-sm border-blue-300 focus:border-blue-500 focus:ring-blue-500"
+                          on:keydown={handleEditKeydown}
+                          autofocus
+                        />
+                        <div class="flex gap-2">
+                          <Button size="sm" on:click={saveEdit} disabled={!editReason.trim()} class="bg-green-600 hover:bg-green-700 text-white font-semibold">
+                            <div class="flex items-center gap-1">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                              {$t('actions.save')}
+                            </div>
+                          </Button>
+                          <Button size="sm" variant="outline" on:click={cancelEdit} class="hover:bg-gray-100">
+                            {$t('actions.cancel')}
+                          </Button>
+                        </div>
                       </div>
-                    </div>
                   {:else}
                       <div class="bg-red-100 border border-red-200 rounded-md px-3 py-2 mb-2">
                         <p class="text-xs font-medium text-red-800"><span class="font-semibold">Reason:</span> {entry.reason}</p>
@@ -2692,9 +2698,12 @@
                       size="sm" 
                       variant="outline"
                       on:click={() => startEditEntry(index)}
-                      class="opacity-0 group-hover:opacity-100 transition-opacity hover:bg-blue-50 hover:border-blue-300"
+                      class="opacity-0 group-hover:opacity-100 transition-all bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100 hover:border-blue-400 font-medium"
                     >
-                      {$t('actions.edit')}
+                      <div class="flex items-center gap-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path><path d="m15 5 4 4"></path></svg>
+                        {$t('actions.edit')}
+                      </div>
                     </Button>
                   {/if}
                   
@@ -2703,9 +2712,12 @@
                     variant="destructive"
                     on:click={() => removeBlacklistEntry(entry.chiral_address)}
                     disabled={editingEntry === index}
-                    class="bg-red-600 hover:bg-red-700 font-semibold"
+                    class="bg-red-600 hover:bg-red-700 text-white font-semibold shadow-sm"
                   >
-                    {$t('actions.remove')}
+                    <div class="flex items-center gap-1">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                      {$t('actions.remove')}
+                    </div>
                   </Button>
                 </div>
               </div>
@@ -2713,8 +2725,8 @@
           </div>
           
           {#if $blacklist.length > 5}
-            <div class="text-center mt-3">
-              <p class="text-xs text-muted-foreground">
+            <div class="text-center mt-3 p-2 bg-gray-100 rounded-lg border border-gray-200">
+              <p class="text-xs text-gray-700 font-medium">
                 {$t('blacklist.list.showing', { values: { shown: filteredBlacklist.length, total: $blacklist.length } })}
               </p>
             </div>
@@ -2723,18 +2735,18 @@
       </div>
 
         <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-          <div class="flex gap-2">
+          <div class="grid grid-cols-2 gap-3">
             {#if $blacklist.length > 0}
             <Button 
               variant="outline" 
               size="sm" 
               on:click={exportBlacklist}
-              class="flex-1 hover:bg-green-50 hover:border-green-300 hover:text-green-700 font-medium"
+              class="bg-green-50 text-green-700 border-green-300 hover:bg-green-100 hover:border-green-400 font-semibold shadow-sm"
               disabled={$blacklist.length === 0}
               title={$t('blacklist.actions.exportTitle', { values: { count: $blacklist.length } })}
             >
-              <div class="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <div class="flex items-center justify-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                 {$t('blacklist.actions.export')} ({$blacklist.length})
               </div>
             </Button>
@@ -2743,11 +2755,11 @@
               variant="outline" 
               size="sm" 
               on:click={() => importFileInput.click()}
-              class="flex-1 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 font-medium"
+              class="{$blacklist.length === 0 ? 'col-span-2' : ''} bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100 hover:border-blue-400 font-semibold shadow-sm"
             >
-              <div class="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-              {$t('blacklist.actions.import')}
+              <div class="flex items-center justify-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                {$t('blacklist.actions.import')}
               </div>
             </Button>
           </div>
