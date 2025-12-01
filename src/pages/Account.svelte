@@ -1509,19 +1509,19 @@
 
 </script>
 
-<div class="space-y-6">
-  <div>
-    <h1 class="text-3xl font-bold">{$t('account.title')}</h1>
-    <p class="text-muted-foreground mt-2">{$t('account.subtitle')}</p>
+<div class="space-y-4 sm:space-y-6 px-2 sm:px-0">
+  <div class="py-2 sm:py-0">
+    <h1 class="text-2xl sm:text-3xl font-bold">{$t('account.title')}</h1>
+    <p class="text-muted-foreground mt-1 sm:mt-2 text-sm sm:text-base">{$t('account.subtitle')}</p>
   </div>
 
   <!-- Warning Banner: Geth Not Running -->
   {#if $gethStatus !== 'running'}
-    <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
-      <div class="flex items-center gap-3">
-        <AlertCircle class="h-5 w-5 text-yellow-500 flex-shrink-0" />
-        <p class="text-sm text-yellow-600">
-          {$t('nav.blockchainUnavailable')} <button on:click={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium">{$t('nav.networkPageLink')}</button>. {$t('account.balanceWarning')}
+    <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3 sm:p-4">
+      <div class="flex items-start sm:items-center gap-2 sm:gap-3">
+        <AlertCircle class="h-4 w-4 sm:h-5 sm:w-5 text-yellow-500 flex-shrink-0 mt-0.5 sm:mt-0" />
+        <p class="text-xs sm:text-sm text-yellow-600 leading-relaxed">
+          {$t('nav.blockchainUnavailable')} <button on:click={() => { navigation.setCurrentPage('network'); goto('/network'); }} class="underline font-medium hover:text-yellow-700 transition-colors">{$t('nav.networkPageLink')}</button>. {$t('account.balanceWarning')}
         </p>
       </div>
     </div>
@@ -1535,14 +1535,14 @@
   />
 {/if}
 
-  <div class="grid grid-cols-1 {$etcAccount ? 'md:grid-cols-2' : ''} gap-4">
-    <Card class="p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">{$t('wallet.title')}</h2>
-        <Wallet class="h-5 w-5 text-muted-foreground" />
+  <div class="grid grid-cols-1 {$etcAccount ? 'lg:grid-cols-2' : ''} gap-3 sm:gap-4">
+    <Card class="p-4 sm:p-6">
+      <div class="flex items-center justify-between mb-3 sm:mb-4">
+        <h2 class="text-base sm:text-lg font-semibold">{$t('wallet.title')}</h2>
+        <Wallet class="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground" />
       </div>
       
-      <div class="space-y-4">
+      <div class="space-y-3 sm:space-y-4">
         {#if !$etcAccount}
           <div class="space-y-3">
             <p class="text-sm text-muted-foreground">{$t('wallet.cta.intro')}</p>
@@ -1555,22 +1555,24 @@
               <Plus class="h-4 w-4 mr-2" />
               {isCreatingAccount ? $t('actions.creating') : $t('actions.createAccount')}
             </Button>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <Button variant="outline" class="w-full" on:click={openCreateMnemonic}>
-                <KeyRound class="h-4 w-4 mr-2" /> {$t('wallet.hd.create_via_phrase')}
+            <div class="flex flex-col sm:flex-row gap-2">
+              <Button variant="outline" class="w-full sm:flex-1" on:click={openCreateMnemonic}>
+                <KeyRound class="h-4 w-4 mr-1.5" /> 
+                <span class="text-sm sm:text-base">{$t('wallet.hd.create_via_phrase')}</span>
               </Button>
-              <Button variant="outline" class="w-full" on:click={openImportMnemonic}>
-                <Import class="h-4 w-4 mr-2" /> {$t('wallet.hd.import_phrase')}
+              <Button variant="outline" class="w-full sm:flex-1" on:click={openImportMnemonic}>
+                <Import class="h-4 w-4 mr-1.5" /> 
+                <span class="text-sm sm:text-base">{$t('wallet.hd.import_phrase')}</span>
               </Button>
             </div>
             
             <div class="space-y-2">
-              <div class="flex w-full">
+              <div class="flex flex-col sm:flex-row w-full gap-2 sm:gap-0">
                 <Input
                   type="text"
                   bind:value={importPrivateKey}
                   placeholder={$t('placeholders.importPrivateKey')}
-                  class="flex-1 rounded-r-none border-r-0"
+                  class="flex-1 sm:rounded-r-none sm:border-r-0 text-sm"
                   autocomplete="off"
                   data-form-type="other"
                   data-lpignore="true"
@@ -1580,11 +1582,11 @@
                   variant="outline"
                   size="default"
                   on:click={loadPrivateKeyFromFile}
-                  class="rounded-l-none border-l-0 bg-gray-200 hover:bg-gray-300 border-gray-300 text-gray-900 shadow-sm"
+                  class="w-full sm:w-auto sm:rounded-l-none sm:border-l-0 bg-gray-200 hover:bg-gray-300 border-gray-300 text-gray-900 shadow-sm text-sm"
                   title="Import private key from wallet JSON"
                 >
-                  <FileText class="h-4 w-4 mr-2" />
-                  {$t('wallet.hd.load_from_wallet')}
+                  <FileText class="h-4 w-4 mr-1.5 sm:mr-2" />
+                  <span class="truncate">{$t('wallet.hd.load_from_wallet')}</span>
                 </Button>
               </div>
               <Button 
@@ -1669,47 +1671,47 @@
           <p class="text-3xl font-bold text-foreground">{$wallet.balance.toFixed(8)} Chiral</p>
         </div>
         
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 mt-3 sm:mt-4">
           <!-- Blocks Mined -->
-          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-3 shadow-sm">
-            <div class="flex items-center gap-2 mb-2">
+          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-2.5 sm:p-3 shadow-sm">
+            <div class="flex items-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-2">
               <div class="bg-purple-100 rounded p-1">
-                <Coins class="h-4 w-4 text-purple-600" />
+                <Coins class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-purple-600" />
               </div>
-            <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            <p class="text-[10px] sm:text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
-              <p class="text-base font-semibold text-foreground break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
+              <p class="text-sm sm:text-base font-semibold text-foreground break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
             {:else}
-              <p class="text-base font-semibold text-foreground opacity-60 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
+              <p class="text-sm sm:text-base font-semibold text-foreground opacity-60 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
             {/if}
           </div>
           <!-- Total Received -->
-          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-3 shadow-sm">
-            <div class="flex items-center gap-2 mb-2">
+          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-2.5 sm:p-3 shadow-sm">
+            <div class="flex items-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-2">
               <div class="bg-green-100 rounded p-1">
-                <ArrowDownLeft class="h-4 w-4 text-green-600" />
+                <ArrowDownLeft class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-green-600" />
               </div>
-            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            <p class="text-[10px] sm:text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
-              <p class="text-base font-semibold text-green-600 dark:text-green-400 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
+              <p class="text-sm sm:text-base font-semibold text-green-600 dark:text-green-400 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
             {:else}
-              <p class="text-base font-semibold text-green-600 dark:text-green-400 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
+              <p class="text-sm sm:text-base font-semibold text-green-600 dark:text-green-400 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
             {/if}
           </div>
           <!-- Total Spent -->
-          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-3 shadow-sm">
-            <div class="flex items-center gap-2 mb-2">
+          <div class="min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-2.5 sm:p-3 shadow-sm">
+            <div class="flex items-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-2">
               <div class="bg-red-100 rounded p-1">
-                <ArrowUpRight class="h-4 w-4 text-red-600" />
+                <ArrowUpRight class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-red-600" />
               </div>
-            <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
+            <p class="text-[10px] sm:text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
-              <p class="text-base font-semibold text-red-600 dark:text-red-400 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
+              <p class="text-sm sm:text-base font-semibold text-red-600 dark:text-red-400 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
             {:else}
-              <p class="text-base font-semibold text-red-600 dark:text-red-400 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
+              <p class="text-sm sm:text-base font-semibold text-red-600 dark:text-red-400 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
             {/if}
           </div>
         </div>
@@ -1743,26 +1745,26 @@
           </div>
         {/if}
 
-            <div class="mt-6">
-              <p class="text-sm text-muted-foreground">{$t('wallet.address')}</p>
-              <div class="flex items-center gap-2 mt-1">
-                <p class="font-mono text-sm">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
-                <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')}>
+            <div class="mt-4 sm:mt-6">
+              <p class="text-xs sm:text-sm text-muted-foreground mb-1.5 sm:mb-1">{$t('wallet.address')}</p>
+              <div class="flex items-center gap-1.5 sm:gap-2">
+                <p class="font-mono text-xs sm:text-sm truncate flex-1">{$etcAccount.address.slice(0, 10)}...{$etcAccount.address.slice(-8)}</p>
+                <Button size="sm" variant="outline" on:click={copyAddress} aria-label={$t('aria.copyAddress')} class="flex-shrink-0">
                   <Copy class="h-3 w-3" />
                 </Button>
-                <Button size="sm" variant="outline" on:click={generateAndShowQrCode} title={$t('tooltips.showQr')} aria-label={$t('aria.showQr')}>
+                <Button size="sm" variant="outline" on:click={generateAndShowQrCode} title={$t('tooltips.showQr')} aria-label={$t('aria.showQr')} class="flex-shrink-0">
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                 </Button>
                 {#if showQrCodeModal}
                   <div
-                    class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+                    class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-3 sm:p-4 animate-in fade-in duration-200"
                     role="button"
                     tabindex="0"
                     on:click={() => showQrCodeModal = false}
                     on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showQrCodeModal = false; }}
                   >
                     <div
-                      class="bg-white p-8 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md text-center border border-purple-200 animate-in zoom-in-95 duration-200"
+                      class="bg-white p-5 sm:p-8 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md text-center border border-purple-200 animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
                       on:click|stopPropagation
                       role="dialog"
                       tabindex="0"
@@ -1770,38 +1772,38 @@
                       on:keydown={(e) => { if (e.key === 'Escape') showQrCodeModal = false; }}
                     >
                       <!-- Header -->
-                      <div class="flex items-center justify-between mb-6">
-                        <div class="flex items-center gap-3">
-                          <div class="bg-purple-100 p-2.5 rounded-xl shadow-sm">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                      <div class="flex items-center justify-between mb-4 sm:mb-6">
+                        <div class="flex items-center gap-2 sm:gap-3">
+                          <div class="bg-purple-100 p-1.5 sm:p-2.5 rounded-xl shadow-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600 sm:w-[22px] sm:h-[22px]"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                           </div>
-                          <h3 class="text-2xl font-bold text-gray-900">{$t('wallet.qrModal.title')}</h3>
+                          <h3 class="text-lg sm:text-2xl font-bold text-gray-900">{$t('wallet.qrModal.title')}</h3>
                         </div>
                         <button
                           on:click={() => showQrCodeModal = false}
-                          class="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-lg hover:bg-gray-100"
+                          class="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-lg hover:bg-gray-100 flex-shrink-0"
                           aria-label="Close"
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" class="sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
                       </div>
                       
                       <!-- QR Code -->
-                      <div class="bg-white p-6 rounded-2xl border-2 border-purple-200 shadow-lg inline-block mb-6 transition-transform hover:scale-105 duration-200">
-                        <img src={qrCodeDataUrl} alt={$t('wallet.qrModal.alt')} class="mx-auto rounded-lg" />
+                      <div class="bg-white p-4 sm:p-6 rounded-2xl border-2 border-purple-200 shadow-lg inline-block mb-4 sm:mb-6 transition-transform hover:scale-105 duration-200">
+                        <img src={qrCodeDataUrl} alt={$t('wallet.qrModal.alt')} class="mx-auto rounded-lg w-full max-w-[200px] sm:max-w-none" />
                       </div>
                       
                       <!-- Address -->
-                      <div class="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6">
-                        <p class="text-xs text-gray-500 mb-1 font-medium">Wallet Address</p>
-                        <p class="text-sm text-gray-800 break-all font-mono leading-relaxed">
+                      <div class="bg-gray-50 border border-gray-200 rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
+                        <p class="text-[10px] sm:text-xs text-gray-500 mb-1 font-medium">Wallet Address</p>
+                        <p class="text-xs sm:text-sm text-gray-800 break-all font-mono leading-relaxed">
                           {$etcAccount?.address}
                         </p>
                       </div>
 
                       <Button 
                         variant="outline"
-                        class="w-full font-semibold hover:bg-gray-100 transition-all duration-200" 
+                        class="w-full font-semibold hover:bg-gray-100 transition-all duration-200 text-sm sm:text-base" 
                         on:click={() => showQrCodeModal = false}
                       >
                         {$t('actions.close')}
@@ -1858,10 +1860,10 @@
     </Card>
     
     {#if $etcAccount}
-    <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">{$t('transfer.title')}</h2>
-      <Coins class="h-5 w-5 text-muted-foreground" />
+    <Card class="p-4 sm:p-6">
+    <div class="flex items-center justify-between mb-3 sm:mb-4">
+      <h2 class="text-base sm:text-lg font-semibold">{$t('transfer.title')}</h2>
+      <Coins class="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground" />
     </div>
     <form autocomplete="off" data-form-type="other" data-lpignore="true">
       <div class="space-y-4">
@@ -1895,31 +1897,31 @@
             </Button>
           </div>
           {#if showScannerModal}
-            <div class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-              <div class="bg-white dark:bg-gray-900 p-6 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md border border-purple-200 dark:border-purple-800 animate-in zoom-in-95 duration-200">
+            <div class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-3 sm:p-4 animate-in fade-in duration-200">
+              <div class="bg-white dark:bg-gray-900 p-4 sm:p-6 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md border border-purple-200 dark:border-purple-800 animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
                 <!-- Header -->
-                <div class="flex items-center justify-between mb-5">
-                  <div class="flex items-center gap-3">
-                    <div class="bg-purple-100 p-2.5 rounded-xl shadow-sm">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                <div class="flex items-center justify-between mb-4 sm:mb-5">
+                  <div class="flex items-center gap-2 sm:gap-3">
+                    <div class="bg-purple-100 p-1.5 sm:p-2.5 rounded-xl shadow-sm">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600 sm:w-[22px] sm:h-[22px]"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                     </div>
-                    <h3 class="text-2xl font-bold text-gray-900 dark:text-white">{$t('transfer.recipient.scanQrTitle')}</h3>
+                    <h3 class="text-lg sm:text-2xl font-bold text-gray-900 dark:text-white">{$t('transfer.recipient.scanQrTitle')}</h3>
                   </div>
                   <button
                     on:click={() => showScannerModal = false}
-                    class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                    class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0"
                     aria-label="Close"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" class="sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                   </button>
                 </div>
                 
                 <!-- Scanner View -->
-                <div id="qr-reader" class="w-full border-2 border-purple-300 rounded-xl overflow-hidden shadow-inner mb-4 bg-gray-50 dark:bg-gray-800"></div>
+                <div id="qr-reader" class="w-full border-2 border-purple-300 rounded-xl overflow-hidden shadow-inner mb-3 sm:mb-4 bg-gray-50 dark:bg-gray-800"></div>
                 
                 <div class="flex gap-2">
                   <Button 
-                    class="flex-1 font-semibold bg-purple-600 hover:bg-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-200" 
+                    class="flex-1 font-semibold bg-purple-600 hover:bg-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-200 text-sm sm:text-base" 
                     on:click={() => showScannerModal = false}
                   >
                     {$t('actions.cancel')}
@@ -2096,10 +2098,10 @@
         </Card>
     {/if}
   <!-- Transaction History Section - Full Width -->
-  <Card class="p-6 mt-4">
-    <div class="flex items-center justify-between mb-2">
-      <h2 class="text-lg font-semibold">{$t('transactions.title')}</h2>
-      <History class="h-5 w-5 text-muted-foreground" />
+  <Card class="p-4 sm:p-6 mt-3 sm:mt-4">
+    <div class="flex items-center justify-between mb-2 sm:mb-2">
+      <h2 class="text-base sm:text-lg font-semibold">{$t('transactions.title')}</h2>
+      <History class="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground" />
     </div>
 
     <!-- Scan Range Info -->
@@ -2340,44 +2342,44 @@
   {/if}
 
   {#if $etcAccount}
-  <Card class="p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div class="bg-blue-100 p-2 rounded-lg">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+  <Card class="p-4 sm:p-6">
+      <div class="flex items-start sm:items-center justify-between mb-3 sm:mb-4 gap-2">
+        <div class="flex items-start sm:items-center gap-2 sm:gap-3">
+          <div class="bg-blue-100 p-1.5 sm:p-2 rounded-lg flex-shrink-0">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600 w-[18px] h-[18px] sm:w-5 sm:h-5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
           </div>
         <div>
-          <h2 class="text-lg font-semibold">{$t('security.2fa.title')}</h2>
-            <p class="text-sm text-muted-foreground">{$t('security.2fa.subtitle_clear')}</p>
+          <h2 class="text-base sm:text-lg font-semibold">{$t('security.2fa.title')}</h2>
+            <p class="text-xs sm:text-sm text-muted-foreground">{$t('security.2fa.subtitle_clear')}</p>
         </div>
         </div>
       </div>
-      <div class="space-y-4">
+      <div class="space-y-3 sm:space-y-4">
         {#if is2faEnabled}
-          <div class="flex items-center justify-between p-4 bg-green-50 border-l-4 border-l-green-500 border-y border-r border-green-200 rounded-lg shadow-sm">
-            <div class="flex items-center gap-3">
-              <div class="bg-green-100 p-2 rounded-full">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3 sm:p-4 bg-green-50 border-l-4 border-l-green-500 border-y border-r border-green-200 rounded-lg shadow-sm">
+            <div class="flex items-start sm:items-center gap-2 sm:gap-3">
+              <div class="bg-green-100 p-1.5 sm:p-2 rounded-full flex-shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600 w-[18px] h-[18px] sm:w-5 sm:h-5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
               </div>
               <div>
-                <p class="font-semibold text-green-800">{$t('security.2fa.status.enabled')}</p>
-                <p class="text-sm text-green-700">{$t('security.2fa.status.enabled_desc')}</p>
+                <p class="font-semibold text-green-800 text-sm sm:text-base">{$t('security.2fa.status.enabled')}</p>
+                <p class="text-xs sm:text-sm text-green-700">{$t('security.2fa.status.enabled_desc')}</p>
               </div>
             </div>
-            <Button variant="destructive" on:click={disable2FA} class="font-semibold">{$t('security.2fa.disable')}</Button>
+            <Button variant="destructive" on:click={disable2FA} class="font-semibold text-sm w-full sm:w-auto">{$t('security.2fa.disable')}</Button>
           </div>
         {:else}
-          <div class="flex items-center justify-between p-4 bg-yellow-50 border-l-4 border-l-yellow-500 border-y border-r border-yellow-200 rounded-lg shadow-sm">
-            <div class="flex items-center gap-3">
-              <div class="bg-yellow-100 p-2 rounded-full">
-                <AlertCircle class="h-5 w-5 text-yellow-600" />
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3 sm:p-4 bg-yellow-50 border-l-4 border-l-yellow-500 border-y border-r border-yellow-200 rounded-lg shadow-sm">
+            <div class="flex items-start sm:items-center gap-2 sm:gap-3">
+              <div class="bg-yellow-100 p-1.5 sm:p-2 rounded-full flex-shrink-0">
+                <AlertCircle class="h-4 w-4 sm:h-5 sm:w-5 text-yellow-600" />
               </div>
               <div>
-                <p class="font-semibold text-yellow-900">Not Protected</p>
-                <p class="text-sm text-yellow-700">{$t('security.2fa.status.disabled_desc')}</p>
+                <p class="font-semibold text-yellow-900 text-sm sm:text-base">Not Protected</p>
+                <p class="text-xs sm:text-sm text-yellow-700">{$t('security.2fa.status.disabled_desc')}</p>
               </div>
             </div>
-            <Button on:click={setup2FA} class="bg-blue-600 hover:bg-blue-700 text-white font-semibold">{$t('security.2fa.enable')}</Button>
+            <Button on:click={setup2FA} class="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm w-full sm:w-auto">{$t('security.2fa.enable')}</Button>
           </div>
         {/if}
         <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
@@ -2510,28 +2512,28 @@
   {/if}
   
   {#if $etcAccount}
-  <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
-        <div class="bg-red-100 p-2 rounded-lg">
-          <BadgeX class="h-5 w-5 text-red-600" />
+  <Card class="p-4 sm:p-6">
+    <div class="flex items-start sm:items-center justify-between mb-3 sm:mb-4 gap-2">
+      <div class="flex items-start sm:items-center gap-2 sm:gap-3">
+        <div class="bg-red-100 p-1.5 sm:p-2 rounded-lg flex-shrink-0">
+          <BadgeX class="h-4 w-4 sm:h-5 sm:w-5 text-red-600" />
         </div>
       <div>
-        <h2 class="text-lg font-semibold">{$t('blacklist.title')}</h2>
-          <p class="text-sm text-muted-foreground">{$t('blacklist.subtitle')}</p>
+        <h2 class="text-base sm:text-lg font-semibold">{$t('blacklist.title')}</h2>
+          <p class="text-xs sm:text-sm text-muted-foreground">{$t('blacklist.subtitle')}</p>
       </div>
       </div>
     </div>
 
-    <div class="space-y-6">
-      <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-        <div class="flex items-center gap-2 mb-3">
-          <div class="bg-red-100 p-1.5 rounded">
-            <Plus class="h-4 w-4 text-red-600" />
+    <div class="space-y-4 sm:space-y-6">
+      <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 sm:p-4">
+        <div class="flex items-center gap-1.5 sm:gap-2 mb-2 sm:mb-3">
+          <div class="bg-red-100 p-1 sm:p-1.5 rounded">
+            <Plus class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-red-600" />
           </div>
-          <h3 class="text-md font-semibold">{$t('blacklist.add.title')}</h3>
+          <h3 class="text-sm sm:text-base font-semibold">{$t('blacklist.add.title')}</h3>
         </div>
-        <div class="space-y-4">
+        <div class="space-y-3 sm:space-y-4">
           <div>
             <Label for="blacklist-address">{$t('blacklist.add.address')}</Label>
             <Input
@@ -2579,15 +2581,15 @@
           <div>
             <Label class="text-xs mb-2 block font-semibold">{$t('blacklist.quickReasons.label')}</Label>
             <div class="flex flex-wrap gap-2">
-              {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harassment'), $t('blacklist.quickReasons.scam')] as reason}
-                <button
-                  type="button"
+            {#each [$t('blacklist.quickReasons.spam'), $t('blacklist.quickReasons.fraud'), $t('blacklist.quickReasons.malicious'), $t('blacklist.quickReasons.harassment'), $t('blacklist.quickReasons.scam')] as reason}
+              <button
+                type="button"
                   class="px-3 py-1.5 text-xs font-semibold border-2 rounded-full transition-all shadow-sm {newBlacklistEntry.reason === reason ? 'bg-red-600 text-white border-red-600 shadow-md scale-105' : 'bg-white border-gray-300 hover:border-red-400 hover:bg-red-50 hover:shadow-md hover:scale-105'}"
-                  on:click={() => newBlacklistEntry.reason = reason}
-                >
-                  {reason}
-                </button>
-              {/each}
+                on:click={() => newBlacklistEntry.reason = reason}
+              >
+                {reason}
+              </button>
+            {/each}
             </div>
           </div>
 
@@ -2646,7 +2648,7 @@
               >
                 <div class="flex items-center gap-1.5">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="m19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-                  {$t('blacklist.actions.clearAll')}
+                {$t('blacklist.actions.clearAll')}
                 </div>
               </Button>
             {/if}
@@ -2680,39 +2682,39 @@
                       <p class="text-sm font-mono font-semibold text-red-900 truncate">
                       {entry.chiral_address}
                     </p>
-                      <button
-                        type="button"
+                    <button
+                      type="button"
                         class="opacity-0 group-hover:opacity-100 transition-all p-1.5 bg-red-100 hover:bg-red-200 border border-red-300 hover:border-red-400 rounded flex-shrink-0 shadow-sm hover:shadow-md"
-                        on:click={() => copyToClipboard(entry.chiral_address)}
-                        title={$t('blacklist.actions.copyAddress')}
+                      on:click={() => copyToClipboard(entry.chiral_address)}
+                      title={$t('blacklist.actions.copyAddress')}
                         aria-label="Copy address"
-                      >
+                    >
                         <Copy class="h-3.5 w-3.5 text-red-700" />
-                      </button>
+                    </button>
                   </div>
 
-                    {#if editingEntry === index}
+                  {#if editingEntry === index}
                       <div class="space-y-2 bg-white p-3 rounded-lg border-2 border-blue-300 shadow-md">
-                        <Input
-                          bind:value={editReason}
-                          placeholder={$t('placeholders.reason')}
-                          maxlength={200}
+                      <Input
+                        bind:value={editReason}
+                        placeholder={$t('placeholders.reason')}
+                        maxlength={200}
                           class="text-sm border-blue-300 focus:border-blue-500 focus:ring-blue-500"
-                          on:keydown={handleEditKeydown}
-                          autofocus
-                        />
-                        <div class="flex gap-2">
+                        on:keydown={handleEditKeydown}
+                        autofocus
+                      />
+                      <div class="flex gap-2">
                           <Button size="sm" on:click={saveEdit} disabled={!editReason.trim()} class="bg-green-600 hover:bg-green-700 text-white font-semibold">
                             <div class="flex items-center gap-1">
                               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-                              {$t('actions.save')}
+                          {$t('actions.save')}
                             </div>
-                          </Button>
+                        </Button>
                           <Button size="sm" variant="outline" on:click={cancelEdit} class="hover:bg-gray-100">
-                            {$t('actions.cancel')}
-                          </Button>
-                        </div>
+                          {$t('actions.cancel')}
+                        </Button>
                       </div>
+                    </div>
                   {:else}
                       <div class="bg-red-100 border border-red-200 rounded-md px-3 py-2 mb-2">
                         <p class="text-xs font-medium text-red-800"><span class="font-semibold">Reason:</span> {entry.reason}</p>
@@ -2735,7 +2737,7 @@
                     >
                       <div class="flex items-center gap-1">
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path><path d="m15 5 4 4"></path></svg>
-                        {$t('actions.edit')}
+                      {$t('actions.edit')}
                       </div>
                     </Button>
                   {/if}
@@ -2749,7 +2751,7 @@
                   >
                     <div class="flex items-center gap-1">
                       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                      {$t('actions.remove')}
+                    {$t('actions.remove')}
                     </div>
                   </Button>
                 </div>
@@ -2792,7 +2794,7 @@
             >
               <div class="flex items-center justify-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                {$t('blacklist.actions.import')}
+              {$t('blacklist.actions.import')}
               </div>
             </Button>
           </div>
@@ -2820,14 +2822,14 @@
   <!-- 2FA Setup Modal -->
   {#if show2faSetupModal && totpSetupInfo}
     <div
-      class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+      class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-3 sm:p-4 animate-in fade-in duration-200"
       role="button"
       tabindex="0"
       on:click={() => show2faSetupModal = false}
       on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') show2faSetupModal = false; }}
     >
       <div
-        class="bg-white dark:bg-gray-900 p-7 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-lg border border-blue-200 dark:border-blue-800 animate-in zoom-in-95 duration-200"
+        class="bg-white dark:bg-gray-900 p-5 sm:p-7 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-lg border border-blue-200 dark:border-blue-800 animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
         on:click|stopPropagation
         role="dialog"
         aria-modal="true"
@@ -2891,26 +2893,26 @@
         <div class="space-y-4">
           <div>
             <Label for="totp-verify" class="text-sm font-semibold text-gray-700 dark:text-gray-300">{$t('security.2fa.setup.verifyLabel')}</Label>
-            <Input
-              id="totp-verify"
-              type="text"
-              bind:value={totpVerificationCode}
-              placeholder="123456"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength={6}
+          <Input
+            id="totp-verify"
+            type="text"
+            bind:value={totpVerificationCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength={6}
               class="text-center text-2xl font-mono tracking-widest mt-2 h-14 border-2 border-blue-200 focus:border-blue-500 shadow-sm rounded-xl"
-            />
+          />
           </div>
           <div>
             <Label for="totp-password-setup" class="text-sm font-semibold text-gray-700 dark:text-gray-300">{$t('keystore.load.password')}</Label>
-            <Input
-              id="totp-password-setup"
-              type="password"
-              bind:value={twoFaPassword}
-              placeholder={$t('placeholders.unlockPassword')}
+          <Input
+            id="totp-password-setup"
+            type="password"
+            bind:value={twoFaPassword}
+            placeholder={$t('placeholders.unlockPassword')}
               class="mt-2 h-11 border-2 border-gray-200 focus:border-blue-500 shadow-sm rounded-xl"
-            />
+          />
           </div>
           {#if twoFaErrorMessage}
             <div class="bg-red-50 border-l-4 border-l-red-500 p-4 rounded-xl shadow-sm animate-in slide-in-from-top-2 duration-200">
@@ -2940,7 +2942,7 @@
               <div class="flex items-center gap-2">
                 <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
                 {$t('actions.verifying')}
-              </div>
+        </div>
             {:else}
               <div class="flex items-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
@@ -2956,14 +2958,14 @@
   <!-- 2FA Action Prompt Modal -->
   {#if show2faPromptModal}
     <div
-      class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+      class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-3 sm:p-4 animate-in fade-in duration-200"
       role="button"
       tabindex="0"
       on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
       on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { show2faPromptModal = false; actionToConfirm = null; } }}
     >
       <div
-        class="bg-white dark:bg-gray-900 p-7 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md border border-blue-200 dark:border-blue-800 animate-in zoom-in-95 duration-200"
+        class="bg-white dark:bg-gray-900 p-5 sm:p-7 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md border border-blue-200 dark:border-blue-800 animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
         on:click|stopPropagation
         role="dialog"
         aria-modal="true"
@@ -2994,27 +2996,27 @@
         <div class="space-y-4">
           <div>
             <Label for="totp-action" class="text-sm font-semibold text-gray-700 dark:text-gray-300">{$t('security.2fa.prompt.label')}</Label>
-            <Input
-              id="totp-action"
-              type="text"
-              bind:value={totpActionCode}
-              placeholder="123456"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength={6}
-              autofocus
+          <Input
+            id="totp-action"
+            type="text"
+            bind:value={totpActionCode}
+            placeholder="123456"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength={6}
+            autofocus
               class="text-center text-2xl font-mono tracking-widest mt-2 h-14 border-2 border-blue-200 focus:border-blue-500 shadow-sm rounded-xl"
-            />
+          />
           </div>
           <div>
             <Label for="totp-password-action" class="text-sm font-semibold text-gray-700 dark:text-gray-300">{$t('keystore.load.password')}</Label>
-            <Input
-              id="totp-password-action"
-              type="password"
-              bind:value={twoFaPassword}
-              placeholder={$t('placeholders.unlockPassword')}
+          <Input
+            id="totp-password-action"
+            type="password"
+            bind:value={twoFaPassword}
+            placeholder={$t('placeholders.unlockPassword')}
               class="mt-2 h-11 border-2 border-gray-200 focus:border-blue-500 shadow-sm rounded-xl"
-            />
+          />
           </div>
           {#if twoFaErrorMessage}
             <div class="bg-red-50 border-l-4 border-l-red-500 p-4 rounded-xl shadow-sm animate-in slide-in-from-top-2 duration-200">
@@ -3044,7 +3046,7 @@
               <div class="flex items-center gap-2">
                 <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
                 {$t('actions.verifying')}
-              </div>
+        </div>
             {:else}
               <div class="flex items-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
