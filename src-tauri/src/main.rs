@@ -7,7 +7,12 @@
 
 // Modules unique to the binary
 pub mod blockchain_listener;
-pub mod commands;
+pub mod commands {
+    pub mod auth;
+    pub mod bootstrap;
+    pub mod network;
+    pub mod proxy;
+}
 pub mod ethereum;
 pub mod geth_bootstrap;
 pub mod geth_downloader;
