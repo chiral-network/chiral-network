@@ -223,6 +223,11 @@ export class PeerService {
     // Generate address from peer ID (simplified)
     const address = this.generateAddressFromPeerId(metrics.peer_id);
 
+    // Use joined_at if valid, otherwise use lastSeen as fallback
+    const joinedAtMs = metrics.joined_at && metrics.joined_at > 0 
+      ? metrics.joined_at * 1000 
+      : lastSeenMs;
+
     return {
       id: metrics.peer_id,
       address,
@@ -231,7 +236,7 @@ export class PeerService {
       reputation,
       sharedFiles: metrics.total_uploads,
       totalSize: metrics.bytes_transferred,
-      joinDate: new Date(metrics.joined_at * 1000),
+      joinDate: new Date(joinedAtMs),
       lastSeen: new Date(lastSeenMs),
       location: metrics.location || this.inferLocationFromAddress(address),
     };

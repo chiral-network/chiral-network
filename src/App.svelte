@@ -33,7 +33,8 @@ import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
 import { paymentService } from '$lib/services/paymentService';
-import { subscribeToTransferEvents, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+    import { showToast } from '$lib/toast';
 import { walletService } from '$lib/wallet';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -62,6 +63,8 @@ let lastAppliedBandwidthSignature: string | null = null;
 let showFirstRunWizard = false;
 let showShortcutsPanel = false;
 let showCommandPalette = false;
+let transferStoreUnsubscribe: (() => void) | null = null;
+const notifiedCompletedTransfers = new Set<string>();
 const scrollPositions: Record<string, number> = {};
 
 // Helper to get the main scroll container (if present)
@@ -180,6 +183,30 @@ function handleFirstRunComplete() {
       // Subscribe to transfer events from backend
       try {
         transferEventsUnsubscribe = await subscribeToTransferEvents();
+        transferStoreUnsubscribe = transferStore.subscribe(($store) => {
+
+          if (!$store || !$store.transfers) {
+            return;
+          }
+
+          for (const [transferId, transfer] of $store.transfers.entries()) {
+            if (transfer.status === 'completed') {
+              // First time we see this transfer as completed → fire toast
+              if (!notifiedCompletedTransfers.has(transferId)) {
+                notifiedCompletedTransfers.add(transferId);
+
+                const fileName = transfer.fileName ?? 'file';
+                const message = `Download complete: "${fileName}"`;
+
+                showToast(message, 'success');
+              }
+            } else {
+              // If the transfer goes back to a non-completed status (e.g. retry),
+              // allow a later completion to trigger a new toast
+              notifiedCompletedTransfers.delete(transferId);
+            }
+          }
+        });
       } catch (error) {
         console.warn('Failed to subscribe to transfer events:', error);
       }
@@ -451,12 +478,11 @@ function handleFirstRunComplete() {
           // Only start file transfer service, not DHT
           await invoke("start_file_transfer_service");
         }
-        console.log("✅ File transfer and WebRTC services started successfully");
       } catch (error) {
         // Only ignore "already running" errors - this is normal during hot reload
         const errorMessage = error instanceof Error ? error.message : String(error);
         if (errorMessage.includes("already running") || errorMessage.includes("already initialized")) {
-          console.log("ℹ️ Services already running (hot reload)");
+          // Services already running (hot reload) - no need to log
         } else {
           // Log other errors - these might indicate real problems
           console.error("⚠️ Failed to start services:", errorMessage);
@@ -614,6 +640,10 @@ function handleFirstRunComplete() {
       }
       if (transferEventsUnsubscribe) {
         transferEventsUnsubscribe();
+      }
+      if (transferStoreUnsubscribe) {
+        transferStoreUnsubscribe();
+        transferStoreUnsubscribe = null;
       }
       // Also ensure transfer events are fully unsubscribed
       unsubscribeFromTransferEvents();

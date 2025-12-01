@@ -53,8 +53,8 @@ export interface FtpSourceInfo {
 }
 
 export interface Ed2kSourceInfo {
-  serverUrl: string;
-  fileHash: string;
+  server_url: string;
+  file_hash: string;
 }
 
 export interface FileMetadata {
@@ -258,7 +258,7 @@ export class DhtService {
             )
           );
           unlistenPromise.then((unlistenFn) => unlistenFn());
-        }, 10000); // Reduce timeout to 10 seconds for debugging
+        }, 30000); // Increase timeout to 30 seconds for ED2K and other protocols
       });
 
       // Trigger the backend upload with price and protocol

@@ -3,7 +3,7 @@
   import Input from '$lib/components/ui/input.svelte';
   import Label from '$lib/components/ui/label.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import { Search, X, History, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-svelte';
+  import { Search, X, History, RotateCcw, AlertCircle, CheckCircle2, Loader } from 'lucide-svelte';
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
@@ -147,6 +147,8 @@
   }
 
   async function searchForFile() {
+    isSearching = true
+
     // Handle BitTorrent downloads - show confirmation instead of immediately downloading
     if (searchMode === 'magnet' || searchMode === 'torrent' || searchMode === 'ed2k' || searchMode === 'ftp') {
       let identifier: string | null = null
@@ -155,19 +157,51 @@
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter a magnet link', 'warning')
+          isSearching = false
           return
         }
+
+        // For magnet links, extract info_hash and search DHT directly
+        const urlParams = new URLSearchParams(identifier.split('?')[1])
+        const infoHash = urlParams.get('xt')?.replace('urn:btih:', '')
+        if (infoHash) {
+          try {
+            // Search DHT using the info_hash as the key (BitTorrent files are stored with info_hash as merkle_root)
+            const metadata = await dhtService.searchFileMetadata(infoHash, SEARCH_TIMEOUT_MS)
+            if (metadata) {
+              // Found the file! Show it instead of the placeholder
+              metadata.fileHash = metadata.merkleRoot || ""
+              latestMetadata = metadata
+              latestStatus = 'found'
+              hasSearched = true
+              pushMessage(`Found file: ${metadata.fileName}`, 'success')
+              isSearching = false
+              return
+            }
+          } catch (error) {
+            console.log('DHT search failed, falling back to magnet download:', error)
+          }
+        }
+
+        // If not found in DHT or no info_hash, proceed with magnet download
       } else if (searchMode === 'torrent') {
         if (!torrentFileName) {
           pushMessage('Please select a .torrent file', 'warning')
+          isSearching = false
           return
         }
         // Use the file input to get the actual file
         const file = torrentFileInput?.files?.[0]
         if (file) {
-          // Read the file and pass it to the backend
-          // For now, we'll just use the filename approach
+          // Try to parse torrent file and search for it first
+          try {
+            // For now, we'll search using a placeholder - ideally we'd parse the torrent
+            // to extract the info hash and search DHT. For simplicity, fall back to placeholder.
           identifier = torrentFileName
+          } catch (error) {
+            console.log('Failed to parse torrent file:', error)
+            identifier = torrentFileName
+          }
         } else {
           pushMessage('Please select a .torrent file', 'warning')
           return
@@ -176,29 +210,54 @@
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter an ED2K link', 'warning')
+          isSearching = false
           return
         }
         // Basic ED2K link validation
         if (!identifier.startsWith('ed2k://')) {
           pushMessage('Please enter a valid ED2K link starting with ed2k://', 'warning')
+          isSearching = false
           return
+        }
+
+        // For ED2K links, extract hash and search DHT first
+        const parts = identifier.split('|')
+        if (parts.length >= 5) {
+          const ed2kHash = parts[4]
+          try {
+            // Search DHT using the ED2K hash as the key
+            const metadata = await dhtService.searchFileMetadata(ed2kHash, SEARCH_TIMEOUT_MS)
+            if (metadata) {
+              // Found the file! Show it instead of the placeholder
+              metadata.fileHash = metadata.merkleRoot || ""
+              latestMetadata = metadata
+              latestStatus = 'found'
+              hasSearched = true
+              pushMessage(`Found file: ${metadata.fileName}`, 'success')
+              isSearching = false
+              return
+            }
+          } catch (error) {
+            console.log('DHT search failed, falling back to ED2K download:', error)
+          }
         }
       } else if (searchMode === 'ftp') {
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter an FTP URL', 'warning')
+          isSearching = false
           return
         }
         // Basic FTP URL validation
         if (!identifier.startsWith('ftp://') && !identifier.startsWith('ftps://')) {
           pushMessage('Please enter a valid FTP URL starting with ftp:// or ftps://', 'warning')
+          isSearching = false
           return
         }
       }
 
       if (identifier) {
         try {
-          isSearching = true
           
           // Store the pending torrent info for confirmation
           if (searchMode === 'torrent') {
@@ -259,10 +318,10 @@
                      searchMode === 'ftp' ? 'Please enter an FTP URL' :
                      'Please enter a search term';
       pushMessage(message, 'warning');
+      isSearching = false; // Reset searching state
       return;
     }
 
-    isSearching = true;
     hasSearched = true;
     latestMetadata = null;
     latestStatus = 'pending';
@@ -325,7 +384,6 @@
       // Ensure isSearching is always set to false
       setTimeout(() => {
         isSearching = false;
-        console.log('🔒 Forced isSearching to false');
       }, 100);
     }
   }
@@ -888,12 +946,11 @@
           disabled={(searchMode !== 'torrent' && !searchHash.trim()) || (searchMode === 'torrent' && !torrentFileName) || isSearching}
           class="h-10 px-6"
         >
-          <Search class="h-4 w-4 mr-2" />
           {#if isSearching}
+            <Loader class="h-4 w-4 mr-2 animate-spin" />
             {tr('download.search.status.searching')}
-          {:else if searchMode === 'magnet' || searchMode === 'torrent' || searchMode === 'ed2k' || searchMode === 'ftp'}
-            Download
           {:else}
+            <Search class="h-4 w-4 mr-2" />
             {tr('download.search.button')}
           {/if}
         </Button>
@@ -911,7 +968,7 @@
               <SearchResultCard
                 metadata={latestMetadata}
                 on:copy={handleCopy}
-                on:download={event => handleFileDownload(event.detail)}
+                on:download={(event: any) => handleFileDownload(event.detail)}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}
