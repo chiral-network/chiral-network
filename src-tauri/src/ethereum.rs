@@ -1756,6 +1756,18 @@ pub async fn send_transaction(
         ));
     }
 
+    // Debug network connectivity before sending
+    tracing::info!("=== NETWORK DEBUG BEFORE SENDING ===");
+    match get_peer_count().await {
+        Ok(count) => {
+            tracing::info!("   Peer count: {}", count);
+            if count == 0 {
+                tracing::warn!("   ⚠️ NO PEERS CONNECTED - transaction will not propagate!");
+            }
+        },
+        Err(e) => tracing::error!("   Failed to get peer count: {}", e),
+    }
+
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
 
@@ -1885,6 +1897,27 @@ pub async fn send_transaction(
                 }
             }
         }
+    }
+    
+    // Log connected peers to verify network propagation
+    match get_peer_info().await {
+        Ok(peers) => {
+            if let Some(peers_array) = peers.as_array() {
+                if peers_array.is_empty() {
+                    tracing::warn!("   ⚠️ NO PEERS - Transaction cannot propagate to other nodes!");
+                } else {
+                    tracing::info!("   Connected to {} peer(s) - transaction should propagate", peers_array.len());
+                    for peer in peers_array.iter().take(3) {  // Show first 3 peers
+                        let remote_addr = peer.get("network")
+                            .and_then(|n| n.get("remoteAddress"))
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("?");
+                        tracing::info!("      Peer: {}", remote_addr);
+                    }
+                }
+            }
+        },
+        Err(e) => tracing::warn!("   Could not get peer info: {}", e),
     }
     
     // Try to get the transaction back to verify it's in the pool

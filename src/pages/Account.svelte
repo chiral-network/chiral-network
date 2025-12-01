@@ -503,7 +503,16 @@
       
       showToast('Transaction submitted!', 'success')
       
-      
+      // Refresh balance after a delay to allow transaction to be mined
+      // Poll every 2 seconds for 30 seconds to catch the confirmation
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        await fetchBalance();
+        if (pollCount >= 15) {
+          clearInterval(pollInterval);
+        }
+      }, 2000);
       
     } catch (error) {
       console.error('Transaction failed:', error)
@@ -535,6 +544,8 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
+  let balanceRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  
   onMount(async () => {
     await walletService.initialize();
     await loadKeystoreAccountsList();
@@ -543,7 +554,21 @@
       // IMPORTANT: refreshTransactions must run BEFORE refreshBalance
       await walletService.refreshTransactions();
       await walletService.refreshBalance();
+      
+      // Start periodic balance refresh to catch incoming transactions
+      balanceRefreshInterval = setInterval(async () => {
+        if ($etcAccount && isGethRunning) {
+          await walletService.refreshBalance();
+        }
+      }, 10000); // Refresh every 10 seconds
     }
+    
+    // Cleanup on unmount
+    return () => {
+      if (balanceRefreshInterval) {
+        clearInterval(balanceRefreshInterval);
+      }
+    };
   })
 
   async function fetchBalance() {
