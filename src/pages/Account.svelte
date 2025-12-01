@@ -2359,56 +2359,118 @@
 
   {#if $etcAccount}
   <Card class="p-6" id="keystore-section">
-    <div class="flex items-center gap-2 mb-4">
-      <KeyRound class="h-5 w-5 text-muted-foreground" />
-      <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>
+    <div class="flex items-center gap-3 mb-4">
+      <div class="bg-amber-100 p-2 rounded-lg">
+        <KeyRound class="h-5 w-5 text-amber-600" />
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold">{$t('keystore.title')}</h2>
+        <p class="text-xs text-muted-foreground">{$t('keystore.desc')}</p>
+      </div>
     </div>
     <div class="space-y-4">
-      <p class="text-sm text-muted-foreground">
-        {$t('keystore.desc')}
-      </p>
       <div class="flex items-center gap-2">
         <div class="flex-1">
           <Input
             type="password"
             bind:value={keystorePassword}
             placeholder={$t('placeholders.password')}
-            class="w-full {passwordStrength ? `border-${passwordStrength === 'strong' ? 'green' : passwordStrength === 'medium' ? 'yellow' : 'red'}-500` : ''}"
+            class="w-full {passwordStrength === 'strong' ? 'border-green-500 focus:ring-green-500' : passwordStrength === 'medium' ? 'border-yellow-500 focus:ring-yellow-500' : passwordStrength === 'weak' ? 'border-red-500 focus:ring-red-500' : ''}"
             autocomplete="new-password"
           />
           {#if keystorePassword}
-            <div class="mt-1 flex items-center gap-2">
-              <div class="h-1 flex-1 bg-gray-200 rounded-full overflow-hidden">
+            <!-- Enhanced Password Strength Indicator -->
+            <div class="mt-2 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-gray-700">Password Strength</span>
+                <span class="text-xs font-semibold {passwordStrength === 'strong' ? 'text-green-600' : passwordStrength === 'medium' ? 'text-yellow-600' : 'text-red-600'}">
+                  {passwordFeedback}
+                </span>
+              </div>
+              <div class="h-2 w-full bg-gray-200 rounded-full overflow-hidden shadow-inner">
                 <div
-                  class="h-full transition-all duration-300 {passwordStrength === 'strong' ? 'bg-green-500 w-full' : passwordStrength === 'medium' ? 'bg-yellow-500 w-2/3' : 'bg-red-500 w-1/3'}"
+                  class="h-full transition-all duration-500 ease-out {passwordStrength === 'strong' ? 'bg-gradient-to-r from-green-500 to-green-600 w-full' : passwordStrength === 'medium' ? 'bg-gradient-to-r from-yellow-500 to-yellow-600 w-2/3' : 'bg-gradient-to-r from-red-500 to-red-600 w-1/3'}"
                 ></div>
               </div>
-              <span class="text-xs {passwordStrength === 'strong' ? 'text-green-600' : passwordStrength === 'medium' ? 'text-yellow-600' : 'text-red-600'}">
-                {passwordFeedback}
-              </span>
             </div>
-            <ul class="text-xs text-muted-foreground mt-2 space-y-1">
-              <li class="{keystorePassword.length >= 8 ? 'text-green-600' : ''}">• {$t('password.requirements.length')}</li>
-              <li class="{/[A-Z]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.uppercase')}</li>
-              <li class="{/[a-z]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.lowercase')}</li>
-              <li class="{/[0-9]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.number')}</li>
-              <li class="{/[!@#$%^&*(),.?":{}|<>]/.test(keystorePassword) ? 'text-green-600' : ''}">• {$t('password.requirements.special')}</li>
-            </ul>
+            
+            <!-- Enhanced Requirements Checklist with Icons -->
+            <div class="mt-3 border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-gray-50 dark:bg-gray-900/30">
+              <p class="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Requirements:</p>
+              <ul class="space-y-1.5">
+                <li class="flex items-center gap-2 text-xs transition-all duration-300 {keystorePassword.length >= 8 ? 'text-green-600 font-medium' : 'text-gray-500'}">
+                  {#if keystorePassword.length >= 8}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                  {:else}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><circle cx="12" cy="12" r="10"></circle></svg>
+                  {/if}
+                  <span>{$t('password.requirements.length')}</span>
+                </li>
+                <li class="flex items-center gap-2 text-xs transition-all duration-300 {/[A-Z]/.test(keystorePassword) ? 'text-green-600 font-medium' : 'text-gray-500'}">
+                  {#if /[A-Z]/.test(keystorePassword)}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                  {:else}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><circle cx="12" cy="12" r="10"></circle></svg>
+                  {/if}
+                  <span>{$t('password.requirements.uppercase')}</span>
+                </li>
+                <li class="flex items-center gap-2 text-xs transition-all duration-300 {/[a-z]/.test(keystorePassword) ? 'text-green-600 font-medium' : 'text-gray-500'}">
+                  {#if /[a-z]/.test(keystorePassword)}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                  {:else}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><circle cx="12" cy="12" r="10"></circle></svg>
+                  {/if}
+                  <span>{$t('password.requirements.lowercase')}</span>
+                </li>
+                <li class="flex items-center gap-2 text-xs transition-all duration-300 {/[0-9]/.test(keystorePassword) ? 'text-green-600 font-medium' : 'text-gray-500'}">
+                  {#if /[0-9]/.test(keystorePassword)}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                  {:else}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><circle cx="12" cy="12" r="10"></circle></svg>
+                  {/if}
+                  <span>{$t('password.requirements.number')}</span>
+                </li>
+                <li class="flex items-center gap-2 text-xs transition-all duration-300 {/[!@#$%^&*(),.?":{}|<>]/.test(keystorePassword) ? 'text-green-600 font-medium' : 'text-gray-500'}">
+                  {#if /[!@#$%^&*(),.?":{}|<>]/.test(keystorePassword)}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                  {:else}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0"><circle cx="12" cy="12" r="10"></circle></svg>
+                  {/if}
+                  <span>{$t('password.requirements.special')}</span>
+                </li>
+              </ul>
+            </div>
           {/if}
         </div>
         <Button
           on:click={saveToKeystore}
           disabled={!isPasswordValid || isSavingToKeystore}
+          class="bg-green-600 hover:bg-green-700 text-white font-semibold"
         >
           {#if isSavingToKeystore}
-            {$t('actions.saving')}
+            <div class="flex items-center gap-2">
+              <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+              {$t('actions.saving')}
+            </div>
           {:else}
-            {$t('actions.saveKey')}
+            <div class="flex items-center gap-2">
+              <KeyRound class="h-4 w-4" />
+              {$t('actions.saveKey')}
+            </div>
           {/if}
         </Button>
       </div>
       {#if keystoreSaveMessage}
-        <p class="text-xs text-center mt-2 {keystoreSaveMessage.toLowerCase().includes('success') ? 'text-green-600' : 'text-red-600'}">{keystoreSaveMessage}</p>
+        <div class="mt-3 p-3 rounded-lg border-l-4 {keystoreSaveMessage.toLowerCase().includes('success') ? 'bg-green-50 border-l-green-500 border-y border-r border-green-200' : 'bg-red-50 border-l-red-500 border-y border-r border-red-200'}">
+          <p class="text-sm {keystoreSaveMessage.toLowerCase().includes('success') ? 'text-green-700' : 'text-red-700'} flex items-center gap-2">
+            {#if keystoreSaveMessage.toLowerCase().includes('success')}
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            {:else}
+              <AlertCircle class="h-4 w-4" />
+            {/if}
+            {keystoreSaveMessage}
+          </p>
+        </div>
       {/if}
     </div>
   </Card>
