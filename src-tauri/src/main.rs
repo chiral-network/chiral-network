@@ -8131,7 +8131,28 @@ async fn clear_seed_list() -> Result<(), String> {
 fn check_directory_exists(path: String) -> Result<bool, String> {
     use std::path::Path;
     let p = Path::new(&path);
-    Ok(p.exists() && p.is_dir())
+    
+    // If directory already exists, return true
+    if p.exists() && p.is_dir() {
+        return Ok(true);
+    }
+    
+    // If it doesn't exist, try to create it
+    if !p.exists() {
+        match std::fs::create_dir_all(p) {
+            Ok(_) => {
+                info!("Created storage directory: {}", path);
+                return Ok(true);
+            }
+            Err(e) => {
+                warn!("Failed to create directory {}: {}", path, e);
+                return Ok(false);
+            }
+        }
+    }
+    
+    // Path exists but is not a directory
+    Ok(false)
 }
 
 /// Event pump for DHT events, moved out of start_dht_node
