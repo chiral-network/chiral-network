@@ -284,13 +284,22 @@ impl GethProcess {
             .arg("16384") // Increase tx pool size for network-wide transactions
             .arg("--txpool.globalqueue")
             .arg("4096")
+            // Txpool settings to ensure transactions are included
+            .arg("--txpool.accountslots")
+            .arg("64") // Allow more pending txs per account
+            .arg("--txpool.accountqueue")
+            .arg("128")
+            .arg("--txpool.pricebump")
+            .arg("0") // Don't require price bump for replacement
+            .arg("--txpool.pricelimit")
+            .arg("0") // Accept transactions with 0 gas price
             // Set minimum gas price to 0 to accept all transactions
             // This is important for a private network where we want all transactions to be mined
             .arg("--miner.gasprice")
             .arg("0")
             // Recommend transactions for mining (include pending txs)
             .arg("--miner.recommit")
-            .arg("1s"); // Re-create the mining block every 1 second to include new transactions
+            .arg("500ms"); // Re-create the mining block every 500ms to include new transactions faster
 
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
@@ -1750,7 +1759,19 @@ pub async fn send_transaction(
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
 
-    let chain_id = NETWORK_CONFIG.chain_id;
+    // Query the actual chain ID from the running node to ensure transaction is signed correctly
+    // This handles cases where the local chain was initialized with a different genesis
+    let chain_id = match get_chain_id().await {
+        Ok(id) => {
+            tracing::info!("Using chain ID from node: {}", id);
+            id
+        },
+        Err(e) => {
+            tracing::warn!("Failed to get chain ID from node ({}), using default: {}", e, NETWORK_CONFIG.chain_id);
+            NETWORK_CONFIG.chain_id
+        }
+    };
+    
     let wallet = wallet.with_chain_id(chain_id);
 
     let client = SignerMiddleware::new(provider.clone(), wallet);
@@ -1771,16 +1792,17 @@ pub async fn send_transaction(
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
 
-    // For private network with --miner.gasprice 0, we can use a minimal gas price
-    // This ensures transactions are always included in blocks
-    let gas_price = U256::from(1u64); // Use minimal gas price of 1 wei
-
-    let tx = TransactionRequest::new()
+    // For EIP-1559 transactions (London fork), we use maxFeePerGas and maxPriorityFeePerGas
+    // Setting both to 0 for a private network with --miner.gasprice 0
+    // This ensures transactions are always accepted and mined
+    let tx = Eip1559TransactionRequest::new()
         .to(to)
         .value(amount_wei)
         .gas(21000)
-        .gas_price(gas_price)
-        .nonce(nonce);
+        .max_fee_per_gas(U256::from(0u64))
+        .max_priority_fee_per_gas(U256::from(0u64))
+        .nonce(nonce)
+        .chain_id(chain_id);
 
     let pending_tx = client
         .send_transaction(tx, None)
@@ -1791,15 +1813,30 @@ pub async fn send_transaction(
 
     tracing::info!("✅ Transaction sent: {} from {} to {} amount {} CHIRAL", 
         tx_hash, from_address, to_address, amount_chiral);
-    tracing::info!("   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000", nonce, gas_price);
+    tracing::info!("   Nonce: {}, Max Fee: 0 wei, Max Priority Fee: 0 wei, Gas Limit: 21000, Chain ID: {}", nonce, chain_id);
     
     // Verify the transaction was added to the local txpool
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     
+    // Check txpool status
+    if let Ok(status) = get_txpool_status().await {
+        tracing::info!("   TxPool Status: pending={}, queued={}", 
+            status.get("pending").and_then(|v| v.as_str()).unwrap_or("?"),
+            status.get("queued").and_then(|v| v.as_str()).unwrap_or("?"));
+    }
+    
     // Try to get the transaction back to verify it's in the pool
     match get_transaction_by_hash(tx_hash.clone()).await {
-        Ok(Some(_)) => {
+        Ok(Some(tx_data)) => {
             tracing::info!("✅ Transaction confirmed in local txpool: {}", tx_hash);
+            // Log the blockNumber - if it's null, tx is still pending
+            if let Some(block) = tx_data.get("blockNumber") {
+                if block.is_null() {
+                    tracing::info!("   Transaction is PENDING (not yet mined)");
+                } else {
+                    tracing::info!("   Transaction is in block: {}", block);
+                }
+            }
         },
         Ok(None) => {
             tracing::warn!("⚠️  Transaction NOT found in local txpool: {}", tx_hash);
@@ -1901,6 +1938,35 @@ pub async fn get_txpool_status() -> Result<serde_json::Value, String> {
         .json()
         .await
         .map_err(|e| format!("Failed to parse txpool response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    Ok(json_response["result"].clone())
+}
+
+/// Gets detailed pending transaction pool content for debugging
+#[tauri::command]
+pub async fn get_txpool_content() -> Result<serde_json::Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "txpool_content",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get txpool content: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse txpool content response: {}", e))?;
 
     if let Some(error) = json_response.get("error") {
         return Err(format!("RPC error: {}", error));

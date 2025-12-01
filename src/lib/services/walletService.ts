@@ -4,7 +4,7 @@ import { etcAccount } from '$lib/stores';
 import { invoke } from '@tauri-apps/api/core';
 
 // Default chain ID, can be overridden by fetching from backend
-let CHAIN_ID = 98765; // Default Chiral Network Chain ID
+let CHAIN_ID = 98765; // Chiral Network Chain ID
 
 // Check if running in Tauri environment
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
