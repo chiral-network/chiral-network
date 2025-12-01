@@ -164,8 +164,9 @@
 
   // Encrypted sharing state
   let useEncryptedSharing = false;
-  let recipientPublicKeys: string[] = [];
+  let recipientPublicKeys: Record<string, string>[] = [];
   let recipientPublicKeyInput = "";
+  let editingRecipientIndex = -1;
   let showEncryptionOptions = false;
 
   // Calculate price using dynamic network metrics with safe fallbacks
@@ -1339,7 +1340,10 @@
                     if (/^[0-9a-fA-F]{64}$/.test(trimmedKey)) {
                       recipientPublicKeys = [
                         ...recipientPublicKeys,
-                        trimmedKey,
+                        {
+                          key: trimmedKey,
+                          name: `Recipient ${recipientPublicKeys.length + 1}`,
+                        },
                       ];
                       recipientPublicKeyInput = "";
                     }
@@ -1368,26 +1372,64 @@
                 </h4>
                 {#if recipientPublicKeys.length > 0}
                   <ul class="space-y-2">
-                    {#each recipientPublicKeys as key, index}
+                    {#each recipientPublicKeys as item, index}
                       <li class="flex items-center gap-2">
-                        <span class="flex items-center gap-2">
-                          <button
-                            class="group/btn p-1 hover:bg-destructive/10 rounded transition-colors"
-                            on:click={() =>
-                              (recipientPublicKeys = recipientPublicKeys.filter(
-                                (_, i) => i !== index,
-                              ))}
-                            title={$t("upload.encryption.removeRecipient")}
-                            aria-label={$t("upload.encryption.removeRecipient")}
-                          >
-                            <X
-                              class="h-4 w-4 text-muted-foreground group-hover/btn:text-destructive transition-colors"
+                        <span class="flex flex-col gap-1">
+                            {#if editingRecipientIndex === index}
+                            <input
+                              bind:value={item.name}
+                              class="text-sm font-medium text-gray-800 border-none outline-none text-left px-2 py-1 rounded"
+                              on:blur={() => (editingRecipientIndex = -1)}
+                              on:keydown={(e) => {
+                              if (e.key === "Enter")
+                                editingRecipientIndex = -1;
+                              }}
                             />
-                          </button>
-                          <span
-                            class="font-mono text-sm bg-muted/50 px-2 py-1 rounded"
-                            >{key}</span
-                          >
+                            {:else}
+                            <button
+                              type="button"
+                              class="text-sm font-medium text-gray-800 border-none outline-none text-left px-2 py-1 rounded underline"
+                              on:click={() => (editingRecipientIndex = index)}
+                              title="Click to edit name"
+                            >
+                              {item.name}
+                            </button>
+                            {/if}
+                          <span class="flex items-center gap-2">
+                            <code
+                              class="font-mono text-sm bg-muted/50 px-2 py-1 rounded w-[36rem]"
+                              placeholder="Public key"
+                            >
+                              {item.key}
+                            </code>
+                            <button
+                              class="group/btn p-1 hover:bg-destructive/10 rounded transition-colors"
+                              on:click={() =>
+                                (recipientPublicKeys =
+                                  recipientPublicKeys.filter(
+                                    (_, i) => i !== index,
+                                  ))}
+                              title={$t("upload.encryption.removeRecipient")}
+                              aria-label={$t(
+                                "upload.encryption.removeRecipient",
+                              )}
+                            >
+                              <X
+                                class="h-4 w-4 text-muted-foreground group-hover/btn:text-destructive transition-colors"
+                              />
+                            </button>
+                            <button
+                              class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                              on:click={() =>
+                                navigator.clipboard.writeText(item.key)}
+                              title="Copy public key"
+                              aria-label="Copy public key"
+                            >
+                              <Copy
+                                class="h-4 w-4 text-muted-foreground group-hover/btn:text-primary transition-colors"
+                              />
+                            </button>
+                          </span>
                         </span>
                       </li>
                     {/each}
