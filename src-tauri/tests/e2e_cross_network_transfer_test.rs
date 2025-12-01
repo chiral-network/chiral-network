@@ -12,7 +12,8 @@
 /// - DHT provider records work correctly
 /// - Bitswap block exchange succeeds
 
-use chiral_network::dht::{DhtService, FileMetadata};
+use chiral_network::dht::DhtService;
+use chiral_network::dht::models::FileMetadata;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -68,7 +69,10 @@ async fn test_e2e_file_transfer_same_network() {
         false,
         Vec::new(),
         false,
-        None,
+        false, // enable_upnp
+        None, // blockstore_db_path
+        None, // last_autorelay_enabled_at
+        None, // last_autorelay_disabled_at
     )
     .await
     .expect("Failed to create seeder");
@@ -140,7 +144,10 @@ async fn test_e2e_file_transfer_same_network() {
         false,
         Vec::new(),
         false,
-        None,
+        false, // enable_upnp
+        None, // blockstore_db_path
+        None, // last_autorelay_enabled_at
+        None, // last_autorelay_disabled_at
     )
     .await
     .expect("Failed to create downloader");
@@ -187,15 +194,8 @@ async fn test_e2e_file_transfer_same_network() {
     let download_path = std::env::temp_dir().join("chiral-test-downloaded.txt");
 
     // Download file (this will test Bitswap)
-    let download_metadata = FileMetadata {
-        merkle_root: expected_hash.clone(),
-        file_name: "downloaded-file.txt".to_string(),
-        file_size: test_content.len() as u64,
-        seeders: vec![seeder_peer_id.clone()],
-        cids: Some(vec![expected_hash.clone()]),
-        is_root: true,
-        ..file_metadata
-    };
+    // Note: download_metadata would be used if we implemented download functionality
+    // For now, the test validates DHT discovery and file search
 
     // Note: You'll need to expose a download method in DhtService
     // For now, we'll just verify the DHT discovery worked
@@ -234,7 +234,10 @@ async fn test_dht_provider_records() {
         false,
         Vec::new(),
         false,
-        None,
+        false, // enable_upnp
+        None, // blockstore_db_path
+        None, // last_autorelay_enabled_at
+        None, // last_autorelay_disabled_at
     )
     .await
     .expect("Failed to create node");
@@ -296,7 +299,10 @@ async fn test_multi_peer_dht_propagation() {
         false,
         Vec::new(),
         false,
-        None,
+        false, // enable_upnp
+        None, // blockstore_db_path
+        None, // last_autorelay_enabled_at
+        None, // last_autorelay_disabled_at
     )
     .await
     .expect("Failed to create node1");
@@ -306,7 +312,11 @@ async fn test_multi_peer_dht_propagation() {
 
     sleep(Duration::from_secs(1)).await;
     let node1_metrics = node1.metrics_snapshot().await;
-    let bootstrap1 = vec![format!("{}/p2p/{}", node1_metrics.listen_addrs[0], node1_id)];
+    let bootstrap1 = if !node1_metrics.listen_addrs.is_empty() {
+        vec![format!("{}/p2p/{}", node1_metrics.listen_addrs[0], node1_id)]
+    } else {
+        vec![format!("/ip4/127.0.0.1/tcp/14020/p2p/{}", node1_id)]
+    };
 
     // Node 2 connects to Node 1
     let node2 = DhtService::new(
@@ -325,7 +335,10 @@ async fn test_multi_peer_dht_propagation() {
         false,
         Vec::new(),
         false,
-        None,
+        false, // enable_upnp
+        None, // blockstore_db_path
+        None, // last_autorelay_enabled_at
+        None, // last_autorelay_disabled_at
     )
     .await
     .expect("Failed to create node2");
@@ -335,7 +348,11 @@ async fn test_multi_peer_dht_propagation() {
 
     sleep(Duration::from_secs(2)).await;
     let node2_metrics = node2.metrics_snapshot().await;
-    let bootstrap2 = vec![format!("{}/p2p/{}", node2_metrics.listen_addrs[0], node2_id)];
+    let bootstrap2 = if !node2_metrics.listen_addrs.is_empty() {
+        vec![format!("{}/p2p/{}", node2_metrics.listen_addrs[0], node2_id)]
+    } else {
+        vec![format!("/ip4/127.0.0.1/tcp/14021/p2p/{}", node2_id)]
+    };
 
     // Node 3 connects to Node 2
     let node3 = DhtService::new(
@@ -354,7 +371,10 @@ async fn test_multi_peer_dht_propagation() {
         false,
         Vec::new(),
         false,
-        None,
+        false, // enable_upnp
+        None, // blockstore_db_path
+        None, // last_autorelay_enabled_at
+        None, // last_autorelay_disabled_at
     )
     .await
     .expect("Failed to create node3");
