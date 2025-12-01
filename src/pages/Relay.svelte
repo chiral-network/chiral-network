@@ -5,10 +5,12 @@
   import { settings } from '$lib/stores';
   import type { AppSettings } from '$lib/stores';
   import { dhtService } from '$lib/dht';
+  import type { DhtHealth } from '$lib/dht';
   import { relayErrorService } from '$lib/services/relayErrorService';
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Label from '$lib/components/ui/label.svelte';
+  import Badge from '$lib/components/ui/badge.svelte';
   import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte';
   import { Wifi, WifiOff, Server, Settings as SettingsIcon } from 'lucide-svelte';
 
@@ -19,11 +21,25 @@
   let dhtIsRunning: boolean | null = null;
   let relayServerAlias = '';
   let isRestartingAutorelay = false;
+  let dhtHealthSnapshot: DhtHealth | null = null;
+  let healthSnapshotInterval: number | undefined;
 
   // AutoRelay client settings
   let autoRelayEnabled = true;
 
   let settingsUnsubscribe: (() => void) | null = null;
+
+  function truncatePeerId(id: string | null | undefined): string {
+    if (!id) return $t('network.dht.relay.noPeer');
+    if (id.length <= 12) return id;
+    return `${id.slice(0, 12)}...`;
+  }
+
+  function formatHealthTimestamp(timestamp: number | null | undefined): string {
+    if (!timestamp) return $t('network.dht.relay.never');
+    const millis = timestamp < 1e12 ? timestamp * 1000 : timestamp;
+    return new Date(millis).toLocaleString();
+  }
 
   function applySettingsState(source: Partial<AppSettings>) {
     if (typeof source.enableRelayServer === 'boolean') {
@@ -63,6 +79,8 @@
         const health = await dhtService.getHealth();
         if (health) {
           autoRelayEnabled = health.autorelayEnabled;
+          dhtHealthSnapshot = health;
+          relayErrorService.syncFromHealthSnapshot(health);
           await saveSettings();
         }
       } catch (error) {
@@ -87,6 +105,21 @@
       console.error('Failed to check DHT status:', error);
       dhtIsRunning = false;
       relayServerRunning = false;
+    }
+  }
+
+  async function refreshDhtHealthSnapshot() {
+    if (!dhtIsRunning) {
+      dhtHealthSnapshot = null;
+      return;
+    }
+
+    try {
+      const health = await dhtService.getHealth();
+      dhtHealthSnapshot = health;
+      relayErrorService.syncFromHealthSnapshot(health);
+    } catch (error) {
+      console.error('Failed to refresh DHT health snapshot:', error);
     }
   }
 
@@ -212,6 +245,9 @@
 
       // Periodically check DHT status (every 3 seconds)
       statusCheckInterval = window.setInterval(checkDhtStatus, 3000);
+      // Refresh DHT health snapshot so the Relay tab mirrors backend state
+      await refreshDhtHealthSnapshot();
+      healthSnapshotInterval = window.setInterval(refreshDhtHealthSnapshot, 5000);
 
       // Initialize relay error service with preferred relays
       const preferredRelays = get(settings).preferredRelays || [];
@@ -243,6 +279,9 @@
     return () => {
       if (statusCheckInterval !== undefined) {
         clearInterval(statusCheckInterval);
+      }
+      if (healthSnapshotInterval !== undefined) {
+        clearInterval(healthSnapshotInterval);
       }
       settingsUnsubscribe?.();
     };
@@ -402,6 +441,68 @@
       </div>
     </Card>
   </div>
+
+  {#if dhtIsRunning && dhtHealthSnapshot}
+    <Card class="p-6">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.title')}</p>
+          <h3 class="text-xl font-bold text-gray-900">{$t('relay.monitor.activeRelayTitle')}</h3>
+        </div>
+        <Badge class={dhtHealthSnapshot.activeRelayPeerId ? 'bg-green-600' : 'bg-yellow-600'}>
+          {dhtHealthSnapshot.activeRelayPeerId
+            ? `${$t('network.dht.relay.status')}: ${dhtHealthSnapshot.relayReservationStatus ?? $t('network.dht.relay.pending')}`
+            : $t('network.dht.relay.noPeer')}
+        </Badge>
+      </div>
+
+      {#if dhtHealthSnapshot.activeRelayPeerId}
+        <div class="grid gap-3 md:grid-cols-3">
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.activePeer')}</p>
+            <p class="text-sm font-mono mt-1">{truncatePeerId(dhtHealthSnapshot.activeRelayPeerId)}</p>
+          </div>
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('relay.monitor.healthScore')}</p>
+            <p class="text-sm font-medium mt-1">{(dhtHealthSnapshot.relayHealthScore ?? 0).toFixed(1)}%</p>
+          </div>
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.status')}</p>
+            <p class="text-sm font-medium mt-1">{dhtHealthSnapshot.relayReservationStatus ?? $t('network.dht.relay.pending')}</p>
+          </div>
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.renewals')}</p>
+            <p class="text-sm font-medium mt-1">{dhtHealthSnapshot.reservationRenewals ?? 0}</p>
+          </div>
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.evictions')}</p>
+            <p class="text-sm font-medium mt-1">{dhtHealthSnapshot.reservationEvictions ?? 0}</p>
+          </div>
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.lastSuccess')}</p>
+            <p class="text-sm font-medium mt-1">{formatHealthTimestamp(dhtHealthSnapshot.lastReservationSuccess)}</p>
+          </div>
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.lastFailure')}</p>
+            <p class="text-sm font-medium mt-1">{formatHealthTimestamp(dhtHealthSnapshot.lastReservationFailure)}</p>
+          </div>
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('relay.monitor.totalRelays')}</p>
+            <p class="text-sm font-medium mt-1">{dhtHealthSnapshot.totalRelaysInPool ?? 0}</p>
+          </div>
+          <div class="bg-muted/40 rounded-lg p-3">
+            <p class="text-xs uppercase text-muted-foreground">{$t('relay.monitor.connected')}</p>
+            <p class="text-sm font-medium mt-1">{dhtHealthSnapshot.activeRelayCount ?? 0}</p>
+          </div>
+        </div>
+      {:else}
+        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+          <p class="text-sm text-yellow-900">{$t('network.dht.relay.noPeer')}</p>
+          <p class="text-xs text-yellow-800 mt-1">{$t('network.dht.relay.pending')}</p>
+        </div>
+      {/if}
+    </Card>
+  {/if}
 
   <!-- Relay Error Monitor -->
   {#if autoRelayEnabled && dhtIsRunning === true}

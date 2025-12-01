@@ -14,6 +14,7 @@
 
 import { writable, derived, get } from 'svelte/store';
 import { dhtService } from '$lib/dht';
+import type { DhtHealth } from '$lib/dht';
 
 /**
  * Relay error categories for diagnosis
@@ -501,6 +502,57 @@ class RelayErrorService {
       };
       this.handleConnectionFailure(relay, relayError, 0);
     }
+  }
+
+  /**
+   * Ingest relay info from a backend DHT health snapshot so the UI can reflect
+   * the active relay even when no preferred relays were configured.
+   */
+  syncFromHealthSnapshot(health: Partial<DhtHealth> | null): void {
+    if (!health) {
+      return;
+    }
+
+    const activeRelayId = health.activeRelayPeerId;
+
+    const normalizeTimestamp = (value: number | null | undefined): number | null => {
+      if (value === null || value === undefined) return null;
+      // Backend may report seconds; convert anything that looks like seconds
+      return value < 1e12 ? value * 1000 : value;
+    };
+
+    // If backend reports an active relay, ensure it exists in the pool
+    if (activeRelayId) {
+      const placeholderMultiaddr = `/p2p/${activeRelayId}`;
+      this.addRelayToPool(placeholderMultiaddr, false);
+      this.updateRelayState(activeRelayId, RelayConnectionState.RESERVED);
+
+      const metrics: Partial<RelayNode> = {};
+
+      if (typeof health.relayHealthScore === 'number') {
+        metrics.healthScore = Math.min(Math.max(health.relayHealthScore, 0), 100);
+      }
+      if (typeof health.lastReservationSuccess === 'number') {
+        const ts = normalizeTimestamp(health.lastReservationSuccess);
+        metrics.lastSuccess = ts ?? null;
+        metrics.lastAttempt = ts ?? null;
+      }
+      if (typeof health.relayConnectionAttempts === 'number') {
+        metrics.totalAttempts = health.relayConnectionAttempts;
+      }
+      if (typeof health.relayConnectionSuccesses === 'number') {
+        metrics.totalSuccesses = health.relayConnectionSuccesses;
+      }
+
+      // Apply captured metrics and set as active relay for UI purposes
+      this.updateRelayMetrics(activeRelayId, metrics);
+      const pool = get(this.relayPool);
+      this.activeRelay.set(pool.get(activeRelayId) ?? null);
+      return;
+    }
+
+    // No active relay reported by backend
+    this.activeRelay.set(null);
   }
 
   /**
