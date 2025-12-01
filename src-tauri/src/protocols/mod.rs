@@ -62,6 +62,9 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 use detection::ProtocolDetector;
 
+// Re-export detection types for external use
+pub use detection::DetectionPreferences;
+
 // Re-export legacy trait with the old name for backward compatibility
 // This allows existing code like bittorrent_handler.rs to continue working
 #[doc(hidden)]
@@ -338,9 +341,47 @@ impl ProtocolManager {
         for handler in &self.handlers {
             map.insert(handler.name().to_string(), handler.as_ref());
         }
-    
+
         self.detector.detect_best(&file_identifier, &map).await
-    }    
+    }
+
+    /// Returns the best protocol for downloading the file with custom preferences
+    ///
+    /// This method allows filtering protocols based on required capabilities
+    /// such as seeding support, encryption, or pause/resume functionality.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_identifier` - The file identifier (URL, magnet link, ed2k link, etc.)
+    /// * `preferences` - User preferences for filtering protocols
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let prefs = DetectionPreferences {
+    ///     require_encryption: true,
+    ///     ..Default::default()
+    /// };
+    /// let best = manager.detect_best_protocol_with_preferences(
+    ///     "magnet:?xt=urn:btih:...".to_string(),
+    ///     prefs
+    /// ).await;
+    /// ```
+    pub async fn detect_best_protocol_with_preferences(
+        &mut self,
+        file_identifier: String,
+        preferences: DetectionPreferences,
+    ) -> Option<String> {
+        // Update detector preferences
+        self.detector.set_priority(preferences);
+
+        let mut map: HashMap<String, &dyn ProtocolHandler> = HashMap::new();
+        for handler in &self.handlers {
+            map.insert(handler.name().to_string(), handler.as_ref());
+        }
+
+        self.detector.detect_best(&file_identifier, &map).await
+    }
 }
 
 

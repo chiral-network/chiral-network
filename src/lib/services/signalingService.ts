@@ -352,7 +352,6 @@ export class SignalingService {
 
       this.state.set("connected");
       this.connected.set(true);
-      console.debug("[SignalingService] connected via DHT");
 
       // ensure heartbeat is not running for WS
       this.stopWsHeartbeat();
@@ -414,7 +413,6 @@ export class SignalingService {
               JSON.stringify({ type: "register", clientId: this.clientId })
             );
           } catch (_) {}
-          console.debug("[SignalingService] WS connected");
           // start heartbeat
           this.startWsHeartbeat();
           resolve();
@@ -680,8 +678,6 @@ export class SignalingService {
       }
       return;
     }
-
-    console.debug("[SignalingService] Unhandled message", message);
   }
 }
 

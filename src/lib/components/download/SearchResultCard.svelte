@@ -25,6 +25,10 @@
   let checkingBalance = false;
   let hashCopied = false;
   let seederCopiedIndex: number | null = null;
+  let magnetCopied = false;
+  let ed2kCopied = false;
+  let ftpCopied = false;
+  let httpCopied = false;
   let showDecryptDialog = false;
   let showDownloadConfirmDialog = false;
   let showPaymentConfirmDialog = false;
@@ -42,6 +46,7 @@
   $: createdLabel = metadata?.createdAt
     ? formatRelativeTime(new Date(metadata.createdAt * 1000))
     : null;
+
 
   // Helper function to determine available protocols for a file
   $: availableProtocols = (() => {
@@ -130,6 +135,38 @@
           seederCopiedIndex = null;
         }
       }, 1500);
+    });
+  }
+
+  function copyMagnetLink(link: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      magnetCopied = true;
+      dispatch('copy', link);
+      setTimeout(() => (magnetCopied = false), 1500);
+    });
+  }
+
+  function copyEd2kLink(link: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      ed2kCopied = true;
+      dispatch('copy', link);
+      setTimeout(() => (ed2kCopied = false), 1500);
+    });
+  }
+
+  function copyFtpLink(link: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      ftpCopied = true;
+      dispatch('copy', link);
+      setTimeout(() => (ftpCopied = false), 1500);
+    });
+  }
+
+  function copyHttpLink(link: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      httpCopied = true;
+      dispatch('copy', link);
+      setTimeout(() => (httpCopied = false), 1500);
     });
   }
 
@@ -296,8 +333,6 @@
 
   // Check balance when component mounts
   onMount(() => {
-    console.log("💰 SearchResultCard metadata:", metadata);
-    console.log("💰 Price from metadata:", metadata.price);
     checkBalance();
   });
 </script>
@@ -305,19 +340,19 @@
 <Card class="p-5 space-y-5">
   <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
     <div class="flex items-start gap-3">
-      <div class="mt-1 h-9 w-9 rounded-md bg-muted flex items-center justify-center">
-        <FileIcon class="h-5 w-5 text-muted-foreground" />
+      <div class="w-12 h-12 rounded-md bg-muted flex items-center justify-center">
+        <FileIcon class="h-6 w-6 text-muted-foreground" />
       </div>
-      <div class="space-y-1">
+      <div class="flex-1">
         <h3 class="text-lg font-semibold break-all">{metadata.fileName}</h3>
-        <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <span>{formatFileSize(metadata.fileSize)}</span>
+        <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mt-1">
           {#if createdLabel}
-            <span>•</span>
             <span>Published {createdLabel}</span>
           {/if}
           {#if metadata.mimeType}
-            <span>•</span>
+            {#if createdLabel}
+              <span>•</span>
+            {/if}
             <span>{metadata.mimeType}</span>
           {/if}
         </div>
@@ -335,27 +370,149 @@
   </div>
 
   <div class="grid gap-4 md:grid-cols-2">
+    <!-- Left Column: All technical identifiers and details -->
     <div class="space-y-3">
       <div>
-        <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">File hash</p>
-        <div class="flex items-center gap-2">
-          <code class="text-sm font-mono break-all flex-1">{metadata.fileHash}</code>
-          <Button variant="outline" size="icon" on:click={copyHash} class="h-8 w-8">
-            <Copy class="h-4 w-4" />
+        <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Merkle hash</p>
+        <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 py-1 px-1.5 overflow-hidden">
+          <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{metadata.fileHash}</code>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="h-7 w-7"
+            on:click={copyHash}
+          >
+            <Copy class="h-3.5 w-3.5" />
             <span class="sr-only">Copy hash</span>
           </Button>
         </div>
         {#if hashCopied}
-          <p class="mt-1 text-xs text-emerald-600">Copied!</p>
+          <p class="ml-6 text-xs text-emerald-600">Hash copied</p>
         {/if}
       </div>
 
+      {#if metadata.infoHash}
+        {@const magnetLink = `magnet:?xt=urn:btih:${metadata.infoHash}${metadata.trackers && metadata.trackers.length > 0 ? '&tr=' + metadata.trackers.join('&tr=') : ''}`}
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Magnet Link</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{magnetLink}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              on:click={() => copyMagnetLink(magnetLink)}
+            >
+              <Copy class="h-3.5 w-3.5" />
+              <span class="sr-only">Copy magnet link</span>
+            </Button>
+          </div>
+          {#if magnetCopied}
+            <p class="ml-6 text-xs text-emerald-600">Magnet link copied</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if metadata.ed2kSources && metadata.ed2kSources.length > 0}
+        {@const ed2kSource = metadata.ed2kSources[0]}
+        {@const ed2kLink = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`}
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">ED2K Link</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{ed2kLink}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              on:click={() => copyEd2kLink(ed2kLink)}
+            >
+              <Copy class="h-3.5 w-3.5" />
+              <span class="sr-only">Copy ED2K link</span>
+            </Button>
+          </div>
+          {#if ed2kCopied}
+            <p class="ml-6 text-xs text-emerald-600">ED2K link copied</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if metadata.ftpSources && metadata.ftpSources.length > 0}
+        {@const ftpSource = metadata.ftpSources[0]}
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">FTP Link</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{ftpSource.url}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              on:click={() => copyFtpLink(ftpSource.url)}
+            >
+              <Copy class="h-3.5 w-3.5" />
+              <span class="sr-only">Copy FTP link</span>
+            </Button>
+          </div>
+          {#if ftpCopied}
+            <p class="ml-6 text-xs text-emerald-600">FTP link copied</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if metadata.httpSources && metadata.httpSources.length > 0}
+        {@const httpSource = metadata.httpSources[0]}
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">HTTP Link</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{httpSource.url}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              on:click={() => copyHttpLink(httpSource.url)}
+            >
+              <Copy class="h-3.5 w-3.5" />
+              <span class="sr-only">Copy HTTP link</span>
+            </Button>
+          </div>
+          {#if httpCopied}
+            <p class="ml-6 text-xs text-emerald-600">HTTP link copied</p>
+          {/if}
+        </div>
+      {/if}
+
+      <div class="space-y-3">
+        <p class="text-xs uppercase tracking-wide text-muted-foreground">Details</p>
+        <ul class="space-y-2 text-sm text-foreground">
+          <li class="flex items-center justify-between">
+            <span class="text-muted-foreground">Seeder count</span>
+            <span>{seederCount}</span>
+          </li>
+          <li class="flex items-center justify-between">
+            <span class="text-muted-foreground">Size</span>
+            <span>{formatFileSize(metadata.fileSize)}</span>
+          </li>
+          <li class="flex items-center justify-between">
+            <span class="text-muted-foreground">Price</span>
+            <span class="font-semibold {metadata.price && metadata.price > 0 ? 'text-emerald-600' : 'text-muted-foreground'}">
+              {#if metadata.price && metadata.price > 0}
+                {metadata.price} Chiral
+              {:else}
+                Free
+              {/if}
+            </span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Right Column: Available peers -->
+    <div class="space-y-3">
       {#if metadata.seeders?.length}
         <div class="space-y-2">
           <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
           <div class="space-y-2 max-h-40 overflow-auto pr-1">
             {#each seederIds as seeder, index}
-              <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2">
+              <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden">
                 <div class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
                 <div class="space-y-1 flex-1">
                   <code class="text-xs font-mono break-words block">{seeder.address}</code>
@@ -380,36 +537,11 @@
           </div>
         </div>
       {:else}
-        <p class="text-xs text-muted-foreground italic">No seeders reported yet for this file.</p>
+        <div class="space-y-2">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
+          <p class="text-xs text-muted-foreground italic">No seeders reported yet for this file.</p>
+        </div>
       {/if}
-    </div>
-
-    <div class="space-y-3">
-      <p class="text-xs uppercase tracking-wide text-muted-foreground">Details</p>
-      <ul class="space-y-2 text-sm text-foreground">
-        <li class="flex items-center justify-between">
-          <span class="text-muted-foreground">Seeder count</span>
-          <span>{seederCount}</span>
-        </li>
-        <li class="flex items-center justify-between">
-          <span class="text-muted-foreground">Estimated size</span>
-          <span>{formatFileSize(metadata.fileSize)}</span>
-        </li>
-        <li class="flex items-center justify-between">
-          <span class="text-muted-foreground">Price</span>
-          <span class="font-semibold {metadata.price && metadata.price > 0 ? 'text-emerald-600' : 'text-muted-foreground'}">
-            {#if metadata.price && metadata.price > 0}
-              {metadata.price} Chiral
-            {:else}
-              Free
-            {/if}
-          </span>
-        </li>
-        <li class="flex items-center justify-between">
-          <span class="text-muted-foreground">Hash prefix</span>
-          <span>{metadata.fileHash.slice(0, 10)}…</span>
-        </li>
-      </ul>
     </div>
   </div>
 

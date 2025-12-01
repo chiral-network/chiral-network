@@ -561,6 +561,12 @@
   
   async function updateMiningStats() {
     try {
+      // Check if Geth is running before making blockchain calls
+      const gethRunning = await invoke<boolean>('is_geth_running');
+      if (!gethRunning) {
+        return; // Silently skip if Geth is not running
+      }
+
       const [rate, block] = await Promise.all([
         invoke('get_miner_hashrate') as Promise<string>,
         invoke('get_current_block') as Promise<number>

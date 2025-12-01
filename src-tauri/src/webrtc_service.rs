@@ -89,6 +89,7 @@ pub struct WebRTCManifestResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChunk {
     pub file_hash: String,
+    pub file_name: String, // Add file_name field to preserve original filename
     pub chunk_index: u32,
     pub total_chunks: u32,
     pub data: Vec<u8>,
@@ -1494,6 +1495,7 @@ impl WebRTCService {
 
             let chunk = FileChunk {
                 file_hash: request.file_hash.clone(),
+                file_name: request.file_name.clone(), // Include original filename
                 chunk_index,
                 total_chunks,
                 data: final_chunk_data,
@@ -1713,7 +1715,7 @@ impl WebRTCService {
     // Get file name from the first chunk
     let file_name = sorted_chunks
         .first()
-        .map(|c| c.file_hash.clone())
+        .map(|c| c.file_name.clone()) // Use file_name instead of file_hash
         .unwrap_or_else(|| format!("downloaded_{}", file_hash));
 
     // Concatenate chunk data

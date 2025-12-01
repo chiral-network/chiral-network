@@ -12,6 +12,7 @@ export default defineConfig({
     },
     hmr: {
       overlay: false,
+      clientLogLevel: "error",
     },
   },
   logLevel: "error",
