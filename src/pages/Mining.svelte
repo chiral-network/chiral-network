@@ -41,7 +41,15 @@
   let error = ''
 
   // Blockchain sync status - updated from gethSyncStatus store
-  $: isSyncing = $gethSyncStatus?.syncing ?? true
+  // Track whether we've received initial sync status to prevent premature mining
+  let hasReceivedInitialSyncStatus = false
+  $: {
+    if ($gethSyncStatus !== null && !hasReceivedInitialSyncStatus) {
+      hasReceivedInitialSyncStatus = true
+    }
+  }
+  // Default to syncing=true until we get the first real status, then trust the data
+  $: isSyncing = hasReceivedInitialSyncStatus ? ($gethSyncStatus?.syncing ?? false) : true
   $: syncProgress = $gethSyncStatus?.progress_percent ?? 0
   $: syncCurrentBlock = $gethSyncStatus?.current_block ?? 0
   $: syncHighestBlock = $gethSyncStatus?.highest_block ?? 0
@@ -427,6 +435,7 @@
 
     await checkGethStatus()
     await updateNetworkStats()
+    await updateSyncStatus() // Check blockchain sync status immediately on mount
 
     // Always fetch initial mining stats (blocksFound, totalRewards) on mount
     if (isTauri) {
