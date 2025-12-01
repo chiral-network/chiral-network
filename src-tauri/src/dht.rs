@@ -298,7 +298,10 @@ pub enum DhtCommand {
         info_hash: String,
         sender: oneshot::Sender<Result<Vec<String>, String>>,
     },
-    SearchFile(String),
+    SearchFile {
+        file_hash: String,
+        sender: oneshot::Sender<Result<Option<FileMetadata>, String>>,
+    },
     DownloadFile(FileMetadata, String),
     ConnectPeer(String),
     ConnectToPeerById(PeerId),
@@ -645,6 +648,51 @@ struct PendingInfohashSearch {
 struct PendingProviderQuery {
     id: u64,
     sender: oneshot::Sender<Result<Vec<String>, String>>,
+}
+
+// Add this struct after PendingProviderQuery around line 650:
+#[derive(Debug)]
+struct PendingSearchQuery {
+    file_hash: String,
+    record_query_id: Option<kad::QueryId>,
+    providers_query_id: Option<kad::QueryId>,
+    sender: oneshot::Sender<Result<Option<FileMetadata>, String>>,
+    start_time: std::time::Instant,
+    found_record: Option<FileMetadata>,
+    found_providers: Option<Vec<String>>,
+}
+
+impl PendingSearchQuery {
+    fn new(
+        file_hash: String,
+        sender: oneshot::Sender<Result<Option<FileMetadata>, String>>,
+    ) -> Self {
+        Self {
+            file_hash,
+            record_query_id: None,
+            providers_query_id: None,
+            sender,
+            start_time: std::time::Instant::now(),
+            found_record: None,
+            found_providers: None,
+        }
+    }
+    
+    fn is_complete(&self) -> bool {
+        self.found_record.is_some() || self.found_providers.is_some()
+    }
+    
+    fn finalize(self) -> Result<Option<FileMetadata>, String> {
+        if let Some(metadata) = self.found_record {
+            Ok(Some(metadata))
+        } else if let Some(_providers) = self.found_providers {
+            // If we found providers but no metadata record, we could potentially
+            // query the providers for metadata, but for now return None
+            Ok(None)
+        } else {
+            Ok(None)
+        }
+    }
 }
 // ------Proxy Protocol Implementation------
 #[derive(Clone, Debug, Default)]
@@ -1242,6 +1290,7 @@ async fn run_dht_node(
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>,
         >,
     >,
+    pending_search_queries: Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>>, // <-- Added parameter
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -2037,19 +2086,29 @@ async fn run_dht_node(
                                     let _ = swarm.behaviour_mut().kademlia.get_record(key);
                                 }
                             }
-                            Some(DhtCommand::SearchFile(file_hash)) => {
-                                // Query both the metadata record AND the provider records
-                                // This ensures we find the file even if only provider announcements exist
-                                let key = kad::RecordKey::new(&file_hash.as_bytes());
-                                let record_query_id = swarm.behaviour_mut().kademlia.get_record(key.clone());
-                                info!("Searching for file metadata: {} (query: {:?})", file_hash, record_query_id);
-
-                                // Also query for providers who have announced they're seeding this file
-                                let providers_query_id = swarm.behaviour_mut().kademlia.get_providers(key);
-                                info!("Searching for file providers: {} (query: {:?})", file_hash, providers_query_id);
-
-                                // Track this providers query for timeout detection
-                                get_providers_queries.lock().await.insert(providers_query_id, (file_hash.clone(), std::time::Instant::now()));
+                            Some(DhtCommand::SearchFile { file_hash, sender }) => {
+                               // Query both the metadata record AND the provider records
+                            // This ensures we find the file even if only provider announcements exist
+                            let key = kad::RecordKey::new(&file_hash.as_bytes());
+                            
+                            // Create a pending search query to track both lookups
+                            let mut pending_query = PendingSearchQuery::new(file_hash.clone(), sender);
+                            
+                            // Start record lookup
+                            let record_query_id = swarm.behaviour_mut().kademlia.get_record(key.clone());
+                            info!("Searching for file metadata: {} (query: {:?})", file_hash, record_query_id);
+                            pending_query.record_query_id = Some(record_query_id);
+                            
+                            // Start provider lookup
+                            let providers_query_id = swarm.behaviour_mut().kademlia.get_providers(key);
+                            info!("Searching for file providers: {} (query: {:?})", file_hash, providers_query_id);
+                            pending_query.providers_query_id = Some(providers_query_id);
+                            
+                            // Track both queries under the record query ID (primary)
+                            pending_search_queries.lock().await.insert(record_query_id, pending_query);
+                            
+                            // Also track the providers query for timeout detection
+                            get_providers_queries.lock().await.insert(providers_query_id, (file_hash.clone(), std::time::Instant::now()));
                             }
                             Some(DhtCommand::SearchByInfohash { info_hash, sender }) => {
                                 let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
@@ -6128,6 +6187,9 @@ impl DhtService {
         let pending_dht_queries: Arc<
             Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
         > = Arc::new(Mutex::new(HashMap::new()));
+        // Add this initialization around line 6100 after pending_dht_queries:
+        let pending_search_queries: Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -6176,6 +6238,7 @@ impl DhtService {
             file_metadata_cache_local.clone(),
             pending_dht_queries.clone(),
             pending_key_requests.clone(),
+            pending_search_queries.clone(), // Add this parameter to the tokio::spawn call around line 6145:
             is_bootstrap,
             final_enable_autorelay,
             relay_candidates,
@@ -6437,9 +6500,13 @@ impl DhtService {
             .map_err(|e| e.to_string())
     }
 
+    // Fix the search_file method around line 6464:
     pub async fn search_file(&self, file_hash: String) -> Result<(), String> {
+        // Create a dummy channel since this is fire-and-forget
+        let (sender, _receiver) = oneshot::channel();
+        
         self.cmd_tx
-            .send(DhtCommand::SearchFile(file_hash))
+            .send(DhtCommand::SearchFile { file_hash, sender })
             .await
             .map_err(|e| e.to_string())
     }
@@ -6448,9 +6515,13 @@ impl DhtService {
         self.search_file(file_hash).await
     }
 
+    // Fix the search_metadata method around line 6474:
     pub async fn search_metadata(&self, file_hash: String, timeout_ms: u64) -> Result<(), String> {
+        // Create a dummy channel since this is fire-and-forget
+        let (sender, _receiver) = oneshot::channel();
+        
         self.cmd_tx
-            .send(DhtCommand::SearchFile(file_hash.clone()))
+            .send(DhtCommand::SearchFile { file_hash, sender })
             .await
             .map_err(|e| e.to_string())
     }
@@ -6473,8 +6544,9 @@ impl DhtService {
         }
 
         if timeout_ms == 0 {
+            let (sender, _receiver) = oneshot::channel();
             self.cmd_tx
-                .send(DhtCommand::SearchFile(file_hash))
+                .send(DhtCommand::SearchFile { file_hash, sender })
                 .await
                 .map_err(|e| e.to_string())?;
             return Ok(None);
@@ -6494,10 +6566,10 @@ impl DhtService {
                     sender: tx,
                 });
         }
-
+        let (dummy_sender, _dummy_receiver) = oneshot::channel();
         if let Err(err) = self
             .cmd_tx
-            .send(DhtCommand::SearchFile(file_hash.clone()))
+            .send(DhtCommand::SearchFile { file_hash: file_hash.clone(), sender: dummy_sender })
             .await
         {
             let mut pending = self.pending_searches.lock().await;
