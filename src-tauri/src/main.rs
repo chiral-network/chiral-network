@@ -7,7 +7,12 @@
 
 // Modules unique to the binary
 pub mod blockchain_listener;
-pub mod commands;
+pub mod commands {
+    pub mod auth;
+    pub mod bootstrap;
+    pub mod network;
+    pub mod proxy;
+}
 pub mod ethereum;
 pub mod geth_bootstrap;
 pub mod geth_downloader;
@@ -5402,12 +5407,13 @@ async fn encrypt_file_for_upload(
     ))
 }
 
+// Update the search_file_metadata Tauri command around line 5392:
 #[tauri::command]
 async fn search_file_metadata(
     state: State<'_, AppState>,
     file_hash: String,
     timeout_ms: Option<u64>,
-) -> Result<(), String> {
+) -> Result<Option<FileMetadata>, String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
@@ -5415,7 +5421,7 @@ async fn search_file_metadata(
 
     if let Some(dht) = dht {
         let timeout = timeout_ms.unwrap_or(10_000);
-        dht.search_metadata(file_hash, timeout).await
+        dht.synchronous_search_metadata(file_hash, timeout).await
     } else {
         Err("DHT node is not running".to_string())
     }
