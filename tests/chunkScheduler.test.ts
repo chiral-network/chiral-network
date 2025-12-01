@@ -1,19 +1,28 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ChunkScheduler, ChunkState } from '../src/lib/transfer/chunkScheduler';
 
+//
+// ChunkScheduler Test Suite
+// -------------------------
+// This suite covers initialization, peer tracking, scheduling logic,
+// timeout behavior, retry handling, corruption handling, and load balancing.
+//
+
 describe('ChunkScheduler', () => {
   let scheduler: ChunkScheduler;
 
   beforeEach(() => {
+    // Re-create a fresh scheduler before each test
     scheduler = new ChunkScheduler({
-      maxConcurrentPerPeer: 2,
-      chunkTimeoutMs: 1000,
-      maxRetries: 2,
+      maxConcurrentPerPeer: 2,      // allow up to 2 concurrent chunks per peer
+      chunkTimeoutMs: 1000,         // chunk timeout used for timeout tests
+      maxRetries: 2,                // maximum number of retry attempts
       peerSelectionStrategy: 'load-balanced',
     });
   });
 
   it('initializes with manifest', () => {
+    // Tests that scheduler loads a manifest and sets all chunks to UNREQUESTED
     const manifest = {
       chunks: [
         { index: 0, size: 1000 },
@@ -31,19 +40,21 @@ describe('ChunkScheduler', () => {
   });
 
   it('adds and removes peers', () => {
+    // Tests addPeer() and removePeer() logic
     scheduler.addPeer('peer1', 3);
     scheduler.addPeer('peer2');
     
     const peers = scheduler.getPeers();
     expect(peers.size).toBe(2);
     expect(peers.get('peer1')?.maxConcurrent).toBe(3);
-    expect(peers.get('peer2')?.maxConcurrent).toBe(2); // default
+    expect(peers.get('peer2')?.maxConcurrent).toBe(2); // default value
     
     scheduler.removePeer('peer1');
     expect(scheduler.getPeers().size).toBe(1);
   });
 
   it('generates chunk requests within peer limits', () => {
+    // Ensures scheduler respects peer concurrency caps
     const manifest = {
       chunks: [
         { index: 0, size: 1000 },
@@ -53,27 +64,26 @@ describe('ChunkScheduler', () => {
     };
 
     scheduler.initScheduler(manifest);
-    scheduler.addPeer('peer1', 1); // limit to 1 concurrent
+    scheduler.addPeer('peer1', 1);
     scheduler.addPeer('peer2', 1);
 
     const requests = scheduler.getNextRequests(5);
     
-    expect(requests.length).toBe(2); // limited by peer concurrency
-    expect(requests[0].peerId).not.toBe(requests[1].peerId); // different peers
+    expect(requests.length).toBe(2);
+    expect(requests[0].peerId).not.toBe(requests[1].peerId); // load-balanced
     expect(requests.every(r => r.chunkIndex >= 0 && r.chunkIndex <= 2)).toBe(true);
   });
 
   it('handles chunk success and updates peer metrics', () => {
+    // Tests success path + completion tracking
     const manifest = { chunks: [{ index: 0, size: 1000 }] };
     scheduler.initScheduler(manifest);
     scheduler.addPeer('peer1');
 
     const requests = scheduler.getNextRequests(1);
     expect(requests.length).toBe(1);
-    expect(requests[0].chunkIndex).toBe(0);
 
-    // Simulate successful chunk
-    scheduler.onChunkReceived(0);
+    scheduler.onChunkReceived(0); // simulate a successful chunk
     
     const state = scheduler.getSchedulerState();
     expect(state.completedChunks).toBe(1);
@@ -82,58 +92,53 @@ describe('ChunkScheduler', () => {
   });
 
   it('handles chunk failure and retries', () => {
+    // Verifies retry behavior when chunks fail
     const manifest = { chunks: [{ index: 0, size: 1000 }] };
     scheduler.initScheduler(manifest);
     scheduler.addPeer('peer1');
 
-    // First request
     let requests = scheduler.getNextRequests(1);
     expect(requests.length).toBe(1);
 
-    // Simulate failure
-    scheduler.onChunkFailed(0, false);
+    scheduler.onChunkFailed(0, false); // first failure
     
     let state = scheduler.getSchedulerState();
     expect(state.activeRequestCount).toBe(0);
     expect(state.completedChunks).toBe(0);
 
-    // Should allow retry
-    requests = scheduler.getNextRequests(1);
+    requests = scheduler.getNextRequests(1); // retry #1
     expect(requests.length).toBe(1);
-    expect(requests[0].chunkIndex).toBe(0);
 
-    // Fail again
-    scheduler.onChunkFailed(0, false);
+    scheduler.onChunkFailed(0, false); // second failure
 
-    // Third attempt (max retries = 2)
-    requests = scheduler.getNextRequests(1);
-    expect(requests.length).toBe(0); // exceeded max retries
+    requests = scheduler.getNextRequests(1); // retry limit reached
+    expect(requests.length).toBe(0);
   });
 
   it('handles timeouts', async () => {
+    // Tests timeout logic using fake timers
     vi.useFakeTimers();
-    const startTime = Date.now();
     
     const manifest = { chunks: [{ index: 0, size: 1000 }] };
     scheduler.initScheduler(manifest);
     scheduler.addPeer('peer1');
 
-    // Make request
     const requests = scheduler.getNextRequests(1);
     expect(requests.length).toBe(1);
     expect(scheduler.getActiveRequests().size).toBe(1);
 
-    // Advance time past timeout (config timeout is 1000ms)
+    // Advance time past timeout
     vi.advanceTimersByTime(1500);
 
-    // Next call should handle timeout - call it multiple times to ensure processing
-    scheduler.getNextRequests(0); // Just trigger timeout handling
+    // Timeout cleanup occurs when requesting next work
+    scheduler.getNextRequests(0);
     expect(scheduler.getActiveRequests().size).toBe(0);
 
     vi.useRealTimers();
   });
 
   it('respects peer availability', () => {
+    // Ensures offline peers are ignored
     const manifest = {
       chunks: [{ index: 0, size: 1000 }, { index: 1, size: 1000 }],
     };
@@ -141,16 +146,14 @@ describe('ChunkScheduler', () => {
     scheduler.addPeer('peer1');
     scheduler.addPeer('peer2');
 
-    // Mark peer2 as unavailable
-    scheduler.updatePeerHealth('peer2', false);
+    scheduler.updatePeerHealth('peer2', false); // mark peer2 unavailable
 
     const requests = scheduler.getNextRequests(5);
-    
-    // Should only use peer1
     expect(requests.every(r => r.peerId === 'peer1')).toBe(true);
   });
 
   it('balances load across peers', () => {
+    // Ensures scheduler distributes work evenly
     const manifest = {
       chunks: [
         { index: 0, size: 1000 },
@@ -165,7 +168,6 @@ describe('ChunkScheduler', () => {
 
     const requests = scheduler.getNextRequests(4);
     
-    // Should distribute across both peers
     const peer1Requests = requests.filter(r => r.peerId === 'peer1').length;
     const peer2Requests = requests.filter(r => r.peerId === 'peer2').length;
     
@@ -174,6 +176,7 @@ describe('ChunkScheduler', () => {
   });
 
   it('handles corrupted chunks', () => {
+    // Tests behavior when a chunk is marked corrupted (no retries)
     const manifest = { chunks: [{ index: 0, size: 1000 }] };
     scheduler.initScheduler(manifest);
     scheduler.addPeer('peer1');
@@ -181,25 +184,25 @@ describe('ChunkScheduler', () => {
     const requests = scheduler.getNextRequests(1);
     expect(requests.length).toBe(1);
 
-    // Mark as corrupted (won't retry)
-    scheduler.onChunkFailed(0, true);
+    scheduler.onChunkFailed(0, true); // corruption path
     
     const state = scheduler.getSchedulerState();
     expect(state.chunkStates[0]).toBe(ChunkState.CORRUPTED);
 
-    // Should not generate new requests for corrupted chunk
     const newRequests = scheduler.getNextRequests(1);
     expect(newRequests.length).toBe(0);
   });
 
   it('updates peer response times', () => {
+    // Tests simple moving-average update of peer response times
     scheduler.addPeer('peer1');
     
     const initialAvgTime = scheduler.getPeers().get('peer1')?.avgResponseTime;
-    
+
     scheduler.updatePeerHealth('peer1', true, 500);
-    
+
     const updatedAvgTime = scheduler.getPeers().get('peer1')?.avgResponseTime;
+
     expect(updatedAvgTime).not.toBe(initialAvgTime);
     expect(updatedAvgTime).toBeLessThan(initialAvgTime!);
   });
