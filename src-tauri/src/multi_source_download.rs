@@ -6,6 +6,7 @@ use crate::download_source::{
     FtpSourceInfo as DownloadFtpSourceInfo,
 };
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
+use crate::manager::ChunkManager;
 use crate::transfer_events::{
     TransferEventBus, TransferStartedEvent, SourceConnectedEvent, SourceDisconnectedEvent,
     ChunkCompletedEvent, ChunkFailedEvent, TransferProgressEvent, TransferCompletedEvent,
@@ -73,6 +74,21 @@ pub enum SourceStatus {
     Downloading,
     Failed,
     Completed,
+}
+
+/// Persisted download state for resuming across app restarts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadState {
+    pub file_hash: String,
+    pub file_metadata: crate::dht::models::FileMetadata,
+    pub chunks: Vec<ChunkInfo>,
+    pub source_assignments: Vec<SourceAssignment>,
+    pub completed_chunk_ids: Vec<u32>,
+    pub failed_chunks: Vec<u32>,
+    pub start_time_unix: u64, // Unix timestamp instead of Instant
+    pub output_path: String,
+    pub ed2k_chunk_hashes: Option<Vec<String>>,
+    pub saved_at: u64,
 }
 
 impl SourceAssignment {
@@ -183,6 +199,7 @@ pub struct ActiveDownload {
     pub ed2k_chunk_hashes: Option<Vec<String>>,
 }
 
+#[derive(Clone)]
 pub struct MultiSourceDownloadService {
     dht_service: Arc<DhtService>,
     webrtc_service: Arc<WebRTCService>,
@@ -202,6 +219,8 @@ pub struct MultiSourceDownloadService {
     transfer_event_bus: Arc<TransferEventBus>,
     // Analytics service for backend metrics tracking
     analytics_service: Arc<AnalyticsService>,
+    // Unified chunk storage manager for persistence and caching
+    chunk_manager: Arc<ChunkManager>,
 }
 
 #[derive(Debug, Serialize)]
@@ -269,6 +288,7 @@ impl MultiSourceDownloadService {
         bittorrent_handler: Arc<BitTorrentHandler>,
         transfer_event_bus: Arc<TransferEventBus>,
         analytics_service: Arc<AnalyticsService>,
+        chunk_manager: Arc<ChunkManager>,
     ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
@@ -290,6 +310,7 @@ impl MultiSourceDownloadService {
             ed2k_connections: Arc::new(Mutex::new(HashMap::new())),
             transfer_event_bus,
             analytics_service,
+            chunk_manager,
         }
     }
 
@@ -520,6 +541,52 @@ impl MultiSourceDownloadService {
             downloads.insert(file_hash.clone(), download);
         }
 
+        // Load any existing chunks from disk before starting downloads
+        match self.load_existing_chunks_into_download(&file_hash).await {
+            Ok(loaded_count) => {
+                if loaded_count > 0 {
+                    info!("Resumed download with {} existing chunks loaded from disk", loaded_count);
+
+                    // Emit progress update for loaded chunks
+                    let downloads = self.active_downloads.read().await;
+                    if let Some(download) = downloads.get(&file_hash) {
+                        let completed_chunks = download.completed_chunks.len() as u32;
+                        let total_chunks = download.chunks.len() as u32;
+                        let progress = (completed_chunks as f64 / total_chunks as f64) * 100.0;
+
+                        // Emit progress event
+                        self.transfer_event_bus.emit_progress(TransferProgressEvent {
+                            transfer_id: file_hash.clone(),
+                            downloaded_bytes: (completed_chunks as u64) * 256 * 1024, // Approximate based on chunk size
+                            total_bytes: (total_chunks as u64) * 256 * 1024,
+                            completed_chunks,
+                            total_chunks,
+                            progress_percentage: progress,
+                            download_speed_bps: 0.0, // No speed for resumed chunks
+                            upload_speed_bps: 0.0,
+                            eta_seconds: None,
+                            active_sources: 0,
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                        });
+
+                        // Check if download is already complete
+                        if completed_chunks >= total_chunks {
+                            info!("Download {} is already complete from disk", file_hash);
+                            self.finalize_download(&file_hash).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load existing chunks for download {}: {}", file_hash, e);
+                // Continue with download anyway
+            }
+        }
+
         // Start source connections and assign chunks
         self.start_source_connections(&file_hash, selected_sources.clone())
             .await?;
@@ -649,7 +716,7 @@ impl MultiSourceDownloadService {
         let download = downloads.get(file_hash).ok_or("Download not found")?;
 
         // Assign chunks to sources using round-robin strategy
-        let chunk_assignments = self.assign_chunks_to_sources(&download.chunks, &sources);
+        let chunk_assignments = self.assign_chunks_to_sources(&download.chunks, &sources, &download.completed_chunks);
         drop(downloads);
 
         // Start connecting to sources
@@ -686,6 +753,7 @@ impl MultiSourceDownloadService {
         &self,
         chunks: &[ChunkInfo],
         sources: &[DownloadSource],
+        completed_chunks: &HashMap<u32, CompletedChunk>,
     ) -> Vec<(DownloadSource, Vec<u32>)> {
         // Defensive: if no sources, return an empty assignment list instead of panicking.
         if sources.is_empty() {
@@ -695,14 +763,34 @@ impl MultiSourceDownloadService {
         let mut assignments: Vec<(DownloadSource, Vec<u32>)> =
             sources.iter().map(|s| (s.clone(), Vec::new())).collect();
 
-        // Round-robin assignment
-        for (index, chunk) in chunks.iter().enumerate() {
-            let source_index = index % sources.len();
-            if let Some((_, chunks)) = assignments.get_mut(source_index) {
-                if chunks.len() < MAX_CHUNKS_PER_PEER {
-                    chunks.push(chunk.chunk_id);
-                }
+        // Round-robin assignment - skip already completed chunks
+        let mut source_index = 0;
+        for chunk in chunks.iter() {
+            // Skip chunks that are already completed
+            if completed_chunks.contains_key(&chunk.chunk_id) {
+                continue;
             }
+
+            // Find next available source
+            let mut assigned = false;
+            for _ in 0..sources.len() {
+                if let Some((_, chunks)) = assignments.get_mut(source_index) {
+                    if chunks.len() < MAX_CHUNKS_PER_PEER {
+                        chunks.push(chunk.chunk_id);
+                        assigned = true;
+                        break;
+                    }
+                }
+                source_index = (source_index + 1) % sources.len();
+            }
+
+            // If no source has capacity, we'll skip this chunk
+            // (it will be picked up by failed chunk retry logic later)
+            if !assigned {
+                debug!("No available source capacity for chunk {}", chunk.chunk_id);
+            }
+
+            source_index = (source_index + 1) % sources.len();
         }
 
         // Redistribute chunks if some sources have too few
@@ -1003,6 +1091,7 @@ impl MultiSourceDownloadService {
         let event_tx = self.event_tx.clone();
         let downloads = self.active_downloads.clone();
         let transfer_event_bus = self.transfer_event_bus.clone();
+        let chunk_manager = self.chunk_manager.clone();
 
         tokio::spawn(async move {
             let semaphore = Arc::new(tokio::sync::Semaphore::new(2)); // Max 2 concurrent FTP downloads per server
@@ -1024,6 +1113,7 @@ impl MultiSourceDownloadService {
                 let downloads = downloads.clone();
                 let chunk = chunk_info.clone();
                 let transfer_event_bus = transfer_event_bus.clone();
+                let chunk_manager = chunk_manager.clone();
 
                 let task = tokio::spawn(async move {
                     let _permit = permit.unwrap();
@@ -1146,7 +1236,7 @@ impl MultiSourceDownloadService {
                                 if let Some(download) = downloads_guard.get_mut(&file_hash) {
                                     let completed_chunk = CompletedChunk {
                                         chunk_id: chunk.chunk_id,
-                                        data,
+                                        data: data.clone(), // Clone for memory storage
                                         source_id: ftp_url.clone(),
                                         completed_at: Instant::now(),
                                     };
@@ -1172,6 +1262,50 @@ impl MultiSourceDownloadService {
                                 "Successfully downloaded FTP chunk {} ({} bytes)",
                                 chunk.chunk_id, chunk.size
                             );
+
+                            // Store chunk data to disk for persistence (clone before moving into CompletedChunk)
+                            let data_for_disk = data.clone();
+                            let file_hash_for_disk = file_hash.clone();
+                            let chunk_id_for_disk = chunk.chunk_id;
+
+                            // Store chunk to disk asynchronously (keep existing approach for chunk_id mapping)
+                            // Also store in ChunkManager for potential deduplication
+                            let chunk_manager_clone = chunk_manager.clone();
+                            tokio::spawn(async move {
+                                // Inline the disk storage logic to avoid lifetime issues
+                                let chunks_dir = std::path::Path::new("./chunks");
+                                if !chunks_dir.exists() {
+                                    let _ = std::fs::create_dir_all(chunks_dir);
+                                }
+
+                                let file_dir = chunks_dir.join(&file_hash_for_disk);
+                                if !file_dir.exists() {
+                                    let _ = std::fs::create_dir_all(&file_dir);
+                                }
+
+                                let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id_for_disk));
+                                if let Err(e) = tokio::fs::write(&chunk_path, &data_for_disk).await {
+                                    warn!("Failed to write chunk {} to disk: {}", chunk_id_for_disk, e);
+                                } else {
+                                    let metadata_path = file_dir.join(format!("chunk_{}.meta", chunk_id_for_disk));
+                                    let metadata = serde_json::json!({
+                                        "chunk_id": chunk_id_for_disk,
+                                        "size": data_for_disk.len(),
+                                        "stored_at": std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs(),
+                                        "file_hash": file_hash_for_disk
+                                    });
+                                    let _ = tokio::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap()).await;
+
+                                    // Also store in ChunkManager for deduplication (generate content hash)
+                                    let mut hasher = Sha256::new();
+                                    hasher.update(&data_for_disk);
+                                    let content_hash = format!("{:x}", hasher.finalize());
+                                    let _ = chunk_manager_clone.save_chunk(&content_hash, &data_for_disk);
+                                }
+                            });
 
                             // Calculate actual download duration
                             let completed_at = current_timestamp_ms();
@@ -1404,7 +1538,12 @@ impl MultiSourceDownloadService {
         let download = downloads.get_mut(file_hash)
             .ok_or_else(|| format!("Active download not found for file {}", file_hash))?;
 
-        // Store the chunk data
+        // Prepare data for disk storage (clone before moving into CompletedChunk)
+        let data_for_disk = data.clone();
+        let file_hash_for_disk = file_hash.to_string();
+        let chunk_id_for_disk = chunk_info.chunk_id;
+
+        // Store the chunk data in memory
         let completed_chunk = CompletedChunk {
             chunk_id: chunk_info.chunk_id,
             data,
@@ -1412,6 +1551,52 @@ impl MultiSourceDownloadService {
             completed_at: std::time::Instant::now(),
         };
         download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
+
+        // Get completion info before releasing the lock
+        let is_complete = download.completed_chunks.len() == download.chunks.len();
+
+        // Release the lock before disk I/O and finalization
+        drop(downloads);
+
+        // Store chunk to disk asynchronously (keep existing approach for chunk_id mapping)
+        // Also store in ChunkManager for potential deduplication
+        let chunk_manager = self.chunk_manager.clone();
+        let chunk_manager_clone = chunk_manager.clone();
+        tokio::spawn(async move {
+            // Inline the disk storage logic to avoid lifetime issues
+            let chunks_dir = std::path::Path::new("./chunks");
+            if !chunks_dir.exists() {
+                let _ = std::fs::create_dir_all(chunks_dir);
+            }
+
+            let file_dir = chunks_dir.join(&file_hash_for_disk);
+            if !file_dir.exists() {
+                let _ = std::fs::create_dir_all(&file_dir);
+            }
+
+            let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id_for_disk));
+            if let Err(e) = tokio::fs::write(&chunk_path, &data_for_disk).await {
+                warn!("Failed to write HTTP chunk {} to disk: {}", chunk_id_for_disk, e);
+            } else {
+                let metadata_path = file_dir.join(format!("chunk_{}.meta", chunk_id_for_disk));
+                let metadata = serde_json::json!({
+                    "chunk_id": chunk_id_for_disk,
+                    "size": data_for_disk.len(),
+                    "stored_at": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    "file_hash": file_hash_for_disk
+                });
+                let _ = tokio::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap()).await;
+
+                // Also store in ChunkManager for deduplication (generate content hash)
+                let mut hasher = Sha256::new();
+                hasher.update(&data_for_disk);
+                let content_hash = format!("{:x}", hasher.finalize());
+                let _ = chunk_manager_clone.save_chunk(&content_hash, &data_for_disk);
+            }
+        });
 
         // Calculate actual download duration
         let completed_at = current_timestamp_ms();
@@ -1439,8 +1624,7 @@ impl MultiSourceDownloadService {
         }
 
         // Check if download is complete
-        if download.completed_chunks.len() == download.chunks.len() {
-            drop(downloads); // Release lock before calling finalize
+        if is_complete {
             Self::finalize_download_static(&self.active_downloads, file_hash).await?;
         }
 
@@ -2138,21 +2322,56 @@ impl MultiSourceDownloadService {
         }
     }
 
-    /// Store chunk data to disk/memory
+    /// Store chunk data to disk for persistence and memory efficiency
     async fn store_chunk(
         &self,
         file_hash: &str,
         chunk_id: u32,
         data: Vec<u8>,
     ) -> Result<(), String> {
-        // Store the chunk - this would typically save to a file or memory store
-        // For now, we'll just log it since the actual storage is handled elsewhere
+        // Create chunks directory if it doesn't exist
+        let chunks_dir = std::path::Path::new("./chunks");
+        if !chunks_dir.exists() {
+            std::fs::create_dir_all(chunks_dir)
+                .map_err(|e| format!("Failed to create chunks directory: {}", e))?;
+        }
+
+        // Create file-specific subdirectory
+        let file_dir = chunks_dir.join(file_hash);
+        if !file_dir.exists() {
+            std::fs::create_dir_all(&file_dir)
+                .map_err(|e| format!("Failed to create file directory: {}", e))?;
+        }
+
+        // Write chunk to file
+        let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id));
+        tokio::fs::write(&chunk_path, &data)
+            .await
+            .map_err(|e| format!("Failed to write chunk {}: {}", chunk_id, e))?;
+
         info!(
-            "Storing chunk {} for file {} ({} bytes)",
+            "Stored chunk {} for file {} ({} bytes) to disk",
             chunk_id,
             file_hash,
             data.len()
         );
+
+        // Also store metadata about the chunk for later retrieval
+        let metadata_path = file_dir.join(format!("chunk_{}.meta", chunk_id));
+        let metadata = serde_json::json!({
+            "chunk_id": chunk_id,
+            "size": data.len(),
+            "stored_at": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            "file_hash": file_hash
+        });
+
+        tokio::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap())
+            .await
+            .map_err(|e| format!("Failed to write chunk metadata {}: {}", chunk_id, e))?;
+
         Ok(())
     }
 
@@ -2762,6 +2981,16 @@ impl MultiSourceDownloadService {
         }
     }
 
+    /// Finalize a completed download
+    async fn finalize_download(&self, file_hash: &str) -> Result<(), String> {
+        Self::finalize_download_static(&self.active_downloads, file_hash).await?;
+        // Remove persisted download state since download is complete
+        if let Err(e) = self.remove_download_state(file_hash).await {
+            warn!("Failed to remove download state for {}: {}", file_hash, e);
+        }
+        Ok(())
+    }
+
     async fn finalize_download_static(
         downloads: &Arc<RwLock<HashMap<String, ActiveDownload>>>,
         file_hash: &str,
@@ -2933,6 +3162,571 @@ impl MultiSourceDownloadService {
 
         (start_chunk_id..end_chunk_id).collect()
     }
+
+    /// Check if a chunk exists on disk for the given file hash and chunk ID
+    pub async fn chunk_exists_on_disk(&self, file_hash: &str, chunk_id: u32) -> bool {
+        let chunks_dir = std::path::Path::new("./chunks");
+        let file_dir = chunks_dir.join(file_hash);
+        let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id));
+        let metadata_path = file_dir.join(format!("chunk_{}.meta", chunk_id));
+
+        chunk_path.exists() && metadata_path.exists()
+    }
+
+    /// Load a chunk from disk storage with validation
+    pub async fn load_chunk_from_disk(&self, file_hash: &str, chunk_id: u32) -> Result<Vec<u8>, String> {
+        let chunks_dir = std::path::Path::new("./chunks");
+        let file_dir = chunks_dir.join(file_hash);
+        let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id));
+        let metadata_path = file_dir.join(format!("chunk_{}.meta", chunk_id));
+
+        // Check if files exist
+        if !chunk_path.exists() || !metadata_path.exists() {
+            return Err(format!("Chunk {} not found on disk for file {}", chunk_id, file_hash));
+        }
+
+        // Read metadata first
+        let metadata_content = tokio::fs::read_to_string(&metadata_path)
+            .await
+            .map_err(|e| format!("Failed to read chunk metadata: {}", e))?;
+
+        let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
+            .map_err(|e| format!("Failed to parse chunk metadata: {}", e))?;
+
+        // Validate metadata
+        let expected_file_hash = metadata["file_hash"].as_str()
+            .ok_or("Missing file_hash in metadata")?;
+        let expected_chunk_id = metadata["chunk_id"].as_u64()
+            .ok_or("Missing chunk_id in metadata")? as u32;
+        let expected_size = metadata["size"].as_u64()
+            .ok_or("Missing size in metadata")? as usize;
+
+        if expected_file_hash != file_hash {
+            return Err(format!("File hash mismatch in metadata: expected {}, got {}", file_hash, expected_file_hash));
+        }
+
+        if expected_chunk_id != chunk_id {
+            return Err(format!("Chunk ID mismatch in metadata: expected {}, got {}", chunk_id, expected_chunk_id));
+        }
+
+        // Read chunk data
+        let chunk_data = tokio::fs::read(&chunk_path)
+            .await
+            .map_err(|e| format!("Failed to read chunk data: {}", e))?;
+
+        // Validate size
+        if chunk_data.len() != expected_size {
+            return Err(format!("Chunk size mismatch: expected {}, got {}", expected_size, chunk_data.len()));
+        }
+
+        // Get the expected chunk info to validate hash
+        let downloads = self.active_downloads.read().await;
+        if let Some(download) = downloads.get(file_hash) {
+            if let Some(chunk_info) = download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                // Verify chunk hash if available
+                let mut hasher = Sha256::new();
+                hasher.update(&chunk_data);
+                let actual_hash = format!("{:x}", hasher.finalize());
+                if actual_hash != chunk_info.hash {
+                    return Err(format!("Chunk hash mismatch: expected {}, got {}", chunk_info.hash, actual_hash));
+                }
+            }
+        }
+
+        Ok(chunk_data)
+    }
+
+    /// Scan existing chunks on disk and return list of available chunk IDs for a file
+    pub async fn scan_existing_chunks(&self, file_hash: &str) -> Result<Vec<u32>, String> {
+        let chunks_dir = std::path::Path::new("./chunks");
+        let file_dir = chunks_dir.join(file_hash);
+
+        if !file_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut existing_chunks = Vec::new();
+        let mut dir_entries = tokio::fs::read_dir(&file_dir)
+            .await
+            .map_err(|e| format!("Failed to read chunks directory: {}", e))?;
+
+        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+            let file_name_owned = entry.file_name().to_string_lossy().to_string();
+
+            // Look for metadata files
+            if file_name_owned.ends_with(".meta") && file_name_owned.starts_with("chunk_") {
+                if let Some(chunk_id_str) = file_name_owned.strip_prefix("chunk_").and_then(|s| s.strip_suffix(".meta")) {
+                    if let Ok(chunk_id) = chunk_id_str.parse::<u32>() {
+                        // Verify the corresponding .dat file exists
+                        let dat_path = file_dir.join(format!("chunk_{}.dat", chunk_id));
+                        if dat_path.exists() {
+                            existing_chunks.push(chunk_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort chunks by ID for consistent ordering
+        existing_chunks.sort_unstable();
+        Ok(existing_chunks)
+    }
+
+    /// Load all existing chunks for a file and add them to the active download
+    pub async fn load_existing_chunks_into_download(&self, file_hash: &str) -> Result<usize, String> {
+        let existing_chunks = self.scan_existing_chunks(file_hash).await?;
+
+        if existing_chunks.is_empty() {
+            return Ok(0);
+        }
+
+        let mut downloads = self.active_downloads.write().await;
+        let download = downloads.get_mut(file_hash)
+            .ok_or_else(|| format!("Active download not found for file {}", file_hash))?;
+
+        let mut loaded_count = 0;
+        for chunk_id in existing_chunks {
+            // Check if chunk is already in memory
+            if download.completed_chunks.contains_key(&chunk_id) {
+                continue;
+            }
+
+            // Try to load from disk
+            match self.load_chunk_from_disk(file_hash, chunk_id).await {
+                Ok(chunk_data) => {
+                    let completed_chunk = CompletedChunk {
+                        chunk_id,
+                        data: chunk_data,
+                        source_id: "disk".to_string(), // Mark as loaded from disk
+                        completed_at: std::time::Instant::now(),
+                    };
+                    download.completed_chunks.insert(chunk_id, completed_chunk);
+                    loaded_count += 1;
+                    info!("Loaded chunk {} from disk for file {}", chunk_id, file_hash);
+                }
+                Err(e) => {
+                    warn!("Failed to load chunk {} from disk: {}", chunk_id, e);
+                    // Continue with other chunks
+                }
+            }
+        }
+
+        Ok(loaded_count)
+    }
+
+    /// Clean up old or orphaned chunks to free disk space
+    pub async fn cleanup_chunks(&self, max_age_days: Option<u64>) -> Result<usize, String> {
+        let chunks_dir = std::path::Path::new("./chunks");
+        if !chunks_dir.exists() {
+            return Ok(0);
+        }
+
+        let mut cleaned_count = 0;
+        let mut dir_entries = tokio::fs::read_dir(&chunks_dir)
+            .await
+            .map_err(|e| format!("Failed to read chunks directory: {}", e))?;
+
+        let max_age_seconds = max_age_days.map(|days| days * 24 * 60 * 60);
+
+        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+            let file_dir = entry.path();
+            if !file_dir.is_dir() {
+                continue;
+            }
+
+            // Check if this file hash is still being downloaded
+            let file_name = file_dir.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+
+            let downloads = self.active_downloads.read().await;
+            let is_active_download = downloads.contains_key(file_name);
+            drop(downloads);
+
+            if is_active_download {
+                // Don't clean up active downloads
+                continue;
+            }
+
+            // Clean up this file's chunks
+            let file_cleanup_count = self.cleanup_file_chunks(&file_dir, max_age_seconds).await?;
+            cleaned_count += file_cleanup_count;
+
+            // If all chunks are cleaned up, remove the directory
+            if let Ok(mut file_dir_entries) = tokio::fs::read_dir(&file_dir).await {
+                let mut has_files = false;
+                while let Some(entry) = file_dir_entries.next_entry().await.map_err(|e| format!("Failed to read file dir entry: {}", e))? {
+                    has_files = true;
+                    break;
+                }
+
+                if !has_files {
+                    let _ = tokio::fs::remove_dir(&file_dir).await;
+                }
+            }
+        }
+
+        Ok(cleaned_count)
+    }
+
+    /// Clean up chunks for a specific file
+    async fn cleanup_file_chunks(&self, file_dir: &std::path::Path, max_age_seconds: Option<u64>) -> Result<usize, String> {
+        let mut cleaned_count = 0;
+        let mut dir_entries = tokio::fs::read_dir(file_dir)
+            .await
+            .map_err(|e| format!("Failed to read file chunks directory: {}", e))?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read file dir entry: {}", e))? {
+            let file_name_owned = entry.file_name().to_string_lossy().to_string();
+
+            // Only process metadata files for cleanup decisions
+            if file_name_owned.ends_with(".meta") {
+                let metadata_path = entry.path();
+                let dat_path = file_dir.join(file_name_owned.replace(".meta", ".dat"));
+
+                // Check if corresponding .dat file exists
+                if !dat_path.exists() {
+                    // Remove orphaned metadata file
+                    let _ = tokio::fs::remove_file(&metadata_path).await;
+                    cleaned_count += 1;
+                    continue;
+                }
+
+                // Check age if max_age specified
+                if let Some(max_age) = max_age_seconds {
+                    match tokio::fs::metadata(&metadata_path).await {
+                        Ok(metadata) => {
+                            if let Ok(modified) = metadata.modified() {
+                                if let Ok(age) = modified.elapsed() {
+                                    if age.as_secs() > max_age {
+                                        // Remove old chunk files
+                                        let _ = tokio::fs::remove_file(&metadata_path).await;
+                                        let _ = tokio::fs::remove_file(&dat_path).await;
+                                        cleaned_count += 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // If we can't read metadata, remove the files (corrupted)
+                            let _ = tokio::fs::remove_file(&metadata_path).await;
+                            let _ = tokio::fs::remove_file(&dat_path).await;
+                            cleaned_count += 1;
+                            continue;
+                        }
+                    }
+                }
+
+                // Validate chunk integrity
+                if let Err(_) = self.validate_chunk_metadata(&metadata_path).await {
+                    // Remove corrupted chunks
+                    let _ = tokio::fs::remove_file(&metadata_path).await;
+                    let _ = tokio::fs::remove_file(&dat_path).await;
+                    cleaned_count += 1;
+                }
+            }
+        }
+
+        Ok(cleaned_count)
+    }
+
+    /// Validate chunk metadata file
+    async fn validate_chunk_metadata(&self, metadata_path: &std::path::Path) -> Result<(), String> {
+        let content = tokio::fs::read_to_string(metadata_path)
+            .await
+            .map_err(|e| format!("Failed to read metadata: {}", e))?;
+
+        let _: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Invalid metadata JSON: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Remove duplicate chunks across different files (if they have the same content hash)
+    pub async fn deduplicate_chunks(&self) -> Result<usize, String> {
+        let chunks_dir = std::path::Path::new("./chunks");
+        if !chunks_dir.exists() {
+            return Ok(0);
+        }
+
+        let mut content_hashes: std::collections::HashMap<String, std::path::PathBuf> = std::collections::HashMap::new();
+        let mut duplicates = Vec::new();
+
+        // Scan all chunk files and collect content hashes
+        let mut dir_entries = tokio::fs::read_dir(&chunks_dir)
+            .await
+            .map_err(|e| format!("Failed to read chunks directory: {}", e))?;
+
+        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+            let file_dir = entry.path();
+            if !file_dir.is_dir() {
+                continue;
+            }
+
+            let mut file_dir_entries = tokio::fs::read_dir(&file_dir)
+                .await
+                .map_err(|e| format!("Failed to read file directory: {}", e))?;
+
+            while let Some(chunk_entry) = file_dir_entries.next_entry().await.map_err(|e| format!("Failed to read chunk entry: {}", e))? {
+                let file_name = chunk_entry.file_name().to_string_lossy().to_string();
+
+                if file_name.ends_with(".dat") {
+                    let chunk_path = chunk_entry.path();
+
+                    // Read chunk content and hash it
+                    match tokio::fs::read(&chunk_path).await {
+                        Ok(data) => {
+                            let mut hasher = Sha256::new();
+                            hasher.update(&data);
+                            let content_hash = format!("{:x}", hasher.finalize());
+
+                            // Check if we've seen this content hash before
+                            if let Some(existing_path) = content_hashes.get(&content_hash) {
+                                // This is a duplicate
+                                duplicates.push((chunk_path.clone(), existing_path.clone()));
+                            } else {
+                                content_hashes.insert(content_hash, chunk_path);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to read chunk file {}: {}", chunk_path.display(), e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove duplicate files (keep the first occurrence)
+        let mut removed_count = 0;
+        for (duplicate_path, _original_path) in duplicates {
+            // Remove the duplicate .dat file
+            if let Err(e) = tokio::fs::remove_file(&duplicate_path).await {
+                warn!("Failed to remove duplicate chunk {}: {}", duplicate_path.display(), e);
+            } else {
+                removed_count += 1;
+            }
+
+            // Also remove the corresponding .meta file
+            let meta_path = duplicate_path.with_extension("meta");
+            let _ = tokio::fs::remove_file(&meta_path).await;
+        }
+
+        Ok(removed_count)
+    }
+
+    /// Save download state to disk for persistence across app restarts
+    pub async fn save_download_state(&self) -> Result<(), String> {
+        let downloads_dir = std::path::Path::new("./downloads");
+        if !downloads_dir.exists() {
+            std::fs::create_dir_all(downloads_dir)
+                .map_err(|e| format!("Failed to create downloads directory: {}", e))?;
+        }
+
+        let downloads = self.active_downloads.read().await;
+
+        for (file_hash, download) in downloads.iter() {
+            let state_path = downloads_dir.join(format!("{}.state", file_hash));
+
+            let state = DownloadState {
+                file_hash: file_hash.clone(),
+                file_metadata: download.file_metadata.clone(),
+                chunks: download.chunks.clone(),
+                source_assignments: download.source_assignments.values().cloned().collect(),
+                completed_chunk_ids: download.completed_chunks.keys().cloned().collect(),
+                failed_chunks: download.failed_chunks.iter().cloned().collect(),
+                start_time_unix: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    .saturating_sub(download.start_time.elapsed().as_secs()),
+                output_path: download.output_path.clone(),
+                ed2k_chunk_hashes: download.ed2k_chunk_hashes.clone(),
+                saved_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            };
+
+            let state_json = serde_json::to_string_pretty(&state)
+                .map_err(|e| format!("Failed to serialize download state: {}", e))?;
+
+            tokio::fs::write(&state_path, state_json)
+                .await
+                .map_err(|e| format!("Failed to write download state file: {}", e))?;
+
+            debug!("Saved download state for file {}", file_hash);
+        }
+
+        Ok(())
+    }
+
+    /// Load persisted download states from disk
+    pub async fn load_download_states(&self) -> Result<Vec<String>, String> {
+        let downloads_dir = std::path::Path::new("./downloads");
+        if !downloads_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut loaded_files = Vec::new();
+        let mut dir_entries = tokio::fs::read_dir(downloads_dir)
+            .await
+            .map_err(|e| format!("Failed to read downloads directory: {}", e))?;
+
+        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+            let file_name_owned = entry.file_name().to_string_lossy().to_string();
+
+            if file_name_owned.ends_with(".state") {
+                let state_path = entry.path();
+                let file_hash = file_name_owned.strip_suffix(".state").unwrap_or(&file_name_owned);
+
+                match self.load_download_state(&state_path, file_hash).await {
+                    Ok(_) => {
+                        loaded_files.push(file_hash.to_string());
+                        info!("Loaded persisted download state for file {}", file_hash);
+                    }
+                    Err(e) => {
+                        warn!("Failed to load download state for {}: {}", file_hash, e);
+                        // Remove corrupted state file
+                        let _ = tokio::fs::remove_file(&state_path).await;
+                    }
+                }
+            }
+        }
+
+        Ok(loaded_files)
+    }
+
+    /// Load a specific download state from file
+    async fn load_download_state(&self, state_path: &std::path::Path, file_hash: &str) -> Result<(), String> {
+        let state_content = tokio::fs::read_to_string(state_path)
+            .await
+            .map_err(|e| format!("Failed to read state file: {}", e))?;
+
+        let state: DownloadState = serde_json::from_str(&state_content)
+            .map_err(|e| format!("Failed to parse state file: {}", e))?;
+
+        // Validate state
+        if state.file_hash != file_hash {
+            return Err("File hash mismatch in state file".to_string());
+        }
+
+        // Check if download is already active
+        {
+            let downloads = self.active_downloads.read().await;
+            if downloads.contains_key(file_hash) {
+                return Err("Download already active".to_string());
+            }
+        }
+
+        // Reconstruct source assignments map
+        let mut source_assignments = HashMap::new();
+        for assignment in state.source_assignments {
+            source_assignments.insert(assignment.source.identifier(), assignment);
+        }
+
+        // Reconstruct completed chunks (load from disk)
+        let mut completed_chunks = HashMap::new();
+        for chunk_id in state.completed_chunk_ids {
+            match self.load_chunk_from_disk(file_hash, chunk_id).await {
+                Ok(data) => {
+                    let completed_chunk = CompletedChunk {
+                        chunk_id,
+                        data,
+                        source_id: "persisted".to_string(), // Mark as loaded from persisted state
+                        completed_at: std::time::Instant::now(),
+                    };
+                    completed_chunks.insert(chunk_id, completed_chunk);
+                }
+                Err(e) => {
+                    warn!("Failed to load persisted chunk {} for {}: {}", chunk_id, file_hash, e);
+                    // Continue without this chunk
+                }
+            }
+        }
+
+        // Create the download state
+        let download = ActiveDownload {
+            file_metadata: state.file_metadata,
+            chunks: state.chunks,
+            source_assignments,
+            completed_chunks,
+            pending_requests: HashMap::new(), // Will be reconstructed when sources reconnect
+            failed_chunks: state.failed_chunks.into(),
+            start_time: std::time::Instant::now(), // We'll use current time as approximation
+            last_progress_update: std::time::Instant::now(),
+            output_path: state.output_path,
+            ed2k_chunk_hashes: state.ed2k_chunk_hashes,
+        };
+
+        // Store the download
+        {
+            let mut downloads = self.active_downloads.write().await;
+            downloads.insert(file_hash.to_string(), download);
+        }
+
+        Ok(())
+    }
+
+    /// Remove persisted download state (called when download completes)
+    pub async fn remove_download_state(&self, file_hash: &str) -> Result<(), String> {
+        let downloads_dir = std::path::Path::new("./downloads");
+        let state_path = downloads_dir.join(format!("{}.state", file_hash));
+
+        if state_path.exists() {
+            tokio::fs::remove_file(&state_path)
+                .await
+                .map_err(|e| format!("Failed to remove download state file: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    /// Clean up old persisted download states (for completed downloads)
+    pub async fn cleanup_old_download_states(&self) -> Result<usize, String> {
+        let downloads_dir = std::path::Path::new("./downloads");
+        if !downloads_dir.exists() {
+            return Ok(0);
+        }
+
+        let downloads = self.active_downloads.read().await;
+        let active_file_hashes: std::collections::HashSet<String> = downloads.keys().cloned().collect();
+        drop(downloads);
+
+        let mut cleaned_count = 0;
+        let mut dir_entries = tokio::fs::read_dir(downloads_dir)
+            .await
+            .map_err(|e| format!("Failed to read downloads directory: {}", e))?;
+
+        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+            let file_name_owned = entry.file_name().to_string_lossy().to_string();
+
+            if file_name_owned.ends_with(".state") {
+                if let Some(file_hash) = file_name_owned.strip_suffix(".state") {
+                    if !active_file_hashes.contains(file_hash) {
+                        // This state file is for a download that's no longer active
+                        let state_path = entry.path();
+                        match tokio::fs::remove_file(&state_path).await {
+                            Ok(_) => {
+                                cleaned_count += 1;
+                                debug!("Removed old download state file for {}", file_hash);
+                            }
+                            Err(e) => {
+                                warn!("Failed to remove old download state file {}: {}", state_path.display(), e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(cleaned_count)
+    }
 }
 
 #[cfg(test)]
@@ -2970,6 +3764,51 @@ mod tests {
 
         let other_data = b"goodbye world";
         assert!(verify_chunk_integrity(&chunk, other_data).is_err());
+    }
+
+    #[test]
+    fn test_file_size_thresholds() {
+        // Test the constants used for multi-source decisions
+        let small_file = 500 * 1024; // 500KB
+        let large_file = 2 * 1024 * 1024; // 2MB
+
+        assert!(small_file < 1024 * 1024); // Less than 1MB
+        assert!(large_file > 1024 * 1024); // Greater than 1MB
+    }
+
+    #[test]
+    fn test_multi_source_event_serialization() {
+        let event = MultiSourceEvent::DownloadStarted {
+            file_hash: "test_hash".to_string(),
+            total_peers: 3,
+        };
+
+        // Test that event can be serialized (required for Tauri events)
+        let serialized = serde_json::to_string(&event);
+        assert!(serialized.is_ok());
+    }
+
+    #[test]
+    fn test_ftp_source_assignment() {
+        use crate::download_source::{DownloadSource, FtpSourceInfo as DownloadFtpSourceInfo};
+
+        let ftp_info = DownloadFtpSourceInfo {
+            url: "ftp://ftp.example.com/file.bin".to_string(),
+            username: Some("testuser".to_string()),
+            encrypted_password: Some("testpass".to_string()),
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: Some(30),
+        };
+
+        let ftp_source = DownloadSource::Ftp(ftp_info);
+        let chunk_ids = vec![1, 2, 3];
+        let assignment = SourceAssignment::new(ftp_source.clone(), chunk_ids.clone());
+
+        assert_eq!(assignment.source_id(), "ftp://ftp.example.com/file.bin");
+        assert_eq!(assignment.chunks, chunk_ids);
+        assert_eq!(assignment.status, SourceStatus::Connecting);
+        assert!(matches!(assignment.source, DownloadSource::Ftp(_)));
     }
 
     #[test]
@@ -3044,86 +3883,5 @@ mod tests {
         assert_eq!(chunk.data, data);
         assert_eq!(chunk.source_id, "peer456");
     }
-
-    #[test]
-    fn test_file_size_thresholds() {
-        // Test the constants used for multi-source decisions
-        let small_file = 500 * 1024; // 500KB
-        let large_file = 2 * 1024 * 1024; // 2MB
-
-        assert!(small_file < 1024 * 1024); // Less than 1MB
-        assert!(large_file > 1024 * 1024); // Greater than 1MB
-    }
-
-    #[test]
-    fn test_multi_source_event_serialization() {
-        let event = MultiSourceEvent::DownloadStarted {
-            file_hash: "test_hash".to_string(),
-            total_peers: 3,
-        };
-
-        // Test that event can be serialized (required for Tauri events)
-        let serialized = serde_json::to_string(&event);
-        assert!(serialized.is_ok());
-    }
-
-    #[test]
-    fn test_ftp_source_assignment() {
-        use crate::download_source::{DownloadSource, FtpSourceInfo as DownloadFtpSourceInfo};
-
-        let ftp_info = DownloadFtpSourceInfo {
-            url: "ftp://ftp.example.com/file.bin".to_string(),
-            username: Some("testuser".to_string()),
-            encrypted_password: Some("testpass".to_string()),
-            passive_mode: true,
-            use_ftps: false,
-            timeout_secs: Some(30),
-        };
-
-        let ftp_source = DownloadSource::Ftp(ftp_info);
-        let chunk_ids = vec![1, 2, 3];
-        let assignment = SourceAssignment::new(ftp_source.clone(), chunk_ids.clone());
-
-        assert_eq!(assignment.source_id(), "ftp://ftp.example.com/file.bin");
-        assert_eq!(assignment.chunks, chunk_ids);
-        assert_eq!(assignment.status, SourceStatus::Connecting);
-        assert!(matches!(assignment.source, DownloadSource::Ftp(_)));
-    }
-
-    #[test]
-    fn test_ftp_priority_score() {
-        use crate::download_source::{
-            DownloadSource, FtpSourceInfo as DownloadFtpSourceInfo, HttpSourceInfo, P2pSourceInfo,
-        };
-
-        let ftp_source = DownloadSource::Ftp(DownloadFtpSourceInfo {
-            url: "ftp://example.com/file".to_string(),
-            username: None,
-            encrypted_password: None,
-            passive_mode: true,
-            use_ftps: false,
-            timeout_secs: None,
-        });
-
-        let p2p_source = DownloadSource::P2p(P2pSourceInfo {
-            peer_id: "peer123".to_string(),
-            multiaddr: None,
-            reputation: Some(80),
-            supports_encryption: false,
-            protocol: None,
-        });
-
-        let http_source = DownloadSource::Http(HttpSourceInfo {
-            url: "http://example.com/file".to_string(),
-            auth_header: None,
-            verify_ssl: true,
-            headers: None,
-            timeout_secs: None,
-        });
-
-        // FTP should have lowest priority (25), HTTP medium (50), P2P highest (100 + reputation)
-        assert_eq!(ftp_source.priority_score(), 25);
-        assert_eq!(http_source.priority_score(), 50);
-        assert_eq!(p2p_source.priority_score(), 180); // 100 + 80 reputation
-    }
 }
+
