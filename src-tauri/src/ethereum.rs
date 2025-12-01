@@ -1792,15 +1792,25 @@ pub async fn send_transaction(
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
 
-    // For EIP-1559 transactions (London fork), we use maxFeePerGas and maxPriorityFeePerGas
-    // Setting both to 0 for a private network with --miner.gasprice 0
-    // This ensures transactions are always accepted and mined
+    // For EIP-1559 transactions, we need to cover at least the base fee
+    // Query the current base fee from the latest block and add a buffer
+    let base_fee = match provider.get_block(BlockNumber::Latest).await {
+        Ok(Some(block)) => block.base_fee_per_gas.unwrap_or(U256::from(1)),
+        _ => U256::from(1), // Fallback to minimal fee
+    };
+    
+    // Set max fee to 2x base fee to handle fee fluctuations, priority fee to 1 wei
+    let max_fee = base_fee * 2;
+    let priority_fee = U256::from(1u64);
+    
+    tracing::info!("   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei", base_fee, max_fee, priority_fee);
+
     let tx = Eip1559TransactionRequest::new()
         .to(to)
         .value(amount_wei)
         .gas(21000)
-        .max_fee_per_gas(U256::from(0u64))
-        .max_priority_fee_per_gas(U256::from(0u64))
+        .max_fee_per_gas(max_fee)
+        .max_priority_fee_per_gas(priority_fee)
         .nonce(nonce)
         .chain_id(chain_id);
 
@@ -1813,7 +1823,8 @@ pub async fn send_transaction(
 
     tracing::info!("✅ Transaction sent: {} from {} to {} amount {} CHIRAL", 
         tx_hash, from_address, to_address, amount_chiral);
-    tracing::info!("   Nonce: {}, Max Fee: 0 wei, Max Priority Fee: 0 wei, Gas Limit: 21000, Chain ID: {}", nonce, chain_id);
+    tracing::info!("   Nonce: {}, Max Fee: {} wei, Priority Fee: {} wei, Gas Limit: 21000, Chain ID: {}", 
+        nonce, max_fee, priority_fee, chain_id);
     
     // Verify the transaction was added to the local txpool
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
