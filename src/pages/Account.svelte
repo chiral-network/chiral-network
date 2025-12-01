@@ -1755,38 +1755,54 @@
                 </Button>
                 {#if showQrCodeModal}
                   <div
-                    class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+                    class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
                     role="button"
                     tabindex="0"
                     on:click={() => showQrCodeModal = false}
                     on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showQrCodeModal = false; }}
                   >
                     <div
-                      class="bg-white dark:bg-gray-800 p-8 rounded-xl shadow-2xl w-full max-w-md text-center border border-gray-200 dark:border-gray-700"
+                      class="bg-white dark:bg-gray-900 p-8 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md text-center border border-purple-200 dark:border-purple-800 animate-in zoom-in-95 duration-200"
                       on:click|stopPropagation
                       role="dialog"
                       tabindex="0"
                       aria-modal="true"
                       on:keydown={(e) => { if (e.key === 'Escape') showQrCodeModal = false; }}
                     >
-                      <div class="flex items-center justify-center gap-2 mb-4">
-                        <div class="bg-purple-100 p-2 rounded-lg">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                      <!-- Header -->
+                      <div class="flex items-center justify-between mb-6">
+                        <div class="flex items-center gap-3">
+                          <div class="bg-purple-100 p-2.5 rounded-xl shadow-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                          </div>
+                          <h3 class="text-2xl font-bold text-gray-900 dark:text-white">{$t('wallet.qrModal.title')}</h3>
                         </div>
-                        <h3 class="text-xl font-bold">{$t('wallet.qrModal.title')}</h3>
+                        <button
+                          on:click={() => showQrCodeModal = false}
+                          class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                          aria-label="Close"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
                       </div>
                       
-                      <div class="bg-white p-4 rounded-lg border-2 border-purple-200 shadow-sm inline-block mb-4">
-                        <img src={qrCodeDataUrl} alt={$t('wallet.qrModal.alt')} class="mx-auto rounded" />
+                      <!-- QR Code -->
+                      <div class="bg-white p-6 rounded-2xl border-2 border-purple-200 shadow-lg inline-block mb-6 transition-transform hover:scale-105 duration-200">
+                        <img src={qrCodeDataUrl} alt={$t('wallet.qrModal.alt')} class="mx-auto rounded-lg" />
                       </div>
                       
-                      <div class="bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg p-3 mb-4">
-                        <p class="text-xs text-gray-600 dark:text-gray-300 break-all font-mono">
-                        {$etcAccount?.address}
-                      </p>
+                      <!-- Address -->
+                      <div class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 mb-6">
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium">Wallet Address</p>
+                        <p class="text-sm text-gray-800 dark:text-gray-200 break-all font-mono leading-relaxed">
+                          {$etcAccount?.address}
+                        </p>
                       </div>
 
-                      <Button class="w-full font-semibold" variant="outline" on:click={() => showQrCodeModal = false}>
+                      <Button 
+                        class="w-full font-semibold bg-purple-600 hover:bg-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-200" 
+                        on:click={() => showQrCodeModal = false}
+                      >
                         {$t('actions.close')}
                       </Button>
                     </div>
@@ -1878,20 +1894,36 @@
             </Button>
           </div>
           {#if showScannerModal}
-            <div class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-              <div class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-gray-700">
-                <div class="flex items-center justify-center gap-2 mb-4">
-                  <div class="bg-purple-100 p-2 rounded-lg">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+            <div class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+              <div class="bg-white dark:bg-gray-900 p-6 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md border border-purple-200 dark:border-purple-800 animate-in zoom-in-95 duration-200">
+                <!-- Header -->
+                <div class="flex items-center justify-between mb-5">
+                  <div class="flex items-center gap-3">
+                    <div class="bg-purple-100 p-2.5 rounded-xl shadow-sm">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
+                    </div>
+                    <h3 class="text-2xl font-bold text-gray-900 dark:text-white">{$t('transfer.recipient.scanQrTitle')}</h3>
                   </div>
-                  <h3 class="text-xl font-bold">{$t('transfer.recipient.scanQrTitle')}</h3>
+                  <button
+                    on:click={() => showScannerModal = false}
+                    class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                    aria-label="Close"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                  </button>
                 </div>
                 
-                <div id="qr-reader" class="w-full border-2 border-purple-200 rounded-lg overflow-hidden"></div>
+                <!-- Scanner View -->
+                <div id="qr-reader" class="w-full border-2 border-purple-300 rounded-xl overflow-hidden shadow-inner mb-4 bg-gray-50 dark:bg-gray-800"></div>
                 
-                <Button class="mt-4 w-full font-semibold" variant="outline" on:click={() => showScannerModal = false}>
-                  {$t('actions.cancel')}
-                </Button>
+                <div class="flex gap-2">
+                  <Button 
+                    class="flex-1 font-semibold bg-purple-600 hover:bg-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-200" 
+                    on:click={() => showScannerModal = false}
+                  >
+                    {$t('actions.cancel')}
+                  </Button>
+                </div>
               </div>
             </div>
           {/if}
@@ -2787,14 +2819,14 @@
   <!-- 2FA Setup Modal -->
   {#if show2faSetupModal && totpSetupInfo}
     <div
-      class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
       role="button"
       tabindex="0"
       on:click={() => show2faSetupModal = false}
       on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') show2faSetupModal = false; }}
     >
       <div
-        class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-lg border border-gray-200 dark:border-gray-700"
+        class="bg-white dark:bg-gray-900 p-7 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-lg border border-blue-200 dark:border-blue-800 animate-in zoom-in-95 duration-200"
         on:click|stopPropagation
         role="dialog"
         aria-modal="true"
@@ -2802,85 +2834,117 @@
         on:keydown={(e) => { if (e.key === 'Escape') show2faSetupModal = false; }}
       >
         <!-- Header with Icon -->
-        <div class="flex items-center gap-3 mb-4">
-          <div class="bg-blue-100 p-2 rounded-lg">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        <div class="flex items-center justify-between mb-6">
+          <div class="flex items-center gap-3">
+            <div class="bg-blue-100 p-2.5 rounded-xl shadow-sm">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            </div>
+            <div>
+              <h3 class="text-2xl font-bold text-gray-900 dark:text-white">{$t('security.2fa.setup.title')}</h3>
+              <p class="text-xs text-blue-600 font-semibold mt-0.5">Step 1 of 2</p>
+            </div>
           </div>
-          <div>
-            <h3 class="text-xl font-bold">{$t('security.2fa.setup.title')}</h3>
-            <p class="text-xs text-blue-600 font-medium">Step 1 of 2</p>
-          </div>
+          <button
+            on:click={() => show2faSetupModal = false}
+            class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+            aria-label="Close"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
         </div>
         
-        <div class="bg-blue-50 border-l-4 border-l-blue-500 p-3 rounded-lg mb-4">
-          <p class="text-sm text-blue-900">{$t('security.2fa.setup.step1_scan')}</p>
+        <!-- Step 1 Info -->
+        <div class="bg-blue-50 border-l-4 border-l-blue-500 p-4 rounded-xl mb-5 shadow-sm">
+          <p class="text-sm text-blue-900 font-medium">{$t('security.2fa.setup.step1_scan')}</p>
         </div>
         
-        <div class="flex flex-col md:flex-row gap-4 items-center border border-gray-200 dark:border-gray-700 p-4 rounded-lg mb-4">
-          <div class="bg-white p-3 rounded-lg border-2 border-blue-200 shadow-sm">
-            <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded" />
+        <!-- QR Code & Secret -->
+        <div class="flex flex-col md:flex-row gap-5 items-center bg-gradient-to-br from-gray-50 to-blue-50 dark:from-gray-800 dark:to-blue-900/20 border border-gray-200 dark:border-gray-700 p-5 rounded-xl mb-5 shadow-sm">
+          <div class="bg-white p-4 rounded-xl border-2 border-blue-300 shadow-lg transition-transform hover:scale-105 duration-200">
+            <img src={totpSetupInfo.qrCodeDataUrl} alt="2FA QR Code" class="w-40 h-40 rounded-lg" />
           </div>
-          <div class="space-y-2 flex-1">
-            <p class="text-sm font-medium">{$t('security.2fa.setup.scanAlt')}</p>
-            <p class="text-xs text-muted-foreground">{$t('security.2fa.setup.step2_manual')}</p>
-            <div class="flex items-center gap-2 bg-gray-100 dark:bg-gray-700 p-2 rounded border border-gray-300 dark:border-gray-600">
-              <code class="text-sm font-mono break-all text-blue-600 dark:text-blue-400 flex-1">{totpSetupInfo.secret}</code>
-              <Button size="icon" variant="ghost" on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast(tr('toasts.common.copied'), 'success'); }} class="flex-shrink-0">
+          <div class="space-y-3 flex-1">
+            <p class="text-sm font-semibold text-gray-900 dark:text-white">{$t('security.2fa.setup.scanAlt')}</p>
+            <p class="text-xs text-gray-600 dark:text-gray-400">{$t('security.2fa.setup.step2_manual')}</p>
+            <div class="flex items-center gap-2 bg-white dark:bg-gray-800 p-3 rounded-lg border-2 border-blue-200 dark:border-blue-700 shadow-sm">
+              <code class="text-sm font-mono break-all text-blue-700 dark:text-blue-300 flex-1 font-semibold">{totpSetupInfo.secret}</code>
+              <Button 
+                size="icon" 
+                variant="ghost" 
+                on:click={() => { navigator.clipboard.writeText(totpSetupInfo?.secret || ''); showToast(tr('toasts.common.copied'), 'success'); }} 
+                class="flex-shrink-0 hover:bg-blue-100 hover:text-blue-700 transition-colors"
+              >
                 <Copy class="h-4 w-4" />
               </Button>
             </div>
           </div>
         </div>
 
-        <div class="bg-purple-50 border-l-4 border-l-purple-500 p-3 rounded-lg mb-4">
-          <p class="text-xs text-purple-900 font-medium mb-1">Step 2 of 2</p>
-          <p class="text-sm text-purple-700">{$t('security.2fa.setup.step3_verify')}</p>
+        <!-- Step 2 Info -->
+        <div class="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 border-l-4 border-l-purple-500 p-4 rounded-xl mb-5 shadow-sm">
+          <p class="text-xs text-purple-900 dark:text-purple-200 font-semibold mb-1">Step 2 of 2</p>
+          <p class="text-sm text-purple-800 dark:text-purple-300 font-medium">{$t('security.2fa.setup.step3_verify')}</p>
         </div>
         
-        <div class="space-y-3">
+        <!-- Input Fields -->
+        <div class="space-y-4">
           <div>
-            <Label for="totp-verify" class="text-sm font-semibold">{$t('security.2fa.setup.verifyLabel')}</Label>
-          <Input
-            id="totp-verify"
-            type="text"
-            bind:value={totpVerificationCode}
-            placeholder="123456"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            maxlength={6}
-              class="text-center text-lg font-mono tracking-wider mt-1"
-          />
+            <Label for="totp-verify" class="text-sm font-semibold text-gray-700 dark:text-gray-300">{$t('security.2fa.setup.verifyLabel')}</Label>
+            <Input
+              id="totp-verify"
+              type="text"
+              bind:value={totpVerificationCode}
+              placeholder="123456"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength={6}
+              class="text-center text-2xl font-mono tracking-widest mt-2 h-14 border-2 border-blue-200 focus:border-blue-500 shadow-sm rounded-xl"
+            />
           </div>
           <div>
-            <Label for="totp-password-setup" class="text-sm font-semibold">{$t('keystore.load.password')}</Label>
-          <Input
-            id="totp-password-setup"
-            type="password"
-            bind:value={twoFaPassword}
-            placeholder={$t('placeholders.unlockPassword')}
-              class="mt-1"
-          />
+            <Label for="totp-password-setup" class="text-sm font-semibold text-gray-700 dark:text-gray-300">{$t('keystore.load.password')}</Label>
+            <Input
+              id="totp-password-setup"
+              type="password"
+              bind:value={twoFaPassword}
+              placeholder={$t('placeholders.unlockPassword')}
+              class="mt-2 h-11 border-2 border-gray-200 focus:border-blue-500 shadow-sm rounded-xl"
+            />
           </div>
           {#if twoFaErrorMessage}
-            <div class="bg-red-50 border-l-4 border-l-red-500 p-3 rounded-lg">
-              <p class="text-sm text-red-700 flex items-center gap-2">
-                <AlertCircle class="h-4 w-4" />
+            <div class="bg-red-50 border-l-4 border-l-red-500 p-4 rounded-xl shadow-sm animate-in slide-in-from-top-2 duration-200">
+              <p class="text-sm text-red-700 dark:text-red-600 flex items-center gap-2 font-medium">
+                <AlertCircle class="h-5 w-5 flex-shrink-0" />
                 {twoFaErrorMessage}
               </p>
             </div>
           {/if}
         </div>
 
-        <div class="mt-6 flex justify-end gap-2">
-          <Button variant="outline" on:click={() => show2faSetupModal = false}>{$t('actions.cancel')}</Button>
-          <Button on:click={verifyAndEnable2FA} disabled={isVerifying2fa || totpVerificationCode.length < 6 || !twoFaPassword} class="bg-green-600 hover:bg-green-700 text-white font-semibold">
+        <!-- Action Buttons -->
+        <div class="mt-7 flex justify-end gap-3">
+          <Button 
+            variant="outline" 
+            on:click={() => show2faSetupModal = false}
+            class="px-6 font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          >
+            {$t('actions.cancel')}
+          </Button>
+          <Button 
+            on:click={verifyAndEnable2FA} 
+            disabled={isVerifying2fa || totpVerificationCode.length < 6 || !twoFaPassword} 
+            class="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 shadow-md hover:shadow-lg transition-all duration-200"
+          >
             {#if isVerifying2fa}
               <div class="flex items-center gap-2">
                 <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
                 {$t('actions.verifying')}
               </div>
             {:else}
-              {$t('security.2fa.setup.verifyAndEnable')}
+              <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                {$t('security.2fa.setup.verifyAndEnable')}
+              </div>
             {/if}
           </Button>
         </div>
@@ -2891,75 +2955,100 @@
   <!-- 2FA Action Prompt Modal -->
   {#if show2faPromptModal}
     <div
-      class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      class="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
       role="button"
       tabindex="0"
       on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
       on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { show2faPromptModal = false; actionToConfirm = null; } }}
     >
       <div
-        class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-gray-700"
+        class="bg-white dark:bg-gray-900 p-7 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.3)] w-full max-w-md border border-blue-200 dark:border-blue-800 animate-in zoom-in-95 duration-200"
         on:click|stopPropagation
         role="dialog"
         aria-modal="true"
         tabindex="-1"
         on:keydown={(e) => { if (e.key === 'Escape' ) { show2faPromptModal = false; actionToConfirm = null; } }}
       >
-        <div class="flex items-center gap-3 mb-4">
-          <div class="bg-blue-100 p-2 rounded-lg">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-6">
+          <div class="flex items-center gap-3">
+            <div class="bg-blue-100 p-2.5 rounded-xl shadow-sm">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            </div>
+            <div>
+              <h3 class="text-2xl font-bold text-gray-900 dark:text-white">{$t('security.2fa.prompt.title')}</h3>
+              <p class="text-sm text-gray-600 dark:text-gray-400 mt-0.5">{$t('security.2fa.prompt.enter_code')}</p>
+            </div>
           </div>
-          <div>
-            <h3 class="text-xl font-bold">{$t('security.2fa.prompt.title')}</h3>
-            <p class="text-sm text-muted-foreground">{$t('security.2fa.prompt.enter_code')}</p>
-          </div>
+          <button
+            on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
+            class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+            aria-label="Close"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
         </div>
         
-        <div class="space-y-3">
+        <!-- Input Fields -->
+        <div class="space-y-4">
           <div>
-            <Label for="totp-action" class="text-sm font-semibold">{$t('security.2fa.prompt.label')}</Label>
-          <Input
-            id="totp-action"
-            type="text"
-            bind:value={totpActionCode}
-            placeholder="123456"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            maxlength={6}
-            autofocus
-              class="text-center text-lg font-mono tracking-wider mt-1"
-          />
+            <Label for="totp-action" class="text-sm font-semibold text-gray-700 dark:text-gray-300">{$t('security.2fa.prompt.label')}</Label>
+            <Input
+              id="totp-action"
+              type="text"
+              bind:value={totpActionCode}
+              placeholder="123456"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength={6}
+              autofocus
+              class="text-center text-2xl font-mono tracking-widest mt-2 h-14 border-2 border-blue-200 focus:border-blue-500 shadow-sm rounded-xl"
+            />
           </div>
           <div>
-            <Label for="totp-password-action" class="text-sm font-semibold">{$t('keystore.load.password')}</Label>
-          <Input
-            id="totp-password-action"
-            type="password"
-            bind:value={twoFaPassword}
-            placeholder={$t('placeholders.unlockPassword')}
-              class="mt-1"
-          />
+            <Label for="totp-password-action" class="text-sm font-semibold text-gray-700 dark:text-gray-300">{$t('keystore.load.password')}</Label>
+            <Input
+              id="totp-password-action"
+              type="password"
+              bind:value={twoFaPassword}
+              placeholder={$t('placeholders.unlockPassword')}
+              class="mt-2 h-11 border-2 border-gray-200 focus:border-blue-500 shadow-sm rounded-xl"
+            />
           </div>
           {#if twoFaErrorMessage}
-            <div class="bg-red-50 border-l-4 border-l-red-500 p-3 rounded-lg">
-              <p class="text-sm text-red-700 flex items-center gap-2">
-                <AlertCircle class="h-4 w-4" />
+            <div class="bg-red-50 border-l-4 border-l-red-500 p-4 rounded-xl shadow-sm animate-in slide-in-from-top-2 duration-200">
+              <p class="text-sm text-red-700 dark:text-red-600 flex items-center gap-2 font-medium">
+                <AlertCircle class="h-5 w-5 flex-shrink-0" />
                 {twoFaErrorMessage}
               </p>
             </div>
           {/if}
         </div>
 
-        <div class="mt-6 flex justify-end gap-2">
-          <Button variant="outline" on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}>{$t('actions.cancel')}</Button>
-          <Button on:click={confirmActionWith2FA} disabled={isVerifyingAction || totpActionCode.length < 6 || !twoFaPassword} class="bg-blue-600 hover:bg-blue-700 text-white font-semibold">
+        <!-- Action Buttons -->
+        <div class="mt-7 flex justify-end gap-3">
+          <Button 
+            variant="outline" 
+            on:click={() => { show2faPromptModal = false; actionToConfirm = null; }}
+            class="px-6 font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          >
+            {$t('actions.cancel')}
+          </Button>
+          <Button 
+            on:click={confirmActionWith2FA} 
+            disabled={isVerifyingAction || totpActionCode.length < 6 || !twoFaPassword} 
+            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 shadow-md hover:shadow-lg transition-all duration-200"
+          >
             {#if isVerifyingAction}
               <div class="flex items-center gap-2">
                 <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
                 {$t('actions.verifying')}
               </div>
             {:else}
-              {$t('actions.confirm')}
+              <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                {$t('actions.confirm')}
+              </div>
             {/if}
           </Button>
         </div>
