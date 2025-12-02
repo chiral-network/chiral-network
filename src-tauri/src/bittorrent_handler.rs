@@ -7,7 +7,7 @@ use crate::transfer_events::{
 use async_trait::async_trait;
 use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions, create_torrent, CreateTorrentOptions, AddTorrentOptions};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -16,7 +16,6 @@ use tracing::{error, info, instrument, warn};
 use crate::dht::DhtService;
 use libp2p::Multiaddr;
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
 
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
 
@@ -164,43 +163,6 @@ impl BitTorrentError {
             BitTorrentError::Unknown { .. } => "unknown",
         }
     }
-}
-
-/// Represents the source of a torrent, which can be a magnet link or a .torrent file.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum PersistentTorrentSource {
-    Magnet(String),
-    File(PathBuf),
-}
-
-/// Represents the status of a persistent torrent.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum PersistentTorrentStatus {
-    Downloading,
-    Seeding,
-}
-
-/// A struct representing the state of a single torrent to be persisted to disk.
-/// This allows the application to resume downloads and seeds across restarts.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PersistentTorrent {
-    /// The unique info hash of the torrent, as a hex string. This will be our primary key.
-    pub info_hash: String,
-
-    /// The source of the torrent (magnet link or file path) needed to re-add it.
-    pub source: PersistentTorrentSource,
-
-    /// The directory where the torrent's content is stored.
-    pub output_path: PathBuf,
-
-    /// The last known status of the torrent (e.g., downloading or seeding).
-    pub status: PersistentTorrentStatus,
-
-    /// Timestamp (Unix epoch seconds) when the torrent was added.
-    pub added_at: u64,
 }
 
 /// Events sent by the BitTorrent download monitor
@@ -1015,6 +977,50 @@ mod tests {
         let txt_path = create_test_file(temp_dir.path(), "test.txt", "content");
         assert!(BitTorrentHandler::validate_torrent_file(txt_path.to_str().unwrap()).is_err());
     }
+
+    #[test]
+    fn test_persistent_torrent_serialization_round_trip() {
+        // Test with a Magnet link source
+        let original_magnet = PersistentTorrent {
+            info_hash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string(),
+            source: PersistentTorrentSource::Magnet("magnet:?xt=urn:btih:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string()),
+            output_path: PathBuf::from("/downloads/test_magnet"),
+            status: PersistentTorrentStatus::Downloading,
+            added_at: 1678886400,
+        };
+
+        let serialized_magnet = serde_json::to_string_pretty(&original_magnet).unwrap();
+        println!("Serialized Magnet Torrent:\n{}", serialized_magnet);
+
+        let deserialized_magnet: PersistentTorrent = serde_json::from_str(&serialized_magnet).unwrap();
+
+        assert_eq!(original_magnet.info_hash, deserialized_magnet.info_hash);
+        assert_eq!(original_magnet.source, deserialized_magnet.source);
+        assert_eq!(original_magnet.output_path, deserialized_magnet.output_path);
+        assert_eq!(original_magnet.status, deserialized_magnet.status);
+        assert_eq!(original_magnet.added_at, deserialized_magnet.added_at);
+
+        // Test with a File source
+        let original_file = PersistentTorrent {
+            info_hash: "f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2".to_string(),
+            source: PersistentTorrentSource::File(PathBuf::from("/torrents/test.torrent")),
+            output_path: PathBuf::from("/downloads/test_file"),
+            status: PersistentTorrentStatus::Seeding,
+            added_at: 1678887400,
+        };
+
+        let serialized_file = serde_json::to_string_pretty(&original_file).unwrap();
+        println!("Serialized File Torrent:\n{}", serialized_file);
+
+        let deserialized_file: PersistentTorrent = serde_json::from_str(&serialized_file).unwrap();
+
+        assert_eq!(original_file.info_hash, deserialized_file.info_hash);
+        assert_eq!(original_file.source, deserialized_file.source);
+        assert_eq!(original_file.output_path, deserialized_file.output_path);
+        assert_eq!(original_file.status, deserialized_file.status);
+        assert_eq!(original_file.added_at, deserialized_file.added_at);
+    }
+
 
     #[tokio::test]
     #[ignore] // Ignored by default as it performs a real network download
