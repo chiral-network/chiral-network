@@ -7,7 +7,7 @@ use crate::transfer_events::{
 use async_trait::async_trait;
 use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions, create_torrent, CreateTorrentOptions, AddTorrentOptions};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -16,6 +16,7 @@ use tracing::{error, info, instrument, warn};
 use crate::dht::DhtService;
 use libp2p::Multiaddr;
 use thiserror::Error;
+use serde::{Deserialize, Serialize};
 
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
 
@@ -163,6 +164,43 @@ impl BitTorrentError {
             BitTorrentError::Unknown { .. } => "unknown",
         }
     }
+}
+
+/// Represents the source of a torrent, which can be a magnet link or a .torrent file.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PersistentTorrentSource {
+    Magnet(String),
+    File(PathBuf),
+}
+
+/// Represents the status of a persistent torrent.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PersistentTorrentStatus {
+    Downloading,
+    Seeding,
+}
+
+/// A struct representing the state of a single torrent to be persisted to disk.
+/// This allows the application to resume downloads and seeds across restarts.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistentTorrent {
+    /// The unique info hash of the torrent, as a hex string. This will be our primary key.
+    pub info_hash: String,
+
+    /// The source of the torrent (magnet link or file path) needed to re-add it.
+    pub source: PersistentTorrentSource,
+
+    /// The directory where the torrent's content is stored.
+    pub output_path: PathBuf,
+
+    /// The last known status of the torrent (e.g., downloading or seeding).
+    pub status: PersistentTorrentStatus,
+
+    /// Timestamp (Unix epoch seconds) when the torrent was added.
+    pub added_at: u64,
 }
 
 /// Events sent by the BitTorrent download monitor
