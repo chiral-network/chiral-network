@@ -7147,8 +7147,8 @@ impl DhtService {
             return Vec::new();
         }
 
-        // Wait for response with timeout
-        match tokio::time::timeout(Duration::from_secs(5), rx).await {
+        // Wait for response with timeout - increased to 10s for better DHT propagation
+        match tokio::time::timeout(Duration::from_secs(10), rx).await {
             Ok(Ok(Ok(providers))) => {
                 info!(
                     "Found {} providers for file: {}",
@@ -7159,22 +7159,22 @@ impl DhtService {
                 providers
             }
             Ok(Ok(Err(e))) => {
-                warn!("GetProviders command failed: {}", e);
-                // Fallback to connected peers
-                let connected = self.connected_peers.lock().await;
-                connected.iter().take(3).map(|p| p.to_string()).collect()
+                warn!("GetProviders command failed for {}: {}", file_hash, e);
+                warn!("🔍 DEBUG DHT: No providers found via DHT query - returning empty list");
+                // Return empty list - don't fall back to random connected peers as they won't have the file
+                Vec::new()
             }
             Ok(Err(e)) => {
-                warn!("Receiver error: {}", e);
-                // Fallback to connected peers
-                let connected = self.connected_peers.lock().await;
-                connected.iter().take(3).map(|p| p.to_string()).collect()
+                warn!("GetProviders receiver error for {}: {}", file_hash, e);
+                warn!("🔍 DEBUG DHT: Channel error - returning empty list");
+                // Return empty list - don't fall back to random connected peers
+                Vec::new()
             }
             Err(_) => {
-                warn!("GetProviders command timed out for file: {}", file_hash);
-                // Fallback to connected peers
-                let connected = self.connected_peers.lock().await;
-                connected.iter().take(3).map(|p| p.to_string()).collect()
+                warn!("GetProviders command timed out for file: {} (waited 10s)", file_hash);
+                warn!("🔍 DEBUG DHT: Timeout waiting for providers - returning empty list");
+                // Return empty list - the file truly has no providers available
+                Vec::new()
             }
         }
     }
