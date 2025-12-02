@@ -88,21 +88,23 @@
 
     <div class="space-y-3">
       <Label>{tr('account.privateKeyImport.privateKeyLabel')}</Label>
-      <div class="relative">
+      <div class="flex gap-2">
         <Input
           type={privateKeyVisible ? 'text' : 'password'}
           bind:value={privateKey}
           placeholder={tr('account.privateKeyImport.privateKeyPlaceholder')}
           on:keydown={handleKeyDown}
-          class="pr-10"
+          class="flex-1"
         />
-        <button
+        <Button
           type="button"
-          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          size="sm"
+          variant="outline"
+          class="w-16 h-9 px-3"
           on:click={() => privateKeyVisible = !privateKeyVisible}
         >
-          {privateKeyVisible ? '👁️' : '👁️‍🗨️'}
-        </button>
+          {privateKeyVisible ? tr('actions.hide') : tr('actions.show')}
+        </Button>
       </div>
       <p class="text-xs text-muted-foreground">
         {tr('account.privateKeyImport.hint')}
@@ -132,7 +134,3 @@
     </div>
   </Card>
 </div>
-
-<style>
-  /* Ensure input background respects theme */
-</style>
