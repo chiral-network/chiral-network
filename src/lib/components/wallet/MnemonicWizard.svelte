@@ -6,6 +6,11 @@
   import { createMnemonic, isValidMnemonic, deriveAccount } from '$lib/wallet/hd'
   import { onMount } from 'svelte'
   import { showToast } from '$lib/toast'
+  import { t } from 'svelte-i18n'
+
+  type TranslateParams = { values?: Record<string, unknown>; default?: string }
+  // const tr = (key: string, params?: TranslateParams) => get(t)(key, params)
+  const tr = (key: string, params?: TranslateParams) => $t(key, params)
 
   export let onComplete: (args: { mnemonic: string, passphrase: string, account: { address: string, privateKeyHex: string, index: number, change: number }, name?: string }) => void
   export let onCancel: () => void
@@ -85,7 +90,8 @@
       }
       const acct = await deriveAccount(mnemonic, passphrase || '', 0, 0)
       onComplete({ mnemonic, passphrase: passphrase || '', account: { address: acct.address, privateKeyHex: acct.privateKeyHex, index: 0, change: 0 }, name: walletName.trim() || undefined })
-      showToast('Wallet ready', 'success')
+      // showToast('Wallet ready', 'success')
+      showToast(tr('toasts.wallet.mnemonic.ready'), 'success')
     } catch (e) {
       console.error(e)
       confirmError = String(e)
@@ -110,7 +116,8 @@
             </select>
           </div>
           <div class="flex items-center gap-2">
-            <Button variant="outline" on:click={async () => { await navigator.clipboard.writeText(mnemonic); showToast('Recovery phrase copied to clipboard', 'success') }}>Copy</Button>
+            <!-- <Button variant="outline" on:click={async () => { await navigator.clipboard.writeText(mnemonic); showToast('Recovery phrase copied to clipboard', 'success') }}>Copy</Button> -->
+             <Button variant="outline" on:click={async () => { await navigator.clipboard.writeText(mnemonic); showToast(tr('toasts.wallet.mnemonic.copied'), 'success') }}>Copy</Button>
             <Button variant="outline" on:click={regenerate}>Regenerate</Button>
           </div>
         </div>

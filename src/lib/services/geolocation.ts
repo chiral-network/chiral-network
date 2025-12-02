@@ -110,7 +110,6 @@ async function detectFromBrowserGeolocation(): Promise<GeoRegionConfig | null> {
     const { latitude, longitude } = position.coords;
     return nearestRegion(latitude, longitude);
   } catch (error) {
-    console.warn('Geolocation permission denied or unavailable:', error);
     return null;
   }
 }

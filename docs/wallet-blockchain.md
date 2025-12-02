@@ -1,343 +1,222 @@
-# IMPORTANT: This document needs full revision. We dont' need overcomplicated wallet and blockchain integration. We only need to support Ethereum-compatible blockchain and a simple wallet.
-
-# Wallet & Blockchain Integration
+# **Chiral Network – Wallet & Blockchain Design**
 
-Chiral Network includes a separate Ethereum-compatible blockchain with HD wallet support and CPU mining capabilities.
+## **1. Overview**
 
-## HD Wallet
+The **Wallet & Blockchain Layer** provides a minimal **payment and identity system** for the Chiral Network.
+It enables users to:
 
-### Overview
+- **Earn** cryptocurrency for seeding files
+- **Pay** for file downloads
+- **Verify** payments and balances on-chain
+- **Authenticate** nodes cryptographically
 
-Chiral Network uses Hierarchical Deterministic (HD) wallets based on industry standards:
-- **BIP32**: HD wallet structure
-- **BIP39**: Mnemonic phrase generation
-- **secp256k1**: Elliptic curve cryptography
+This layer is **Ethereum-compatible**, meaning all accounts and transactions follow Ethereum standards and can be used with supported Ethereum libraries.
 
-### Creating a Wallet
+Our **EVM-compatible blockchain** is hosted on a dedicated **Geth node**, which processes transactions, maintains the ledger, provides a JSON-RPC interface, and handles mining. **Clef** is used as an **external signer** to manage wallets and key signing securely.
 
-#### Generate New Wallet
-
-1. **Navigate to Account Page**
-2. **Click "Create Wallet"**
-3. **System generates**:
-   - 12 or 24-word mnemonic phrase
-   - Master private key
-   - First account address
-4. **Write down mnemonic phrase** (CRITICAL - cannot be recovered)
-5. **Verify phrase** by re-entering words
-6. **Wallet is created** and ready to use
+### Wallet Description
 
-#### Import Existing Wallet
+- **State management:** Clef stores private keys and signs transactions; Geth interacts via JSON-RPC.
+- **Persistence:** Wallets are encrypted and managed entirely by Clef; no keys are stored in the application memory.
+- **Blockchain interaction:** Transactions are signed through Clef and submitted via the Geth RPC endpoint.
+- **UI / CLI integration:** Wallet operations such as creating/importing accounts, checking balances, sending transactions, and processing download payments are exposed through Tauri commands that communicate with Clef + Geth.
+- **Security features:** Private keys never leave Clef. Geth only handles signed transactions. Optional 2FA/TOTP can be enforced via Clef policies for sensitive actions.
 
-1. **Navigate to Account Page**
-2. **Click "Import Wallet"**
-3. **Enter mnemonic phrase**
-4. **Optional: Enter derivation path** (default: m/44'/60'/0'/0)
-5. **System derives**:
-   - Private keys
-   - Account addresses
-6. **Wallet restored**
+This setup provides a **lightweight, secure, and standard Ethereum-compatible wallet system** fully integrated with the Chiral Network file-sharing and payment system, while relying on a **single Geth node** for all blockchain operations.
 
-### Mnemonic Phrase Security
+---
 
-**Critical Security Rules**:
-- ✅ Write down phrase on paper
-- ✅ Store in secure location (safe, vault)
-- ✅ Never share with anyone
-- ✅ Never store digitally (no photos, no cloud)
-- ❌ Never enter on websites
-- ❌ Never send via email/chat
+## **2. Design Goals**
 
-**Phrase Characteristics**:
-- 12 or 24 words from BIP39 wordlist
-- Deterministically generates all accounts
-- Can restore wallet on any device
-- Losing phrase = losing access forever
+| Goal              | Description                                                               |
+| ----------------- | ------------------------------------------------------------------------- |
+| **Simplicity**    | Single-account wallet handled externally by Clef; Geth manages blockchain |
+| **Compatibility** | Works with any Ethereum-compatible chain or testnet                       |
+| **Separation**    | Wallet signing handled by Clef, blockchain operations handled by Geth     |
+| **Transparency**  | All payments verifiable on-chain via Geth                                 |
 
-### Multiple Accounts
+---
 
-HD wallets support multiple accounts:
+## **3. System Components**
 
-1. **Derived from single mnemonic**
-2. **Each account has unique address**
-3. **Derivation path**: m/44'/60'/0'/0/N (N = account index)
-4. **Create new accounts** in Account page
-5. **Switch between accounts** easily
+### 3.1 Wallet Service (Clef)
 
-### Account Management
+Handles key management and signing of Ethereum-compatible transactions.
 
-**Account List Features**:
-- View all derived accounts
-- See balances for each
-- Copy addresses
-- Generate QR codes
-- Set default account
-- Export individual private keys (advanced)
+**Responsibilities:**
 
-### Wallet Security
+- Generate and import accounts (mnemonic or private key)
+- Sign transactions and messages securely
+- Enforce signing policies (optional 2FA or multi-sig)
+- Expose wallet functions to the application via IPC/JSON-RPC
 
-**Implemented**:
-- Private keys never leave device
-- Encrypted storage (if device supports)
-- No cloud backup (intentional - security)
-- Secure random number generation
+**Key Functions:**
 
-**Best Practices**:
-- Use strong device password
-- Enable disk encryption
-- Backup mnemonic phrase securely
-- Consider hardware wallet for large amounts
+- `createWallet()` – Clef generates a new account
+- `importWallet(mnemonic)` – Restore wallet from mnemonic
+- `getAddress()` – Return the wallet address
+- `signMessage(message)` – Sign messages or transactions
+- `sendTransaction(txUnsigned)` – Sign and return raw transaction to Geth for broadcasting
 
-## Blockchain
+---
 
-### Network Details
+### 3.2 Blockchain Service (Geth)
 
-Chiral Network runs a **separate Ethereum-compatible blockchain**:
+Handles all blockchain operations via **JSON-RPC**:
 
-- **Network Name**: Chiral Network
-- **Chain ID**: Custom (configured in genesis.json)
-- **Consensus**: Proof of Work (Ethash)
-- **Block Time**: ~15 seconds
-- **Gas Limit**: Configurable
+**Responsibilities:**
 
-### Geth Integration
+- Connect to a local or remote **Geth node RPC endpoint** (HTTP/WebSocket)
+- Submit **Clef-signed transactions** to the blockchain
+- Query balances, transaction receipts, and confirmations
+- Optionally handle **mining** if enabled on the node
+- Track transaction status (`pending` / `confirmed`)
 
-The application integrates with Geth (Go Ethereum):
+**Core APIs:**
 
-**Features**:
-- Full Ethereum node
-- Transaction signing
-- Smart contract deployment
-- Block mining
-- RPC interface
+- `connect(gethRpcUrl)` — Connect to the Geth node
+- `getBalance(address)` — Query account balance from Geth
+- `sendRawTransaction(txSigned)` — Submit signed transaction via Geth
+- `getTransactionStatus(txHash)` — Check transaction status
 
-**Geth Service** (`src/lib/services/gethService.ts`):
-- Start/stop Geth node
-- Monitor sync status
-- Submit transactions
-- Query balances
+---
 
-### Proof of Storage Smart Contract
+## **4. Wallet Architecture**
 
-Location: `src/lib/services/ProofOfStorage.sol`
+```text
+┌──────────────────────────────────────────┐
+│               Wallet Layer               │
+│ ┌──────────────────────────────────────┐ │
+│ │ Clef Key Management                   │ │
+│ │ - Mnemonic / Private Key Storage      │ │
+│ │ - secp256k1 Signatures                │ │
+│ │ - Signing Policies / 2FA              │ │
+│ └──────────────────────────────────────┘ │
+│ ┌──────────────────────────────────────┐ │
+│ │ Transaction Signing                   │ │
+│ │ - EIP-155 Transaction Format          │ │
+│ │ - Offline / Secure Signing            │ │
+│ └──────────────────────────────────────┘ │
+│ ┌──────────────────────────────────────┐ │
+│ │ Geth RPC Interface                    │ │
+│ │ - Send Signed Transactions            │ │
+│ │ - Query Balances & Receipts           │ │
+│ │ - Mining (optional)                   │ │
+│ └──────────────────────────────────────┘ │
+└──────────────────────────────────────────┘
+```
 
-**Purpose**: Validate storage claims through periodic challenges
+---
 
-**Features**:
-- Storage commitment registration
-- Challenge/response mechanism
-- Verification of stored data
-- Reward distribution
+## **5.1 Network Setup**
 
-## Mining
+- **Type:** Ethereum-compatible
+  - Wallet and transactions follow Ethereum standards.
 
-### Overview
+- **Blockchain Node:** Local Geth node
+  - Handles transaction submission, mining (optional), balance queries, and block information.
 
-Mine blocks to secure the network and earn rewards:
+- **Wallet & Signing:** Clef
+  - Manages keys, signs transactions, and enforces signing policies.
 
-- **Algorithm**: Ethash (Ethereum PoW)
-- **Difficulty**: Adjusts based on network hashrate
-- **Rewards**: Block reward + transaction fees
-- **Hardware**: CPU mining (GPU mining not yet supported)
+- **RPC Endpoint:** Configurable
+  - Example: `http://localhost:8545` or `ws://localhost:8546`
+  - Rust app communicates with **Geth + Clef** through JSON-RPC.
 
-### Starting Mining
+---
 
-1. **Navigate to Mining Page**
-2. **Configure settings**:
-   - Number of CPU threads (1-16)
-   - Mining intensity (1-100%)
-   - Pool selection (solo or pool)
-3. **Click "Start Mining"**
-4. **Monitor**:
-   - Hash rate (H/s, KH/s, MH/s)
-   - Blocks found
-   - Total rewards
-   - Mining history
+### 5.2 Transaction Flow
 
-### Mining Pools
+1. Seeder or leecher triggers a payment event.
+2. Wallet (Clef) signs the transaction securely.
+3. Blockchain Service (Geth) submits the signed transaction via RPC.
+4. UI reflects transaction status: **pending** → **confirmed**.
 
-**Note**: Pool UI exists but actual pool mining not yet implemented.
+---
 
-**Available Options**:
-- Solo mining (fully functional)
-- Pool mining (UI only, coming soon)
+## **6. User Flow (File-Sharing Context)**
 
-### Mining Performance
+### 6.1 Create Wallet
 
-**Factors Affecting Hashrate**:
-- CPU model and speed
-- Number of threads
-- Mining intensity
-- System temperature
-- Other running processes
+1. On first launch, Clef generates a **new wallet**.
+2. The address becomes the node’s **on-chain identity** for earning or paying tokens.
+3. User securely backs up mnemonic/private key (never stored remotely).
 
-**Optimization Tips**:
-- Use all available CPU cores
-- Close unnecessary applications
-- Ensure adequate cooling
-- Monitor temperature
-- Adjust intensity if system lags
+### 6.2 Import Wallet
 
-### Mining Rewards
+1. Existing users **import a wallet** via mnemonic/private key in Clef.
+2. Wallet state is restored, including balances and transaction history.
+3. Node resumes previous seeding/downloading state with the same identity.
 
-**Block Rewards**:
-- Fixed reward per block (configured in genesis.json)
-- Transaction fees (minimal on new network)
-- Rewards sent to mining address
+### 6.3 Pay for Download (Leecher Flow)
 
-**Reward Tracking**:
-- Total blocks found
-- Total rewards earned
-- Recent blocks list
-- Mining history chart
+1. Leecher requests a file or chunk.
+2. Wallet (Clef) signs the payment transaction.
+3. Geth submits the signed transaction to the blockchain.
+4. Seeder receives proof of payment before transfer begins.
+5. Transaction + download logs stored locally for tracking.
 
-**Note**: Reward values in UI may use mock data; actual rewards depend on blockchain configuration.
+### 6.4 Earn for Seeding (Seeder Flow)
 
-### Mining History
+1. Seeder advertises files with wallet address attached.
+2. Leecher initiates payment → Clef signs → Geth broadcasts.
+3. Seeder account receives payment upon confirmation.
+4. Transaction + upload logs tracked locally.
 
-The Mining page displays:
+### 6.5 View Transactions and File History
 
-- **Hash Rate Chart**: Historical hashrate over time
-- **Blocks Found**: List of blocks you've mined
-- **Power Usage**: Real power consumption (when available) or N/A when unavailable
-- **Efficiency**: Hash/watt ratio (based on real power consumption when available)
-- **Session Statistics**: Current mining session details
+- Wallet UI or CLI displays financial and file-level history, including uploads and downloads.
+- Filterable by: Payments Sent, Earnings Received, File Uploads, File Downloads.
 
-## Transactions
+---
 
-### Sending Transactions
+## **7. Separation of Wallet & Blockchain Layer from File-Sharing Logic**
 
-1. **Navigate to Account Page**
-2. **Click "Send"**
-3. **Enter**:
-   - Recipient address
-   - Amount (in native token)
-   - Gas limit (optional)
-   - Gas price (optional)
-4. **Review transaction**
-5. **Confirm and sign**
-6. **Transaction submitted** to blockchain
+### Key Benefits
 
-### Transaction History
+- **Modularity:** Wallet and blockchain logic handled entirely by Clef + Geth.
+- **Maintainability:** Updates in Geth or Clef do not affect file transfer code.
+- **Security:** Private keys remain in Clef; file-sharing logic only sees signed transactions.
+- **Flexibility:** Supports future blockchains and smart contract logic.
+- **Simplified Development:** File transfer and blockchain/payment logic remain independent.
 
-View all transactions in Account page:
+---
 
-- **Sent transactions**: Outgoing transfers
-- **Received transactions**: Incoming transfers
-- **Pending transactions**: Not yet confirmed
-- **Failed transactions**: Rejected by network
+## **8. Summary**
 
-### Transaction Details
+The **Wallet & Blockchain Layer** in Chiral Network now provides:
 
-Each transaction shows:
-- Transaction hash
-- Status (pending/completed/failed)
-- Amount
-- From/to addresses
-- Gas used
-- Block number
-- Timestamp
+- ✅ Ethereum-compatible wallet handled by **Clef**
+- ✅ Blockchain operations, mining, and transaction submission handled by **Geth**
+- ✅ Offline or RPC-based signing
+- ✅ Fully decoupled from file-sharing protocols
+- ✅ Minimal transaction states (`pending` / `confirmed`)
+- ✅ Extensible for future token and smart contract logic
 
-## Wallet Features
+---
 
-### QR Codes
+## **9. Future Exploration – Alloy**
 
-Generate QR codes for:
-- **Receiving payments**: Share your address
-- **Mnemonic backup**: Paper wallet creation
-- **Account import**: Easy import on mobile
+The current design intentionally relies on **Geth** because it provides the **most stable and complete implementation** of an Ethereum-compatible client that still supports **mining** on **Ethereum Classic (ETC)** networks.
 
-### Address Book
+During design discussions, it was noted that:
 
-**Coming Soon**: Save frequently used addresses with labels
+- **Geth** remains the only reliable option for mining on legacy ETH/ETC chains.
+- **Alloy** (Rust-based Ethereum SDK) does **not currently support mining**, so Geth must remain part of the architecture for now.
+- Because Geth already exposes a **wallet RPC interface**, it simplifies development to handle both **wallet** and **blockchain** functions directly through Geth’s HTTP API rather than maintaining Clef separately at this stage.
+- **Long-term goal:**
+  - Migrate wallet operations to **Alloy** for improved modularity, performance, and Rust-native integration.
+  - Retain Geth only for **mining and consensus** functions.
+  - Eventually, if the project grows and mining becomes obsolete (e.g., due to network transition or impracticality of CPU mining), **Geth could be dropped entirely**.
 
-### Token Support
+Preliminary review of Alloy documentation suggests it **likely supports Ethereum Classic** and legacy transaction formats (see [Alloy legacy transaction example](https://alloy.rs/examples/transactions/send_legacy_transaction)), though this should be confirmed through testing.
 
-**Currently**: Native token only
-**Future**: ERC-20 token support
+In summary, the **current approach keeps Geth as the unified node for wallet + blockchain + mining**, while **Alloy is reserved as a future candidate** for wallet abstraction once mining support is no longer a requirement.
 
-### Hardware Wallet Integration
+---
 
-**Planned Feature**: Support for hardware wallets (Ledger, Trezor)
+## **See Also**
 
-## Best Practices
-
-### Security
-
-1. **Backup mnemonic phrase** immediately
-2. **Use strong passwords** for device encryption
-3. **Never share private keys**
-4. **Verify addresses** before sending
-5. **Test with small amounts** first
-
-### Mining
-
-1. **Monitor temperatures** regularly
-2. **Start with lower intensity** and increase gradually
-3. **Don't mine on battery** (laptops)
-4. **Calculate electricity costs** vs. rewards
-5. **Join a pool** for more consistent rewards (when available)
-
-### Transaction Management
-
-1. **Set appropriate gas prices** for urgency
-2. **Double-check addresses** before sending
-3. **Keep transaction history** for records
-4. **Monitor pending transactions**
-5. **Contact support** if transaction stuck
-
-## Troubleshooting
-
-### Wallet Issues
-
-**Can't access wallet**:
-- Verify mnemonic phrase is correct
-- Check derivation path
-- Ensure Geth is running
-- Restart application
-
-**Balance not showing**:
-- Wait for Geth to sync
-- Check network connectivity
-- Verify correct account selected
-- Refresh account page
-
-### Mining Issues
-
-**Mining won't start**:
-- Check Geth is running
-- Verify mining address is set
-- Ensure sufficient system resources
-- Check console for errors
-
-**Low hashrate**:
-- Increase thread count
-- Raise mining intensity
-- Close other applications
-- Check CPU throttling
-
-**No blocks found**:
-- Mining is probabilistic (keep mining)
-- Check network difficulty
-- Verify connection to peers
-- Consider pool mining
-
-### Transaction Issues
-
-**Transaction pending forever**:
-- Increase gas price
-- Resubmit with higher gas
-- Check network congestion
-- Verify Geth is synced
-
-**Transaction failed**:
-- Check gas limit
-- Verify sufficient balance
-- Review transaction parameters
-- Check smart contract execution
-
-## See Also
-
-- [Security & Privacy](security-privacy.md) - Wallet security details
-- [User Guide](user-guide.md) - Step-by-step wallet usage
-- [API Documentation](api-documentation.md) - Wallet API reference
+- [Security & Privacy](security-privacy.md) – Wallet security details
+- [User Guide](user-guide.md) – Step-by-step wallet usage
+- [API Documentation](api-documentation.md) – Wallet API reference

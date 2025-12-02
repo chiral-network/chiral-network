@@ -25,13 +25,17 @@ export interface P2PTransfer {
   webrtcSession?: any;
   startTime: number;
   outputPath?: string;
-  receivedChunks?: Map<number, Uint8Array>;
+  receivedChunks?: Map<number, Uint8Array>; // Legacy: only used for small files
   requestedChunks?: Set<number>;
   currentSeederIndex?: number;
   retryCount?: number;
   lastError?: string;
   totalChunks?: number;
   corruptedChunks?: Set<number>;
+  // Streaming download session (for large files - writes directly to disk)
+  streamingSessionId?: string;
+  receivedChunkIndices?: Set<number>; // Track which chunks received (not the data)
+  chunkSize: number;
 }
 
 export class P2PFileTransferService {
@@ -45,13 +49,20 @@ export class P2PFileTransferService {
 
   constructor() {
     // Initialize signaling service for WebRTC coordination
-    this.signalingService = new SignalingService();
+    this.signalingService = new SignalingService({
+      preferDht: false,  // Force WebSocket for WebRTC file transfers
+      persistPeers: false  // Don't persist peers to avoid stale peer IDs
+    });
   }
 
   async getFileMetadata(fileHash: string): Promise<any> {
     // Use the file hash to retrieve metadata from DHT
     return await invoke("get_file_metadata", { fileHash });
   }
+
+  // Constants for streaming vs in-memory threshold
+  private static readonly CHUNK_SIZE = 16 * 1024; // 16KB chunks
+  private static readonly STREAMING_THRESHOLD = 1024 * 1024; // 1MB - use streaming for files larger than this
 
   async initiateDownload(
     metadata: FileMetadata,
@@ -71,6 +82,7 @@ export class P2PFileTransferService {
       bytesTransferred: 0,
       speed: 0,
       startTime: Date.now(),
+      chunkSize: P2PFileTransferService.CHUNK_SIZE,
     };
 
     this.transfers.set(transferId, transfer);
@@ -122,9 +134,11 @@ export class P2PFileTransferService {
     // Initialize transfer state
     transfer.currentSeederIndex = 0;
     transfer.retryCount = 0;
-    transfer.totalChunks = Math.ceil(metadata.fileSize / (16 * 1024)); // Assume 16KB chunks
+    transfer.totalChunks = Math.ceil(metadata.fileSize / P2PFileTransferService.CHUNK_SIZE);
     transfer.corruptedChunks = new Set();
     transfer.requestedChunks = new Set();
+    transfer.receivedChunkIndices = new Set();
+    // Note: Streaming session is initialized after manifest response for accurate chunk count
 
     // Connect to signaling service if not connected
     try {
@@ -143,144 +157,225 @@ export class P2PFileTransferService {
   private async tryConnectToSeeder(
     transfer: P2PTransfer,
     metadata: FileMetadata,
-    maxRetries: number = 3
+    maxRetries: number = 3,
+    preferredSeeders?: string[]
   ): Promise<void> {
-    const maxSeederIndex = transfer.seeders.length;
+    // For WebRTC, we need to find the correct seeders from the file metadata
+    // metadata.seeders contains both libp2p peer IDs and WebSocket client IDs
+    // We need to find which ones are WebSocket client IDs by checking if they're in the connected peers list
+    let availableSeeders = preferredSeeders;
 
-    while (
-      transfer.currentSeederIndex! < maxSeederIndex &&
-      transfer.retryCount! < maxRetries
-    ) {
-      const seederId = transfer.seeders[transfer.currentSeederIndex!];
+    if (!availableSeeders) {
+      const availablePeers = this.signalingService.peers;
+      let peersList: string[] = [];
 
-      try {
-        transfer.status = "connecting";
-        transfer.lastError = undefined;
-        this.notifyProgress(transfer);
+      // Subscribe to peers list
+      const unsubscribe = availablePeers.subscribe((peers) => {
+        peersList = peers;
+      });
 
-        // Create WebRTC session for this seeder
-        const webrtcSession = createWebRTCSession({
-          isInitiator: true,
-          peerId: seederId,
-          onLocalIceCandidate: (_candidate) => {
-            // ICE candidates are handled by the backend WebRTC coordination
-            console.log("ICE candidate generated for peer:", seederId);
-          },
-          signaling: this.signalingService,
-          onConnectionStateChange: (state) => {
-            if (state === "connected") {
-              transfer.status = "transferring";
-              transfer.retryCount = 0; // Reset retry count on successful connection
-              this.notifyProgress(transfer);
-              this.startFileTransfer(transfer, metadata);
-            } else if (state === "failed" || state === "disconnected") {
-              this.handleConnectionFailure(
-                transfer,
-                metadata,
-                `WebRTC connection ${state}`
-              );
-            }
-          },
-          onDataChannelOpen: () => {},
-          onMessage: async (data) => {
-            await this.handleIncomingChunk(transfer, data);
-          },
-          onError: (error) => {
-            console.error("WebRTC error:", error);
-            this.handleConnectionFailure(
-              transfer,
-              metadata,
-              "WebRTC connection error"
-            );
-          },
-        });
+      // Filter seeders that are currently connected via WebSocket
+      availableSeeders =
+        metadata.seeders?.filter((seeder) => peersList.includes(seeder)) || [];
 
-        transfer.webrtcSession = webrtcSession;
-
-        // Create offer and establish connection with timeout
-        try {
-          const offer = await Promise.race([
-            webrtcSession.createOffer(),
-            this.createTimeoutPromise(10000, "WebRTC offer creation timeout"),
-          ]);
-
-          console.log("Created WebRTC offer for seeder:", seederId);
-
-          // Use backend coordination with enhanced DHT signaling support
-          await Promise.race([
-            invoke("establish_webrtc_connection", {
-              peerId: seederId,
-              offer: JSON.stringify(offer),
-              useDhtSignaling: true, // Enable DHT signaling as fallback
-            }),
-            this.createTimeoutPromise(
-              15000,
-              "WebRTC connection establishment timeout"
-            ),
-          ]);
-
-          console.log("WebRTC connection established with peer:", seederId);
-        } catch (error) {
-          console.error(
-            `Failed to create WebRTC offer for ${seederId}:`,
-            error
-          );
-          webrtcSession.close();
-
-          if (
-            error === "WebRTC offer creation timeout" ||
-            error === "WebRTC connection establishment timeout"
-          ) {
-            this.handleConnectionFailure(transfer, metadata, error as string);
-          } else {
-            this.handleConnectionFailure(
-              transfer,
-              metadata,
-              `WebRTC setup failed: ${error}`
-            );
-          }
-        }
-      } catch (error) {
-        console.error(`Failed to connect to seeder ${seederId}:`, error);
-        this.handleConnectionFailure(
-          transfer,
-          metadata,
-          `Connection failed: ${error}`
-        );
-      }
+      unsubscribe();
     }
 
-    // No seeders connected successfully
-    transfer.status = "failed";
-    transfer.error = "Could not connect to any seeders after retries";
-    this.notifyProgress(transfer);
+    // If no matching seeder found in connected peers, fail immediately
+    if (!availableSeeders || availableSeeders.length === 0) {
+      transfer.status = "failed";
+      const connectedPeersMessage = preferredSeeders?.length
+        ? preferredSeeders.join(", ")
+        : "none";
+      transfer.error = `No WebRTC seeder online for this file. File seeders: ${metadata.seeders?.join(', ') || 'none'}. Connected peers: ${connectedPeersMessage}`;
+      this.notifyProgress(transfer);
+      return;
+    }
+
+    transfer.currentSeederIndex = transfer.currentSeederIndex ?? 0;
+    transfer.retryCount = transfer.retryCount ?? 0;
+
+    const maxSeeders = availableSeeders.length;
+    const seederId = availableSeeders[transfer.currentSeederIndex % maxSeeders];
+
+    console.log(
+      `Attempting WebRTC connection to seeder ${seederId} (index ${transfer.currentSeederIndex! + 1}/${maxSeeders})`
+    );
+
+    try {
+      transfer.status = "connecting";
+      transfer.lastError = undefined;
+      this.notifyProgress(transfer);
+
+      // Create WebRTC session for this seeder
+      const webrtcSession = createWebRTCSession({
+        isInitiator: true,
+        peerId: seederId,
+        onLocalIceCandidate: (_candidate) => {
+          // ICE candidates are handled by the backend WebRTC coordination
+          console.log("ICE candidate generated for peer:", seederId);
+        },
+        signaling: this.signalingService,
+        onConnectionStateChange: (state) => {
+          if (state === "connected") {
+            transfer.status = "transferring";
+            transfer.retryCount = 0; // Reset retry count on successful connection
+            this.notifyProgress(transfer);
+            this.startFileTransfer(transfer, metadata);
+          } else if (state === "failed" || state === "disconnected") {
+            this.handleConnectionFailure(
+              transfer,
+              metadata,
+              `WebRTC connection ${state}`,
+              availableSeeders,
+              maxRetries
+            );
+          }
+        },
+        onDataChannelOpen: () => {},
+        onMessage: async (data) => {
+          await this.handleIncomingChunk(transfer, data);
+        },
+        onError: (error) => {
+          console.error("WebRTC error:", error);
+          this.handleConnectionFailure(
+            transfer,
+            metadata,
+            "WebRTC connection error",
+            availableSeeders,
+            maxRetries
+          );
+        },
+      });
+
+      transfer.webrtcSession = webrtcSession;
+      this.webrtcSessions.set(seederId, webrtcSession);
+
+      // Create offer - signaling service will automatically send it to the peer
+      try {
+        // createOffer() both creates and sends the offer via signaling
+        await Promise.race([
+          webrtcSession.createOffer(),
+          this.createTimeoutPromise(10000, "WebRTC offer creation timeout"),
+        ]);
+
+        console.log("Created and sent WebRTC offer to seeder:", seederId);
+        console.log("Waiting for answer via signaling...");
+
+        // Wait for connection to establish via signaling (answer will come back automatically)
+        await Promise.race([
+          this.waitForConnection(webrtcSession, 15000),
+          this.createTimeoutPromise(
+            15000,
+            "WebRTC connection establishment timeout"
+          ),
+        ]);
+
+        console.log("WebRTC connection established with peer:", seederId);
+      } catch (error) {
+        console.error(
+          `Failed to establish WebRTC connection with ${seederId}:`,
+          error
+        );
+        webrtcSession.close();
+        this.webrtcSessions.delete(seederId);
+
+        if (
+          error === "WebRTC offer creation timeout" ||
+          error === "WebRTC connection establishment timeout"
+        ) {
+          this.handleConnectionFailure(
+            transfer,
+            metadata,
+            error as string,
+            availableSeeders,
+            maxRetries
+          );
+        } else {
+          this.handleConnectionFailure(
+            transfer,
+            metadata,
+            `WebRTC setup failed: ${error}`,
+            availableSeeders,
+            maxRetries
+          );
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to connect to seeder ${seederId}:`, error);
+      this.handleConnectionFailure(
+        transfer,
+        metadata,
+        `Connection failed: ${error}`,
+        availableSeeders,
+        maxRetries
+      );
+    }
   }
 
   private handleConnectionFailure(
     transfer: P2PTransfer,
     metadata: FileMetadata,
-    error: string
+    error: string,
+    availableSeeders?: string[],
+    maxRetries: number = 5
   ): void {
     transfer.lastError = error;
     transfer.retryCount = (transfer.retryCount || 0) + 1;
 
+    // Save checkpoint before retry so progress isn't lost
+    if (transfer.streamingSessionId) {
+      this.saveCheckpoint(transfer);
+    }
+
+    // Clean up current session
+    if (transfer.webrtcSession) {
+      try {
+        transfer.webrtcSession.close();
+      } catch (e) { /* ignore */ }
+      if (transfer.webrtcSession.peerId) {
+        this.webrtcSessions.delete(transfer.webrtcSession.peerId);
+      }
+      transfer.webrtcSession = undefined;
+    }
+
     // Try next seeder
     transfer.currentSeederIndex = (transfer.currentSeederIndex || 0) + 1;
 
-    if (transfer.currentSeederIndex! < transfer.seeders.length) {
+    const maxSeeders = availableSeeders?.length || transfer.seeders.length;
+
+    if (transfer.currentSeederIndex! < maxSeeders) {
       // Continue trying other seeders
-    } else if (transfer.retryCount! < 3) {
+      console.log(
+        `Trying next seeder (${transfer.currentSeederIndex}/${maxSeeders})`
+      );
+      transfer.status = "retrying";
+      this.notifyProgress(transfer);
+      this.tryConnectToSeeder(
+        transfer,
+        metadata,
+        maxRetries,
+        availableSeeders
+      );
+    } else if (transfer.retryCount! < maxRetries) {
+      // Reset to first seeder and retry
       transfer.currentSeederIndex = 0;
       transfer.status = "retrying";
       this.notifyProgress(transfer);
 
-      // Wait before retrying
+      const backoffMs = Math.min(2000 * Math.pow(2, transfer.retryCount! - 1), 30000);
+      console.log(`Retry ${transfer.retryCount}/${maxRetries} in ${backoffMs}ms`);
+
       setTimeout(() => {
         this.tryConnectToSeeder(transfer, metadata);
-      }, 2000 * transfer.retryCount!); // Exponential backoff
+      }, backoffMs);
     } else {
       transfer.status = "failed";
       transfer.error = `Failed after ${transfer.retryCount} retries. Last error: ${error}`;
+      // Save final checkpoint so user can manually resume later
+      if (transfer.streamingSessionId) {
+        this.saveCheckpoint(transfer);
+      }
       this.notifyProgress(transfer);
     }
   }
@@ -291,6 +386,34 @@ export class P2PFileTransferService {
   ): Promise<T> {
     return new Promise((_, reject) => {
       setTimeout(() => reject(errorMessage), ms);
+    });
+  }
+
+  /**
+   * Wait for WebRTC connection to establish (via signaling)
+   */
+  private waitForConnection(session: any, timeoutMs: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+
+      const checkConnection = () => {
+        if (session.pc.connectionState === "connected") {
+          resolve();
+          return;
+        }
+        if (session.pc.connectionState === "failed" || session.pc.connectionState === "closed") {
+          reject(new Error(`Connection ${session.pc.connectionState}`));
+          return;
+        }
+        if (Date.now() - startTime > timeoutMs) {
+          reject(new Error("Connection timeout"));
+          return;
+        }
+        // Check again in 100ms
+        setTimeout(checkConnection, 100);
+      };
+
+      checkConnection();
     });
   }
 
@@ -305,18 +428,44 @@ export class P2PFileTransferService {
       return;
     }
 
+    // First request manifest to get accurate file info
+    const manifestRequest = {
+      type: "ManifestRequest",
+      file_hash: metadata.fileHash,
+    };
+
+    try {
+      console.log("Requesting manifest for file:", metadata.fileHash);
+      transfer.webrtcSession.send(JSON.stringify(manifestRequest));
+
+      // Store metadata for when manifest response arrives
+      (transfer as any).pendingMetadata = metadata;
+
+      // Manifest response will trigger chunk downloading via handleIncomingChunk
+    } catch (error) {
+      console.error("Failed to send manifest request:", error);
+      // Fallback to direct file request
+      this.sendFileRequestAndStartDownload(transfer, metadata);
+    }
+  }
+
+  private sendFileRequestAndStartDownload(
+    transfer: P2PTransfer,
+    metadata: FileMetadata
+  ): void {
+    if (!transfer.webrtcSession) return;
+
     // Send file request through the WebRTC data channel
     const fileRequest = {
       type: "file_request",
       fileHash: metadata.fileHash,
       fileName: metadata.fileName,
       fileSize: metadata.fileSize,
-      requesterPeerId: "local_peer", // This should be the actual local peer ID
+      requesterPeerId: "local_peer",
     };
 
     try {
       transfer.webrtcSession.send(JSON.stringify(fileRequest));
-
       // Start parallel chunk downloading
       this.startParallelChunkDownload(transfer, metadata);
     } catch (error) {
@@ -324,6 +473,76 @@ export class P2PFileTransferService {
       transfer.status = "failed";
       transfer.error = "Failed to send file request";
       this.notifyProgress(transfer);
+    }
+  }
+
+  /**
+   * Handle manifest response from seeder - use to initialize streaming download
+   */
+  private async handleManifestResponse(
+    transfer: P2PTransfer,
+    message: any
+  ): Promise<void> {
+    try {
+      const manifest = JSON.parse(message.manifest_json);
+      const totalChunks = manifest.chunks?.length || 0;
+      const pendingMetadata = (transfer as any).pendingMetadata;
+
+      if (!pendingMetadata) {
+        console.warn("No pending metadata for manifest response");
+        return;
+      }
+
+      // Update transfer with accurate info from manifest
+      transfer.totalChunks = totalChunks;
+
+      // Calculate actual file size from chunks
+      let actualFileSize = 0;
+      for (const chunk of manifest.chunks || []) {
+        actualFileSize += chunk.size || P2PFileTransferService.CHUNK_SIZE;
+      }
+      if (actualFileSize > 0) {
+        transfer.fileSize = actualFileSize;
+      }
+
+      console.log(`Manifest received: ${totalChunks} chunks, ${transfer.fileSize} bytes`);
+
+      // Initialize streaming session if file is large enough and output path is set
+      if (transfer.outputPath && transfer.fileSize > P2PFileTransferService.STREAMING_THRESHOLD) {
+        try {
+          const sessionId = await invoke<string>("init_streaming_download", {
+            fileHash: transfer.fileHash,
+            fileName: transfer.fileName,
+            fileSize: transfer.fileSize,
+            outputPath: transfer.outputPath,
+            totalChunks: totalChunks,
+            chunkSize: P2PFileTransferService.CHUNK_SIZE,
+          });
+          transfer.streamingSessionId = sessionId;
+          console.log(`Initialized streaming download session: ${sessionId}`);
+        } catch (error) {
+          console.error("Failed to init streaming download:", error);
+          // Fall back to in-memory mode
+          transfer.receivedChunks = new Map();
+        }
+      } else {
+        // Use in-memory for small files
+        transfer.receivedChunks = new Map();
+      }
+
+      // Clear pending metadata
+      delete (transfer as any).pendingMetadata;
+
+      // Now send file request to start receiving chunks
+      this.sendFileRequestAndStartDownload(transfer, pendingMetadata);
+    } catch (error) {
+      console.error("Failed to parse manifest response:", error);
+      // Fallback to direct file request
+      const pendingMetadata = (transfer as any).pendingMetadata;
+      if (pendingMetadata) {
+        delete (transfer as any).pendingMetadata;
+        this.sendFileRequestAndStartDownload(transfer, pendingMetadata);
+      }
     }
   }
 
@@ -440,13 +659,14 @@ export class P2PFileTransferService {
     try {
       const message = typeof data === "string" ? JSON.parse(data) : data;
 
-      if (message.type === "file_chunk") {
-        // Handle incoming file chunk
-        // Initialize chunks map if not exists
-        if (!transfer.receivedChunks) {
-          transfer.receivedChunks = new Map();
-        }
+      // Handle manifest response
+      if (message.type === "ManifestResponse") {
+        console.log("Received manifest response for file:", message.file_hash);
+        await this.handleManifestResponse(transfer, message);
+        return;
+      }
 
+      if (message.type === "file_chunk") {
         // Validate chunk data
         if (!(await this.validateChunk(message))) {
           console.warn("Received corrupted chunk:", message.chunk_index);
@@ -459,34 +679,86 @@ export class P2PFileTransferService {
           return;
         }
 
-        // Store the chunk data
         const chunkData = new Uint8Array(message.data);
-        transfer.receivedChunks.set(message.chunk_index, chunkData);
+        const chunkIndex = message.chunk_index;
 
-        // Remove from requested chunks since it's now received
-        transfer.requestedChunks?.delete(message.chunk_index);
+        // Check if using streaming mode (large files)
+        if (transfer.streamingSessionId) {
+          // Write chunk directly to disk via Tauri
+          try {
+            const isComplete = await invoke<boolean>("write_download_chunk", {
+              sessionId: transfer.streamingSessionId,
+              chunkIndex: chunkIndex,
+              chunkData: Array.from(chunkData), // Convert to array for Tauri
+            });
 
-        // Remove from corrupted chunks if it was previously corrupted
-        transfer.corruptedChunks?.delete(message.chunk_index);
+            transfer.receivedChunkIndices?.add(chunkIndex);
 
-        // Update progress
-        transfer.bytesTransferred += chunkData.length;
-        const progress = (transfer.bytesTransferred / transfer.fileSize) * 100;
-        transfer.progress = Math.min(100, progress);
+            // Update progress
+            transfer.bytesTransferred += chunkData.length;
+            const progress = (transfer.bytesTransferred / transfer.fileSize) * 100;
+            transfer.progress = Math.min(100, progress);
 
-        // Calculate speed
-        const elapsed = (Date.now() - transfer.startTime) / 1000;
-        transfer.speed = transfer.bytesTransferred / elapsed;
+            // Calculate speed
+            const elapsed = (Date.now() - transfer.startTime) / 1000;
+            transfer.speed = transfer.bytesTransferred / elapsed;
 
-        // Check if transfer is complete
-        if (this.isTransferComplete(transfer, message.total_chunks)) {
-          transfer.status = "completed";
+            // Save checkpoint periodically (every 50 chunks)
+            const receivedCount = transfer.receivedChunkIndices?.size || 0;
+            if (receivedCount > 0 && receivedCount % 50 === 0) {
+              this.saveCheckpoint(transfer);
+            }
 
-          // Save file if output path is specified
-          if (transfer.outputPath) {
-            this.saveCompletedFile(transfer);
+            // Check if transfer is complete
+            if (isComplete) {
+              await this.finalizeStreamingDownload(transfer);
+            }
+          } catch (error) {
+            console.error("Failed to write chunk to disk:", error);
+            transfer.corruptedChunks?.add(chunkIndex);
+            // Re-request the chunk
+            if (transfer.webrtcSession) {
+              this.requestChunkAgain(transfer, chunkIndex);
+            }
+            return;
+          }
+        } else {
+          // In-memory mode for small files
+          if (!transfer.receivedChunks) {
+            transfer.receivedChunks = new Map();
+          }
+
+          transfer.receivedChunks.set(chunkIndex, chunkData);
+          transfer.receivedChunkIndices?.add(chunkIndex);
+
+          // Update progress
+          transfer.bytesTransferred += chunkData.length;
+          const progress = (transfer.bytesTransferred / transfer.fileSize) * 100;
+          transfer.progress = Math.min(100, progress);
+
+          // Calculate speed
+          const elapsed = (Date.now() - transfer.startTime) / 1000;
+          transfer.speed = transfer.bytesTransferred / elapsed;
+
+          // Check if transfer is complete
+          if (this.isTransferComplete(transfer, message.total_chunks)) {
+            transfer.status = "completed";
+
+            // Save file if output path is specified
+            if (transfer.outputPath) {
+              this.saveCompletedFile(transfer);
+            }
           }
         }
+
+        // Remove from requested chunks since it's now received
+        transfer.requestedChunks?.delete(chunkIndex);
+
+        // Remove from corrupted chunks if it was previously corrupted
+        transfer.corruptedChunks?.delete(chunkIndex);
+
+        // Send ACK to seeder for flow control
+        this.sendChunkAck(transfer, chunkIndex);
 
         this.notifyProgress(transfer);
       } else if (message.type === "dht_message") {
@@ -495,6 +767,59 @@ export class P2PFileTransferService {
       }
     } catch (error) {
       console.error("Error handling incoming chunk:", error);
+    }
+  }
+
+  private async finalizeStreamingDownload(transfer: P2PTransfer): Promise<void> {
+    if (!transfer.streamingSessionId) return;
+
+    try {
+      const outputPath = await invoke<string>("finalize_streaming_download", {
+        sessionId: transfer.streamingSessionId,
+      });
+
+      transfer.status = "completed";
+      transfer.outputPath = outputPath;
+      console.log(`Streaming download completed: ${outputPath}`);
+    } catch (error) {
+      console.error("Failed to finalize streaming download:", error);
+      transfer.status = "failed";
+      transfer.error = `Failed to finalize download: ${error}`;
+    }
+
+    transfer.streamingSessionId = undefined;
+    this.notifyProgress(transfer);
+  }
+
+  /**
+   * Save checkpoint for resume support
+   */
+  private saveCheckpoint(transfer: P2PTransfer): void {
+    if (!transfer.streamingSessionId) return;
+
+    invoke("save_download_checkpoint", {
+      sessionId: transfer.streamingSessionId,
+    }).catch((err) => console.warn("Failed to save checkpoint:", err));
+  }
+
+  /**
+   * Send ACK message to seeder for flow control
+   */
+  private sendChunkAck(transfer: P2PTransfer, chunkIndex: number): void {
+    if (!transfer.webrtcSession) return;
+
+    try {
+      const ackMessage = {
+        type: "ChunkAck",
+        file_hash: transfer.fileHash,
+        chunk_index: chunkIndex,
+        ready_for_more: true,
+      };
+
+      transfer.webrtcSession.send(JSON.stringify(ackMessage));
+    } catch (error) {
+      // ACK sending failure is non-critical, just log it
+      console.warn(`Failed to send ACK for chunk ${chunkIndex}:`, error);
     }
   }
 
@@ -816,6 +1141,14 @@ export class P2PFileTransferService {
         if (transfer.webrtcSession.peerId) {
           this.webrtcSessions.delete(transfer.webrtcSession.peerId);
         }
+      }
+
+      // Cancel streaming download session if active
+      if (transfer.streamingSessionId) {
+        invoke("cancel_streaming_download", {
+          sessionId: transfer.streamingSessionId,
+        }).catch((err) => console.error("Failed to cancel streaming download:", err));
+        transfer.streamingSessionId = undefined;
       }
 
       this.notifyProgress(transfer);

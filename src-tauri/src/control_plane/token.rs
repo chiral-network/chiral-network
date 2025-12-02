@@ -3,9 +3,10 @@ use super::jwks::{JwksCache, JwksError, JwksFetcher};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey};
+#[cfg(test)]
+use ed25519_dalek::VerifyingKey;
 use ed25519_dalek::Signer;
-use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
@@ -284,7 +285,7 @@ impl<F: JwksFetcher> ResumeTokenVerifier<F> {
         }
         ensure_strong_etag(&claims.etag)?;
         let lease_len = claims.exp - claims.iat;
-        if lease_len < MIN_LEASE_SECS || lease_len > MAX_LEASE_SECS {
+        if !(MIN_LEASE_SECS..=MAX_LEASE_SECS).contains(&lease_len) {
             return Err(ResumeTokenError::Invalid("lease bounds"));
         }
         let skew = self.max_clock_skew.num_seconds();

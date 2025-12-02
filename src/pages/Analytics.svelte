@@ -7,12 +7,14 @@ import { files, wallet, settings } from '$lib/stores';
 import { proxyNodes } from '$lib/proxy';
 import { onMount, onDestroy } from 'svelte'
 import { t } from 'svelte-i18n'
-import { suspiciousActivity } from '$lib/stores'; // only import
+import { suspiciousActivity } from '$lib/stores';
 import type { FileItem } from '$lib/stores';
+import { toHumanReadableSize } from '$lib/utils';
 import { miningState } from '$lib/stores';
 import { miningProgress } from '$lib/stores';
 import { analyticsService } from '$lib/services/analyticsService';
 import type { BandwidthStats, NetworkActivity } from '$lib/services/analyticsService';
+import { reputationRateLimiter, type RateLimitStatus } from '$lib/services/reputationRateLimiter';
 import { showToast } from '$lib/toast';
 import { get } from 'svelte/store';
 import type { AppSettings } from '$lib/stores';
@@ -47,6 +49,7 @@ let notificationPermissionRequested = false
 // Real analytics data
 let realBandwidthStats: BandwidthStats | null = null
 let realNetworkActivity: NetworkActivity | null = null
+let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
   
   // Latency analytics (derived from proxy nodes)
   let avgLatency = 0
@@ -91,6 +94,17 @@ let realNetworkActivity: NetworkActivity | null = null
     if (value >= 100) return value.toFixed(0)
     if (value >= 10) return value.toFixed(1)
     return value.toFixed(2)
+  }
+
+  function formatDuration(ms?: number | null) {
+    if (!ms || ms <= 0) return 'Now'
+    const seconds = Math.ceil(ms / 1000)
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    const remainingMinutes = minutes % 60
+    return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`
   }
 
   async function pushDesktopNotification(title: string, body: string) {
@@ -459,6 +473,8 @@ let realNetworkActivity: NetworkActivity | null = null
         download: realBandwidthStats.downloadBytes / (1024 * 1024)
       };
     }
+
+    rateLimitStatus = reputationRateLimiter.getStatus();
   }
 
   // Generate mock latency history once on mount
@@ -567,18 +583,8 @@ let realNetworkActivity: NetworkActivity | null = null
     }
   }
 
-  function formatSize(bytes: number): string {
-    const units = ['B', 'KB', 'MB', 'GB', 'TB']
-    let size = bytes
-    let unitIndex = 0
-
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024
-      unitIndex++
-    }
-
-    return `${size.toFixed(2)} ${units[unitIndex]}`
-  }
+  // Use centralized file size formatting for consistency
+  const formatSize = toHumanReadableSize;
 
   // Calculate top performers
   $: topEarners = uploadedFiles
@@ -784,6 +790,55 @@ let realNetworkActivity: NetworkActivity | null = null
           <Badge variant="secondary">{realNetworkActivity?.uniquePeersAllTime ?? 0}</Badge>
         </div>
       </div>
+    </Card>
+
+    <Card class="p-6">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <h2 class="text-lg font-semibold mb-1">Reputation rate limits</h2>
+          <p class="text-sm text-muted-foreground">
+            {rateLimitStatus.enabled ? 'Enabled' : 'Disabled'} · {rateLimitStatus.mode === 'enforce' ? 'Enforced' : 'Log-only monitor'}
+          </p>
+        </div>
+        <Badge variant={rateLimitStatus.shadowBlocked ? 'destructive' : 'secondary'}>
+          {rateLimitStatus.mode === 'enforce' ? 'Enforce' : 'Shadow'}
+        </Badge>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+        <div class="bg-slate-50 rounded-lg p-3">
+          <p class="text-xs text-muted-foreground mb-1">Daily usage</p>
+          <p class="text-xl font-semibold">{rateLimitStatus.dailyUsed}/{rateLimitStatus.dailyCap}</p>
+          <p class="text-xs text-muted-foreground">Resets in {formatDuration(rateLimitStatus.nextDailyResetMs)}</p>
+        </div>
+        <div class="bg-slate-50 rounded-lg p-3">
+          <p class="text-xs text-muted-foreground mb-1">Per-peer</p>
+          <p class="text-xl font-semibold">{rateLimitStatus.perTargetUsed}/{rateLimitStatus.perTargetCap}</p>
+          <p class="text-xs text-muted-foreground">
+            {rateLimitStatus.perTargetCooldownRemainingMs > 0
+              ? `Cooldown ends in ${formatDuration(rateLimitStatus.perTargetCooldownRemainingMs)}`
+              : 'No active cooldown'}
+          </p>
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mt-4 text-sm">
+        <div class="flex items-center gap-2 text-muted-foreground">
+          <span class="inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
+          Burst window: {rateLimitStatus.burstCount} in last {formatDuration(rateLimitStatus.burstWindowMs)}
+        </div>
+        <div class="text-sm font-medium">
+          {rateLimitStatus.burstCooldownRemainingMs > 0
+            ? `Cooldown: ${formatDuration(rateLimitStatus.burstCooldownRemainingMs)}`
+            : 'No active cooldown'}
+        </div>
+      </div>
+
+      {#if rateLimitStatus.lastDecision}
+        <div class="mt-3 border-t pt-3 text-xs text-muted-foreground">
+          Last check: {new Date(rateLimitStatus.lastDecision.ts).toLocaleTimeString()} — {rateLimitStatus.lastDecision.allowed ? 'allowed' : 'blocked'}{rateLimitStatus.lastDecision.reason ? ` (${rateLimitStatus.lastDecision.reason})` : ''}
+        </div>
+      {/if}
     </Card>
   </div>
 

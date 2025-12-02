@@ -22,6 +22,14 @@ class DiagnosticLogger {
   private logs: LogEntry[] = [];
   private maxLogs: number = 1000;
 
+  // CSS styles for console.log %c formatting
+  private readonly STYLES = {
+    [LogLevel.DEBUG]: 'color: #888; font-weight: normal;',
+    [LogLevel.INFO]: 'color: #2196F3; font-weight: normal;',
+    [LogLevel.WARN]: 'color: #FF9800; font-weight: bold;',
+    [LogLevel.ERROR]: 'color: #F44336; font-weight: bold;'
+  } as const;
+
   log(level: LogLevel, component: string, message: string, data?: Record<string, unknown>): void {
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
@@ -63,18 +71,13 @@ class DiagnosticLogger {
     const style = this.getStyle(entry.level);
 
     if (typeof console !== 'undefined') {
-      console.log(`${style}${prefix} ${entry.message}`, entry.data || '');
+      // Use %c placeholder with CSS string as second argument for styled console output
+      console.log(`%c${prefix} ${entry.message}`, style, entry.data || '');
     }
   }
 
   private getStyle(level: LogLevel): string {
-    const styles: Record<LogLevel, string> = {
-      [LogLevel.DEBUG]: '%c',
-      [LogLevel.INFO]: '%c',
-      [LogLevel.WARN]: '%c',
-      [LogLevel.ERROR]: '%c'
-    };
-    return styles[level];
+    return this.STYLES[level];
   }
 
   getLogs(component?: string, level?: LogLevel): LogEntry[] {

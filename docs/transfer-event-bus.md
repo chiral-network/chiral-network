@@ -7,47 +7,73 @@ The Transfer Event Bus is a typed, protocol-agnostic event system for communicat
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Rust Backend                             │
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
-│  │ HTTP Download│  │ FTP Download │  │ P2P Download │       │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘       │
-│         │                  │                  │             │
-│         └──────────────────┴──────────────────┘             │
-│                            │                                │
-│                  ┌─────────▼──────────┐                     │
-│                  │ TransferEventBus   │                     │
-│                  │  (transfer_events) │                     │
-│                  └─────────┬──────────┘                     │
-│                            │                                │
-│                  ┌─────────▼──────────┐                     │
-│                  │   Tauri Emitter    │                     │
-│                  └─────────┬──────────┘                     │
-└────────────────────────────┼────────────────────────────────┘
-                             │
-                    IPC Event Channel
-                             │
-┌────────────────────────────▼────────────────────────────────┐
-│                  Frontend (Svelte)                          │
-│                                                             │
-│                  ┌──────────────────┐                       │
-│                  │  Tauri Listener  │                       │
-│                  └────────┬─────────┘                       │
-│                           │                                 │
-│                  ┌────────▼─────────┐                       │
-│                  │  transferStore   │                       │
-│                  │ (Svelte Writable)│                       │
-│                  └────────┬─────────┘                       │
-│                           │                                 │
-│         ┌─────────────────┼─────────────────┐               │
-│         │                 │                 │               │
-│    ┌────▼────┐     ┌─────▼──────┐    ┌────▼─────┐           │
-│    │Download │     │  Progress  │    │Analytics │           │
-│    │  Page   │     │    Bar     │    │   Page   │           │ 
-│    └─────────┘     └────────────┘    └──────────┘           │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    Rust Backend                                 │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │ HTTP Handler │  │ FTP Handler  │  │  BitTorrent  │           │
+│  │✅Integrated  │  │ ✅Integrated│  │  Handler ✅  │          │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘           │
+│         │                  │                  │                 │
+│  ┌──────┴───────┐  ┌──────┴───────┐  ┌──────┴───────┐           │
+│  │HttpDownload  │  │  download_   │  │bittorrent_   │           │
+│  │Client ✅    │  │  restart ✅  │  │  │handler ✅ │           │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘           │
+│         │                  │                  │                 │
+│         └──────────────────┴──────────────────┘                 │
+│                            │                                    │
+│                  ┌─────────▼──────────┐                         │
+│                  │ TransferEventBus   │                         │
+│                  │  (transfer_events) │                         │
+│                  └─────────┬──────────┘                         │
+│                            │                                    │
+│              ┌─────────────┼─────────────┐                      │
+│              │             │             │                      │
+│    ┌─────────▼───┐  ┌─────▼─────┐  ┌────▼────────┐              │
+│    │Tauri Emitter│  │Analytics  │  │MultiSource  │              │
+│    │             │  │Service ✅ │  │Download ✅ │              │
+│    └─────────┬───┘  └───────────┘  └─────────────┘              │
+└──────────────┼──────────────────────────────────────────────────┘
+               │
+      IPC Event Channel
+               │
+┌──────────────▼──────────────────────────────────────────────────┐
+│                  Frontend (Svelte)                              │
+│                                                                 │
+│                  ┌──────────────────┐                           │
+│                  │  Tauri Listener  │                           │
+│                  │  (App.svelte) ✅ │                          │
+│                  └────────┬─────────┘                           │
+│                           │                                     │
+│                  ┌────────▼─────────┐                           │
+│                  │transferEventsStore│                          │
+│                  │ (Svelte Writable)│                           │
+│                  └────────┬─────────┘                           │
+│                           │                                     │
+│         ┌─────────────────┼─────────────────┐                   │
+│         │                 │                 │                   │
+│    ┌────▼────┐     ┌─────▼──────┐    ┌────▼─────┐               │
+│    │Download │     │  Progress  │    │Analytics │               │
+│    │  Page   │     │    Bar     │    │   Page   │               │
+│    └─────────┘     └────────────┘    └──────────┘               │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+## Protocol Integration Status
+
+The Transfer Event Bus is now fully integrated across all major protocol handlers:
+
+| Protocol Handler | File | Status | Events Emitted |
+|-----------------|------|--------|----------------|
+| HTTP Protocol | `protocols/http.rs` | ✅ Integrated | Full lifecycle |
+| FTP Protocol | `protocols/ftp.rs` | ✅ Integrated | Full lifecycle |
+| BitTorrent Protocol | `protocols/bittorrent.rs` | ✅ Integrated | Full lifecycle |
+| HTTP Download Client | `http_download.rs` | ✅ Integrated | Full lifecycle + ChunkFailed |
+| Download Restart | `download_restart.rs` | ✅ Integrated | Queue/Pause/Resume/Progress |
+| File Transfer | `file_transfer.rs` | ✅ Integrated | Start/Complete/Failed |
+| BitTorrent Handler | `bittorrent_handler.rs` | ✅ Integrated | Progress/Pause/Resume |
+| Multi-Source Download | `multi_source_download.rs` | ✅ Integrated | Full lifecycle |
+| Analytics Service | `analytics.rs` | ✅ Integrated | Event subscriber |
 
 ## Event Types
 
@@ -122,6 +148,207 @@ event_bus.emit_completed(TransferCompletedEvent {
 });
 ```
 
+### Protocol Handler Integration
+
+Protocol handlers use an **opt-in constructor pattern** to enable event bus integration. This maintains backward compatibility while allowing event emission for UI updates.
+
+#### HTTP Protocol Handler
+
+```rust
+use crate::protocols::http::HttpProtocolHandler;
+
+// Without event bus (existing behavior)
+let handler = HttpProtocolHandler::new();
+
+// With event bus (enables UI updates)
+let handler = HttpProtocolHandler::with_event_bus(app_handle.clone());
+
+// With custom timeout and event bus
+let handler = HttpProtocolHandler::with_timeout_and_event_bus(60, app_handle.clone());
+```
+
+**Events emitted by HTTP handler:**
+
+| Method | Events |
+|--------|--------|
+| `download_with_progress()` | TransferStarted → SourceConnected → TransferProgress (throttled) → TransferCompleted/TransferFailed |
+| `cancel_download()` | TransferCanceled |
+
+#### FTP Protocol Handler
+
+```rust
+use crate::protocols::ftp::FtpProtocolHandler;
+
+// Without event bus (existing behavior)
+let handler = FtpProtocolHandler::new();
+
+// With event bus
+let handler = FtpProtocolHandler::with_event_bus(app_handle.clone());
+
+// With custom config and event bus
+let handler = FtpProtocolHandler::with_config_and_event_bus(config, app_handle.clone());
+```
+
+**Events emitted by FTP handler:**
+
+| Method | Events |
+|--------|--------|
+| `download()` | TransferStarted → SourceConnected → ChunkCompleted → SourceDisconnected → TransferCompleted/TransferFailed |
+| `pause_download()` | TransferPaused |
+| `cancel_download()` | TransferCanceled |
+
+#### BitTorrent Protocol Handler
+
+```rust
+use crate::protocols::bittorrent::BitTorrentProtocolHandler;
+
+// Without event bus (existing behavior)
+let handler = BitTorrentProtocolHandler::new(session_handle);
+
+// With event bus
+let handler = BitTorrentProtocolHandler::new_with_event_bus(session_handle, app_handle.clone());
+
+// With download directory and event bus
+let handler = BitTorrentProtocolHandler::with_download_directory_and_event_bus(
+    download_dir, 
+    app_handle.clone()
+);
+```
+
+**Events emitted by BitTorrent handler:**
+
+| Method | Events |
+|--------|--------|
+| `download()` | TransferStarted → SourceConnected → TransferFailed (if start fails) |
+| `pause_download()` | TransferPaused |
+| `resume_download()` | TransferResumed |
+| `cancel_download()` | TransferCanceled |
+| `get_download_progress()` | TransferProgress (throttled) → TransferCompleted/TransferFailed |
+
+#### HTTP Download Client
+
+```rust
+use crate::http_download::HttpDownloadClient;
+
+// Without event bus
+let client = HttpDownloadClient::new();
+
+// With event bus
+let client = HttpDownloadClient::new_with_event_bus(app_handle.clone());
+
+// With peer ID and event bus (for source identification)
+let client = HttpDownloadClient::new_with_peer_id_and_event_bus(
+    "peer-123".to_string(),
+    app_handle.clone()
+);
+
+// Download with full event lifecycle
+client.download_file_with_events(
+    &url,
+    &output_path,
+    HttpDownloadConfig {
+        transfer_id: "download-123".to_string(),
+        file_name: "example.pdf".to_string(),
+    }
+).await?;
+
+// Resume download with events
+client.resume_download_with_events(
+    &url,
+    &output_path,
+    resume_offset,
+    HttpDownloadConfig { ... }
+).await?;
+```
+
+**ChunkFailed Event Emission Points:**
+
+The HTTP download client emits `ChunkFailed` events at 4 specific failure points:
+
+1. **Network request failure** - When the HTTP request fails to send
+2. **Non-206 HTTP response** - When server doesn't return expected Partial Content status
+3. **Failed to read response bytes** - When chunk data cannot be read from response
+4. **Chunk size mismatch** - When downloaded chunk size doesn't match expected size
+
+### Progress Throttling
+
+To prevent flooding the frontend with updates, protocol handlers implement **progress throttling**:
+
+```rust
+// Progress events are emitted at most every 2 seconds
+const PROGRESS_THROTTLE_MS: u64 = 2000;
+
+// In handler implementation
+if now_ms() - self.last_progress_event >= PROGRESS_THROTTLE_MS {
+    event_bus.emit_progress(...);
+    self.last_progress_event = now_ms();
+}
+```
+
+### Helper Functions
+
+Protocol handlers use common helper functions for event generation:
+
+```rust
+/// Get current timestamp in milliseconds
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Extract filename from URL for display
+fn extract_file_name(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// Extract display name from magnet link (BitTorrent)
+fn extract_display_name(identifier: &str) -> Option<String> {
+    // Parses dn= parameter from magnet URI
+}
+```
+
+### Analytics Integration
+
+The Analytics service subscribes to transfer events for metrics collection:
+
+```rust
+impl AnalyticsService {
+    /// Handle incoming transfer events for analytics tracking
+    pub fn handle_transfer_event(&self, event: &TransferEvent) {
+        match event {
+            TransferEvent::Completed(e) => {
+                self.record_download_completed(
+                    &e.file_hash,
+                    e.file_size,
+                    e.duration_seconds,
+                );
+            }
+            TransferEvent::Failed(e) => {
+                self.record_download_failed(&e.file_hash, &e.error);
+            }
+            // ... handle other events
+        }
+    }
+}
+```
+
+In `main.rs`, the analytics service is wired to receive DHT events:
+
+```rust
+// DHT event loop integration
+DhtEvent::DownloadedFile { hash, size, duration } => {
+    analytics.record_download_completed(&hash, size, duration);
+}
+DhtEvent::PublishedFile { hash, size } => {
+    analytics.record_upload_completed(&hash, size);
+}
+```
+
 ### Event Structs
 
 Each event type has a corresponding struct with strongly-typed fields:
@@ -155,6 +382,33 @@ pub struct TransferProgressEvent {
     pub eta_seconds: Option<u32>,
     pub active_sources: usize,
     pub timestamp: u64,
+}
+```
+
+**ChunkFailedEvent**
+```rust
+pub struct ChunkFailedEvent {
+    pub transfer_id: String,
+    pub chunk_id: u32,
+    pub source_id: String,
+    pub source_type: SourceType,
+    pub error: String,
+    pub error_category: ErrorCategory,
+    pub timestamp: u64,
+    pub will_retry: bool,
+    pub retry_count: u32,
+}
+```
+
+**TransferResumedEvent**
+```rust
+pub struct TransferResumedEvent {
+    pub transfer_id: String,
+    pub file_hash: String,
+    pub resumed_at: u64,
+    pub bytes_already_downloaded: u64,
+    pub remaining_bytes: u64,
+    pub resumed_from_checkpoint: bool,
 }
 ```
 
@@ -211,10 +465,10 @@ pub enum DisconnectReason {
 **ErrorCategory**
 ```rust
 pub enum ErrorCategory {
-    Network,
-    Protocol,
-    Filesystem,
-    Verification,
+    Network,      // Connection failures, HTTP errors
+    Protocol,     // Protocol-level errors
+    Filesystem,   // File creation/write errors
+    Verification, // Hash/integrity check failures
     Authentication,
     NoSources,
     RateLimit,
@@ -242,19 +496,29 @@ pub fn calculate_eta(remaining_bytes: u64, speed_bps: f64) -> Option<u32>
 
 ### Setup in App Component
 
+The frontend subscription is initialized in `App.svelte` during the `onMount` lifecycle:
+
 ```typescript
-// App.svelte or +layout.svelte
-import { onMount } from 'svelte';
+// App.svelte
+import { onMount, onDestroy } from 'svelte';
 import { subscribeToTransferEvents } from '$lib/stores/transferEventsStore';
 
+let unsubscribe: (() => void) | null = null;
+
 onMount(async () => {
-  // Subscribe to all transfer events
-  const unsubscribe = await subscribeToTransferEvents();
-  
-  // Cleanup on component destroy
-  return unsubscribe;
+  // Subscribe to all transfer events - THIS IS CRITICAL
+  unsubscribe = await subscribeToTransferEvents();
+});
+
+onDestroy(() => {
+  // Cleanup subscription
+  if (unsubscribe) {
+    unsubscribe();
+  }
 });
 ```
+
+> **Important**: The `subscribeToTransferEvents()` call in `App.svelte` is essential. Without it, no transfer events will be received by the frontend, and downloads will appear invisible to the UI.
 
 ### Store API
 
@@ -400,16 +664,17 @@ This allows components to subscribe to specific event types or all events.
 1. **Always use transfer_id**: Generate unique IDs for each transfer (UUID recommended)
 2. **Emit events in order**: Follow the lifecycle: queued → started → progress... → completed/failed
 3. **Include context**: Always populate relevant fields (file_hash, file_name, etc.)
-4. **Progress updates**: Emit progress every 1-2 seconds, not every chunk
+4. **Progress updates**: Emit progress every 2 seconds (use throttling)
 5. **Speed updates**: Can emit more frequently (every 100-500ms) for smooth UI
-6. **Error handling**: Always emit failed event with descriptive error messages
+6. **Error handling**: Always emit failed event with descriptive error messages and ErrorCategory
 7. **Cleanup**: Emit canceled event when user cancels, not just silence
+8. **Use opt-in constructors**: Use `with_event_bus()` constructors for UI-connected handlers
 
 ### Frontend
 
-1. **Subscribe once**: Subscribe to events in App.svelte, not in every component
+1. **Subscribe once**: Subscribe to events in App.svelte `onMount`, not in every component
 2. **Use derived stores**: Filter transfers using derived stores for better performance
-3. **Cleanup**: Always return unsubscribe function from onMount
+3. **Cleanup**: Always return unsubscribe function from onMount and call in onDestroy
 4. **Handle missing transfers**: Check if transfer exists before accessing properties
 5. **Use reactive statements**: Leverage Svelte's reactivity (`$:` syntax)
 6. **Show user feedback**: Display errors, completion notifications, etc.
@@ -422,7 +687,7 @@ The system uses sensible defaults that can be adjusted per use case:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Progress emit interval | 1-2 seconds | How often to emit progress events |
+| Progress emit interval | 2 seconds | How often to emit progress events (throttled) |
 | Speed update interval | 100-500ms | How often to emit speed updates |
 | Chunk size | Varies by protocol | Size of transfer chunks |
 | Transfer ID format | UUID v4 | Unique identifier format |
@@ -503,10 +768,11 @@ describe('Transfer Store', () => {
 **Symptoms**: No transfers appear in the store despite backend emitting events.
 
 **Solutions**:
-1. Check that `subscribeToTransferEvents()` was called in App.svelte
+1. **Check that `subscribeToTransferEvents()` was called in App.svelte** - This is the most common issue
 2. Verify backend is emitting events (check Rust logs)
 3. Check browser console for subscription errors
 4. Ensure Tauri event system is working
+5. Verify the protocol handler is using an event-bus-enabled constructor
 
 ### Transfers not updating
 
@@ -517,13 +783,32 @@ describe('Transfer Store', () => {
 2. Check that progress events include all required fields
 3. Look for TypeScript errors in browser console
 4. Verify reactive statements are properly structured
+5. Check progress throttling isn't too aggressive
 
 ### Performance issues
 
 **Symptoms**: UI becomes laggy with many active transfers.
 
 **Solutions**:
-1. Reduce frequency of progress/speed updates in backend
+1. Reduce frequency of progress/speed updates in backend (increase throttle interval)
 2. Use derived stores instead of filtering in templates
 3. Implement virtual scrolling for large transfer lists
 4. Debounce UI updates if needed
+
+### Protocol handler not emitting events
+
+**Symptoms**: A specific protocol (HTTP, FTP, BitTorrent) doesn't show progress.
+
+**Solutions**:
+1. Ensure you're using the event-bus-enabled constructor (`with_event_bus()`, `new_with_event_bus()`)
+2. Check that `app_handle` is being passed correctly
+3. Verify the handler's event emission code paths are being executed
+4. Check for errors in the Rust logs
+
+## Related Documentation
+
+- [HTTP Protocol Implementation](HTTP_PROTOCOL_IMPLEMENTATION.md)
+- [FTP Source Implementation](FTP_SOURCE_IMPLEMENTATION.md)
+- [BitTorrent Implementation Guide](bittorrent-implementation-guide.md)
+- [Download Restart](download-restart.md)
+- [Architecture](architecture.md)
