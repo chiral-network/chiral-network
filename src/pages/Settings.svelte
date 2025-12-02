@@ -70,7 +70,7 @@
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
-    storagePath: "~/Chiral-Network-Storage",
+    storagePath: "", // Will be set dynamically from backend
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
@@ -141,6 +141,9 @@
     message: string;
     type: "success" | "error";
   } | null = null;
+
+  // Dynamic placeholder for storage path
+  let storagePathPlaceholder = "Select download directory";
 
   // Diagnostics state
   type DiagStatus = "pass" | "fail" | "warn";
@@ -885,14 +888,17 @@
   }
 
     onMount(async () => {
-    // Get platform-specific default storage path from Tauri
+    // Get the canonical download directory from backend (single source of truth)
     try {
-      const platformDefaultPath = await invoke<string>("get_default_storage_path");
-      defaultSettings.storagePath = platformDefaultPath;
+      // Pass null/undefined to get the default when no frontend settings exist
+      const defaultPath = await invoke<string>("get_download_directory");
+      defaultSettings.storagePath = defaultPath;
+      storagePathPlaceholder = defaultPath; // Update placeholder to show actual default
     } catch (e) {
-      errorLogger.fileOperationError('Get default storage path', e instanceof Error ? e.message : String(e));
-      // Fallback to the hardcoded default if the command fails
-      defaultSettings.storagePath = "~/ChiralNetwork/Storage";
+      errorLogger.fileOperationError('Get download directory', e instanceof Error ? e.message : String(e));
+      // Fallback if backend fails
+      defaultSettings.storagePath = "~/Downloads/Chiral";
+      storagePathPlaceholder = "~/Downloads/Chiral";
     }
 
     // Load settings from local storage
@@ -1230,7 +1236,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="storage-path"
               bind:value={localSettings.storagePath}
-              placeholder="~/Chiral-Network-Storage"
+              placeholder={storagePathPlaceholder}
               class="flex-1"
             />
             <Button

@@ -133,7 +133,7 @@ struct BackendSettings {
 impl Default for BackendSettings {
     fn default() -> Self {
         Self {
-            storage_path: "~/ChiralNetwork/Storage".to_string(),
+            storage_path: "".to_string(), // No hardcoded default - get_download_directory handles this
             enable_file_logging: false,
             max_log_size_mb: 10,
         }
@@ -159,7 +159,7 @@ fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
                         let storage_path = json
                             .get("storagePath")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("~/ChiralNetwork/Storage")
+                            .unwrap_or("")
                             .to_string();
                         let enable_file_logging = json
                             .get("enableFileLogging")
@@ -3230,30 +3230,30 @@ fn detect_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
 }
 
+/// Get the resolved download directory.
 #[tauri::command]
-fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
+    // Load backend settings from file
+    let backend_settings = load_settings_from_file(&app);
 
-    // Get the parent of app data dir to place storage at user level
-    let user_dir = app_data_dir
-        .parent()
-        .ok_or_else(|| "Failed to get parent directory".to_string())?;
+    // If backend has a configured path, use it
+    if !backend_settings.storage_path.is_empty() {
+        let expanded_path = expand_tilde(&backend_settings.storage_path);
+        return expanded_path
+            .to_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Failed to convert path to string".to_string());
+    }
 
-    let storage_path = user_dir.join("Chiral-Network-Storage");
+    // Cross-platform default
+    let default_path = "~/Downloads/Chiral-Network-Storage";
 
-    storage_path
+    let expanded_path = expand_tilde(default_path);
+    expanded_path
         .to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "Failed to convert path to string".to_string())
 }
-
-// #[tauri::command]
-// fn check_directory_exists(path: String) -> bool {
-//     Path::new(&path).is_dir()
-// }
 
 #[tauri::command]
 async fn ensure_directory_exists(path: String) -> Result<(), String> {
@@ -7109,7 +7109,7 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
-            get_default_storage_path,
+            get_download_directory,
             check_directory_exists,
             ensure_directory_exists,
             get_dht_health,
