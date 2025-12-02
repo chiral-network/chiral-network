@@ -334,7 +334,7 @@
       const entry = dhtSearchHistory.addPending(trimmed);
       activeHistoryId = entry.id;
 
-      pushMessage(tr('download.search.status.started'), 'info', 2000);
+      // Removed "Searching the network..." toast
       const metadata = await dhtService.searchFileMetadata(trimmed, SEARCH_TIMEOUT_MS);
       const elapsed = Math.round(performance.now() - startedAt);
       lastSearchDuration = elapsed;
@@ -771,7 +771,6 @@
     // Route download based on selected protocol
     if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap' || selectedProtocol === 'bittorrent') {
       // P2P download flow (WebRTC, Bitswap, BitTorrent)
-      console.log(`🔍 DEBUG: Initiating ${selectedProtocol} download for file: ${selectedFile.fileName}`);
 
       const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {
         ...selectedFile,

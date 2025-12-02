@@ -277,13 +277,6 @@ export class DhtService {
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
-      console.log(
-        "🔽 Frontend: downloadFile called for:",
-        fileMetadata.fileName,
-        "hash:",
-        fileMetadata.fileHash
-      );
-
       // Use the download path from metadata (must be provided by caller)
       let resolvedStoragePath: string;
 
@@ -293,28 +286,14 @@ export class DhtService {
       }
 
       resolvedStoragePath = fileMetadata.downloadPath;
-      console.log(
-        "🔽 Frontend: Using provided download path:",
-        resolvedStoragePath
-      );
-
-      console.log("🔽 Frontend: resolved storage path:", resolvedStoragePath);
-      console.log("🔽 Frontend: about to call ensure_directory_exists");
 
       // Extract directory path from file path
       const pathParts = resolvedStoragePath.split("/");
       const directoryPath = pathParts.slice(0, -1).join("/") || ".";
 
-      console.log("🔽 Frontend: directory path:", directoryPath);
-
       // Ensure the directory exists before starting download
       try {
-        console.log(
-          "🔽 Frontend: calling ensure_directory_exists with directory path:",
-          directoryPath
-        );
         await invoke("ensure_directory_exists", { path: directoryPath });
-        console.log("🔽 Frontend: ensure_directory_exists succeeded");
       } catch (error) {
         console.error(
           "🔽 Frontend: Failed to create download directory:",
@@ -329,9 +308,6 @@ export class DhtService {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           async (event) => {
-            console.log("Received file content event:", event.payload);
-            console.log(`File saved to: ${resolvedStoragePath}`);
-
             resolve(event.payload);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
@@ -363,23 +339,12 @@ export class DhtService {
           : fileMetadata.cids[0] === fileMetadata.merkleRoot ||
             fileMetadata.cids.length === 1;
 
-      console.log("Prepared file metadata for Bitswap download:", fileMetadata);
-      console.log("Calling download_blocks_from_network with:", fileMetadata);
-
       try {
         // Trigger the backend download AFTER setting up the listener
-        console.log(
-          "🔽 Frontend: About to invoke download_blocks_from_network with path:",
-          resolvedStoragePath
-        );
-        const result = await invoke("download_blocks_from_network", {
+        await invoke("download_blocks_from_network", {
           fileMetadata,
           downloadPath: resolvedStoragePath,
         });
-        console.log(
-          "🔽 Frontend: download_blocks_from_network invoke succeeded:",
-          result
-        );
       } catch (error) {
         console.error(
           "🔽 Frontend: download_blocks_from_network invoke failed:",
@@ -388,12 +353,7 @@ export class DhtService {
         throw error;
       }
 
-      console.log(
-        "Backend download initiated, waiting for file_content event..."
-      );
-
       // Wait until the event arrives
-      console.log("🔽 Frontend: Waiting for file_content event...");
       return await metadataPromise;
     } catch (error) {
       console.error("🔽 Frontend: Failed to download file:", error);

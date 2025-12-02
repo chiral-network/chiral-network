@@ -1625,6 +1625,7 @@ async fn start_dht_node(
                         }
                     }
                     DhtEvent::DownloadedFile(metadata) => {
+                        info!("Emitting file_content event for completed download: {} ({})", metadata.file_name, metadata.merkle_root);
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("file_content", payload);
                         // Update analytics: record download completion and bandwidth

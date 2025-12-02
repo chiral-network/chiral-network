@@ -2991,8 +2991,24 @@ async fn run_dht_node(
                                         info!("✅ This is a ROOT BLOCK for file: {}", metadata.merkle_root);
 
                                         // This is the root block containing CIDs - parse and request all data blocks
-                                        match serde_json::from_slice::<Vec<Cid>>(&data) {
-                                            Ok(cids) => {
+                                        match serde_json::from_slice::<Vec<String>>(&data) {
+                                            Ok(cid_strings) => {
+                                                // Convert CID strings to Cid objects
+                                                let mut cids = Vec::new();
+                                                for cid_str in cid_strings {
+                                                    match cid_str.parse::<Cid>() {
+                                                        Ok(cid) => cids.push(cid),
+                                                        Err(e) => {
+                                                            error!("Failed to parse CID from string '{}': {}", cid_str, e);
+                                                            continue;
+                                                        }
+                                                    }
+                                                }
+
+                                                if cids.is_empty() {
+                                                    error!("No valid CIDs found in root block for file {}", metadata.merkle_root);
+                                                    continue;
+                                                }
 
                                                 // Create queries map for this file's data blocks
                                                 let mut file_queries = HashMap::new();

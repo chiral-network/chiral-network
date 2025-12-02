@@ -185,9 +185,6 @@
     // Combine DHT seeders with WebRTC seeders
     const allSeeders = [...new Set([...freshSeeders, ...webrtcSeeders])];
     metadata.seeders = allSeeders;
-    console.log("🔍 DEBUG: Seeders fetched from DHT:", freshSeeders);
-    console.log("🔍 DEBUG: WebRTC seeders from store:", webrtcSeeders);
-    console.log("🔍 DEBUG: All seeders combined:", allSeeders);
 
     // Bitswap note: manual seeder selection was for demo purposes to show
     // peer-selection capability; now switching to intelligent peer selection.
@@ -234,7 +231,6 @@
     const copy = structuredClone(metadata);
     copy.seeders = [copy.seeders[selectedSeederIndex?selectedSeederIndex:0]];
     dispatch("download", metadata);
-    console.log("🔍 DEBUG: Dispatched download event for file:", metadata.fileName);
   }
 
   async function confirmPayment() {
@@ -322,7 +318,6 @@
         // Store the dynamic price for display
         currentPrice = currentDynamicPrice;
 
-        console.log('💰 Balance check:', { currentBalance, price: currentDynamicPrice, canAfford });
       } catch (error) {
         console.error('Failed to check balance:', error);
         canAfford = false;
