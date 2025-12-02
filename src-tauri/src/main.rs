@@ -308,6 +308,7 @@ pub struct StreamingUploadSession {
     pub chunk_cids: Vec<String>,
     pub file_data: Vec<u8>,
     pub price: f64,
+    pub is_complete: bool,
 }
 
 /// Session for streaming WebRTC downloads - writes chunks directly to disk
@@ -3595,11 +3596,6 @@ async fn upload_file_to_network(
                             if let Err(e) = dht.publish_file(final_metadata.clone(), None).await {
                                 warn!("Failed to publish BitTorrent file metadata to DHT: {}", e);
                                 // Don't fail the upload, just log the warning
-                            } else {
-                                // Start heartbeat to maintain file availability announcements
-                                if let Err(e) = dht.start_file_heartbeat(&final_metadata.merkle_root).await {
-                                    warn!("Failed to start heartbeat for BitTorrent file {}: {}", final_metadata.merkle_root, e);
-                                }
                             }
                         }
 
@@ -3729,11 +3725,6 @@ async fn upload_file_to_network(
                             if let Err(e) = dht.publish_file(final_metadata.clone(), None).await {
                                 warn!("Failed to publish ED2K file metadata to DHT: {}", e);
                                 // Don't fail the upload, just log the warning
-                            } else {
-                                // Start heartbeat to maintain file availability announcements
-                                if let Err(e) = dht.start_file_heartbeat(&final_metadata.merkle_root).await {
-                                    warn!("Failed to start heartbeat for ED2K file {}: {}", final_metadata.merkle_root, e);
-                                }
                             }
                         }
 
@@ -3852,11 +3843,6 @@ async fn upload_file_to_network(
                             if let Err(e) = dht.publish_file(final_metadata.clone(), None).await {
                                 warn!("Failed to publish FTP file metadata to DHT: {}", e);
                                 // Don't fail the upload, just log the warning
-                            } else {
-                                // Start heartbeat to maintain file availability announcements
-                                if let Err(e) = dht.start_file_heartbeat(&final_metadata.merkle_root).await {
-                                    warn!("Failed to start heartbeat for FTP file {}: {}", final_metadata.merkle_root, e);
-                                }
                             }
                         }
 
@@ -3923,7 +3909,7 @@ async fn upload_file_to_network(
                     let is_last_chunk = chunk_index >= total_chunks - 1; // Use >= to handle edge cases
 
                     // Send chunk
-                    let result = upload_file_chunk(
+                    upload_file_chunk(
                         upload_id.clone(),
                         chunk_data,
                         chunk_index as u32,
@@ -3938,15 +3924,6 @@ async fn upload_file_to_network(
                                  (chunk_index + 1) as f64 / total_chunks as f64 * 100.0);
                     }
 
-                    if is_last_chunk {
-                        if let Some(file_hash) = result {
-                            println!("✅ Bitswap streaming upload completed: {}", file_hash);
-                            return Ok(());
-                        } else {
-                            return Err("Upload completed but no file hash returned".to_string());
-                        }
-                    }
-
                     chunk_index += 1;
 
                     // Prevent too many concurrent operations
@@ -3954,6 +3931,109 @@ async fn upload_file_to_network(
                         tokio::task::yield_now().await;
                     }
                 }
+
+                // After all chunks are uploaded, finalize the metadata
+                let mut upload_sessions = state.upload_sessions.lock().await;
+                if let Some(session) = upload_sessions.get_mut(&upload_id) {
+                    if session.is_complete {
+                        // Calculate Merkle root for integrity verification
+                        let hasher = std::mem::replace(&mut session.hasher, sha2::Sha256::new());
+                        let merkle_root = format!("{:x}", hasher.finalize());
+
+                        // Create root block containing the list of chunk CIDs
+                        let chunk_cids = std::mem::take(&mut session.chunk_cids);
+                        let root_block_data = match serde_json::to_vec(&chunk_cids) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return Err(format!("Failed to serialize chunk CIDs: {}", e));
+                            }
+                        };
+
+                        // Generate CID for the root block
+                        use dht::{Cid, Code, MultihashDigest, RAW_CODEC};
+                        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+
+                        // Store root block in Bitswap
+                        let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+                        if let Some(dht) = &dht_opt {
+                            if let Err(e) = dht.store_block(root_cid.clone(), root_block_data).await {
+                                error!("failed to store root block: {}", e);
+                                return Err(format!("failed to store root block: {}", e));
+                            }
+                        } else {
+                            return Err("DHT not running".into());
+                        }
+
+                        // Create minimal metadata (without file_data to avoid DHT size limits)
+                        let created_at = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or(std::time::Duration::from_secs(0))
+                            .as_secs();
+
+                        // Get the account address for the uploader
+                        let account = get_active_account(&state).await?;
+
+                        let metadata = dht::models::FileMetadata {
+                            merkle_root: merkle_root.clone(), // Store Merkle root for verification
+                            file_name: session.file_name.clone(),
+                            file_size: session.file_size,
+                            file_data: vec![], // Empty - data is stored in Bitswap blocks
+                            seeders: vec![],
+                            created_at,
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
+                            encrypted_key_bundle: None,
+                            parent_hash: None,
+                            is_root: true,
+                            download_path: None,
+                            price: session.price,
+                            uploader_address: Some(account),
+                            ftp_sources: None,
+                            http_sources: None,
+                            info_hash: None,
+                            trackers: None,
+                            ed2k_sources: None,
+                        };
+
+                        // Check for existing metadata and merge if found
+                        let final_metadata = if let Some(dht) = &dht_opt {
+                            // Search for existing metadata for this file
+                            match dht.synchronous_search_metadata(merkle_root.clone(), 5000).await {
+                                Ok(Some(existing_metadata)) => {
+                                    // Merge existing metadata with new BitSwap CIDs
+                                    let mut merged = existing_metadata.clone();
+                                    merged.cids = Some(vec![root_cid.clone()]); // Add BitSwap CIDs
+                                    // Keep existing sources (HTTP, FTP, etc.) but add BitSwap capability
+                                    info!("Merged BitSwap CIDs with existing metadata for file: {}", merkle_root);
+                                    merged
+                                }
+                                _ => {
+                                    // No existing metadata, use the new BitSwap metadata
+                                    metadata
+                                }
+                            }
+                        } else {
+                            metadata
+                        };
+
+                        // Publish merged metadata to DHT
+                        if let Some(dht) = dht_opt {
+                            dht.publish_file(final_metadata.clone(), None).await?;
+                        } else {
+                            return Err("DHT not running".into());
+                        }
+
+                        let file_hash = root_cid.to_string();
+                        println!("✅ Bitswap streaming upload completed: {}", file_hash);
+
+                        // Clean up session
+                        upload_sessions.remove(&upload_id);
+                    }
+                }
+                drop(upload_sessions);
 
                 return Ok(());
             }
@@ -4084,11 +4164,6 @@ async fn upload_file_to_network(
             match dht.publish_file(metadata_with_http.clone(), None).await {
                 Ok(_) => info!("Published merged file metadata to DHT: {}", file_hash),
                 Err(e) => warn!("Failed to publish merged file metadata to DHT: {}", e),
-            }
-
-            // Start heartbeat to maintain file availability announcements
-            if let Err(e) = dht.start_file_heartbeat(&metadata.merkle_root).await {
-                warn!("Failed to start heartbeat for {}: {}", metadata.merkle_root, e);
             }
 
             Ok(())
@@ -4820,6 +4895,7 @@ async fn start_streaming_upload(
             chunk_cids: Vec::new(),
             file_data: Vec::new(),
             price,
+            is_complete: false,
         },
     );
 
@@ -4833,7 +4909,7 @@ async fn upload_file_chunk(
     _chunk_index: u32,
     is_last_chunk: bool,
     state: State<'_, AppState>,
-) -> Result<Option<String>, String> {
+) -> Result<(), String> {
     let mut upload_sessions = state.upload_sessions.lock().await;
     let session = upload_sessions
         .get_mut(&upload_id)
@@ -4869,111 +4945,12 @@ async fn upload_file_chunk(
         }
     }
 
+    // Mark session as complete when last chunk is received
     if is_last_chunk {
-        // Calculate Merkle root for integrity verification
-        let hasher = std::mem::replace(&mut session.hasher, sha2::Sha256::new());
-        let merkle_root = format!("{:x}", hasher.finalize());
-
-        // Create root block containing the list of chunk CIDs
-        let chunk_cids = std::mem::take(&mut session.chunk_cids);
-        let root_block_data = match serde_json::to_vec(&chunk_cids) {
-            Ok(data) => data,
-            Err(e) => {
-                return Err(format!("Failed to serialize chunk CIDs: {}", e));
-            }
-        };
-
-        // Generate CID for the root block
-        use dht::{Cid, Code, MultihashDigest, RAW_CODEC};
-        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
-
-        // Store root block in Bitswap
-        let dht_opt = { state.dht.lock().await.as_ref().cloned() };
-        if let Some(dht) = &dht_opt {
-            if let Err(e) = dht.store_block(root_cid.clone(), root_block_data).await {
-                error!("failed to store root block: {}", e);
-                return Err(format!("failed to store root block: {}", e));
-            }
-        } else {
-            return Err("DHT not running".into());
-        }
-
-        // Create minimal metadata (without file_data to avoid DHT size limits)
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(std::time::Duration::from_secs(0))
-            .as_secs();
-
-        // Get the account address for the uploader
-        let account = get_active_account(&state).await?;
-
-        let metadata = dht::models::FileMetadata {
-            merkle_root: merkle_root.clone(), // Store Merkle root for verification
-            file_name: session.file_name.clone(),
-            file_size: session.file_size,
-            file_data: vec![], // Empty - data is stored in Bitswap blocks
-            seeders: vec![],
-            created_at,
-            mime_type: None,
-            is_encrypted: false,
-            encryption_method: None,
-            key_fingerprint: None,
-            cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
-            encrypted_key_bundle: None,
-            parent_hash: None,
-            is_root: true,
-            download_path: None,
-            price: session.price,
-            uploader_address: Some(account),
-            ftp_sources: None,
-            http_sources: None,
-            info_hash: None,
-            trackers: None,
-            ed2k_sources: None,
-        };
-
-        // Clean up session - rely entirely on Bitswap for distribution
-        // No local file storage needed since chunks are stored in Bitswap
-        let file_hash = root_cid.to_string();
-        upload_sessions.remove(&upload_id);
-        drop(upload_sessions);
-
-        // Check for existing metadata and merge if found
-        let final_metadata = if let Some(dht) = &dht_opt {
-            // Search for existing metadata for this file
-            match dht.synchronous_search_metadata(merkle_root.clone(), 5000).await {
-                Ok(Some(existing_metadata)) => {
-                    // Merge existing metadata with new BitSwap CIDs
-                    let mut merged = existing_metadata.clone();
-                    merged.cids = Some(vec![root_cid.clone()]); // Add BitSwap CIDs
-                    // Keep existing sources (HTTP, FTP, etc.) but add BitSwap capability
-                    info!("Merged BitSwap CIDs with existing metadata for file: {}", merkle_root);
-                    merged
-                }
-                _ => {
-                    // No existing metadata, use the new BitSwap metadata
-                    metadata
-                }
-            }
-        } else {
-            metadata
-        };
-
-        // Publish merged metadata to DHT
-        if let Some(dht) = dht_opt {
-            dht.publish_file(final_metadata.clone(), None).await?;
-            // Start heartbeat to maintain file availability announcements
-            if let Err(e) = dht.start_file_heartbeat(&final_metadata.merkle_root).await {
-                warn!("Failed to start heartbeat for {}: {}", final_metadata.merkle_root, e);
-            }
-        } else {
-            return Err("DHT not running".into());
-        }
-
-        Ok(Some(file_hash))
-    } else {
-        Ok(None)
+        session.is_complete = true;
     }
+
+    Ok(())
 }
 
 #[tauri::command]
