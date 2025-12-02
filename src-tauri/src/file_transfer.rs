@@ -334,17 +334,16 @@ impl FileTransferService {
         encryption_enabled: bool,
         keystore: Arc<Mutex<crate::keystore::Keystore>>,
     ) -> Result<Self, String> {
-        Self::new_with_encryption_keystore_and_app_handle(encryption_enabled, keystore, None).await
+        Self::new_with_storage_dir(Self::get_storage_dir()?, encryption_enabled, keystore, None).await
     }
 
-    /// Create with encryption, keystore, and optional AppHandle for TransferEventBus
-    pub async fn new_with_encryption_keystore_and_app_handle(
+    /// Create with custom storage directory, encryption, keystore, and optional AppHandle
+    pub async fn new_with_storage_dir(
+        storage_dir: PathBuf,
         encryption_enabled: bool,
         keystore: Arc<Mutex<crate::keystore::Keystore>>,
         app_handle: Option<AppHandle>,
     ) -> Result<Self, String> {
-        // Initialize storage directory
-        let storage_dir = Self::get_storage_dir()?;
 
         // Create storage directory if it doesn't exist
         if !storage_dir.exists() {
@@ -399,7 +398,7 @@ impl FileTransferService {
         let keystore = Arc::new(Mutex::new(
             crate::keystore::Keystore::load().unwrap_or_default(),
         ));
-        Self::new_with_encryption_keystore_and_app_handle(false, keystore, Some(app_handle)).await
+        Self::new_with_storage_dir(Self::get_storage_dir()?, false, keystore, Some(app_handle)).await
     }
 
     fn get_storage_dir() -> Result<PathBuf, String> {

@@ -24,12 +24,6 @@
   let canAfford = true;
   let checkingBalance = false;
   let currentPrice: number | null = null;
-  let hashCopied = false;
-  let seederCopiedIndex: number | null = null;
-  let magnetCopied = false;
-  let ed2kCopied = false;
-  let ftpCopied = false;
-  let httpCopied = false;
   let showDecryptDialog = false;
   let showDownloadConfirmDialog = false;
   let showPaymentConfirmDialog = false;
@@ -121,53 +115,37 @@
 
   function copyHash() {
     navigator.clipboard.writeText(metadata.fileHash).then(() => {
-      hashCopied = true;
       dispatch('copy', metadata.fileHash);
-      setTimeout(() => (hashCopied = false), 1500);
     });
   }
 
   function copySeeder(address: string, index: number) {
     navigator.clipboard.writeText(address).then(() => {
-      seederCopiedIndex = index;
       dispatch('copy', address);
-      setTimeout(() => {
-        if (seederCopiedIndex === index) {
-          seederCopiedIndex = null;
-        }
-      }, 1500);
     });
   }
 
   function copyMagnetLink(link: string) {
     navigator.clipboard.writeText(link).then(() => {
-      magnetCopied = true;
       dispatch('copy', link);
-      setTimeout(() => (magnetCopied = false), 1500);
     });
   }
 
   function copyEd2kLink(link: string) {
     navigator.clipboard.writeText(link).then(() => {
-      ed2kCopied = true;
       dispatch('copy', link);
-      setTimeout(() => (ed2kCopied = false), 1500);
     });
   }
 
   function copyFtpLink(link: string) {
     navigator.clipboard.writeText(link).then(() => {
-      ftpCopied = true;
       dispatch('copy', link);
-      setTimeout(() => (ftpCopied = false), 1500);
     });
   }
 
   function copyHttpLink(link: string) {
     navigator.clipboard.writeText(link).then(() => {
-      httpCopied = true;
       dispatch('copy', link);
-      setTimeout(() => (httpCopied = false), 1500);
     });
   }
 
@@ -392,9 +370,6 @@
             <span class="sr-only">Copy hash</span>
           </Button>
         </div>
-        {#if hashCopied}
-          <p class="ml-6 text-xs text-emerald-600">Hash copied</p>
-        {/if}
       </div>
 
       {#if metadata.infoHash}
@@ -413,9 +388,6 @@
               <span class="sr-only">Copy magnet link</span>
             </Button>
           </div>
-          {#if magnetCopied}
-            <p class="ml-6 text-xs text-emerald-600">Magnet link copied</p>
-          {/if}
         </div>
       {/if}
 
@@ -436,9 +408,6 @@
               <span class="sr-only">Copy ED2K link</span>
             </Button>
           </div>
-          {#if ed2kCopied}
-            <p class="ml-6 text-xs text-emerald-600">ED2K link copied</p>
-          {/if}
         </div>
       {/if}
 
@@ -458,9 +427,6 @@
               <span class="sr-only">Copy FTP link</span>
             </Button>
           </div>
-          {#if ftpCopied}
-            <p class="ml-6 text-xs text-emerald-600">FTP link copied</p>
-          {/if}
         </div>
       {/if}
 
@@ -480,9 +446,6 @@
               <span class="sr-only">Copy HTTP link</span>
             </Button>
           </div>
-          {#if httpCopied}
-            <p class="ml-6 text-xs text-emerald-600">HTTP link copied</p>
-          {/if}
         </div>
       {/if}
 
@@ -541,9 +504,6 @@
                   <span class="sr-only">Copy seeder address</span>
                 </Button>
               </div>
-              {#if seederCopiedIndex === index}
-                <p class="ml-6 text-xs text-emerald-600">Copied</p>
-              {/if}
             {/each}
           </div>
         </div>

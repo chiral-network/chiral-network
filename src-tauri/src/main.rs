@@ -159,13 +159,8 @@ fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
                         let storage_path = json
                             .get("storagePath")
                             .and_then(|v| v.as_str())
-                            .filter(|s| !s.is_empty())
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| {
-                                // Use platform-specific default if not set
-                                get_default_storage_path(app_handle.clone())
-                                    .unwrap_or_else(|_| "~/.local/share/Chiral-Network-Storage".to_string())
-                            });
+                            .unwrap_or("")
+                            .to_string();
                         let enable_file_logging = json
                             .get("enableFileLogging")
                             .and_then(|v| v.as_bool())
@@ -3257,10 +3252,30 @@ fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
         .ok_or_else(|| "Failed to convert path to string".to_string())
 }
 
-// #[tauri::command]
-// fn check_directory_exists(path: String) -> bool {
-//     Path::new(&path).is_dir()
-// }
+/// Get the resolved download directory.
+#[tauri::command]
+fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
+    // Load backend settings from file
+    let backend_settings = load_settings_from_file(&app);
+
+    // If backend has a configured path, use it
+    if !backend_settings.storage_path.is_empty() {
+        let expanded_path = expand_tilde(&backend_settings.storage_path);
+        return expanded_path
+            .to_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Failed to convert path to string".to_string());
+    }
+
+    // Cross-platform default
+    let default_path = "~/Downloads/Chiral-Network-Storage";
+
+    let expanded_path = expand_tilde(default_path);
+    expanded_path
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Failed to convert path to string".to_string())
+}
 
 #[tauri::command]
 async fn ensure_directory_exists(path: String) -> Result<(), String> {
@@ -3298,7 +3313,17 @@ async fn start_file_transfer_service(
     }
 
     info!("🔧 Creating FileTransferService...");
-    let file_transfer_service = FileTransferService::new_with_encryption(true)
+    // Get the configurable storage directory
+    let storage_path = get_download_directory(app.clone())
+        .map_err(|e| format!("Failed to get storage directory: {}", e))?;
+    let storage_dir = PathBuf::from(storage_path);
+
+    let file_transfer_service = FileTransferService::new_with_storage_dir(
+        storage_dir,
+        true, // encryption enabled
+        state.keystore.clone(),
+        Some(app.clone())
+    )
         .await
         .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
 
@@ -3529,22 +3554,52 @@ async fn upload_file_to_network(
                             uploader_address: Some(account),
                             ftp_sources: None,
                             http_sources: None,
-                            info_hash,
+                            info_hash: info_hash.clone(),
                             trackers: Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]),
                             ed2k_sources: None,
                             download_path: None,
                         };
 
-                        // Publish metadata to DHT for discoverability
+                        // Check for existing metadata and merge BitTorrent info if found
+                        let final_metadata = {
+                            let dht_guard = state.dht.lock().await;
+                            if let Some(dht) = dht_guard.as_ref() {
+                                // Search for existing metadata using content hash
+                                match dht.synchronous_search_metadata(file_hash.clone(), 5000).await {
+                                    Ok(Some(existing_metadata)) => {
+                                        // Merge existing metadata with new BitTorrent info
+                                        let mut merged = existing_metadata.clone();
+                                        merged.info_hash = info_hash.clone(); // Add BitTorrent info_hash
+                                        merged.trackers = Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]); // Add trackers
+                                        // Keep existing sources (HTTP, FTP, BitSwap, etc.) but add BitTorrent capability
+                                        info!("Merged BitTorrent info with existing metadata for file: {}", file_hash);
+                                        merged
+                                    }
+                                    _ => {
+                                        // No existing metadata, use the new BitTorrent metadata
+                                        metadata
+                                    }
+                                }
+                            } else {
+                                metadata
+                            }
+                        };
+
+                        // Publish merged metadata to DHT for discoverability
                         let dht = {
                             let dht_guard = state.dht.lock().await;
                             dht_guard.as_ref().cloned()
                         };
 
                         if let Some(dht) = dht {
-                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                            if let Err(e) = dht.publish_file(final_metadata.clone(), None).await {
                                 warn!("Failed to publish BitTorrent file metadata to DHT: {}", e);
                                 // Don't fail the upload, just log the warning
+                            } else {
+                                // Start heartbeat to maintain file availability announcements
+                                if let Err(e) = dht.start_file_heartbeat(&final_metadata.merkle_root).await {
+                                    warn!("Failed to start heartbeat for BitTorrent file {}: {}", final_metadata.merkle_root, e);
+                                }
                             }
                         }
 
@@ -3633,16 +3688,52 @@ async fn upload_file_to_network(
                             download_path: None,
                         };
 
-                        // Publish metadata to DHT for discoverability
+                        // Check for existing metadata and merge ED2K info if found
+                        let final_metadata = {
+                            let dht_guard = state.dht.lock().await;
+                            if let Some(dht) = dht_guard.as_ref() {
+                                // Search for existing metadata using content hash
+                                match dht.synchronous_search_metadata(file_hash.clone(), 5000).await {
+                                    Ok(Some(existing_metadata)) => {
+                                        // Merge existing metadata with new ED2K sources
+                                        let mut merged = existing_metadata.clone();
+                                        merged.ed2k_sources = Some(vec![dht::models::Ed2kSourceInfo {
+                                            server_url: "ed2k://|server|45.82.80.155|5687|/".to_string(),
+                                            file_hash: ed2k_hash.clone().unwrap_or_else(|| "unknown".to_string()),
+                                            file_size,
+                                            file_name: Some(original_file_name.clone()),
+                                            sources: None,
+                                            timeout: None,
+                                        }]); // Add ED2K sources
+                                        // Keep existing sources (HTTP, FTP, BitSwap, etc.) but add ED2K capability
+                                        info!("Merged ED2K sources with existing metadata for file: {}", file_hash);
+                                        merged
+                                    }
+                                    _ => {
+                                        // No existing metadata, use the new ED2K metadata
+                                        metadata
+                                    }
+                                }
+                            } else {
+                                metadata
+                            }
+                        };
+
+                        // Publish merged metadata to DHT for discoverability
                         let dht = {
                             let dht_guard = state.dht.lock().await;
                             dht_guard.as_ref().cloned()
                         };
 
                         if let Some(dht) = dht {
-                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                            if let Err(e) = dht.publish_file(final_metadata.clone(), None).await {
                                 warn!("Failed to publish ED2K file metadata to DHT: {}", e);
                                 // Don't fail the upload, just log the warning
+                            } else {
+                                // Start heartbeat to maintain file availability announcements
+                                if let Err(e) = dht.start_file_heartbeat(&final_metadata.merkle_root).await {
+                                    warn!("Failed to start heartbeat for ED2K file {}: {}", final_metadata.merkle_root, e);
+                                }
                             }
                         }
 
@@ -3716,16 +3807,56 @@ async fn upload_file_to_network(
                         };
 
 
-                        // Publish metadata to DHT for discoverability
+                        // Check for existing metadata and merge FTP sources if found
+                        let final_metadata = {
+                            let dht_guard = state.dht.lock().await;
+                            if let Some(dht) = dht_guard.as_ref() {
+                                // Search for existing metadata using content hash
+                                match dht.synchronous_search_metadata(file_hash.clone(), 5000).await {
+                                    Ok(Some(existing_metadata)) => {
+                                        // Merge existing metadata with new FTP sources
+                                        let mut merged = existing_metadata.clone();
+                                        merged.ftp_sources = Some(vec![dht::models::FtpSourceInfo {
+                                            url: seeding_info.identifier.clone(),
+                                            username: None,
+                                            password: None,
+                                            supports_resume: true,
+                                            file_size,
+                                            last_checked: Some(std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs()),
+                                            is_available: true,
+                                        }]); // Add FTP sources
+                                        // Keep existing sources (HTTP, BitSwap, etc.) but add FTP capability
+                                        info!("Merged FTP sources with existing metadata for file: {}", file_hash);
+                                        merged
+                                    }
+                                    _ => {
+                                        // No existing metadata, use the new FTP metadata
+                                        metadata
+                                    }
+                                }
+                            } else {
+                                metadata
+                            }
+                        };
+
+                        // Publish merged metadata to DHT for discoverability
                         let dht = {
                             let dht_guard = state.dht.lock().await;
                             dht_guard.as_ref().cloned()
                         };
 
                         if let Some(dht) = dht {
-                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                            if let Err(e) = dht.publish_file(final_metadata.clone(), None).await {
                                 warn!("Failed to publish FTP file metadata to DHT: {}", e);
                                 // Don't fail the upload, just log the warning
+                            } else {
+                                // Start heartbeat to maintain file availability announcements
+                                if let Err(e) = dht.start_file_heartbeat(&final_metadata.merkle_root).await {
+                                    warn!("Failed to start heartbeat for FTP file {}: {}", final_metadata.merkle_root, e);
+                                }
                             }
                         }
 
@@ -3934,9 +4065,30 @@ async fn upload_file_to_network(
                 file_name, metadata.merkle_root, file_hash
             );
 
-            match dht.publish_file(metadata.clone(), None).await {
-                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
-                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
+            // Add HTTP source information to metadata for multi-protocol downloads
+            let mut metadata_with_http = metadata.clone();
+            if let Some(http_addr) = *state.http_server_addr.lock().await {
+                use chiral_network::download_source::HttpSourceInfo;
+                // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
+                let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
+                metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
+                    url: url.clone(),
+                    auth_header: None,
+                    verify_ssl: true,
+                    headers: None,
+                    timeout_secs: None,
+                }]);
+                info!("Added HTTP source to metadata: {}", url);
+            }
+
+            match dht.publish_file(metadata_with_http.clone(), None).await {
+                Ok(_) => info!("Published merged file metadata to DHT: {}", file_hash),
+                Err(e) => warn!("Failed to publish merged file metadata to DHT: {}", e),
+            }
+
+            // Start heartbeat to maintain file availability announcements
+            if let Err(e) = dht.start_file_heartbeat(&metadata.merkle_root).await {
+                warn!("Failed to start heartbeat for {}: {}", metadata.merkle_root, e);
             }
 
             Ok(())
@@ -4756,7 +4908,7 @@ async fn upload_file_chunk(
         let account = get_active_account(&state).await?;
 
         let metadata = dht::models::FileMetadata {
-            merkle_root: merkle_root, // Store Merkle root for verification
+            merkle_root: merkle_root.clone(), // Store Merkle root for verification
             file_name: session.file_name.clone(),
             file_size: session.file_size,
             file_data: vec![], // Empty - data is stored in Bitswap blocks
@@ -4786,10 +4938,34 @@ async fn upload_file_chunk(
         upload_sessions.remove(&upload_id);
         drop(upload_sessions);
 
+        // Check for existing metadata and merge if found
+        let final_metadata = if let Some(dht) = &dht_opt {
+            // Search for existing metadata for this file
+            match dht.synchronous_search_metadata(merkle_root.clone(), 5000).await {
+                Ok(Some(existing_metadata)) => {
+                    // Merge existing metadata with new BitSwap CIDs
+                    let mut merged = existing_metadata.clone();
+                    merged.cids = Some(vec![root_cid.clone()]); // Add BitSwap CIDs
+                    // Keep existing sources (HTTP, FTP, etc.) but add BitSwap capability
+                    info!("Merged BitSwap CIDs with existing metadata for file: {}", merkle_root);
+                    merged
+                }
+                _ => {
+                    // No existing metadata, use the new BitSwap metadata
+                    metadata
+                }
+            }
+        } else {
+            metadata
+        };
 
-        // Publish to DHT
+        // Publish merged metadata to DHT
         if let Some(dht) = dht_opt {
-            dht.publish_file(metadata.clone(), None).await?;
+            dht.publish_file(final_metadata.clone(), None).await?;
+            // Start heartbeat to maintain file availability announcements
+            if let Err(e) = dht.start_file_heartbeat(&final_metadata.merkle_root).await {
+                warn!("Failed to start heartbeat for {}: {}", final_metadata.merkle_root, e);
+            }
         } else {
             return Err("DHT not running".into());
         }
@@ -7126,6 +7302,7 @@ fn main() {
             get_dht_events,
             detect_locale,
             get_default_storage_path,
+            get_download_directory,
             check_directory_exists,
             ensure_directory_exists,
             get_dht_health,

@@ -1150,7 +1150,7 @@ async function loadAndResumeDownloads() {
   }
 
   try {
-    const storagePath = await invoke("get_default_storage_path");
+    const storagePath = await invoke("get_download_directory");
 
     // Construct full file path: directory + filename
     const fullPath = `${storagePath}/${downloadingFile.name}`;

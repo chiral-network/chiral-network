@@ -6490,7 +6490,7 @@ impl DhtService {
         self.chunk_size
     }
 
-    async fn start_file_heartbeat(&self, file_hash: &str) -> Result<(), String> {
+    pub async fn start_file_heartbeat(&self, file_hash: &str) -> Result<(), String> {
         let file_hash_owned = file_hash.to_string();
 
         {

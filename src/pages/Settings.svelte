@@ -51,6 +51,9 @@
   let notificationsSectionOpen = false;
   let diagnosticsSectionOpen = false;
 
+  // Dynamic placeholder for storage path
+  let storagePathPlaceholder = "Select download directory";
+
   const ACCORDION_STORAGE_KEY = "settingsAccordionState";
 
   type AccordionState = {
@@ -885,18 +888,19 @@
   }
 
     onMount(async () => {
-    // Get platform-specific default storage path from Tauri
-    const platformDefaultPath = await invoke<string>("get_default_storage_path");
-    defaultSettings.storagePath = platformDefaultPath;
+    // Get the canonical download directory from backend (single source of truth)
+    const defaultPath = await invoke<string>("get_download_directory");
+    defaultSettings.storagePath = defaultPath;
+    storagePathPlaceholder = defaultPath; // Update placeholder to show actual default
 
     // Load settings from local storage
     const stored = localStorage.getItem("chiralSettings");
     if (stored) {
   try {
     const loadedSettings: AppSettings = JSON.parse(stored);
-    // Ensure storagePath is set to platform default if missing or empty
+    // Ensure storagePath is set to default if missing or empty
     if (!loadedSettings.storagePath || loadedSettings.storagePath.trim() === "") {
-      loadedSettings.storagePath = platformDefaultPath;
+      loadedSettings.storagePath = defaultSettings.storagePath;
     }
     // Set the store, which ensures it is available globally
     settings.set({ ...defaultSettings, ...loadedSettings });
@@ -1228,7 +1232,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="storage-path"
               bind:value={localSettings.storagePath}
-              placeholder="Platform-specific default path"
+              placeholder={storagePathPlaceholder}
               class="flex-1"
             />
             <Button
