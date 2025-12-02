@@ -235,13 +235,16 @@ export class DhtService {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
           (event) => {
+            console.log('🔍 DEBUG DHT.TS: Received published_file event:', event);
             const metadata = event.payload;
+            console.log('🔍 DEBUG DHT.TS: event.payload.seeders =', metadata.seeders);
             if (!metadata.merkleRoot && metadata.fileHash) {
               metadata.merkleRoot = metadata.fileHash;
             }
             if (!metadata.fileHash && metadata.merkleRoot) {
               metadata.fileHash = metadata.merkleRoot;
             }
+            console.log('🔍 DEBUG DHT.TS: Resolving with metadata.seeders =', metadata.seeders);
             // Clear timeout on success
             if (timeoutId) clearTimeout(timeoutId);
             resolve(metadata);
@@ -452,9 +455,11 @@ export class DhtService {
 
   async getSeedersForFile(fileHash: string): Promise<string[]> {
     try {
+      console.log('🔍 DEBUG DHT.TS: getSeedersForFile called with hash =', fileHash);
       const seeders = await invoke<string[]>("get_file_seeders", {
         fileHash,
       });
+      console.log('🔍 DEBUG DHT.TS: getSeedersForFile returned =', seeders);
       return Array.isArray(seeders) ? seeders : [];
     } catch (error) {
       console.error("Failed to fetch seeders:", error);

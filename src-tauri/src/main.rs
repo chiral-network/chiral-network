@@ -1628,7 +1628,10 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
+                        println!("🔍 DEBUG MAIN: PublishedFile event received");
+                        println!("🔍 DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
                         let payload = serde_json::json!(metadata);
+                        println!("🔍 DEBUG MAIN: Emitting published_file event to frontend");
                         let _ = app_handle.emit("published_file", payload);
                         // Update analytics: record upload completion
                         analytics_arc.record_upload_completed().await;
@@ -5419,13 +5422,16 @@ async fn get_file_seeders(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<Vec<String>, String> {
+    println!("🔍 DEBUG MAIN: get_file_seeders called with hash = {}", file_hash);
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
     if let Some(dht_service) = dht {
-        Ok(dht_service.get_seeders_for_file(&file_hash).await)
+        let seeders = dht_service.get_seeders_for_file(&file_hash).await;
+        println!("🔍 DEBUG MAIN: get_file_seeders returning seeders = {:?}", seeders);
+        Ok(seeders)
     } else {
         Err("DHT node is not running".to_string())
     }
