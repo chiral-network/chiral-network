@@ -593,19 +593,13 @@
     try {
       const allMetrics = await PeerSelectionService.getPeerMetrics();
 
-      const sizeInMb = metadata.fileSize > 0 ? metadata.fileSize / (1024 * 1024) : 0;
-      let perMbPrice =
-        metadata.price && sizeInMb > 0
-          ? metadata.price / sizeInMb
-          : 0;
-
-      if (!Number.isFinite(perMbPrice) || perMbPrice <= 0) {
-        try {
-          perMbPrice = await paymentService.getDynamicPricePerMB(1.2);
-        } catch (pricingError) {
-          console.warn('Falling back to static per MB price:', pricingError);
-          perMbPrice = 0.001;
-        }
+      // Always calculate dynamic price per MB for peer selection
+      let perMbPrice = 0;
+      try {
+        perMbPrice = await paymentService.getDynamicPricePerMB(1.2);
+      } catch (pricingError) {
+        console.warn('Failed to get dynamic per MB price, using fallback:', pricingError);
+        perMbPrice = 0.001;
       }
 
       availablePeers = metadata.seeders.map(seederId => {

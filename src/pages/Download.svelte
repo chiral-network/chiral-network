@@ -916,6 +916,13 @@ async function loadAndResumeDownloads() {
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
 
     if (existingFile) {
+      diagnosticLogger.debug('Download', 'Found existing file', {
+        hash: metadata.fileHash,
+        status: existingFile.status,
+        inQueue: $downloadQueue.some(f => f.hash === metadata.fileHash),
+        inFiles: $files.some(f => f.hash === metadata.fileHash)
+      });
+
       let statusMessage = ''
       switch (existingFile.status) {
         case 'completed':
@@ -943,7 +950,9 @@ async function loadAndResumeDownloads() {
 
       showNotification(statusMessage, 'warning', 4000)
 
-      if (existingFile.status !== 'failed' && existingFile.status !== 'canceled') {
+      // Allow downloading if status is failed, canceled, or seeding (user may want to re-download/test)
+      if (existingFile.status !== 'failed' && existingFile.status !== 'canceled' && existingFile.status !== 'seeding') {
+        diagnosticLogger.debug('Download', 'Skipping download due to existing file status', { status: existingFile.status });
         return
       }
     }
@@ -1187,8 +1196,10 @@ async function loadAndResumeDownloads() {
     const fileProtocol = downloadingFile.protocol || detectedProtocol;
     diagnosticLogger.debug('Download', 'Added file to files store', { fileName: downloadingFile.name, protocol: fileProtocol });
 
-    if (fileProtocol === "Bitswap"){
+    if (fileProtocol === "Bitswap") {
   diagnosticLogger.debug('Download', 'Starting Bitswap download', { fileName: downloadingFile.name });
+
+  diagnosticLogger.debug('Download', 'Checking CIDs for Bitswap download', { hasCids: !!downloadingFile.cids, cidCount: downloadingFile.cids?.length });
 
   // CRITICAL: Bitswap requires CIDs to download
   if (!downloadingFile.cids || downloadingFile.cids.length === 0) {
@@ -1222,25 +1233,37 @@ async function loadAndResumeDownloads() {
     return
   }
 
+  diagnosticLogger.debug('Download', 'CID check passed, validating settings path');
+
   // ✅ VALIDATE SETTINGS PATH BEFORE DOWNLOADING
   try {
+    diagnosticLogger.debug('Download', 'Loading settings from localStorage');
     const stored = localStorage.getItem("chiralSettings");
+
+    let storagePath = "."; // Default fallback
+
     if (!stored) {
-      showNotification(
-        'Please configure a download path in Settings before downloading files.',
-        'error',
-        8000
-      );
-      files.update(f => f.map(file =>
-        file.id === downloadingFile.id
-          ? { ...file, status: 'failed' }
-          : file
-      ));
-      return;
-    }
-    
-    const settings = JSON.parse(stored);
-    let storagePath = settings.storagePath;
+      diagnosticLogger.debug('Download', 'No settings found, trying to get default path from backend');
+      try {
+        storagePath = await invoke("get_default_storage_path");
+        diagnosticLogger.debug('Download', 'Got default path from backend', { storagePath });
+      } catch (e) {
+        diagnosticLogger.debug('Download', 'Failed to get default path, showing error', { error: e });
+        showNotification(
+          'Please configure a download path in Settings before downloading files.',
+          'error',
+          8000
+        );
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? { ...file, status: 'failed' }
+            : file
+        ));
+        return;
+      }
+    } else {
+      const settings = JSON.parse(stored);
+      storagePath = settings.storagePath || ".";
     
     if (!storagePath || storagePath === '.') {
       showNotification(
@@ -1280,8 +1303,12 @@ async function loadAndResumeDownloads() {
 
     // Construct full file path: directory + filename
     const fullPath = `${storagePath}/${downloadingFile.name}`;
-    
-    diagnosticLogger.debug('Download', 'Using settings download path', { fullPath });
+
+    diagnosticLogger.debug('Download', 'Using settings download path', {
+      storagePath,
+      fileName: downloadingFile.name,
+      fullPath
+    });
 
     // Now start the actual Bitswap download
     const metadata = {
@@ -1304,13 +1331,20 @@ async function loadAndResumeDownloads() {
       downloadPath: fullPath
     });
 
+    diagnosticLogger.debug('Download', 'About to call dhtService.downloadFile', {
+      fileName: downloadingFile.name,
+      downloadPath: metadata.downloadPath,
+      hasDownloadPath: !!metadata.downloadPath
+    });
+
     // Start the download asynchronously
     dhtService.downloadFile(metadata)
       .then((_result) => {
-        diagnosticLogger.debug('Download', 'Bitswap download completed', { fileName: downloadingFile.name });
+        diagnosticLogger.debug('Download', 'Bitswap download completed successfully', { fileName: downloadingFile.name });
         showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success')
       })
       .catch((error) => {
+        diagnosticLogger.debug('Download', 'Bitswap download failed', { fileName: downloadingFile.name, error: error instanceof Error ? error.message : String(error) });
         errorLogger.fileOperationError('Bitswap download', error instanceof Error ? error.message : String(error));
         const errorMessage = error instanceof Error ? error.message : String(error)
 
@@ -1326,19 +1360,24 @@ async function loadAndResumeDownloads() {
           6000
         )
       })
+    }
   } catch (error) {
-    errorLogger.fileOperationError('Path validation', error instanceof Error ? error.message : String(error));
+    diagnosticLogger.debug('Download', 'Settings validation failed', { error: error instanceof Error ? error.message : String(error) });
+    errorLogger.fileOperationError('Download settings validation', error instanceof Error ? error.message : String(error));
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
         : file
-    ))
-    showNotification('Failed to validate download path', 'error', 6000);
+    ));
+    showNotification(
+      `Download failed: ${error instanceof Error ? error.message : String(error)}`,
+      'error',
+      6000
+    );
     return;
   }
-}
-    else {
-      // WebRTC download path - Use backend Rust WebRTC (works in Tauri)
+} else {
+    // WebRTC download path - Use backend Rust WebRTC (works in Tauri)
       diagnosticLogger.debug('Download', 'Starting WebRTC download via backend', { fileName: downloadingFile.name });
 
       try {
@@ -2137,7 +2176,6 @@ async function loadAndResumeDownloads() {
       showToast('Failed to choose destination path', 'error')
     }
   }
-
 </script>
 
 <div class="space-y-6">

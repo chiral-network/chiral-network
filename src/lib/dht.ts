@@ -1,8 +1,6 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppSettings } from "./stores";
-import { homeDir } from "@tauri-apps/api/path";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
 const __rep = ReputationStore.getInstance();
@@ -279,45 +277,49 @@ export class DhtService {
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
-      console.log("Initiating download for file:", fileMetadata.fileHash);
+      console.log(
+        "🔽 Frontend: downloadFile called for:",
+        fileMetadata.fileName,
+        "hash:",
+        fileMetadata.fileHash
+      );
 
-      // Use the downloadPath from metadata if provided, otherwise fall back to settings
+      // Use the download path from metadata (must be provided by caller)
       let resolvedStoragePath: string;
 
-      if (fileMetadata.downloadPath) {
-        // Use the path that was already selected by the user in the file dialog
-        resolvedStoragePath = fileMetadata.downloadPath;
-        console.log("Using provided download path:", resolvedStoragePath);
-      } else {
-        // Fallback to settings path (old behavior)
-        const stored = localStorage.getItem("chiralSettings");
-        let storagePath = "."; // Default fallback
-
-        if (stored) {
-          try {
-            const loadedSettings: AppSettings = JSON.parse(stored);
-            storagePath = loadedSettings.storagePath;
-          } catch (e) {
-            console.error("Failed to load settings:", e);
-          }
-        }
-
-        // Construct full file path
-        if (storagePath.startsWith("~")) {
-          const home = await homeDir();
-          resolvedStoragePath = storagePath.replace("~", home);
-        } else {
-          resolvedStoragePath = storagePath;
-        }
-        resolvedStoragePath += "/" + fileMetadata.fileName;
-        console.log("Using settings storage path:", resolvedStoragePath);
+      // Use the download path from metadata (must be provided by caller)
+      if (!fileMetadata.downloadPath) {
+        throw new Error("Download path must be provided in file metadata");
       }
+
+      resolvedStoragePath = fileMetadata.downloadPath;
+      console.log(
+        "🔽 Frontend: Using provided download path:",
+        resolvedStoragePath
+      );
+
+      console.log("🔽 Frontend: resolved storage path:", resolvedStoragePath);
+      console.log("🔽 Frontend: about to call ensure_directory_exists");
+
+      // Extract directory path from file path
+      const pathParts = resolvedStoragePath.split("/");
+      const directoryPath = pathParts.slice(0, -1).join("/") || ".";
+
+      console.log("🔽 Frontend: directory path:", directoryPath);
 
       // Ensure the directory exists before starting download
       try {
-        await invoke("ensure_directory_exists", { path: resolvedStoragePath });
+        console.log(
+          "🔽 Frontend: calling ensure_directory_exists with directory path:",
+          directoryPath
+        );
+        await invoke("ensure_directory_exists", { path: directoryPath });
+        console.log("🔽 Frontend: ensure_directory_exists succeeded");
       } catch (error) {
-        console.error("Failed to create download directory:", error);
+        console.error(
+          "🔽 Frontend: Failed to create download directory:",
+          error
+        );
         throw new Error(`Failed to create download directory: ${error}`);
       }
 
@@ -364,20 +366,37 @@ export class DhtService {
       console.log("Prepared file metadata for Bitswap download:", fileMetadata);
       console.log("Calling download_blocks_from_network with:", fileMetadata);
 
-      // Trigger the backend download AFTER setting up the listener
-      await invoke("download_blocks_from_network", {
-        fileMetadata,
-        downloadPath: resolvedStoragePath,
-      });
+      try {
+        // Trigger the backend download AFTER setting up the listener
+        console.log(
+          "🔽 Frontend: About to invoke download_blocks_from_network with path:",
+          resolvedStoragePath
+        );
+        const result = await invoke("download_blocks_from_network", {
+          fileMetadata,
+          downloadPath: resolvedStoragePath,
+        });
+        console.log(
+          "🔽 Frontend: download_blocks_from_network invoke succeeded:",
+          result
+        );
+      } catch (error) {
+        console.error(
+          "🔽 Frontend: download_blocks_from_network invoke failed:",
+          error
+        );
+        throw error;
+      }
 
       console.log(
         "Backend download initiated, waiting for file_content event..."
       );
 
       // Wait until the event arrives
+      console.log("🔽 Frontend: Waiting for file_content event...");
       return await metadataPromise;
     } catch (error) {
-      console.error("Failed to download file:", error);
+      console.error("🔽 Frontend: Failed to download file:", error);
       throw error;
     }
   }

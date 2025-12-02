@@ -70,7 +70,7 @@
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
-    storagePath: "~/Chiral-Network-Storage",
+    storagePath: "", // Will be set to platform-specific default at runtime
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
@@ -886,20 +886,18 @@
 
     onMount(async () => {
     // Get platform-specific default storage path from Tauri
-    try {
-      const platformDefaultPath = await invoke<string>("get_default_storage_path");
-      defaultSettings.storagePath = platformDefaultPath;
-    } catch (e) {
-      errorLogger.fileOperationError('Get default storage path', e instanceof Error ? e.message : String(e));
-      // Fallback to the hardcoded default if the command fails
-      defaultSettings.storagePath = "~/ChiralNetwork/Storage";
-    }
+    const platformDefaultPath = await invoke<string>("get_default_storage_path");
+    defaultSettings.storagePath = platformDefaultPath;
 
     // Load settings from local storage
     const stored = localStorage.getItem("chiralSettings");
     if (stored) {
   try {
     const loadedSettings: AppSettings = JSON.parse(stored);
+    // Ensure storagePath is set to platform default if missing or empty
+    if (!loadedSettings.storagePath || loadedSettings.storagePath.trim() === "") {
+      loadedSettings.storagePath = platformDefaultPath;
+    }
     // Set the store, which ensures it is available globally
     settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading
@@ -1230,7 +1228,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="storage-path"
               bind:value={localSettings.storagePath}
-              placeholder="~/Chiral-Network-Storage"
+              placeholder="Platform-specific default path"
               class="flex-1"
             />
             <Button

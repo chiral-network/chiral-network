@@ -1966,6 +1966,8 @@ async fn run_dht_node(
                                 let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
                             }
                             Some(DhtCommand::DownloadFile(mut file_metadata, download_path)) =>{
+                                info!("🎬 DownloadFile command received for: {} to: {}", file_metadata.file_name, download_path);
+                                info!("🎬 file has cids: {:?}", file_metadata.cids);
                                 // Dual-lookup check: If the merkle_root is an info_hash, resolve it first.
                                 if file_metadata.merkle_root.starts_with("info_hash:") {
                                     let info_hash = file_metadata.merkle_root.clone();
@@ -3033,14 +3035,17 @@ async fn run_dht_node(
                                                     }
                                                 };
 
+                                                // Clone file_queries since it will be moved to ActiveDownload::new()
+                                                let file_queries_clone = file_queries.clone();
+
                                             // Create active download with memory-mapped file
-                                    match ActiveDownload::new(
-                                        metadata.clone(),
-                                        file_queries,
-                                        &download_path,
-                                        metadata.file_size,
-                                        chunk_offsets,
-                                    ) {
+                                            match ActiveDownload::new(
+                                                metadata.clone(),
+                                                file_queries_clone,
+                                                &download_path,
+                                                metadata.file_size,
+                                                chunk_offsets,
+                                            ) {
                                         Ok(active_download) => {
                                             let active_download = Arc::new(tokio::sync::Mutex::new(active_download));
 
@@ -3051,10 +3056,15 @@ async fn run_dht_node(
                                                 Arc::clone(&active_download),
                                             );
 
-                                            info!(
-                                                "Inserted into active_downloads map. Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
-                                                metadata.merkle_root, cids.len(), chunk_size
-                                            );
+                                                info!(
+                                                    "🎬 Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
+                                                    metadata.merkle_root, cids.len(), chunk_size
+                                                );
+
+                                                // Log the query mappings for debugging (clone again since it was moved)
+                                                for (qid, idx) in &file_queries {
+                                                    debug!("Query {:?} -> chunk {}", qid, idx);
+                                                }
                                         }
                                         Err(e) => {
                                             error!(
@@ -3080,10 +3090,11 @@ async fn run_dht_node(
                                             let mut active_downloads_guard = active_downloads.lock().await;
 
                                             let mut found = false;
-                                            for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
-                                                let mut active_download = active_download_lock.lock().await;
-                                                if let Some(chunk_index) = active_download.queries.remove(&query_id) {
-                                                    found = true;
+                                        for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
+                                            let mut active_download = active_download_lock.lock().await;
+                                            if let Some(chunk_index) = active_download.queries.remove(&query_id) {
+                                                info!("📦 Processing successful chunk {} for file {}", chunk_index, file_hash);
+                                                found = true;
 
                                                     // This query belongs to this file - write the chunk to disk
                                                     let offset = active_download.chunk_offsets
@@ -3140,14 +3151,20 @@ async fn run_dht_node(
                                                         file_hash
                                                     );
 
-                                                   // In the "all chunks downloaded" section:
-                                                    // In the "all chunks downloaded" section:
+                                                   // Check if download is complete after receiving this chunk
+        let queries_remaining = active_download.queries.len();
+        let received_count = active_download.received_chunks.lock().unwrap().len();
+        let total_expected = active_download.total_chunks as usize;
+
+        info!("File {} progress: {}/{} chunks received, {} queries remaining",
+              file_hash, received_count, total_expected, queries_remaining);
+
         if active_download.is_complete() {
+            info!("🎉 Download complete for file {}! Finalizing...", file_hash);
             // Flush and finalize the file
-            info!("Finalizing file...");
             match active_download.finalize() {
                 Ok(_) => {
-                    info!("Successfully finalized file");
+                    info!("Successfully finalized file {}", file_hash);
                 }
                 Err(e) => {
                     error!("Failed to finalize file {}: {}", file_hash, e);
@@ -3195,22 +3212,53 @@ async fn run_dht_node(
                                     // Handle Bitswap query error
                                     error!("❌ Bitswap query {:?} failed: {:?}", query_id, error);
 
-                                    // Clean up any active downloads that contain this failed query
+                                    // Check if any active downloads contain this failed query
                                     {
                                         let mut active_downloads_guard = active_downloads.lock().await;
-                                        let mut failed_files = Vec::new();
+                                        let mut completed_downloads = Vec::new();
 
                                         for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
-                                                let mut active_download = active_download_lock.lock().await;
+                                            let mut active_download = active_download_lock.lock().await;
                                             if active_download.queries.remove(&query_id).is_some() {
-                                                warn!("Query {:?} failed for file {}, removing from active downloads", query_id, file_hash);
-                                                failed_files.push(file_hash.clone());
+                                                warn!("❌ Query {:?} failed for file {}, but continuing with remaining chunks", query_id, file_hash);
+
+                                                // Check if download is still complete with remaining chunks
+                                                if active_download.is_complete() {
+                                                    info!("File {} completed despite failed chunk", file_hash);
+                                                    // Flush and finalize the file
+                                                    match active_download.finalize() {
+                                                        Ok(_) => {
+                                                            info!("Successfully finalized file {}", file_hash);
+                                                        }
+                                                        Err(e) => {
+                                                            error!("Failed to finalize file {}: {}", file_hash, e);
+                                                            continue;
+                                                        }
+                                                    }
+
+                                                    // Create completed metadata with the correct absolute path
+                                                    let mut completed_metadata = active_download.metadata.clone();
+                                                    completed_metadata.download_path = Some(
+                                                        active_download.final_file_path
+                                                            .to_string_lossy()
+                                                            .to_string()
+                                                    );
+                                                    completed_downloads.push(completed_metadata);
+                                                }
                                             }
                                         }
 
-                                        // Remove failed downloads from active downloads
-                                        for file_hash in failed_files {
-                                            active_downloads_guard.remove(&file_hash);
+                                        // Remove completed downloads from active downloads
+                                        for metadata in &completed_downloads {
+                                            active_downloads_guard.remove(&metadata.merkle_root);
+                                        }
+
+                                        // Send completion events for finished downloads
+                                        for metadata in completed_downloads {
+                                            info!("Emitting DownloadedFile event for: {} (after chunk failure)", metadata.merkle_root);
+                                            if let Err(e) = event_tx.send(DhtEvent::DownloadedFile(metadata)).await {
+                                                error!("Failed to send DownloadedFile event: {}", e);
+                                            }
                                         }
                                     }
 
@@ -3452,8 +3500,6 @@ async fn run_dht_node(
                                                 ed2k_sources: json_val.get("ed2k_sources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
                                             };
-                                            // Don't send FileDiscovered events for general discoveries to avoid interfering with searches
-// let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
                                         }
                                     }
                                 }
@@ -5759,12 +5805,18 @@ impl ActiveDownload {
     }
 
     fn is_complete(&self) -> bool {
-        self.queries.is_empty()
-            && self
-                .received_chunks
-                .lock()
-                .map(|chunks| chunks.len() == self.total_chunks as usize)
-                .unwrap_or(false)
+        let queries_empty = self.queries.is_empty();
+        let received_count = self.received_chunks.lock().unwrap().len();
+        let has_all_chunks = received_count == self.total_chunks as usize;
+        let complete = queries_empty && has_all_chunks;
+
+        if complete {
+            info!("🎉 Download completion check: queries_empty={}, received_chunks={}/{}, COMPLETE!", queries_empty, received_count, self.total_chunks);
+        } else {
+            debug!("Download progress check: queries_empty={}, received_chunks={}/{}", queries_empty, received_count, self.total_chunks);
+        }
+
+        complete
     }
 
     fn flush(&self) -> std::io::Result<()> {
@@ -6604,6 +6656,8 @@ impl DhtService {
         file_metadata: FileMetadata,
         download_path: String,
     ) -> Result<(), String> {
+        info!("📥 DhtService::download_file called for: {} to: {}", file_metadata.file_name, download_path);
+        info!("📥 file has {} seeders, cids present: {}", file_metadata.seeders.len(), file_metadata.cids.is_some());
         self.cmd_tx
             .send(DhtCommand::DownloadFile(file_metadata, download_path))
             .await

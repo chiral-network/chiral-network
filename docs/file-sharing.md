@@ -229,7 +229,7 @@ Control when files are seeded:
 
 Files are stored locally:
 
-- **Default location**: `~/ChiralNetwork/Storage`
+- **Default location**: Platform-specific (e.g., `~/.local/share/Chiral-Network-Storage` on Linux)
 - **Configurable path**: Change in Settings
 - **Storage limits**: Set maximum storage size
 - **Auto-cleanup**: Remove old files automatically

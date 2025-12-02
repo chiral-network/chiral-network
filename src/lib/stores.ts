@@ -691,7 +691,7 @@ export interface AppSettings {
 // Export the settings store
 // We initialize with a safe default structure. Settings.svelte will load/persist the actual state.
 export const settings = writable<AppSettings>({
-  storagePath: "~/Chiral-Network-Storage",
+  storagePath: "", // Will be set to platform-specific default at runtime
   maxStorageSize: 100,
   autoCleanup: true,
   cleanupThreshold: 90,

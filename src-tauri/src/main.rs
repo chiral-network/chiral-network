@@ -133,7 +133,7 @@ struct BackendSettings {
 impl Default for BackendSettings {
     fn default() -> Self {
         Self {
-            storage_path: "~/ChiralNetwork/Storage".to_string(),
+            storage_path: "".to_string(), // Will be set to platform-specific default
             enable_file_logging: false,
             max_log_size_mb: 10,
         }
@@ -159,8 +159,13 @@ fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
                         let storage_path = json
                             .get("storagePath")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("~/ChiralNetwork/Storage")
-                            .to_string();
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| {
+                                // Use platform-specific default if not set
+                                get_default_storage_path(app_handle.clone())
+                                    .unwrap_or_else(|_| "~/.local/share/Chiral-Network-Storage".to_string())
+                            });
                         let enable_file_logging = json
                             .get("enableFileLogging")
                             .and_then(|v| v.as_bool())
@@ -4220,15 +4225,19 @@ async fn download_blocks_from_network(
     file_metadata: FileMetadata,
     download_path: String,
 ) -> Result<(), String> {
+    info!("🔽 download_blocks_from_network called for file: {} to path: {}", file_metadata.file_name, download_path);
+    info!("🔽 file has {} seeders, cids: {:?}", file_metadata.seeders.len(), file_metadata.cids);
+
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
     if let Some(dht) = dht {
-        info!("calling dht download_file");
+        info!("🔽 DHT node is running, calling dht.download_file");
         dht.download_file(file_metadata, download_path).await
     } else {
+        error!("🔽 DHT node is not running!");
         Err("DHT node is not running".to_string())
     }
 }
