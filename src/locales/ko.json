@@ -1,4 +1,8 @@
 {
+  "common": {
+    "or": "또는",
+    "cancel": "취소"
+  },
   "settings.title": "설정",
   "settings.subtitle": "Chiral Network 환경을 구성하세요.",
   "settings.diagnostics.title": "진단",
@@ -408,7 +412,30 @@
   },
   "account": {
     "title": "계정",
-    "subtitle": "지갑과 계정 설정을 관리하세요"
+    "subtitle": "지갑과 계정 설정을 관리하세요",
+    "firstRun": {
+      "welcome": "Chiral Network에 오신 것을 환영합니다!",
+      "description": "채굴을 시작하고 보상을 받으려면 지갑 계정을 만들어야 합니다.",
+      "whyAccount": "왜 계정이 필요한가요?",
+      "reason1": "지갑으로 채굴 보상 받기",
+      "reason2": "암호화된 복구 문구로 자금 보호",
+      "reason3": "네트워크의 다른 사용자에게 코인 전송",
+      "createWallet": "새 지갑 만들기",
+      "importPrivateKey": "기존 지갑 가져오기",
+      "requiresWallet": "채굴, 보상 획득 및 Chiral 전송에는 지갑이 필요합니다. 복구 문구는 다음 단계에서 생성됩니다.",
+      "accountCreated": "지갑이 성공적으로 생성되었습니다! 이제 채굴을 시작할 수 있습니다.",
+      "error": "계정 생성에 실패했습니다. 다시 시도해 주세요."
+    },
+    "privateKeyImport": {
+      "title": "개인 키로 지갑 가져오기",
+      "description": "개인 키를 입력하여 기존 지갑에 대한 액세스를 복원하세요.",
+      "privateKeyLabel": "개인 키",
+      "privateKeyPlaceholder": "0x... 또는 64자리 16진수",
+      "hint": "개인 키는 64자리 16진수여야 합니다(0x 접두사 포함 또는 미포함).",
+      "warning": "개인 키를 절대 누구와도 공유하지 마세요. 개인 키에 액세스할 수 있는 사람은 누구나 자금에 액세스할 수 있습니다.",
+      "import": "지갑 가져오기",
+      "importing": "가져오는 중..."
+    }
   },
   "wallet": {
     "title": "카이럴 네트워크 지갑",
@@ -1497,8 +1524,11 @@
         "keystoreError": "Keystore save failed: {error}"
       },
       "mnemonic": {
-        "ready": "Wallet ready",
-        "copied": "Recovery phrase copied to clipboard"
+        "ready": "지갑 준비 완료",
+        "copied": "복구 문구가 클립보드에 복사되었습니다"
+      },
+      "privateKey": {
+        "imported": "지갑을 성공적으로 가져왔습니다!"
       },
       "transaction": {
         "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",

@@ -1,4 +1,8 @@
 {
+  "common": {
+    "or": "ou",
+    "cancel": "Cancelar"
+  },
   "settings.title": "Configurações",
   "settings.subtitle": "Configure suas preferências da Rede Chiral",
   "settings.autorelay.enable": "Ativar AutoRelay (Circuit Relay v2)",
@@ -520,9 +524,20 @@
       "reason2": "Proteger seus fundos com frase de recuperação criptografada",
       "reason3": "Transferir moedas para outros usuários na rede",
       "createWallet": "Criar Nova Carteira",
+      "importPrivateKey": "Importar Carteira Existente",
       "requiresWallet": "Uma carteira é necessária para minerar, ganhar recompensas e transferir Chiral. Sua frase de recuperação será gerada na próxima etapa.",
       "accountCreated": "Carteira criada com sucesso! Você pode começar a minerar agora.",
       "error": "Falha ao criar conta. Por favor, tente novamente."
+    },
+    "privateKeyImport": {
+      "title": "Importar Carteira com Chave Privada",
+      "description": "Digite sua chave privada para restaurar o acesso à sua carteira existente.",
+      "privateKeyLabel": "Chave Privada",
+      "privateKeyPlaceholder": "0x... ou 64 caracteres hexadecimais",
+      "hint": "Sua chave privada deve ter 64 caracteres hexadecimais (com ou sem o prefixo 0x).",
+      "warning": "Nunca compartilhe sua chave privada com ninguém. Qualquer pessoa com acesso à sua chave privada pode acessar seus fundos.",
+      "import": "Importar Carteira",
+      "importing": "Importando..."
     }
   },
   "wallet": {
@@ -1632,8 +1647,11 @@
         "keystoreError": "Keystore save failed: {error}"
       },
       "mnemonic": {
-        "ready": "Wallet ready",
-        "copied": "Recovery phrase copied to clipboard"
+        "ready": "Carteira pronta",
+        "copied": "Frase de recuperação copiada para a área de transferência"
+      },
+      "privateKey": {
+        "imported": "Carteira importada com sucesso!"
       },
       "transaction": {
         "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",

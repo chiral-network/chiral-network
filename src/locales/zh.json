@@ -1,4 +1,8 @@
 {
+  "common": {
+    "or": "或",
+    "cancel": "取消"
+  },
   "settings.title": "设置",
   "settings.subtitle": "配置你的Chiral网络偏好",
   "settings.diagnostics.title": "诊断",
@@ -408,7 +412,30 @@
   },
   "account": {
     "title": "账户",
-    "subtitle": "管理你的钱包和账户设置"
+    "subtitle": "管理你的钱包和账户设置",
+    "firstRun": {
+      "welcome": "欢迎来到 Chiral Network！",
+      "description": "要开始挖矿并赚取奖励，您需要创建一个钱包账户。",
+      "whyAccount": "为什么我需要一个账户？",
+      "reason1": "接收挖矿奖励到您的钱包",
+      "reason2": "使用加密的恢复短语保护您的资金",
+      "reason3": "向网络上的其他用户转账",
+      "createWallet": "创建新钱包",
+      "importPrivateKey": "导入现有钱包",
+      "requiresWallet": "需要钱包才能挖矿、赚取奖励和转账 Chiral。您的恢复短语将在下一步生成。",
+      "accountCreated": "钱包创建成功！您现在可以开始挖矿了。",
+      "error": "创建账户失败。请重试。"
+    },
+    "privateKeyImport": {
+      "title": "使用私钥导入钱包",
+      "description": "输入您的私钥以恢复对现有钱包的访问。",
+      "privateKeyLabel": "私钥",
+      "privateKeyPlaceholder": "0x... 或 64 个十六进制字符",
+      "hint": "您的私钥应该是 64 个十六进制字符（带或不带 0x 前缀）。",
+      "warning": "永远不要与任何人分享您的私钥。任何拥有您私钥访问权限的人都可以访问您的资金。",
+      "import": "导入钱包",
+      "importing": "正在导入..."
+    }
   },
   "wallet": {
     "title": "Chiral网络钱包",
@@ -1526,8 +1553,11 @@
         "keystoreError": "Keystore save failed: {error}"
       },
       "mnemonic": {
-        "ready": "Wallet ready",
-        "copied": "Recovery phrase copied to clipboard"
+        "ready": "钱包已就绪",
+        "copied": "恢复短语已复制到剪贴板"
+      },
+      "privateKey": {
+        "imported": "钱包导入成功！"
       },
       "transaction": {
         "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",

@@ -1,4 +1,8 @@
 {
+  "common": {
+    "or": "ou",
+    "cancel": "Annuler"
+  },
   "settings.title": "Paramètres",
   "settings.subtitle": "Configurez vos préférences du réseau Chiral",
   "settings.autorelay.enable": "Activer AutoRelay (Circuit Relay v2)",
@@ -527,14 +531,25 @@
     "firstRun": {
       "welcome": "Bienvenue sur le réseau Chiral !",
       "description": "Pour commencer le minage et gagner des récompenses, vous devez créer un portefeuille.",
-      "whyAccount": "Pourquoi ai-je besoin d’un compte ?",
+      "whyAccount": "Pourquoi ai-je besoin d'un compte ?",
       "reason1": "Recevoir les récompenses de minage sur votre portefeuille",
       "reason2": "Sécuriser vos fonds avec une phrase de récupération chiffrée",
-      "reason3": "Transférer des pièces à d’autres utilisateurs du réseau",
+      "reason3": "Transférer des pièces à d'autres utilisateurs du réseau",
       "createWallet": "Créer un nouveau portefeuille",
-      "requiresWallet": "Un portefeuille est nécessaire pour miner, gagner des récompenses et transférer du Chiral. Votre phrase de récupération sera générée à l’étape suivante.",
+      "importPrivateKey": "Importer un portefeuille existant",
+      "requiresWallet": "Un portefeuille est nécessaire pour miner, gagner des récompenses et transférer du Chiral. Votre phrase de récupération sera générée à l'étape suivante.",
       "accountCreated": "Portefeuille créé avec succès ! Vous pouvez maintenant commencer le minage.",
       "error": "Échec de la création du compte. Veuillez réessayer."
+    },
+    "privateKeyImport": {
+      "title": "Importer un portefeuille avec une clé privée",
+      "description": "Entrez votre clé privée pour restaurer l'accès à votre portefeuille existant.",
+      "privateKeyLabel": "Clé privée",
+      "privateKeyPlaceholder": "0x... ou 64 caractères hexadécimaux",
+      "hint": "Votre clé privée doit comporter 64 caractères hexadécimaux (avec ou sans le préfixe 0x).",
+      "warning": "Ne partagez jamais votre clé privée avec qui que ce soit. Toute personne ayant accès à votre clé privée peut accéder à vos fonds.",
+      "import": "Importer le portefeuille",
+      "importing": "Importation..."
     }
   },
   "wallet": {
@@ -1645,6 +1660,9 @@
       "mnemonic": {
         "ready": "Portefeuille prêt",
         "copied": "Phrase de récupération copiée dans le presse-papiers"
+      },
+      "privateKey": {
+        "imported": "Portefeuille importé avec succès !"
       },
       "transaction": {
         "confirmed": "Transaction confirmée ! {amount} CN envoyés à {address}... (Bloc {block})",
