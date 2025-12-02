@@ -1,4 +1,8 @@
 {
+  "common": {
+    "or": "or",
+    "cancel": "Cancel"
+  },
   "settings.title": "Settings",
   "settings.subtitle": "Configure your Chiral Network preferences",
   "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
@@ -544,9 +548,20 @@
       "reason2": "Secure your funds with encrypted recovery phrase",
       "reason3": "Transfer coins to other users on the network",
       "createWallet": "Create New Wallet",
+      "importPrivateKey": "Import Existing Wallet",
       "requiresWallet": "A wallet is required to mine, earn rewards, and transfer Chiral. Your recovery phrase will be generated in the next step.",
       "accountCreated": "Wallet created successfully! You can now start mining.",
       "error": "Failed to create account. Please try again."
+    },
+    "privateKeyImport": {
+      "title": "Import Wallet with Private Key",
+      "description": "Enter your private key to restore access to your existing wallet.",
+      "privateKeyLabel": "Private Key",
+      "privateKeyPlaceholder": "0x... or 64 hex characters",
+      "hint": "Your private key should be 64 hexadecimal characters (with or without 0x prefix).",
+      "warning": "Never share your private key with anyone. Anyone with access to your private key can access your funds.",
+      "import": "Import Wallet",
+      "importing": "Importing..."
     }
   },
   "wallet": {
@@ -1663,6 +1678,9 @@
       "mnemonic": {
         "ready": "Wallet ready",
         "copied": "Recovery phrase copied to clipboard"
+      },
+      "privateKey": {
+        "imported": "Wallet imported successfully!"
       },
       "transaction": {
         "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",

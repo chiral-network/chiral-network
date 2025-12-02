@@ -1,4 +1,8 @@
 {
+  "common": {
+    "or": "o",
+    "cancel": "Cancelar"
+  },
   "settings.title": "Configuración",
   "settings.subtitle": "Configura tus preferencias de la Red Chiral",
   "settings.diagnostics.title": "Diagnóstico",
@@ -408,7 +412,30 @@
   },
   "account": {
     "title": "Cuenta",
-    "subtitle": "Gestiona tu monedero y la configuración de tu cuenta"
+    "subtitle": "Gestiona tu monedero y la configuración de tu cuenta",
+    "firstRun": {
+      "welcome": "¡Bienvenido a Chiral Network!",
+      "description": "Para comenzar a minar y ganar recompensas, necesitarás crear una cuenta de billetera.",
+      "whyAccount": "¿Por qué necesito una cuenta?",
+      "reason1": "Recibe recompensas de minería en tu billetera",
+      "reason2": "Asegura tus fondos con una frase de recuperación cifrada",
+      "reason3": "Transfiere monedas a otros usuarios en la red",
+      "createWallet": "Crear Nueva Billetera",
+      "importPrivateKey": "Importar Billetera Existente",
+      "requiresWallet": "Se requiere una billetera para minar, ganar recompensas y transferir Chiral. Tu frase de recuperación se generará en el siguiente paso.",
+      "accountCreated": "¡Billetera creada con éxito! Ahora puedes comenzar a minar.",
+      "error": "Error al crear la cuenta. Inténtalo de nuevo."
+    },
+    "privateKeyImport": {
+      "title": "Importar Billetera con Clave Privada",
+      "description": "Ingresa tu clave privada para restaurar el acceso a tu billetera existente.",
+      "privateKeyLabel": "Clave Privada",
+      "privateKeyPlaceholder": "0x... o 64 caracteres hexadecimales",
+      "hint": "Tu clave privada debe tener 64 caracteres hexadecimales (con o sin prefijo 0x).",
+      "warning": "Nunca compartas tu clave privada con nadie. Cualquiera con acceso a tu clave privada puede acceder a tus fondos.",
+      "import": "Importar Billetera",
+      "importing": "Importando..."
+    }
   },
   "wallet": {
     "title": "Billetera de la Red Chiral",
@@ -1510,8 +1537,11 @@
         "keystoreError": "Keystore save failed: {error}"
       },
       "mnemonic": {
-        "ready": "Wallet ready",
-        "copied": "Recovery phrase copied to clipboard"
+        "ready": "Billetera lista",
+        "copied": "Frase de recuperación copiada al portapapeles"
+      },
+      "privateKey": {
+        "imported": "¡Billetera importada con éxito!"
       },
       "transaction": {
         "confirmed": "Transaction confirmed! {amount} CN sent to {address}... (Block {block})",
