@@ -103,7 +103,8 @@
     shareAnalytics: true,
     enableWalletAutoLock: false,
     customBootstrapNodes: [],
-    autoStartDHT: false,
+    autoStartDHT: true, // Auto-start DHT by default
+    autoStartGeth: false, // Don't auto-start Geth by default
 
     // Notifications
     enableNotifications: true,
@@ -1465,15 +1466,36 @@ function sectionMatches(section: string, query: string) {
             </Label>
           </div>
 
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="auto-start-dht"
-              bind:checked={localSettings.autoStartDHT}
-            />
-            <Label for="auto-start-dht" class="cursor-pointer">
-              Auto-start DHT on launch
-            </Label>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-start-dht"
+                bind:checked={localSettings.autoStartDHT}
+              />
+              <Label for="auto-start-dht" class="cursor-pointer">
+                {$t("network.autoStartNode")}
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              {$t("network.autoStartNodeDescription")}
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-start-geth"
+                bind:checked={localSettings.autoStartGeth}
+              />
+              <Label for="auto-start-geth" class="cursor-pointer">
+                {$t("network.autoStartGeth")}
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              {$t("network.autoStartGethDescription")}
+            </p>
           </div>
 
         </div>
