@@ -131,7 +131,7 @@ fn test_file_metadata_with_ed2k_sources() {
         trackers: None,
         is_root: true,
         download_path: None,
-        price: None,
+        price: 0.0,
         uploader_address: None,
         ed2k_sources: Some(vec![ed2k_info]), 
     };
@@ -179,7 +179,7 @@ fn test_multiple_ed2k_sources() {
         trackers: None,
         is_root: true,
         download_path: None,
-        price: None,
+        price: 0.0,
         uploader_address: None,
         ed2k_sources: Some(vec![ed2k_info1, ed2k_info2]),
     };
@@ -198,7 +198,7 @@ fn test_empty_none_source_lists() {
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
         parent_hash: None, cids: None, encrypted_key_bundle: None,
         ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
-        download_path: None, price: None, uploader_address: None,
+        download_path: None, price: 0.0, uploader_address: None,
     };
     let metadata_none = FileMetadata {
         merkle_root: "merkle_root_hash".to_string(),
@@ -207,7 +207,7 @@ fn test_empty_none_source_lists() {
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
         parent_hash: None, cids: None, encrypted_key_bundle: None,
         ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
-        download_path: None, price: None, uploader_address: None,
+        download_path: None, price: 0.0, uploader_address: None,
     };
     let json_empty = serde_json::to_string(&metadata_empty).unwrap();
     assert!(json_empty.contains("\"ed2kSources\":[]"));
@@ -265,7 +265,7 @@ fn test_dht_storage_round_trip() {
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
         parent_hash: None, cids: None, encrypted_key_bundle: None,
         ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
-        download_path: None, price: None, uploader_address: None,
+        download_path: None, price: 0.0, uploader_address: None,
     };
 
     let json_data = serde_json::to_vec(&metadata_in).unwrap();
