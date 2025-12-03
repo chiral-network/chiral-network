@@ -1366,7 +1366,6 @@
                               class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
                               title={`Average price across ${coalescedFile.protocols.length} protocol${coalescedFile.protocols.length > 1 ? 's' : ''}`}
                             >
-                              <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
                                 >{coalescedFile.averagePrice.toFixed(4)} Chiral</span
                               >
