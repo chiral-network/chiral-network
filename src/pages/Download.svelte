@@ -1350,28 +1350,6 @@ async function loadAndResumeDownloads() {
       return;
     }
 
-
-    // ✅ ADD SEEDING CONFIRMATION
-  const userConfirmed = confirm(
-    `Download "${downloadingFile.name}"?\n\n` +
-    `You will automatically become a seeder for this file after downloading.\n\n` +
-    `This means:\n` +
-    `• The file will be shared with other users\n` +
-    `• You can stop seeding anytime from the Uploads page\n\n` +
-    `Continue with download?`
-  );
-
-  if (!userConfirmed) {
-    console.log('User cancelled download');
-    files.update(f => f.map(file =>
-      file.id === downloadingFile.id
-        ? { ...file, status: 'idle' }
-        : file
-    ));
-    return;
-  }
-
-
     // Construct full file path: directory + filename
     const fullPath = await join(storagePath, downloadingFile.name);
     
