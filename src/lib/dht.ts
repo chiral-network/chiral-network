@@ -234,16 +234,25 @@ export class DhtService {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
           (event) => {
-            console.log('🔍 DEBUG DHT.TS: Received published_file event:', event);
+            console.log(
+              "🔍 DEBUG DHT.TS: Received published_file event:",
+              event
+            );
             const metadata = event.payload;
-            console.log('🔍 DEBUG DHT.TS: event.payload.seeders =', metadata.seeders);
+            console.log(
+              "🔍 DEBUG DHT.TS: event.payload.seeders =",
+              metadata.seeders
+            );
             if (!metadata.merkleRoot && metadata.fileHash) {
               metadata.merkleRoot = metadata.fileHash;
             }
             if (!metadata.fileHash && metadata.merkleRoot) {
               metadata.fileHash = metadata.merkleRoot;
             }
-            console.log('🔍 DEBUG DHT.TS: Resolving with metadata.seeders =', metadata.seeders);
+            console.log(
+              "🔍 DEBUG DHT.TS: Resolving with metadata.seeders =",
+              metadata.seeders
+            );
             // Clear timeout on success
             if (timeoutId) clearTimeout(timeoutId);
             resolve(metadata);
@@ -281,9 +290,7 @@ export class DhtService {
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
-      console.log("Initiating download for file:", fileMetadata.fileHash);
-
-      // Use the downloadPath from metadata if provided, otherwise fall back to settings
+      // Use the download path from metadata (must be provided by caller)
       let resolvedStoragePath: string;
 
       if (fileMetadata.downloadPath) {
@@ -308,9 +315,6 @@ export class DhtService {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           async (event) => {
-            console.log("Received file content event:", event.payload);
-            console.log(`File saved to: ${resolvedStoragePath}`);
-
             resolve(event.payload);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
@@ -342,23 +346,24 @@ export class DhtService {
           : fileMetadata.cids[0] === fileMetadata.merkleRoot ||
             fileMetadata.cids.length === 1;
 
-      console.log("Prepared file metadata for Bitswap download:", fileMetadata);
-      console.log("Calling download_blocks_from_network with:", fileMetadata);
-
-      // Trigger the backend download AFTER setting up the listener
-      await invoke("download_blocks_from_network", {
-        fileMetadata,
-        downloadPath: resolvedStoragePath,
-      });
-
-      console.log(
-        "Backend download initiated, waiting for file_content event..."
-      );
+      try {
+        // Trigger the backend download AFTER setting up the listener
+        await invoke("download_blocks_from_network", {
+          fileMetadata,
+          downloadPath: resolvedStoragePath,
+        });
+      } catch (error) {
+        console.error(
+          "🔽 Frontend: download_blocks_from_network invoke failed:",
+          error
+        );
+        throw error;
+      }
 
       // Wait until the event arrives
       return await metadataPromise;
     } catch (error) {
-      console.error("Failed to download file:", error);
+      console.error("🔽 Frontend: Failed to download file:", error);
       throw error;
     }
   }
@@ -433,11 +438,14 @@ export class DhtService {
 
   async getSeedersForFile(fileHash: string): Promise<string[]> {
     try {
-      console.log('🔍 DEBUG DHT.TS: getSeedersForFile called with hash =', fileHash);
+      console.log(
+        "🔍 DEBUG DHT.TS: getSeedersForFile called with hash =",
+        fileHash
+      );
       const seeders = await invoke<string[]>("get_file_seeders", {
         fileHash,
       });
-      console.log('🔍 DEBUG DHT.TS: getSeedersForFile returned =', seeders);
+      console.log("🔍 DEBUG DHT.TS: getSeedersForFile returned =", seeders);
       return Array.isArray(seeders) ? seeders : [];
     } catch (error) {
       console.error("Failed to fetch seeders:", error);
@@ -537,7 +545,9 @@ export class DhtService {
           // Always update seeders with the current live list from DHT provider query
           // This ensures we don't use stale seeders from the cached metadata
           metadata.seeders = seeders;
-          console.log(`🔍 DEBUG DHT.TS: Updated metadata.seeders to current live list (${seeders.length} seeders)`);
+          console.log(
+            `🔍 DEBUG DHT.TS: Updated metadata.seeders to current live list (${seeders.length} seeders)`
+          );
         }
       }
       return metadata;

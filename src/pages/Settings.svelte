@@ -51,6 +51,9 @@
   let notificationsSectionOpen = false;
   let diagnosticsSectionOpen = false;
 
+  // Dynamic placeholder for storage path
+  let storagePathPlaceholder = "Select download directory";
+
   const ACCORDION_STORAGE_KEY = "settingsAccordionState";
 
   type AccordionState = {
@@ -70,7 +73,7 @@
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
-    storagePath: "", // Will be set dynamically from backend
+    storagePath: "", // Will be set to platform-specific default at runtime
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
@@ -142,9 +145,6 @@
     message: string;
     type: "success" | "error";
   } | null = null;
-
-  // Dynamic placeholder for storage path
-  let storagePathPlaceholder = "Select download directory";
 
   // Diagnostics state
   type DiagStatus = "pass" | "fail" | "warn";
@@ -907,6 +907,10 @@
     if (stored) {
   try {
     const loadedSettings: AppSettings = JSON.parse(stored);
+    // Ensure storagePath is set to default if missing or empty
+    if (!loadedSettings.storagePath || loadedSettings.storagePath.trim() === "") {
+      loadedSettings.storagePath = defaultSettings.storagePath;
+    }
     // Set the store, which ensures it is available globally
     settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading

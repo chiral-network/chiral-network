@@ -167,40 +167,6 @@
   let recipientPublicKey = "";
   let showEncryptionOptions = false;
 
-  // Calculate price using dynamic network metrics with safe fallbacks
-  async function uploadFileStreamingToDisk(file: File) {
-    const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-    try {
-      // Create a temporary file path for streaming upload to disk
-      const tempFilePath = await invoke<string>("create_temp_file_for_streaming", {
-        fileName: file.name,
-      });
-
-      // Stream file to disk in chunks
-      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-        const start = chunkIndex * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        const chunk = file.slice(start, end);
-
-        const buffer = await chunk.arrayBuffer();
-        const chunkData = Array.from(new Uint8Array(buffer));
-
-        // Append chunk to temp file
-        await invoke("append_chunk_to_temp_file", {
-          tempFilePath,
-          chunkData,
-        });
-      }
-
-      return tempFilePath;
-    } catch (error) {
-      console.error("Streaming upload to disk failed:", error);
-      throw error;
-    }
-  }
-
   async function calculateFilePrice(sizeInBytes: number): Promise<number> {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
 
@@ -764,7 +730,7 @@
 
         // Construct protocol-specific hash for display
         let protocolHash = metadata.merkleRoot || "";
-        if (selectedProtocol === "BitTorrent" && metadata.infoHash) {
+        if ((selectedProtocol as "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP") === "BitTorrent" && metadata.infoHash) {
           // Construct magnet link for BitTorrent
           const trackers = metadata.trackers ? metadata.trackers.join('&tr=') : 'udp://tracker.openbittorrent.com:80';
           protocolHash = `magnet:?xt=urn:btih:${metadata.infoHash}&tr=${trackers}`;
