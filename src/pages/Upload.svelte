@@ -993,7 +993,7 @@
 
         // Construct protocol-specific hash for display
         let protocolHash = metadata.merkleRoot || "";
-        if (selectedProtocol === "BitTorrent" && metadata.infoHash) {
+        if ((selectedProtocol as "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP") === "BitTorrent" && metadata.infoHash) {
           // Construct magnet link for BitTorrent
           const trackers = metadata.trackers ? metadata.trackers.join('&tr=') : 'udp://tracker.openbittorrent.com:80';
           protocolHash = `magnet:?xt=urn:btih:${metadata.infoHash}&tr=${trackers}`;

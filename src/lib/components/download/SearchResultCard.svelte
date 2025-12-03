@@ -119,7 +119,7 @@
     });
   }
 
-  function copySeeder(address: string, index: number) {
+  function copySeeder(address: string, _index: number) {
     navigator.clipboard.writeText(address).then(() => {
       dispatch('copy', address);
     });

@@ -396,6 +396,9 @@ struct AppState {
     // BitTorrent handler for creating and seeding torrents
     bittorrent_handler: Arc<bittorrent_handler::BitTorrentHandler>,
 
+    // Chunk manager for file chunking operations
+    chunk_manager: Mutex<Option<Arc<ChunkManager>>>,
+
     // Download restart service for pause/resume functionality
     download_restart: Mutex<Option<Arc<download_restart::DownloadRestartService>>>,
 }
@@ -1479,7 +1482,7 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
-        Some(chunk_manager), // Pass the chunk manager
+        Some(chunk_manager.clone()), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
@@ -1736,6 +1739,12 @@ async fn start_dht_node(
     {
         let mut dht_guard = state.dht.lock().await;
         *dht_guard = Some(dht_arc.clone());
+    }
+
+    // Store chunk manager in AppState
+    {
+        let mut chunk_guard = state.chunk_manager.lock().await;
+        *chunk_guard = Some(chunk_manager.clone());
     }
 
     // Also attach DHT to HTTP server state for provider-side metrics
@@ -3373,14 +3382,23 @@ async fn start_file_transfer_service(
     if let Some(dht_service) = dht_arc {
         // Create transfer event bus for unified event emission
         let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
+        // Get chunk manager from AppState
+        let chunk_manager_arc = {
+            let chunk_guard = state.chunk_manager.lock().await;
+            chunk_guard.as_ref().cloned()
+        };
+
+        let chunk_manager = chunk_manager_arc.ok_or_else(|| "Chunk manager not initialized".to_string())?;
+
         let multi_source_service = MultiSourceDownloadService::new(
             dht_service,
             webrtc_arc.clone(),
             state.bittorrent_handler.clone(),
             transfer_event_bus,
             state.analytics.clone(),
+            chunk_manager,
         );
-        let multi_source_arc = Arc::new(multi_source_service);
+        let multi_source_arc                                                                                                                                                                                                             = Arc::new(multi_source_service);
 
         {
             let mut multi_source_guard = state.multi_source_download.lock().await;
@@ -3659,6 +3677,7 @@ async fn upload_file_to_network(
                                 file_name: Some(original_file_name.clone()),
                                 sources: None,
                                 timeout: None,
+                                chunk_hashes: None,
                             }]),
                             download_path: None,
                         };
@@ -7096,6 +7115,9 @@ fn main() {
 
             // BitTorrent handler for creating and seeding torrents
             bittorrent_handler: bittorrent_handler_arc,
+
+            // Chunk manager (will be initialized when DHT starts)
+            chunk_manager: Mutex::new(None),
 
             // Download restart service (will be initialized in setup)
             download_restart: Mutex::new(None),
