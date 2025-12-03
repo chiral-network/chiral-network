@@ -1,9 +1,10 @@
-/**
- * Chunk Scheduler for multi-source downloads
- * 
- * Manages which chunks to request from which peers, handles timeouts,
- * reassignment, and coordinates with reassembly state.
- */
+// TypeScript shim for the Rust chunk scheduler (frontend-only)
+// Purpose: keep the frontend as a thin API layer. 
+// All core scheduling logic runs in`src-tauri/src/chunk_scheduler.rs` . 
+// The shim provides typed wrappers around
+// Tauri commands so UI code can interact with the scheduler.
+
+import { invoke } from '@tauri-apps/api/tauri';
 
 export interface ChunkRequest {
   chunkIndex: number;
@@ -30,231 +31,56 @@ export interface SchedulerConfig {
 }
 
 export interface ChunkManifest {
-  chunks: Array<{
-    index: number;
-    size: number;
-    checksum?: string;
-  }>;
+  chunks: Array<{ index: number; size: number; checksum?: string }>;
 }
 
 export enum ChunkState {
-  UNREQUESTED = "UNREQUESTED",
-  REQUESTED = "REQUESTED", 
-  RECEIVED = "RECEIVED",
-  CORRUPTED = "CORRUPTED",
+  UNREQUESTED = 'UNREQUESTED',
+  REQUESTED = 'REQUESTED',
+  RECEIVED = 'RECEIVED',
+  CORRUPTED = 'CORRUPTED',
 }
 
-export class ChunkScheduler {
-  private config: SchedulerConfig;
-  private peers = new Map<string, PeerInfo>();
-  private activeRequests = new Map<number, ChunkRequest>();
-  private chunkStates: ChunkState[] = [];
-  private retryCount = new Map<number, number>();
+export async function initScheduler(manifest: ChunkManifest): Promise<void> {
+  await invoke('init_scheduler', { manifest });
+}
 
-  constructor(config: Partial<SchedulerConfig> = {}) {
-    this.config = {
-      maxConcurrentPerPeer: 3,
-      chunkTimeoutMs: 30000,
-      maxRetries: 3,
-      peerSelectionStrategy: 'load-balanced',
-      ...config,
-    };
-  }
+export async function addPeer(peerId: string, maxConcurrent?: number): Promise<void> {
+  await invoke('add_peer', { peerId, maxConcurrent });
+}
 
-  initScheduler(manifest: ChunkManifest): void {
-    this.chunkStates = manifest.chunks.map(() => ChunkState.UNREQUESTED);
-    this.activeRequests.clear();
-    this.retryCount.clear();
-  }
+export async function removePeer(peerId: string): Promise<void> {
+  await invoke('remove_peer', { peerId });
+}
 
-  addPeer(peerId: string, maxConcurrent?: number): void {
-    this.peers.set(peerId, {
-      peerId,
-      available: true,
-      lastSeen: Date.now(),
-      pendingRequests: 0,
-      maxConcurrent: maxConcurrent ?? this.config.maxConcurrentPerPeer,
-      avgResponseTime: 1000, // initial estimate
-      failureCount: 0,
-    });
-  }
+export async function updatePeerHealth(peerId: string, available: boolean, responseTimeMs?: number): Promise<void> {
+  await invoke('update_peer_health', { peerId, available, responseTimeMs });
+}
 
-  removePeer(peerId: string): void {
-    // Cancel all active requests from this peer
-    for (const [chunkIndex, request] of this.activeRequests.entries()) {
-      if (request.peerId === peerId) {
-        this.activeRequests.delete(chunkIndex);
-        this.chunkStates[chunkIndex] = ChunkState.UNREQUESTED;
-      }
-    }
-    this.peers.delete(peerId);
-  }
+export async function onChunkReceived(chunkIndex: number): Promise<void> {
+  await invoke('on_chunk_received', { chunkIndex });
+}
 
-  updatePeerHealth(peerId: string, available: boolean, responseTimeMs?: number): void {
-    const peer = this.peers.get(peerId);
-    if (!peer) return;
+export async function onChunkFailed(chunkIndex: number, markCorrupted = false): Promise<void> {
+  await invoke('on_chunk_failed', { chunkIndex, markCorrupted });
+}
 
-    peer.available = available;
-    peer.lastSeen = Date.now();
-    
-    if (responseTimeMs !== undefined) {
-      // Exponential moving average
-      peer.avgResponseTime = peer.avgResponseTime * 0.8 + responseTimeMs * 0.2;
-    }
+export async function getNextRequests(maxRequests = 10): Promise<ChunkRequest[]> {
+  return (await invoke('get_next_requests', { maxRequests })) as ChunkRequest[];
+}
 
-    if (!available) {
-      peer.failureCount += 1;
-    }
-  }
+export async function getSchedulerState(): Promise<any> {
+  return await invoke('get_scheduler_state');
+}
 
-  onChunkReceived(chunkIndex: number): void {
-    const request = this.activeRequests.get(chunkIndex);
-    if (request) {
-      const peer = this.peers.get(request.peerId);
-      if (peer) {
-        peer.pendingRequests = Math.max(0, peer.pendingRequests - 1);
-        const responseTime = Date.now() - request.requestedAt;
-        this.updatePeerHealth(request.peerId, true, responseTime);
-      }
-      this.activeRequests.delete(chunkIndex);
-    }
-    this.chunkStates[chunkIndex] = ChunkState.RECEIVED;
-  }
+export async function isComplete(): Promise<boolean> {
+  return (await invoke('is_complete')) as boolean;
+}
 
-  onChunkFailed(chunkIndex: number, markCorrupted = false): void {
-    const request = this.activeRequests.get(chunkIndex);
-    if (request) {
-      const peer = this.peers.get(request.peerId);
-      if (peer) {
-        peer.pendingRequests = Math.max(0, peer.pendingRequests - 1);
-        peer.failureCount += 1;
-      }
-      this.activeRequests.delete(chunkIndex);
-    }
+export async function getActiveRequests(): Promise<ChunkRequest[]> {
+  return (await invoke('get_active_requests')) as ChunkRequest[];
+}
 
-    if (markCorrupted) {
-      this.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
-    } else {
-      this.chunkStates[chunkIndex] = ChunkState.UNREQUESTED;
-    }
-
-    // Increment retry count
-    const retries = this.retryCount.get(chunkIndex) || 0;
-    this.retryCount.set(chunkIndex, retries + 1);
-  }
-
-  getNextRequests(maxRequests = 10): ChunkRequest[] {
-    const requests: ChunkRequest[] = [];
-    const now = Date.now();
-
-    // Handle timeouts first
-    this.handleTimeouts(now);
-
-    // Get available peers sorted by selection strategy
-    const availablePeers = this.getAvailablePeers();
-    if (availablePeers.length === 0) return requests;
-
-    // Find chunks that need requesting
-    const chunksToRequest = this.getChunksToRequest(maxRequests);
-    
-    let peerIndex = 0;
-    for (const chunkIndex of chunksToRequest) {
-      if (requests.length >= maxRequests) break;
-
-      const peer = availablePeers[peerIndex % availablePeers.length];
-      if (peer.pendingRequests >= peer.maxConcurrent) {
-        peerIndex++;
-        continue;
-      }
-
-      const request: ChunkRequest = {
-        chunkIndex,
-        peerId: peer.peerId,
-        requestedAt: now,
-        timeoutMs: this.config.chunkTimeoutMs,
-      };
-
-      requests.push(request);
-      this.activeRequests.set(chunkIndex, request);
-      this.chunkStates[chunkIndex] = ChunkState.REQUESTED;
-      peer.pendingRequests++;
-      
-      peerIndex++;
-    }
-
-    return requests;
-  }
-
-  private handleTimeouts(now: number): void {
-    const timedOutChunks: number[] = [];
-    
-    for (const [chunkIndex, request] of this.activeRequests.entries()) {
-      if (now - request.requestedAt > request.timeoutMs) {
-        timedOutChunks.push(chunkIndex);
-      }
-    }
-    
-    // Handle timeouts after iteration to avoid modifying map during iteration
-    for (const chunkIndex of timedOutChunks) {
-      this.onChunkFailed(chunkIndex, false);
-    }
-  }
-
-  private getAvailablePeers(): PeerInfo[] {
-    const available = Array.from(this.peers.values())
-      .filter(p => p.available && p.pendingRequests < p.maxConcurrent);
-
-    switch (this.config.peerSelectionStrategy) {
-      case 'fastest-first':
-        return available.sort((a, b) => a.avgResponseTime - b.avgResponseTime);
-      
-      case 'load-balanced':
-        return available.sort((a, b) => 
-          (a.pendingRequests / a.maxConcurrent) - (b.pendingRequests / b.maxConcurrent)
-        );
-      
-      case 'round-robin':
-      default:
-        return available;
-    }
-  }
-
-  private getChunksToRequest(maxChunks: number): number[] {
-    const chunks: number[] = [];
-    
-    for (let i = 0; i < this.chunkStates.length && chunks.length < maxChunks; i++) {
-      const state = this.chunkStates[i];
-      const retries = this.retryCount.get(i) || 0;
-      
-      if (state === ChunkState.UNREQUESTED && retries < this.config.maxRetries) {
-        chunks.push(i);
-      }
-    }
-    
-    return chunks;
-  }
-
-  getSchedulerState() {
-    return {
-      chunkStates: this.chunkStates.slice(),
-      activeRequestCount: this.activeRequests.size,
-      availablePeerCount: Array.from(this.peers.values()).filter(p => p.available).length,
-      totalPeerCount: this.peers.size,
-      completedChunks: this.chunkStates.filter(s => s === ChunkState.RECEIVED).length,
-      totalChunks: this.chunkStates.length,
-    };
-  }
-
-  isComplete(): boolean {
-    return this.chunkStates.every(state => state === ChunkState.RECEIVED);
-  }
-
-  // Test/debug helpers
-  getActiveRequests(): Map<number, ChunkRequest> {
-    return new Map(this.activeRequests);
-  }
-
-  getPeers(): Map<string, PeerInfo> {
-    return new Map(this.peers);
-  }
+export async function getPeers(): Promise<PeerInfo[]> {
+  return (await invoke('get_peers')) as PeerInfo[];
 }
