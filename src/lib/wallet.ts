@@ -945,9 +945,26 @@ export class WalletService {
       const account = (await invoke("import_chiral_account", {
         privateKey,
       })) as AccountCreationResult;
-      transactions.set([]);
+      transactions.set([]); // clear old account's txs
       this.seenHashes.clear();
       this.setActiveAccount(account);
+
+      // Prime pagination state for the new account so we don't wipe imported tx snapshots
+      transactionPagination.update((state) => ({
+        ...state,
+        accountAddress: account.address,
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+      miningPagination.update((state) => ({
+        ...state,
+        accountAddress: account.address,
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+
       await this.syncFromBackend();
       return account;
     }
