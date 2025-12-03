@@ -152,6 +152,30 @@ impl GethProcess {
         Ok(exe_dir.join(dir))
     }
 
+    /// Validate that existing Geth data directory has the correct chain ID
+    fn validate_chain_id(&self, data_path: &Path, expected_chain_id: u64) -> Result<(), String> {
+        // Create a marker file to track which chain ID this data directory was initialized with
+        let chain_id_marker = data_path.join("geth").join(".chain_id");
+
+        if chain_id_marker.exists() {
+            if let Ok(content) = std::fs::read_to_string(&chain_id_marker) {
+                if let Ok(stored_chain_id) = content.trim().parse::<u64>() {
+                    if stored_chain_id == expected_chain_id {
+                        return Ok(()); // Chain ID matches
+                    } else {
+                        return Err(format!("Existing blockchain data is for chain ID {}, but expected {}. Will reinitialize.", stored_chain_id, expected_chain_id));
+                    }
+                }
+            }
+        }
+
+        // If no marker file exists, we can't be sure about the chain ID
+        // To be safe, we'll assume it's wrong and force reinitialization
+        // This prevents the chain ID mismatch issue from happening again
+        Err(format!("Could not verify chain ID of existing blockchain data. Will reinitialize to ensure correctness."))
+    }
+
+
     pub fn start(&mut self, data_dir: &str, miner_address: Option<&str>) -> Result<(), String> {
         // Check if we already have a tracked child process
         if self.child.is_some() {
@@ -250,6 +274,15 @@ impl GethProcess {
         let needs_init = !data_path.join("geth").exists();
         let mut needs_reinit = false;
 
+        // Check if existing blockchain data has wrong chain ID
+        if !needs_init {
+            if let Err(chain_mismatch) = self.validate_chain_id(&data_path, *CHAIN_ID) {
+                eprintln!("⚠️  Chain ID mismatch detected: {}", chain_mismatch);
+                eprintln!("⚠️  Existing blockchain data is for wrong chain, will reinitialize...");
+                needs_reinit = true;
+            }
+        }
+
         // Check for blockchain corruption by looking at recent logs
         if !needs_init {
             let log_path = data_path.join("geth.log");
@@ -306,7 +339,13 @@ impl GethProcess {
                 ));
             }
 
-            eprintln!("✅ Blockchain initialized successfully");
+            // Write a marker file to track which chain ID this data directory was initialized with
+            let chain_id_marker = data_path.join("geth").join(".chain_id");
+            if let Err(e) = std::fs::write(&chain_id_marker, CHAIN_ID.to_string()) {
+                eprintln!("Warning: Failed to write chain ID marker file: {}", e);
+            }
+
+            eprintln!("✅ Blockchain initialized successfully with chain ID {}", *CHAIN_ID);
         }
 
         // Get bootstrap nodes - use cached/fallback to avoid blocking startup

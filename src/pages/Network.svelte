@@ -373,8 +373,14 @@
       dhtError = null
       cancelConnection = false
       
-      // Check if DHT is already running in backend
-      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+      // Check if DHT is already running in backend (with retry for timing issues)
+      let isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+      
+      // If not running on first check, wait a bit and check again (in case auto-start is in progress)
+      if (!isRunning) {
+        await new Promise(resolve => setTimeout(resolve, 500))
+        isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+      }
       
       if (isRunning) {
         // DHT is already running in backend, sync the frontend state immediately
@@ -676,17 +682,32 @@
     
     try {
       // Check current DHT status without resetting connections
-      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+      let isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+      
+      // If not running, retry after a short delay (DHT might be starting up)
+      if (!isRunning) {
+        await new Promise(resolve => setTimeout(resolve, 500))
+        isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+      }
+      
       const peerCount = await invoke<number>('get_dht_peer_count').catch(() => 0)
-      const peerId = await invoke<string | null>('get_dht_peer_id').catch(() => null)
+      let peerId = await invoke<string | null>('get_dht_peer_id').catch(() => null)
+      
+      // If DHT is running but peer ID is not yet available, retry
+      if (isRunning && !peerId) {
+        await new Promise(resolve => setTimeout(resolve, 500))
+        peerId = await invoke<string | null>('get_dht_peer_id').catch(() => null)
+      }
 
       // If DHT is running in backend, sync status and start polling
-      if (isRunning && peerId) {
-        dhtPeerId = peerId
-        dhtPeerCount = peerCount
+      if (isRunning) {
+        // DHT is running even if peerId isn't available yet (startup race condition)
+        if (peerId) {
+          dhtPeerId = peerId
+          dhtService.setPeerId(peerId)
+        }
         
-        // Update dhtService with the peer ID
-        dhtService.setPeerId(peerId)
+        dhtPeerCount = peerCount
         
         // Also restore health snapshot
         try {

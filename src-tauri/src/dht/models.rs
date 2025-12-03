@@ -156,6 +156,9 @@ pub struct Ed2kSourceInfo {
     pub sources: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+    /// ED2K chunk hashes (MD4 hashes for each 9.28MB chunk)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_hashes: Option<Vec<String>>,
 }
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Ed2kDownloadStatus {
@@ -198,6 +201,7 @@ impl Ed2kSourceInfo {
                     file_name: Some(file_name),
                     sources: None,
                     timeout: None,
+                    chunk_hashes: None,
                 })
             }
             "server" => {
@@ -215,6 +219,7 @@ impl Ed2kSourceInfo {
                     file_name: None,
                     sources: None,
                     timeout: None,
+                    chunk_hashes: None,
                 })
             }
             _ => Err(Ed2kError::InvalidLink(format!(

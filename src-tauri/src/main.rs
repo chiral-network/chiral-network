@@ -133,7 +133,7 @@ struct BackendSettings {
 impl Default for BackendSettings {
     fn default() -> Self {
         Self {
-            storage_path: "~/ChiralNetwork/Storage".to_string(),
+            storage_path: "".to_string(), // No hardcoded default - get_download_directory handles this
             enable_file_logging: false,
             max_log_size_mb: 10,
         }
@@ -159,7 +159,7 @@ fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
                         let storage_path = json
                             .get("storagePath")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("~/ChiralNetwork/Storage")
+                            .unwrap_or("")
                             .to_string();
                         let enable_file_logging = json
                             .get("enableFileLogging")
@@ -1138,7 +1138,13 @@ async fn get_miner_status() -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn get_blockchain_sync_status() -> Result<ethereum::SyncStatus, String> {
+async fn get_blockchain_sync_status(state: State<'_, AppState>) -> Result<ethereum::SyncStatus, String> {
+    // Only query sync status if Geth is actually running
+    let geth = state.geth.lock().await;
+    if !geth.is_running() {
+        return Err("Geth node is not running".to_string());
+    }
+
     ethereum::get_sync_status().await
 }
 
@@ -1418,13 +1424,6 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
-    // Create a ChunkManager instance
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {}", e))?;
-    let chunk_storage_path = app_data_dir.join("chunk_storage");
-    let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
 
     // --- AutoRelay is now disabled by default (can be enabled via config or env var)
     // Disable AutoRelay on bootstrap nodes (and via env var)
@@ -1478,7 +1477,7 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
-        Some(chunk_manager), // Pass the chunk manager
+        None, // Chunk manager will be set later for multi-source downloads
         chunk_size_kb,
         cache_size_mb,
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
@@ -1652,7 +1651,10 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
+                        println!("🔍 DEBUG MAIN: PublishedFile event received");
+                        println!("🔍 DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
                         let payload = serde_json::json!(metadata);
+                        println!("🔍 DEBUG MAIN: Emitting published_file event to frontend");
                         let _ = app_handle.emit("published_file", payload);
                         // Update analytics: record upload completion
                         analytics_arc.record_upload_completed().await;
@@ -3261,30 +3263,30 @@ fn detect_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
 }
 
+/// Get the resolved download directory.
 #[tauri::command]
-fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
+    // Load backend settings from file
+    let backend_settings = load_settings_from_file(&app);
 
-    // Get the parent of app data dir to place storage at user level
-    let user_dir = app_data_dir
-        .parent()
-        .ok_or_else(|| "Failed to get parent directory".to_string())?;
+    // If backend has a configured path, use it
+    if !backend_settings.storage_path.is_empty() {
+        let expanded_path = expand_tilde(&backend_settings.storage_path);
+        return expanded_path
+            .to_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Failed to convert path to string".to_string());
+    }
 
-    let storage_path = user_dir.join("Chiral-Network-Storage");
+    // Cross-platform default
+    let default_path = "~/Downloads/Chiral-Network-Storage";
 
-    storage_path
+    let expanded_path = expand_tilde(default_path);
+    expanded_path
         .to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "Failed to convert path to string".to_string())
 }
-
-// #[tauri::command]
-// fn check_directory_exists(path: String) -> bool {
-//     Path::new(&path).is_dir()
-// }
 
 #[tauri::command]
 async fn ensure_directory_exists(path: String) -> Result<(), String> {
@@ -3369,6 +3371,14 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
+        // Create ChunkManager instance
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Could not get app data directory: {}", e))?;
+        let chunk_storage_path = app_data_dir.join("chunk_storage");
+        let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
+
         // Create transfer event bus for unified event emission
         let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
         let multi_source_service = MultiSourceDownloadService::new(
@@ -3377,8 +3387,14 @@ async fn start_file_transfer_service(
             state.bittorrent_handler.clone(),
             transfer_event_bus,
             state.analytics.clone(),
+            chunk_manager.clone(),
         );
         let multi_source_arc = Arc::new(multi_source_service);
+
+        // Load any persisted download states
+        if let Err(e) = multi_source_arc.load_download_states().await {
+            tracing::warn!("Failed to load persisted download states: {}", e);
+        }
 
         {
             let mut multi_source_guard = state.multi_source_download.lock().await;
@@ -3653,6 +3669,7 @@ async fn upload_file_to_network(
                                 file_name: Some(original_file_name.clone()),
                                 sources: None,
                                 timeout: None,
+                                chunk_hashes: None,
                             }]),
                             download_path: None,
                         };
@@ -5166,12 +5183,23 @@ async fn pump_file_transfer_events(app: tauri::AppHandle, ft: Arc<FileTransferSe
 }
 
 async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDownloadService>) {
+    let mut save_state_counter = 0;
     loop {
         let events = ms.drain_events(64).await;
         if events.is_empty() {
             if Arc::strong_count(&ms) <= 1 {
                 break;
             }
+
+            // Save download states every ~30 seconds (120 * 250ms)
+            save_state_counter += 1;
+            if save_state_counter >= 120 {
+                save_state_counter = 0;
+                if let Err(e) = ms.save_download_state().await {
+                    warn!("Failed to save download states: {}", e);
+                }
+            }
+
             sleep(Duration::from_millis(250)).await;
             continue;
         }
@@ -5449,13 +5477,16 @@ async fn get_file_seeders(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<Vec<String>, String> {
+    println!("🔍 DEBUG MAIN: get_file_seeders called with hash = {}", file_hash);
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
     if let Some(dht_service) = dht {
-        Ok(dht_service.get_seeders_for_file(&file_hash).await)
+        let seeders = dht_service.get_seeders_for_file(&file_hash).await;
+        println!("🔍 DEBUG MAIN: get_file_seeders returning seeders = {:?}", seeders);
+        Ok(seeders)
     } else {
         Err("DHT node is not running".to_string())
     }
@@ -6855,6 +6886,7 @@ fn main() {
 
     // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
+    let dht_service_for_protocols = dht_service_arc.clone();
 
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -6910,7 +6942,10 @@ fn main() {
         manager.register(Box::new(bittorrent_protocol_handler));
 
         // Register ED2K and FTP handlers
-        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
+        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::with_dht_service(
+            "ed2k://|server|45.82.80.155|5687|/".to_string(),
+            dht_service_for_protocols,
+        );
         manager.register(Box::new(ed2k_handler));
 
         let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
@@ -7145,7 +7180,7 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
-            get_default_storage_path,
+            get_download_directory,
             check_directory_exists,
             ensure_directory_exists,
             get_dht_health,
@@ -7615,6 +7650,18 @@ fn main() {
                             proxies_arc_for_pump,
                             relay_reputation_arc_for_pump,
                         ).await;
+                    });
+                }
+            }
+
+            // Set app handle on bandwidth controller for event emission
+            {
+                let app_handle = app.handle().clone();
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    let bandwidth_controller = state.bandwidth.clone();
+                    let app_handle_for_bandwidth = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        bandwidth_controller.set_app_handle(app_handle_for_bandwidth).await;
                     });
                 }
             }
