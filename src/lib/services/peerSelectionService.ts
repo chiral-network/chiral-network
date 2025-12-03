@@ -404,6 +404,63 @@ export class PeerSelectionService {
   static notePeerFailure(peerId: string) {
     this.rep.failure(peerId);
   }
+
+  /**
+   * Record successful chunk download from a peer (for Bitswap reputation)
+   */
+  static async recordChunkDownloadSuccess(
+    peerId: string,
+    chunkSize: number
+  ): Promise<void> {
+    try {
+      await invoke("record_chunk_download_success", {
+        peerId,
+        chunkSize,
+      });
+      // Also update local reputation store
+      this.rep.success(peerId);
+    } catch (error) {
+      console.error("Failed to record chunk download success:", error);
+    }
+  }
+
+  /**
+   * Record failed chunk download from a peer (for Bitswap reputation)
+   */
+  static async recordChunkDownloadFailure(
+    peerId: string,
+    error: string
+  ): Promise<void> {
+    try {
+      await invoke("record_chunk_download_failure", {
+        peerId,
+        error,
+      });
+      // Also update local reputation store
+      this.rep.failure(peerId);
+    } catch (error) {
+      console.error("Failed to record chunk download failure:", error);
+    }
+  }
+
+  /**
+   * Record successful chunk upload to a peer (for Bitswap reputation)
+   */
+  static async recordChunkUploadSuccess(
+    peerId: string,
+    chunkSize: number
+  ): Promise<void> {
+    try {
+      await invoke("record_chunk_upload_success", {
+        peerId,
+        chunkSize,
+      });
+      // Also update local reputation store
+      this.rep.success(peerId);
+    } catch (error) {
+      console.error("Failed to record chunk upload success:", error);
+    }
+  }
 }
 
 // Export for use in other parts of the application
