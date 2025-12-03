@@ -25,8 +25,8 @@ pub mod reassembly;
 
 // Re-export modules from the lib crate
 use chiral_network::{
-    analytics, bandwidth, bittorrent_handler, download_restart,
-    dht, ed2k_client, encryption, file_transfer,
+    analytics, bandwidth, bittorrent_handler, download_restart, download_scheduler, download_source,
+    dht, ed2k_client, encryption, file_transfer, ftp_client, peer_cache,
     http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
@@ -1507,6 +1507,22 @@ async fn start_dht_node(
     // DHT node is already running in a spawned background task
     let dht_arc = Arc::new(dht_service);
 
+    // Load peer cache and attempt reconnection to known peers
+    let dht_for_cache = dht_arc.clone();
+    tokio::spawn(async move {
+        match dht_for_cache.load_peer_cache().await {
+            Ok(cached_peers) => {
+                if !cached_peers.is_empty() {
+                    info!("Attempting to reconnect to {} cached peers", cached_peers.len());
+                    dht_for_cache.reconnect_cached_peers(cached_peers).await;
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load peer cache: {}", e);
+            }
+        }
+    });
+
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
@@ -1620,11 +1636,19 @@ async fn start_dht_node(
                         }
                     }
                     DhtEvent::DownloadedFile(metadata) => {
-                        let payload = serde_json::json!(metadata);
+                        let payload = serde_json::json!(metadata.clone());
                         let _ = app_handle.emit("file_content", payload);
+
+                        let file_size = metadata.file_size;
+
+                        if let Err(err) =
+                            dht_clone_for_pump.promote_downloaded_file(metadata).await
+                        {
+                            warn!("Failed to promote downloaded file to seeder: {}", err);
+                        }
                         // Update analytics: record download completion and bandwidth
                         analytics_arc.record_download_completed().await;
-                        analytics_arc.record_download(metadata.file_size).await;
+                        analytics_arc.record_download(file_size).await;
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
@@ -1753,6 +1777,12 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     };
 
     if let Some(dht) = dht {
+        // Save peer cache before shutdown for faster startup next time
+        if let Err(e) = dht.save_peer_cache().await {
+            warn!("Failed to save peer cache: {}", e);
+            // Continue with shutdown even if cache save fails
+        }
+        
         let (last_enabled, last_disabled) = dht.autorelay_history().await;
         {
             let mut guard = state.autorelay_last_enabled.lock().await;
@@ -7256,12 +7286,13 @@ fn main() {
             check_directory_exists,
             get_multiaddresses,
             clear_seed_list,
+            stop_seeding_file,
             get_full_network_stats,
             // Download restart commands
             start_download_restart,
             pause_download_restart,
             resume_download_restart,
-            get_download_status_restart
+            get_download_status_restart,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -8149,8 +8180,49 @@ async fn clear_seed_list() -> Result<(), String> {
 fn check_directory_exists(path: String) -> Result<bool, String> {
     use std::path::Path;
     let p = Path::new(&path);
-    Ok(p.exists() && p.is_dir())
+    
+    // If directory already exists, return true
+    if p.exists() && p.is_dir() {
+        return Ok(true);
+    }
+    
+    // If it doesn't exist, try to create it
+    if !p.exists() {
+        match std::fs::create_dir_all(p) {
+            Ok(_) => {
+                info!("Created storage directory: {}", path);
+                return Ok(true);
+            }
+            Err(e) => {
+                warn!("Failed to create directory {}: {}", path, e);
+                return Ok(false);
+            }
+        }
+    }
+    
+    // Path exists but is not a directory
+    Ok(false)
 }
+
+
+#[tauri::command]
+async fn stop_seeding_file(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht {
+        dht_service.stop_publishing_file(file_hash).await
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+
 
 /// Event pump for DHT events, moved out of start_dht_node
 async fn pump_dht_events(
