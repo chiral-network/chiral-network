@@ -667,6 +667,8 @@ export interface AppSettings {
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableWalletAutoLock: boolean;
+  autoStartDHT: boolean; // Whether to automatically start DHT on app launch
+  autoStartGeth: boolean; // Whether to automatically start Geth blockchain node on app launch
   enableNotifications: boolean;
   notifyOnComplete: boolean;
   notifyOnError: boolean;
@@ -687,7 +689,6 @@ export interface AppSettings {
   maxLogSizeMB: number; // Maximum size of a single log file in MB
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
-  autoStartDHT: boolean; // Whether to automatically start DHT on app launch
   selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol selected for file uploads
 }
 
@@ -720,6 +721,8 @@ export const settings = writable<AppSettings>({
   anonymousMode: false,
   shareAnalytics: true,
   enableWalletAutoLock: false,
+  autoStartDHT: true, // Auto-start DHT by default
+  autoStartGeth: false, // Don't auto-start Geth by default (requires download)
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
@@ -740,7 +743,6 @@ export const settings = writable<AppSettings>({
   maxLogSizeMB: 10, // 10 MB per log file by default
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
-  autoStartDHT: false, // Don't auto-start DHT by default
   selectedProtocol: "Bitswap", // Default to Bitswap
 });
 

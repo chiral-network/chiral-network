@@ -259,6 +259,10 @@
     "enableUpnp": "Habilitar UPnP",
     "enableNat": "Habilitar mapeo de puertos NAT",
     "enableDht": "Habilitar DHT",
+    "autoStartNode": "Iniciar nodo DHT automáticamente al abrir",
+    "autoStartNodeDescription": "Iniciar automáticamente el nodo DHT para compartir archivos cuando se inicie la aplicación",
+    "autoStartGeth": "Iniciar nodo blockchain automáticamente al abrir",
+    "autoStartGethDescription": "Iniciar automáticamente el nodo blockchain Geth cuando se inicie la aplicación (habilita billetera y minería)",
     "geoDistribution": {
       "title": "Distribución geográfica",
       "subtitle": "Mapeando {peers} pares observados",

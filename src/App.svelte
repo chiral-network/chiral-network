@@ -469,25 +469,153 @@ function handleFirstRunComplete() {
       } catch (error) {
         console.warn("Automatic location detection failed:", error);
       }
+      
+      // Load settings from localStorage before auto-starting services
+      try {
+        const storedSettings = localStorage.getItem("chiralSettings");
+        if (storedSettings) {
+          const parsed = JSON.parse(storedSettings);
+          settings.update(prev => ({ ...prev, ...parsed }));
+        }
+      } catch (error) {
+        console.warn("Failed to load settings from localStorage:", error);
+      }
+      
       // Initialize backend services (File Transfer, DHT - conditionally)
       try {
         const currentSettings = get(settings);
-        if (currentSettings.autoStartDHT) {
-          await fileService.initializeServices();
-        } else {
-          // Only start file transfer service, not DHT
+        
+        // Check if DHT is already running first (to avoid duplicate start attempts)
+        let isDhtAlreadyRunning = false;
+        try {
+          isDhtAlreadyRunning = await invoke<boolean>("is_dht_running");
+        } catch (err) {
+          // Command might not be available, assume not running
+          isDhtAlreadyRunning = false;
+        }
+        
+        // Always start file transfer service (unless already running)
+        try {
           await invoke("start_file_transfer_service");
+        } catch (ftError) {
+          const ftErrorMsg = ftError instanceof Error ? ftError.message : String(ftError);
+          if (!ftErrorMsg.includes("already running") && !ftErrorMsg.includes("already initialized")) {
+            console.warn("⚠️ File transfer service start warning:", ftErrorMsg);
+          }
+        }
+        
+        // Start DHT if auto-start is enabled AND not already running
+        if (currentSettings.autoStartDHT) {
+          if (isDhtAlreadyRunning) {
+            console.log("✅ DHT node already running (detected on startup)");
+            
+            // Import dhtService and sync the peer ID
+            const { dhtService } = await import("$lib/dht");
+            try {
+              const peerId = await invoke<string | null>("get_dht_peer_id");
+              if (peerId) {
+                dhtService.setPeerId(peerId);
+                console.log("✅ Synced with existing DHT node, peer ID:", peerId);
+              }
+            } catch {}
+            
+            // Update network status
+            networkStatus.set('connected');
+          } else {
+            console.log("🚀 Auto-starting DHT node...");
+            
+            try {
+              // Import dhtService to start DHT with full settings
+              const { dhtService } = await import("$lib/dht");
+              
+              // Get bootstrap nodes - use custom ones if specified, otherwise use defaults
+              let bootstrapNodes = currentSettings.customBootstrapNodes || [];
+              if (bootstrapNodes.length === 0) {
+                bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+              }
+              
+              // Start DHT with all user settings (same as Network page does)
+              const peerId = await dhtService.start({
+                port: currentSettings.port || 4001,
+                bootstrapNodes,
+                enableAutonat: currentSettings.enableAutonat,
+                autonatProbeIntervalSeconds: currentSettings.autonatProbeInterval,
+                autonatServers: currentSettings.autonatServers,
+                proxyAddress: currentSettings.enableProxy ? currentSettings.proxyAddress : undefined,
+                enableAutorelay: currentSettings.enableAutorelay,
+                preferredRelays: currentSettings.preferredRelays || [],
+                enableRelayServer: currentSettings.enableRelayServer,
+                relayServerAlias: currentSettings.relayServerAlias || '',
+                chunkSizeKb: currentSettings.chunkSize,
+                cacheSizeMb: currentSettings.cacheSize,
+                enableUpnp: currentSettings.enableUPnP,
+              });
+              
+              console.log("✅ DHT node auto-started successfully with peer ID:", peerId);
+              
+              // Update network status
+              networkStatus.set('connected');
+            } catch (dhtError) {
+              const dhtErrorMsg = dhtError instanceof Error ? dhtError.message : String(dhtError);
+              if (dhtErrorMsg.includes("already running")) {
+                // Race condition - DHT was started between our check and start attempt
+                console.log("ℹ️ DHT started by another process (race condition)");
+                
+                // Sync the peer ID since DHT is running
+                const { dhtService } = await import("$lib/dht");
+                try {
+                  const peerId = await invoke<string | null>("get_dht_peer_id");
+                  if (peerId) {
+                    dhtService.setPeerId(peerId);
+                    console.log("✅ Synced peer ID after race condition:", peerId);
+                  }
+                } catch {}
+                
+                networkStatus.set('connected');
+              } else {
+                // Real error
+                console.error("❌ Failed to auto-start DHT:", dhtErrorMsg);
+              }
+            }
+          }
+        }
+        
+        // Start Geth blockchain node if auto-start is enabled
+        if (currentSettings.autoStartGeth && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+          try {
+            // Check if Geth is already running
+            const isGethRunning = await invoke<boolean>('is_geth_running').catch(() => false);
+            
+            if (isGethRunning) {
+              console.log("✅ Geth blockchain node already running (detected on startup)");
+            } else {
+              console.log("🚀 Auto-starting Geth blockchain node...");
+              
+              try {
+                await invoke('start_geth_node', { dataDir: './bin/geth-data' });
+                console.log("✅ Geth blockchain node auto-started successfully");
+                
+                // Update geth status
+                const { gethStatus } = await import('./lib/services/gethService');
+                gethStatus.set('running');
+              } catch (gethError) {
+                const gethErrorMsg = gethError instanceof Error ? gethError.message : String(gethError);
+                if (gethErrorMsg.includes("already running") || gethErrorMsg.includes("already started")) {
+                  console.log("ℹ️ Geth started by another process");
+                } else if (gethErrorMsg.includes("not found") || gethErrorMsg.includes("No such file")) {
+                  console.log("ℹ️ Geth not downloaded yet. Download it from the Network page.");
+                } else {
+                  console.error("❌ Failed to auto-start Geth:", gethErrorMsg);
+                }
+              }
+            }
+          } catch (error) {
+            console.error("⚠️ Error checking/starting Geth:", error);
+          }
         }
       } catch (error) {
-        // Only ignore "already running" errors - this is normal during hot reload
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes("already running") || errorMessage.includes("already initialized")) {
-          // Services already running (hot reload) - no need to log
-        } else {
-          // Log other errors - these might indicate real problems
-          console.error("⚠️ Failed to start services:", errorMessage);
-          console.error("WebRTC downloads may not work. Error details:", error);
-        }
+        // Unexpected error in the initialization block
+        console.error("⚠️ Unexpected error during service initialization:", error);
       }
 
       // set the currentPage var
