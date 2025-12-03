@@ -322,15 +322,19 @@ export class WalletService {
             timestamp: number;
             status: string;
             tx_type: string;
-          gas_used: string | null;
-          gas_price: string | null;
-        }>
-      >,
+            gas_used: string | null;
+            gas_price: string | null;
+          }>
+        >,
       ]);
 
       // If backend returns no history but we already have imported history, keep existing
       const existingTxs = get(transactions);
-      if (txHistory.length === 0 && blocks.length === 0 && existingTxs.length > 0) {
+      if (
+        txHistory.length === 0 &&
+        blocks.length === 0 &&
+        existingTxs.length > 0
+      ) {
         transactionPagination.update((state) => ({
           ...state,
           accountAddress,
@@ -549,7 +553,7 @@ export class WalletService {
 
       // If geth returns zero but we already have a non-zero balance (e.g., from an imported snapshot),
       // avoid clobbering it until real data is available.
-      if (realBalance === 0 && prevWallet.actualBalance > 0) {
+      if (realBalance === 0 && prevWallet.balance > 0) {
         return;
       }
 
@@ -572,7 +576,8 @@ export class WalletService {
             });
 
             if (receipt && receipt.block_number !== null) {
-              const status = receipt.status === "success" ? "success" : "failed";
+              const status =
+                receipt.status === "success" ? "success" : "failed";
               const confirmations = receipt.confirmations || 0;
 
               transactions.update((txs) =>

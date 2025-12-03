@@ -846,6 +846,10 @@
       
     } catch (error) {
       console.error('Error loading file:', error);
+      const msg = (key: string, fallback: string) => {
+        const val = $t(key);
+        return val === key ? fallback : val;
+      };
       // showToast('Error loading file: ' + String(error), 'error');
       showToast(
         msg('toasts.account.import.fileLoadError', `Error loading wallet file: ${String(error) }`),

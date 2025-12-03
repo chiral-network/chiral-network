@@ -183,7 +183,7 @@ Server Binding: 0.0.0.0:8080
   - Port 8080 (standard alternative HTTP port)
   - Auto-starts on application launch
 
-Storage Directory: ~/.local/share/chiral-network/files/
+Storage Directory: ~/Downloads/Chiral-Network-Storage
   - Shared with FileTransferService
   - Files stored by merkle root hash
   - No duplication of storage
