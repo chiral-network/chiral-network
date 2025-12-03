@@ -25,6 +25,7 @@
   import { SignalingService } from '$lib/services/signalingService';
   import { createWebRTCSession } from '$lib/services/webrtcService';
   import { peerDiscoveryStore, startPeerEventStream, type PeerDiscovery } from '$lib/services/peerEventService';
+  import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte'
   import type { GeoRegionConfig } from '$lib/geo';
   import { calculateRegionDistance } from '$lib/services/geolocation';
   import { diagnosticLogger, errorLogger, networkLogger } from '$lib/diagnostics/logger';
@@ -1768,79 +1769,6 @@
             </div>
           </div>
 
-          <!-- AutoRelay Status -->
-          <div class="pt-4 space-y-4 border-t border-muted/40">
-            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.title')}</p>
-                <div class="mt-2 flex items-center gap-2">
-                  {#if dhtHealth?.autorelayEnabled}
-                    <Badge class="bg-green-600">{$t('network.dht.relay.enabled')}</Badge>
-                  {:else}
-                    <Badge class="bg-gray-500">{$t('network.dht.relay.disabled')}</Badge>
-                  {/if}
-                  {#if dhtHealth?.activeRelayPeerId}
-                    <span class="text-xs font-mono text-muted-foreground">{dhtHealth.activeRelayPeerId.slice(0, 12)}...</span>
-                  {/if}
-                </div>
-              </div>
-              {#if dhtHealth?.autorelayEnabled}
-                <div class="text-sm text-muted-foreground space-y-1 text-right">
-                  {#if dhtHealth?.activeRelayPeerId}
-                    <p class="text-green-600">{$t('network.dht.relay.status')}: {dhtHealth.relayReservationStatus ?? $t('network.dht.relay.pending')}</p>
-                  {:else}
-                    <p class="text-yellow-600">{$t('network.dht.relay.noPeer')}</p>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-
-            {#if dhtHealth}
-              <div class="bg-muted/40 rounded-lg p-3 border border-dashed border-muted/60">
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.timeline')}</p>
-                <div class="mt-2 grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <p class="text-xs text-muted-foreground">{$t('network.dht.relay.enabledAt')}</p>
-                    <p class="text-sm font-medium">
-                      {dhtHealth.lastAutorelayEnabledAt
-                        ? formatHealthTimestamp(dhtHealth.lastAutorelayEnabledAt)
-                        : $t('network.dht.relay.neverEnabled')}
-                    </p>
-                  </div>
-                  <div>
-                    <p class="text-xs text-muted-foreground">{$t('network.dht.relay.disabledAt')}</p>
-                    <p class="text-sm font-medium">
-                      {dhtHealth.lastAutorelayDisabledAt
-                        ? formatHealthTimestamp(dhtHealth.lastAutorelayDisabledAt)
-                        : $t('network.dht.relay.neverDisabled')}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            {/if}
-
-            {#if dhtHealth?.autorelayEnabled}
-              <div class="grid gap-3 md:grid-cols-2">
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.activePeer')}</p>
-                  <p class="text-sm font-mono mt-1">{dhtHealth?.activeRelayPeerId ?? $t('network.dht.relay.noPeer')}</p>
-                </div>
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.renewals')}</p>
-                  <p class="text-sm font-medium mt-1">{dhtHealth?.reservationRenewals ?? 0}</p>
-                </div>
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.lastSuccess')}</p>
-                  <p class="text-sm font-medium mt-1">{formatNatTimestamp(dhtHealth?.lastReservationSuccess ?? null)}</p>
-                </div>
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.evictions')}</p>
-                  <p class="text-sm font-medium mt-1">{dhtHealth?.reservationEvictions ?? 0}</p>
-                </div>
-              </div>
-            {/if}
-          </div>
-
           {#if dhtHealth}
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
               <div class="bg-muted/40 rounded-lg p-3">
@@ -1994,6 +1922,23 @@
   <div class="mt-6">
     <GeoDistributionCard />
   </div>
+
+  <!-- Relay health & monitoring (DHT snapshot) -->
+  <Card class="p-6 mt-6">
+
+    {#if dhtHealth}
+      {#if $settings.enableAutorelay && dhtStatus === 'connected'}
+        <div class="mt-6">
+          <h3 class="text-lg font-semibold text-foreground mb-3">{$t('relay.monitoring.title')}</h3>
+          <RelayErrorMonitor />
+        </div>
+      {/if}
+    {:else}
+      <div class="mt-4 rounded-lg border border-dashed border-muted/40 bg-muted/20 p-4 text-sm text-muted-foreground">
+        Start the DHT to capture a relay snapshot from the health report.
+      </div>
+    {/if}
+  </Card>
   
   <!-- Peer Discovery -->
   <Card class="p-6">
