@@ -875,17 +875,20 @@ async function loadAndResumeDownloads() {
           statusMessage = tr('download.search.queue.status.queued')
           break
         case 'failed':
-          statusMessage = tr('download.search.queue.status.failed')
-          break
+        case 'canceled':
         case 'seeding':
         case 'uploaded':
-          statusMessage = tr('download.search.queue.status.seeding')
+          // Don't show warning for these statuses - user can re-download failed/canceled files
+          // or intentionally download their own seeding files
           break
         default:
           statusMessage = tr('download.search.queue.status.other', { values: { status: existingFile.status } })
       }
 
-      showToast(statusMessage, 'warning')
+      // Show warning toast only for active statuses (completed, downloading, paused, queued)
+      if (statusMessage) {
+        showToast(statusMessage, 'warning')
+      }
 
       // Allow downloading if status is failed, canceled, or seeding (user may want to re-download/test)
       if (existingFile.status !== 'failed' && existingFile.status !== 'canceled' && existingFile.status !== 'seeding') {
@@ -1202,28 +1205,6 @@ async function loadAndResumeDownloads() {
       ));
       return;
     }
-
-
-    // ✅ ADD SEEDING CONFIRMATION
-    const userConfirmed = confirm(
-      `Download "${downloadingFile.name}"?\n\n` +
-      `You will automatically become a seeder for this file after downloading.\n\n` +
-      `This means:\n` +
-      `• The file will be shared with other users\n` +
-      `• You can stop seeding anytime from the Uploads page\n\n` +
-      `Continue with download?`
-    );
-
-    if (!userConfirmed) {
-      console.log('User cancelled download');
-      files.update(f => f.map(file =>
-        file.id === downloadingFile.id
-          ? { ...file, status: 'queued' }
-          : file
-      ));
-      return;
-    }
-
 
     // Construct full file path: directory + filename
     const fullPath = await join(storagePath, downloadingFile.name);

@@ -5485,7 +5485,6 @@ async fn get_file_seeders(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<Vec<String>, String> {
-    println!("🔍 DEBUG MAIN: get_file_seeders called with hash = {}", file_hash);
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
@@ -5493,7 +5492,6 @@ async fn get_file_seeders(
 
     if let Some(dht_service) = dht {
         let seeders = dht_service.get_seeders_for_file(&file_hash).await;
-        println!("🔍 DEBUG MAIN: get_file_seeders returning seeders = {:?}", seeders);
         Ok(seeders)
     } else {
         Err("DHT node is not running".to_string())

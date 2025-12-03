@@ -7244,11 +7244,9 @@ impl DhtService {
 
     /// Get seeders for a specific file (searches DHT for providers)
     pub async fn get_seeders_for_file(&self, file_hash: &str) -> Vec<String> {
-        info!("🔍 DEBUG DHT: get_seeders_for_file called for hash = {}", file_hash);
         // Fast path: consult local heartbeat cache and prune expired entries
         let now = unix_timestamp();
         if let Some(entry) = self.seeder_heartbeats_cache.lock().await.get_mut(file_hash) {
-            info!("🔍 DEBUG DHT: Found entry in heartbeat cache");
             entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
             entry.metadata["seeders"] = serde_json::Value::Array(
                 heartbeats_to_peer_list(&entry.heartbeats)
@@ -7261,16 +7259,11 @@ impl DhtService {
                 .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
 
             let peers = heartbeats_to_peer_list(&entry.heartbeats);
-            info!("🔍 DEBUG DHT: Peers from heartbeat cache = {:?}", peers);
             if !peers.is_empty() {
-                info!("🔍 DEBUG DHT: Returning {} seeders from cache", peers.len());
                 // return the pruned local view immediately to keep UI responsive/fresh
                 return peers;
             }
             // otherwise fall back to querying the DHT providers
-            info!("🔍 DEBUG DHT: Heartbeat cache empty, falling back to DHT query");
-        } else {
-            info!("🔍 DEBUG DHT: No entry in heartbeat cache, querying DHT");
         }
 
         // Send command to DHT task to query provider records for this file
