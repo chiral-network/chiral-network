@@ -20,8 +20,8 @@
     Lock,
     Key,
     DollarSign,
-    Copy,
-    Share2,
+     Copy,
+     Share2,
     Globe,
     Blocks,
     Network,
@@ -946,6 +946,32 @@
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
 
+        // Handle BitTorrent differently - create and seed torrent
+        if (selectedProtocol === "BitTorrent") {
+          const magnetLink = await invoke<string>('torrent_seed', { filePath, announceUrls: null });
+
+          const torrentFile = {
+            id: `torrent-${Date.now()}-${Math.random()}`,
+            name: fileName,
+            hash: magnetLink, // Use magnet link as hash for torrents
+            size: fileSize,
+            path: filePath,
+            seederAddresses: [],
+            uploadDate: new Date(),
+            seeders: 1,
+            status: "seeding" as const,
+            price: 0, // BitTorrent is free
+          };
+
+          files.update(f => [...f, torrentFile]);
+          // showToast(`${fileName} is now seeding as a torrent`, "success");
+          showToast(
+            tr('toasts.upload.torrentSeeding', { values: { name: fileName } }),
+            "success"
+          );
+          continue; // Skip the normal Chiral upload flow
+        }
+
         // Copy file to temp location to prevent original file from being moved
         const tempFilePath = await invoke<string>("copy_file_to_temp", {
           filePath,
@@ -956,14 +982,17 @@
 
         const metadata = await dhtService.publishFileToNetwork(tempFilePath, price, selectedProtocol, originalFileName);
 
-        // Add WebSocket client ID to seeder addresses for WebRTC discovery
-        const webrtcSeederIds = signalingService?.clientId
-          ? [signalingService.clientId]
-          : [];
-        const allSeederAddresses = [
-          ...(metadata.seeders ?? []),
-          ...webrtcSeederIds
-        ];
+        console.log('🔍 DEBUG UPLOAD: Received metadata from backend:', JSON.stringify(metadata, null, 2));
+        console.log('🔍 DEBUG UPLOAD: metadata.seeders =', metadata.seeders);
+        console.log('🔍 DEBUG UPLOAD: signalingService?.clientId =', signalingService?.clientId);
+
+        // Use seeders from metadata (backend already adds local peer ID via heartbeat system)
+        // Only add WebSocket client ID if no seeders exist (shouldn't happen in normal flow)
+        const allSeederAddresses = metadata.seeders && metadata.seeders.length > 0
+          ? metadata.seeders
+          : (signalingService?.clientId ? [signalingService.clientId] : []);
+
+        console.log('🔍 DEBUG UPLOAD: allSeederAddresses after processing =', allSeederAddresses);
 
         // Construct protocol-specific hash for display
         let protocolHash = metadata.merkleRoot || "";
@@ -1006,14 +1035,13 @@
 
           if (matchIndex !== -1) {
             const existing = f[matchIndex];
-            // Merge WebSocket client ID with existing seeder addresses
-            const webrtcSeederIds = signalingService?.clientId
-              ? [signalingService.clientId]
-              : [];
-            const mergedSeederAddresses = [
-              ...(metadata.seeders ?? existing.seederAddresses ?? []),
-              ...webrtcSeederIds
-            ];
+            // Use seeders from metadata (backend already adds local peer ID via heartbeat system)
+            // Only add WebSocket client ID if no seeders exist (shouldn't happen in normal flow)
+            const mergedSeederAddresses = (metadata.seeders && metadata.seeders.length > 0)
+              ? metadata.seeders
+              : (existing.seederAddresses && existing.seederAddresses.length > 0)
+                ? existing.seederAddresses
+                : (signalingService?.clientId ? [signalingService.clientId] : []);
             const updated = {
               ...existing,
               name: metadata.fileName || existing.name,
@@ -1077,8 +1105,6 @@
     if (addedCount > 0) {
       setTimeout(() => refreshAvailableStorage(), 100);
     }
-
-    // Ensure isUploading is always reset, even if there are errors
     clearTimeout(forceResetTimeout);
     isUploading = false;
   }

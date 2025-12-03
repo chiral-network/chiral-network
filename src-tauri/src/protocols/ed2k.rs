@@ -20,6 +20,8 @@ use tracing::{info, warn, error};
 pub struct Ed2kProtocolHandler {
     /// Underlying ED2K client
     client: Arc<Mutex<Ed2kClient>>,
+    /// DHT service for peer discovery
+    dht_service: Option<Arc<crate::dht::DhtService>>,
     /// Track active downloads
     active_downloads: Arc<Mutex<HashMap<String, Ed2kDownloadState>>>,
     /// Track download progress
@@ -46,6 +48,18 @@ impl Ed2kProtocolHandler {
     pub fn new(server_url: String) -> Self {
         Self {
             client: Arc::new(Mutex::new(Ed2kClient::new(server_url))),
+            dht_service: None,
+            active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            download_progress: Arc::new(Mutex::new(HashMap::new())),
+            seeding_files: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Creates a new ED2K protocol handler with DHT service for peer discovery
+    pub fn with_dht_service(server_url: String, dht_service: Arc<crate::dht::DhtService>) -> Self {
+        Self {
+            client: Arc::new(Mutex::new(Ed2kClient::new(server_url))),
+            dht_service: Some(dht_service),
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             seeding_files: Arc::new(Mutex::new(HashMap::new())),
@@ -56,6 +70,7 @@ impl Ed2kProtocolHandler {
     pub fn with_config(config: Ed2kConfig) -> Self {
         Self {
             client: Arc::new(Mutex::new(Ed2kClient::with_config(config))),
+            dht_service: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             seeding_files: Arc::new(Mutex::new(HashMap::new())),
@@ -105,6 +120,7 @@ impl Ed2kProtocolHandler {
             file_size,
             file_name: Some(file_name),
             sources: Vec::new(),
+            chunk_hashes: Vec::new(), // ED2K chunk hashes for seeding
         })
     }
 
@@ -206,6 +222,7 @@ impl ProtocolHandler for Ed2kProtocolHandler {
         let client = self.client.clone();
         let progress = self.download_progress.clone();
         let downloads = self.active_downloads.clone();
+        let dht_service = self.dht_service.clone();
         let id = download_id.clone();
         let output_path = options.output_path;
         let file_hash = file_info.file_hash.clone();
@@ -228,15 +245,78 @@ impl ProtocolHandler for Ed2kProtocolHandler {
                 }
             };
 
-            // If no server available, set status to indicate waiting for peers
+            // If no server available, try DHT-based peer discovery
             if !server_available {
                 let mut prog = progress.lock().await;
                 if let Some(p) = prog.get_mut(&id) {
                     p.status = DownloadStatus::FetchingMetadata; // Waiting for peer discovery
                 }
-                // In a full P2P implementation, we'd start DHT-based peer discovery here
-                // For now, we'll mark as fetching metadata and could potentially implement direct peer connections
-                info!("ED2K: Download queued in P2P mode - waiting for peer connections");
+
+                // Try DHT-based peer discovery using the file hash
+                if let Some(dht) = dht_service.as_ref() {
+                    info!("ED2K: Attempting DHT-based peer discovery for file hash: {}", file_hash);
+
+                    match dht.search_peers_by_infohash(file_hash.clone()).await {
+                        Ok(peer_ids) => {
+                            if !peer_ids.is_empty() {
+                                info!("ED2K: Found {} potential peers via DHT for file {}", peer_ids.len(), file_hash);
+
+                                // Select best peers using the peer selection strategy
+                                let selected_peers = dht.select_peers_with_strategy(
+                                    &peer_ids,
+                                    peer_ids.len().min(5), // Limit to 5 peers for ED2K
+                                    crate::peer_selection::SelectionStrategy::Balanced,
+                                    false, // ED2K doesn't require encryption
+                                ).await;
+
+                                if !selected_peers.is_empty() {
+                                    info!("ED2K: Selected {} peers for connection attempts", selected_peers.len());
+
+                                    // Attempt to connect to selected peers via DHT
+                                    let mut connection_successes = 0;
+                                    let total_peers = selected_peers.len();
+                                    for peer_id in selected_peers {
+                                        match dht.connect_to_peer_by_id(peer_id.clone()).await {
+                                            Ok(_) => {
+                                                info!("ED2K: Successfully initiated connection to peer {} for file {}", peer_id, file_hash);
+                                                connection_successes += 1;
+                                            }
+                                            Err(e) => {
+                                                warn!("ED2K: Failed to connect to peer {}: {}", peer_id, e);
+                                            }
+                                        }
+                                    }
+
+                                    if connection_successes > 0 {
+                                        info!("ED2K: Successfully connected to {}/{} peers for file {}", connection_successes, total_peers, file_hash);
+                                    } else {
+                                        warn!("ED2K: Failed to connect to any peers for file {}", file_hash);
+                                    }
+
+                                    // Update status to indicate peers found
+                                    let mut prog = progress.lock().await;
+                                    if let Some(p) = prog.get_mut(&id) {
+                                        p.status = DownloadStatus::Downloading;
+                                    }
+                                    info!("ED2K: Peer discovery successful - download can proceed");
+                                } else {
+                                    info!("ED2K: No suitable peers found via DHT");
+                                }
+                            } else {
+                                info!("ED2K: No peers found via DHT for file hash {}", file_hash);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("ED2K: DHT peer discovery failed: {}", e);
+                        }
+                    }
+                } else {
+                    info!("ED2K: No DHT service available for peer discovery");
+                }
+
+                // If we still don't have peers, wait or mark as failed
+                // For now, we'll continue waiting as the status suggests
+                info!("ED2K: Download queued in P2P mode - peer discovery in progress");
                 return;
             }
 

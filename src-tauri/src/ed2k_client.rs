@@ -54,6 +54,9 @@ pub struct Ed2kFileInfo {
 
     /// Available sources (IP:Port)
     pub sources: Vec<String>,
+
+    /// ED2K chunk hashes (MD4 hashes for each 9.28MB chunk)
+    pub chunk_hashes: Vec<String>,
 }
 
 /// ed2k server information
@@ -382,6 +385,7 @@ impl Ed2kClient {
             file_size: 0, // Unknown until we query a source
             file_name: None,
             sources,
+            chunk_hashes: Vec::new(), // Will be populated from server metadata
         })
     }
 

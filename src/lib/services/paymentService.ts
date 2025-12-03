@@ -169,7 +169,7 @@ export class PaymentService {
         power_usage,
       } = stats;
 
-      if (network_hashrate <= 0) {
+      if (network_hashrate <= 0 || power_usage <= 0) {
         return 0.001;
       }
 
@@ -177,9 +177,13 @@ export class PaymentService {
       const avgHashPower =
         active_miners > 0 ? network_hashrate / active_miners : network_hashrate;
 
+      if (avgHashPower <= 0) {
+        return 0.001;
+      }
+
       // unit cost of one hash for this miner, normalized to the average mining power
       // basically for this miner, how expensive is each hash compared to the network average
-      const baseHashCost = power_usage / Math.max(avgHashPower, 1);
+      const baseHashCost = power_usage / avgHashPower;
 
       // --- Price per MB (scaled by difficulty) ---
       const pricePerMB =
@@ -187,7 +191,10 @@ export class PaymentService {
         network_difficulty *
         normalizationFactor;
 
-      return parseFloat(pricePerMB.toFixed(8));
+      // Ensure we don't return 0 or negative prices
+      const finalPrice = Math.max(pricePerMB, 0.001);
+
+      return parseFloat(finalPrice.toFixed(8));
     } catch (error) {
       // fallback to static price from settings when network pricing unavailable
       return 0.001;
