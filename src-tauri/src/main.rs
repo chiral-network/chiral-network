@@ -133,7 +133,7 @@ struct BackendSettings {
 impl Default for BackendSettings {
     fn default() -> Self {
         Self {
-            storage_path: "~/ChiralNetwork/Storage".to_string(),
+            storage_path: "".to_string(), // No hardcoded default - get_download_directory handles this
             enable_file_logging: false,
             max_log_size_mb: 10,
         }
@@ -159,7 +159,7 @@ fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
                         let storage_path = json
                             .get("storagePath")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("~/ChiralNetwork/Storage")
+                            .unwrap_or("")
                             .to_string();
                         let enable_file_logging = json
                             .get("enableFileLogging")
@@ -307,6 +307,7 @@ pub struct StreamingUploadSession {
     pub created_at: std::time::SystemTime,
     pub chunk_cids: Vec<String>,
     pub file_data: Vec<u8>,
+    pub price: f64,
 }
 
 /// Session for streaming WebRTC downloads - writes chunks directly to disk
@@ -1650,7 +1651,10 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
+                        println!("🔍 DEBUG MAIN: PublishedFile event received");
+                        println!("🔍 DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
                         let payload = serde_json::json!(metadata);
+                        println!("🔍 DEBUG MAIN: Emitting published_file event to frontend");
                         let _ = app_handle.emit("published_file", payload);
                         // Update analytics: record upload completion
                         analytics_arc.record_upload_completed().await;
@@ -3259,30 +3263,30 @@ fn detect_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
 }
 
+/// Get the resolved download directory.
 #[tauri::command]
-fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
+    // Load backend settings from file
+    let backend_settings = load_settings_from_file(&app);
 
-    // Get the parent of app data dir to place storage at user level
-    let user_dir = app_data_dir
-        .parent()
-        .ok_or_else(|| "Failed to get parent directory".to_string())?;
+    // If backend has a configured path, use it
+    if !backend_settings.storage_path.is_empty() {
+        let expanded_path = expand_tilde(&backend_settings.storage_path);
+        return expanded_path
+            .to_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Failed to convert path to string".to_string());
+    }
 
-    let storage_path = user_dir.join("Chiral-Network-Storage");
+    // Cross-platform default
+    let default_path = "~/Downloads/Chiral-Network-Storage";
 
-    storage_path
+    let expanded_path = expand_tilde(default_path);
+    expanded_path
         .to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "Failed to convert path to string".to_string())
 }
-
-// #[tauri::command]
-// fn check_directory_exists(path: String) -> bool {
-//     Path::new(&path).is_dir()
-// }
 
 #[tauri::command]
 async fn ensure_directory_exists(path: String) -> Result<(), String> {
@@ -3800,7 +3804,7 @@ async fn upload_file_to_network(
                          total_chunks, chunk_size);
 
                 // Start streaming upload session
-                let upload_id = start_streaming_upload(original_file_name.clone(), file_size, state.clone()).await?;
+                let upload_id = start_streaming_upload(original_file_name.clone(), file_size, price, state.clone()).await?;
 
                 // Stream file in chunks
                 let mut file = tokio::fs::File::open(&file_path)
@@ -4667,6 +4671,7 @@ async fn copy_file_to_temp(file_path: String) -> Result<String, String> {
 async fn start_streaming_upload(
     file_name: String,
     file_size: u64,
+    price: f64,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // Check for active account - require login for all uploads
@@ -4699,6 +4704,7 @@ async fn start_streaming_upload(
             created_at: std::time::SystemTime::now(),
             chunk_cids: Vec::new(),
             file_data: Vec::new(),
+            price,
         },
     );
 
@@ -4783,6 +4789,9 @@ async fn upload_file_chunk(
             .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
+        // Get the account address for the uploader
+        let account = get_active_account(&state).await?;
+
         let metadata = dht::models::FileMetadata {
             merkle_root: merkle_root, // Store Merkle root for verification
             file_name: session.file_name.clone(),
@@ -4799,8 +4808,8 @@ async fn upload_file_chunk(
             parent_hash: None,
             is_root: true,
             download_path: None,
-            price: 0.0,
-            uploader_address: None,
+            price: session.price,
+            uploader_address: Some(account),
             ftp_sources: None,
             http_sources: None,
             info_hash: None,
@@ -5468,13 +5477,16 @@ async fn get_file_seeders(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<Vec<String>, String> {
+    println!("🔍 DEBUG MAIN: get_file_seeders called with hash = {}", file_hash);
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
     if let Some(dht_service) = dht {
-        Ok(dht_service.get_seeders_for_file(&file_hash).await)
+        let seeders = dht_service.get_seeders_for_file(&file_hash).await;
+        println!("🔍 DEBUG MAIN: get_file_seeders returning seeders = {:?}", seeders);
+        Ok(seeders)
     } else {
         Err("DHT node is not running".to_string())
     }
@@ -7168,7 +7180,7 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
-            get_default_storage_path,
+            get_download_directory,
             check_directory_exists,
             ensure_directory_exists,
             get_dht_health,

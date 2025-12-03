@@ -10,7 +10,6 @@
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { getStatus, type GethStatus } from '$lib/services/gethService';
-  import { invoke } from '@tauri-apps/api/core';
 
   export let dataDir: string;
   export let logLines = 40;
