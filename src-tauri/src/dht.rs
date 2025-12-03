@@ -953,7 +953,7 @@ impl PendingSearchQuery {
     }
     
     fn is_complete(&self) -> bool {
-        self.found_record.is_some() || self.found_providers.is_some()
+        self.found_record.is_some() // Only complete when we have the actual metadata
     }
     
     fn finalize(self) -> Result<Option<FileMetadata>, String> {
@@ -4417,7 +4417,7 @@ async fn handle_kademlia_event(
                                 ) {
                                     // Verify this is the file we were searching for
                                     if file_hash == pending_search.file_hash {
-                                        let metadata = construct_file_metadata_from_json_simple(
+                                        let mut metadata = construct_file_metadata_from_json_simple(
                                             &metadata_json,
                                             file_hash,
                                             file_name,
@@ -4425,7 +4425,14 @@ async fn handle_kademlia_event(
                                             created_at,
                                         );
 
-                                        info!("✅ Found searched file: {} ({})", file_name, file_hash);
+                                        // Include providers if they were found
+                                        if let Some(providers) = &pending_search.found_providers {
+                                            metadata.seeders = providers.clone();
+                                            info!("✅ Found searched file: {} ({}) with {} providers", file_name, file_hash, providers.len());
+                                        } else {
+                                            info!("✅ Found searched file: {} ({})", file_name, file_hash);
+                                        }
+
                                         // Send event to frontend for search results
                                         let _ = event_tx.send(DhtEvent::FileDiscovered(metadata.clone())).await;
                                         let _ = pending_search.sender.send(Ok(Some(metadata)));
@@ -4982,36 +4989,36 @@ async fn handle_kademlia_event(
                         let provider_strings: Vec<String> =
                             providers.iter().map(|p| p.to_string()).collect();
 
-                        // Find and notify the pending query
-                        let mut pending_queries = pending_provider_queries.lock().await;
-                        if let Some(pending_query) = pending_queries.remove(&file_hash) {
-                            let _ = pending_query.sender.send(Ok(provider_strings.clone()));
-                        } else {
-                            // This might be from a SearchFile command that also queries providers
-                            // Check if we can construct minimal metadata from providers
-                            if !provider_strings.is_empty() {
-                                info!(
-                                    "Found providers for search query, checking cache for metadata"
-                                );
+                        // Provider results - check for direct queries first
+                            // Check for direct provider queries (not from SearchFile)
+                            let mut pending_queries = pending_provider_queries.lock().await;
+                            if let Some(pending_query) = pending_queries.remove(&file_hash) {
+                                let _ = pending_query.sender.send(Ok(provider_strings.clone()));
+                            } else {
+                                // This might be from background discovery or orphaned provider queries
+                                // Check if we can construct minimal metadata from providers
+                                if !provider_strings.is_empty() {
+                                    info!(
+                                        "Found providers for search query, checking cache for metadata"
+                                    );
 
-                                // First check main file metadata cache (includes locally published files)
-                                let metadata_cache = file_metadata_cache.lock().await;
-                                if let Some(mut metadata) = metadata_cache.get(&file_hash).cloned()
-                                {
-                                    drop(metadata_cache); // Release lock before await
-                                                          // Update seeders list with found providers
-                                    metadata.seeders = provider_strings;
+                                    // First check main file metadata cache (includes locally published files)
+                                    let metadata_cache = file_metadata_cache.lock().await;
+                                    if let Some(mut metadata) = metadata_cache.get(&file_hash).cloned() {
+                                        drop(metadata_cache); // Release lock before await
+                                        // Update seeders list with found providers
+                                        metadata.seeders = provider_strings;
 
-                                    notify_pending_searches(
-                                        &pending_searches,
-                                        &file_hash,
-                                        SearchResponse::Found(metadata),
-                                    )
-                                    .await;
-                                } else {
-                                    drop(metadata_cache); // Release lock
-                                                          // Check seeder heartbeat cache for metadata
-                                    let cache = seeder_heartbeats_cache.lock().await;
+                                        notify_pending_searches(
+                                            &pending_searches,
+                                            &file_hash,
+                                            SearchResponse::Found(metadata),
+                                        )
+                                        .await;
+                                    } else {
+                                        drop(metadata_cache); // Release lock
+                                        // Check seeder heartbeat cache for metadata
+                                        let cache = seeder_heartbeats_cache.lock().await;
                                     if let Some(entry) = cache.get(&file_hash) {
                                         // We have cached metadata, emit it with the found providers
                                         if let Ok(mut metadata_json) =
@@ -5070,27 +5077,27 @@ async fn handle_kademlia_event(
                                         info!("No cached metadata for providers, waiting for metadata record query");
                                     }
                                 }
-                            } else {
-                                // No providers found (empty list) and no pending query
-                                // This means both metadata and provider queries returned nothing
-                                info!(
-                                    "Provider query returned 0 providers for {}, file not found",
-                                    file_hash
-                                );
+                                } else {
+                                    // No providers found (empty list) and no pending query
+                                    // This means both metadata and provider queries returned nothing
+                                    info!(
+                                        "Provider query returned 0 providers for {}, file not found",
+                                        file_hash
+                                    );
 
-                                // Notify pending searches that the file was not found
-                                notify_pending_searches(
-                                    &pending_searches,
-                                    &file_hash,
-                                    SearchResponse::NotFound,
-                                )
-                                .await;
-
-                                // Emit FileNotFound event
-                                let _ = event_tx
-                                    .send(DhtEvent::FileNotFound(file_hash.clone()))
+                                    // Notify pending searches that the file was not found
+                                    notify_pending_searches(
+                                        &pending_searches,
+                                        &file_hash,
+                                        SearchResponse::NotFound,
+                                    )
                                     .await;
-                            }
+
+                                    // Emit FileNotFound event
+                                    let _ = event_tx
+                                        .send(DhtEvent::FileNotFound(file_hash.clone()))
+                                        .await;
+                                }
                         }
                     }
                 }

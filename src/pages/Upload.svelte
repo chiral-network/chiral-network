@@ -47,8 +47,10 @@
   import Label from "$lib/components/ui/label.svelte";
   import Input from "$lib/components/ui/input.svelte";
   import { settings } from "$lib/stores";
-  import { paymentService } from "$lib/services/paymentService";
-  const tr = (k: string, params?: Record<string, any>): string => $t(k, params);
+  import { paymentService } from '$lib/services/paymentService';
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  const tr = (k: string, params?: Record<string, any>): string =>
+    $t(k, params);
 
   // Check if running in Tauri environment
   const isTauri =
@@ -328,7 +330,7 @@
   // Map to track active WebRTC sessions with downloaders
   let activeSeederSessions = new Map<string, any>();
   let signalingService: any = null;
-
+  let unlisten: (() => void) | null = null;
   onMount(async () => {
     // Initialize WebRTC seeder to accept download requests
     try {
@@ -818,11 +820,43 @@
         document.removeEventListener("drop", handleDragEnd);
       };
     }
+    if (isTauri) {
+      try {
+        unlisten = await getCurrentWindow().onDragDropEvent((event) => {
+          if (event.payload.type === 'over') {
+             // User is dragging files over the window
+            isDragging = true;
+          } else if (event.payload.type === 'drop') {
+             // User dropped the files
+            isDragging = false;
+            
+             // event.payload.paths is an array of strings (absolute paths)
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+               // No need to check other conditions. addFilesFromPaths checks those conditions.
+              addFilesFromPaths(paths);
+            }
+          } else {
+             // 'leave' or cancelled
+            isDragging = false;
+          }
+        });
+      } catch (err) {
+        console.error("Failed to setup Tauri drag drop listener:", err);
+      }
+    }
+    else{
+        showToast(
+            tr("upload.desktopOnly"),
+            "error",
+          );
+      }
+
   });
 
   onDestroy(() => {
-    if ((window as any).dragDropCleanup) {
-      (window as any).dragDropCleanup();
+    if (unlisten) {
+      unlisten();
     }
   });
 
