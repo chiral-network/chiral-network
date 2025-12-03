@@ -25,8 +25,8 @@ pub mod reassembly;
 
 // Re-export modules from the lib crate
 use chiral_network::{
-    analytics, bandwidth, bittorrent_handler, download_restart,
-    dht, ed2k_client, encryption, file_transfer,
+    analytics, bandwidth, bittorrent_handler, download_restart, download_scheduler, download_source,
+    dht, ed2k_client, encryption, file_transfer, ftp_client, peer_cache,
     http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
@@ -1506,6 +1506,22 @@ async fn start_dht_node(
     // DHT node is already running in a spawned background task
     let dht_arc = Arc::new(dht_service);
 
+    // Load peer cache and attempt reconnection to known peers
+    let dht_for_cache = dht_arc.clone();
+    tokio::spawn(async move {
+        match dht_for_cache.load_peer_cache().await {
+            Ok(cached_peers) => {
+                if !cached_peers.is_empty() {
+                    info!("Attempting to reconnect to {} cached peers", cached_peers.len());
+                    dht_for_cache.reconnect_cached_peers(cached_peers).await;
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load peer cache: {}", e);
+            }
+        }
+    });
+
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
@@ -1757,6 +1773,12 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     };
 
     if let Some(dht) = dht {
+        // Save peer cache before shutdown for faster startup next time
+        if let Err(e) = dht.save_peer_cache().await {
+            warn!("Failed to save peer cache: {}", e);
+            // Continue with shutdown even if cache save fails
+        }
+        
         let (last_enabled, last_disabled) = dht.autorelay_history().await;
         {
             let mut guard = state.autorelay_last_enabled.lock().await;
