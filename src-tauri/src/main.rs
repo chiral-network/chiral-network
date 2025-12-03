@@ -307,6 +307,7 @@ pub struct StreamingUploadSession {
     pub created_at: std::time::SystemTime,
     pub chunk_cids: Vec<String>,
     pub file_data: Vec<u8>,
+    pub price: f64,
 }
 
 /// Session for streaming WebRTC downloads - writes chunks directly to disk
@@ -1650,7 +1651,10 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
+                        println!("🔍 DEBUG MAIN: PublishedFile event received");
+                        println!("🔍 DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
                         let payload = serde_json::json!(metadata);
+                        println!("🔍 DEBUG MAIN: Emitting published_file event to frontend");
                         let _ = app_handle.emit("published_file", payload);
                         // Update analytics: record upload completion
                         analytics_arc.record_upload_completed().await;
@@ -3800,7 +3804,7 @@ async fn upload_file_to_network(
                          total_chunks, chunk_size);
 
                 // Start streaming upload session
-                let upload_id = start_streaming_upload(original_file_name.clone(), file_size, state.clone()).await?;
+                let upload_id = start_streaming_upload(original_file_name.clone(), file_size, price, state.clone()).await?;
 
                 // Stream file in chunks
                 let mut file = tokio::fs::File::open(&file_path)
@@ -4667,6 +4671,7 @@ async fn copy_file_to_temp(file_path: String) -> Result<String, String> {
 async fn start_streaming_upload(
     file_name: String,
     file_size: u64,
+    price: f64,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // Check for active account - require login for all uploads
@@ -4699,6 +4704,7 @@ async fn start_streaming_upload(
             created_at: std::time::SystemTime::now(),
             chunk_cids: Vec::new(),
             file_data: Vec::new(),
+            price,
         },
     );
 
@@ -4783,6 +4789,9 @@ async fn upload_file_chunk(
             .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
+        // Get the account address for the uploader
+        let account = get_active_account(&state).await?;
+
         let metadata = dht::models::FileMetadata {
             merkle_root: merkle_root, // Store Merkle root for verification
             file_name: session.file_name.clone(),
@@ -4799,8 +4808,8 @@ async fn upload_file_chunk(
             parent_hash: None,
             is_root: true,
             download_path: None,
-            price: 0.0,
-            uploader_address: None,
+            price: session.price,
+            uploader_address: Some(account),
             ftp_sources: None,
             http_sources: None,
             info_hash: None,
@@ -5468,13 +5477,16 @@ async fn get_file_seeders(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<Vec<String>, String> {
+    println!("🔍 DEBUG MAIN: get_file_seeders called with hash = {}", file_hash);
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
     if let Some(dht_service) = dht {
-        Ok(dht_service.get_seeders_for_file(&file_hash).await)
+        let seeders = dht_service.get_seeders_for_file(&file_hash).await;
+        println!("🔍 DEBUG MAIN: get_file_seeders returning seeders = {:?}", seeders);
+        Ok(seeders)
     } else {
         Err("DHT node is not running".to_string())
     }

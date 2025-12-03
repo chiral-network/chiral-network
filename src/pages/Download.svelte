@@ -964,6 +964,9 @@ async function loadAndResumeDownloads() {
 
   async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
     diagnosticLogger.debug('Download', 'handleSearchDownload called', { metadata });
+    console.log('🔍 DEBUG DOWNLOAD: handleSearchDownload metadata =', metadata);
+    console.log('🔍 DEBUG DOWNLOAD: metadata.seeders =', metadata.seeders);
+    console.log('🔍 DEBUG DOWNLOAD: metadata.seeders.length =', metadata.seeders?.length);
 
     // Use user's protocol selection if provided, otherwise auto-detect
     if (metadata.selectedProtocol) {
