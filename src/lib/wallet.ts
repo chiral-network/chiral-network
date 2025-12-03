@@ -612,13 +612,33 @@ export class WalletService {
         .filter((tx) => tx.status === "pending" && tx.type === "sent")
         .reduce((sum, tx) => sum + tx.amount, 0);
 
-      // Use real balance from Geth (no fallback - if Geth says 0, show 0 unless guarded above)
-      const actualBalance = realBalance;
+      // Calculate total earned and spent from transactions
+      const totalEarned = get(transactions)
+        .filter((tx) => tx.type === "mining" && tx.status === "success")
+        .reduce((sum, tx) => sum + tx.amount, 0);
+      const totalSpent = get(transactions)
+        .filter((tx) => tx.type === "sent" && tx.status === "success")
+        .reduce((sum, tx) => sum + tx.amount, 0);
+
+      // Check if mining rewards are already credited to blockchain
+      // If blockchain balance >= expected mining rewards, assume they're credited
+      const currentMiningState = get(miningState);
+      const expectedMiningRewards = currentMiningState.blocksFound * get(blockReward);
+      const miningRewardsCredited = realBalance >= expectedMiningRewards;
+
+      // If mining rewards are credited to blockchain, use blockchain balance only
+      // If not, add mining rewards from local tracking to avoid double-counting
+      const actualBalance = miningRewardsCredited
+        ? realBalance - totalSpent
+        : realBalance + totalEarned - totalSpent;
+
       const availableBalance = Math.max(0, actualBalance - pendingSent);
       wallet.update((current) => ({
         ...current,
         balance: availableBalance,
         actualBalance,
+        totalEarned,
+        totalSpent,
       }));
 
       // Note: totalRewards and blocksFound are now both set together in refreshTransactions
