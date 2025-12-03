@@ -370,10 +370,9 @@ impl BitTorrentConfigManager {
     }
 
     /// Validate network configuration
-    fn validate_network_config(&self, config: &NetworkConfig) -> Result<()> {
-        if config.listening_port > 65535 {
-            return Err(anyhow!("Invalid listening port: must be <= 65535"));
-        }
+    fn validate_network_config(&self, _config: &NetworkConfig) -> Result<()> {
+        // Note: listening_port is u16, so it's always <= 65535
+        // No additional validation needed for port range
         Ok(())
     }
 

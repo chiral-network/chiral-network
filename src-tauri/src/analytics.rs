@@ -1,8 +1,10 @@
+use crate::transfer_events::{TransferEvent, TransferProgressEvent, TransferCompletedEvent, TransferFailedEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
+use tracing::debug;
 
 /// Bandwidth usage statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +240,46 @@ impl AnalyticsService {
         activity.completed_downloads += 1;
     }
 
+    /// Increment active downloads counter (call when download starts)
+    pub async fn increment_active_downloads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.active_downloads += 1;
+        debug!("Active downloads incremented to {}", activity.active_downloads);
+    }
+
+    /// Decrement active downloads counter (call when download completes/fails/cancels)
+    pub async fn decrement_active_downloads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.active_downloads = activity.active_downloads.saturating_sub(1);
+        debug!("Active downloads decremented to {}", activity.active_downloads);
+    }
+
+    /// Increment active uploads counter (call when upload starts)
+    pub async fn increment_active_uploads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.active_uploads += 1;
+        debug!("Active uploads incremented to {}", activity.active_uploads);
+    }
+
+    /// Decrement active uploads counter (call when upload completes/fails/cancels)
+    pub async fn decrement_active_uploads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.active_uploads = activity.active_uploads.saturating_sub(1);
+        debug!("Active uploads decremented to {}", activity.active_uploads);
+    }
+
+    /// Increment queued downloads counter
+    pub async fn increment_queued_downloads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.queued_downloads += 1;
+    }
+
+    /// Decrement queued downloads counter
+    pub async fn decrement_queued_downloads(&self) {
+        let mut activity = self.network_activity.lock().await;
+        activity.queued_downloads = activity.queued_downloads.saturating_sub(1);
+    }
+
     /// Record peer connection
     pub async fn record_peer_connected(&self, peer_id: String) {
         let mut peers = self.unique_peers.lock().await;
@@ -387,6 +429,154 @@ impl AnalyticsService {
 
         self.bandwidth_history.lock().await.clear();
         self.contribution_history.lock().await.clear();
+    }
+
+    // =========================================================================
+    // TransferEvent Consumer - Subscribes to transfer events for metrics
+    // =========================================================================
+
+    /// Handle a TransferEvent and update metrics accordingly
+    /// This method allows AnalyticsService to act as a consumer of TransferEventBus events
+    pub async fn handle_transfer_event(&self, event: &TransferEvent) {
+        match event {
+            TransferEvent::Progress(progress) => {
+                self.handle_progress_event(progress).await;
+            }
+            TransferEvent::Completed(completed) => {
+                self.handle_completed_event(completed).await;
+            }
+            TransferEvent::Failed(failed) => {
+                self.handle_failed_event(failed).await;
+            }
+            TransferEvent::Started(_) => {
+                // Track active downloads - also decrement queued if it was queued before
+                let mut activity = self.network_activity.lock().await;
+                activity.active_downloads += 1;
+                // If there were queued downloads, one is now starting
+                activity.queued_downloads = activity.queued_downloads.saturating_sub(1);
+                debug!("Transfer started, active: {}, queued: {}",
+                    activity.active_downloads, activity.queued_downloads);
+            }
+            TransferEvent::Paused(_) => {
+                // Decrement active downloads when paused
+                let mut activity = self.network_activity.lock().await;
+                activity.active_downloads = activity.active_downloads.saturating_sub(1);
+                debug!("Transfer paused, active downloads: {}", activity.active_downloads);
+            }
+            TransferEvent::Resumed(_) => {
+                // Increment active downloads when resumed
+                let mut activity = self.network_activity.lock().await;
+                activity.active_downloads += 1;
+                debug!("Transfer resumed, active downloads: {}", activity.active_downloads);
+            }
+            TransferEvent::Canceled(_) => {
+                // Decrement active downloads when canceled
+                let mut activity = self.network_activity.lock().await;
+                activity.active_downloads = activity.active_downloads.saturating_sub(1);
+                debug!("Transfer canceled, active downloads: {}", activity.active_downloads);
+            }
+            TransferEvent::Queued(_) => {
+                // Track queued downloads
+                let mut activity = self.network_activity.lock().await;
+                activity.queued_downloads += 1;
+                debug!("Transfer queued, queued downloads: {}", activity.queued_downloads);
+            }
+            TransferEvent::SourceConnected(source) => {
+                // Track peer connections
+                self.record_peer_connected(source.source_id.clone()).await;
+            }
+            TransferEvent::SpeedUpdate(speed) => {
+                // Update speed metrics
+                let download_kbps = speed.download_speed_bps / 1000.0;
+                let upload_kbps = speed.upload_speed_bps / 1000.0;
+
+                let mut perf = self.performance.lock().await;
+                perf.peak_download_speed_kbps = perf.peak_download_speed_kbps.max(download_kbps);
+                perf.peak_upload_speed_kbps = perf.peak_upload_speed_kbps.max(upload_kbps);
+            }
+            _ => {
+                // Other events (SourceDisconnected, ChunkCompleted, ChunkFailed) can be added as needed
+            }
+        }
+    }
+
+    /// Handle progress event - update bandwidth stats
+    async fn handle_progress_event(&self, progress: &TransferProgressEvent) {
+        // Record download bytes
+        self.record_download(progress.downloaded_bytes).await;
+
+        // Update speed metrics
+        let download_kbps = progress.download_speed_bps / 1000.0;
+        let upload_kbps = progress.upload_speed_bps / 1000.0;
+
+        let mut perf = self.performance.lock().await;
+
+        // Update moving averages
+        if perf.avg_download_speed_kbps == 0.0 {
+            perf.avg_download_speed_kbps = download_kbps;
+        } else {
+            perf.avg_download_speed_kbps = (perf.avg_download_speed_kbps * 0.9) + (download_kbps * 0.1);
+        }
+
+        if perf.avg_upload_speed_kbps == 0.0 {
+            perf.avg_upload_speed_kbps = upload_kbps;
+        } else {
+            perf.avg_upload_speed_kbps = (perf.avg_upload_speed_kbps * 0.9) + (upload_kbps * 0.1);
+        }
+
+        // Update peak speeds
+        perf.peak_download_speed_kbps = perf.peak_download_speed_kbps.max(download_kbps);
+        perf.peak_upload_speed_kbps = perf.peak_upload_speed_kbps.max(upload_kbps);
+    }
+
+    /// Handle completed event - update success metrics
+    async fn handle_completed_event(&self, completed: &TransferCompletedEvent) {
+        // Record the completed download
+        self.record_download_completed().await;
+
+        // Update performance metrics
+        let mut perf = self.performance.lock().await;
+        perf.successful_transfers += 1;
+
+        // Update average speed if available
+        let speed_kbps = completed.average_speed_bps / 1000.0;
+        if speed_kbps > 0.0 {
+            if perf.avg_download_speed_kbps == 0.0 {
+                perf.avg_download_speed_kbps = speed_kbps;
+            } else {
+                perf.avg_download_speed_kbps = (perf.avg_download_speed_kbps * 0.8) + (speed_kbps * 0.2);
+            }
+            perf.peak_download_speed_kbps = perf.peak_download_speed_kbps.max(speed_kbps);
+        }
+
+        drop(perf);
+
+        // Update network activity
+        let mut activity = self.network_activity.lock().await;
+        activity.active_downloads = activity.active_downloads.saturating_sub(1);
+        activity.completed_downloads += 1;
+
+        debug!(
+            "Transfer completed: {} ({} bytes in {} seconds)",
+            completed.file_name, completed.file_size, completed.duration_seconds
+        );
+    }
+
+    /// Handle failed event - update failure metrics
+    async fn handle_failed_event(&self, failed: &TransferFailedEvent) {
+        // Update performance metrics
+        let mut perf = self.performance.lock().await;
+        perf.failed_transfers += 1;
+        drop(perf);
+
+        // Update network activity
+        let mut activity = self.network_activity.lock().await;
+        activity.active_downloads = activity.active_downloads.saturating_sub(1);
+
+        debug!(
+            "Transfer failed: {} - {} ({}/{} bytes)",
+            failed.file_hash, failed.error, failed.downloaded_bytes, failed.total_bytes
+        );
     }
 }
 

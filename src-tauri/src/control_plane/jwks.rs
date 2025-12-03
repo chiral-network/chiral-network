@@ -26,23 +26,23 @@ pub enum JwksError {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct JwkDocument {
-    keys: Vec<Jwk>,
+pub struct JwkDocument {
+    pub keys: Vec<Jwk>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Jwk {
-    kty: String,
+pub struct Jwk {
+    pub kty: String,
     #[serde(rename = "use", default)]
-    usage: Option<String>,
+    pub usage: Option<String>,
     #[serde(default)]
-    alg: Option<String>,
+    pub alg: Option<String>,
     #[serde(default)]
-    crv: Option<String>,
+    pub crv: Option<String>,
     #[serde(default)]
-    kid: Option<String>,
+    pub kid: Option<String>,
     #[serde(default)]
-    x: Option<String>,
+    pub x: Option<String>,
 }
 
 #[derive(Debug, Clone)]

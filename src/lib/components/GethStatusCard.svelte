@@ -2,7 +2,9 @@
   import Card from '$lib/components/ui/card.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import { RefreshCw, HardDrive, Activity, FolderOpen, AlertCircle, Server } from 'lucide-svelte';
+  import Expandable from '$lib/components/ui/Expandable.svelte';
+  import BootstrapHealthDashboard from '$lib/components/network/BootstrapHealthDashboard.svelte';
+  import { RefreshCw, HardDrive, Activity, FolderOpen, AlertCircle, Server, Wifi } from 'lucide-svelte';
   import { onDestroy, onMount, createEventDispatcher } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { get } from 'svelte/store';
@@ -24,6 +26,8 @@
   let unlistenProgress: (() => void) | null = null;
   let componentMounted = false;
   let previousDataDir: string | undefined;
+
+  let bootstrapExpanded = false;
 
   $: lastUpdatedLabel = status
     ? tr('network.geth.lastUpdated', {
@@ -243,6 +247,16 @@
           {/if}
         </div>
       </div>
+
+      <!-- Bootstrap Node Health Check -->
+      <Expandable bind:isOpen={bootstrapExpanded}>
+        <div slot="title" class="flex items-center gap-2">
+          <Wifi class="h-4 w-4" />
+          <span>{tr('network.geth.bootstrap.title')}</span>
+        </div>
+
+        <BootstrapHealthDashboard />
+      </Expandable>
     </div>
   {/if}
 </Card>

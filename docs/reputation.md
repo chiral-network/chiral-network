@@ -1,18 +1,21 @@
 # Reputation System
 
-> **Status:** MVP design for transaction-backed reputation. Uptime, storage, and relay metrics will ship later as extensions once out-of-band evidence is available.
+> **Status:** MVP design for transaction-backed reputation with signed transaction message proofs.
+
+> **📘 For detailed information about signed transaction messages and non-payment complaint workflow, see [SIGNED_TRANSACTION_MESSAGES.md](./SIGNED_TRANSACTION_MESSAGES.md)**
 
 ## Overview
 
-Chiral Network tracks peer reputation through verifiable, transaction-centric evidence. Confirmed on-chain transaction history is the authoritative ledger: every payment or settlement that finalizes on-chain becomes durable ground truth. To keep costs low and latency acceptable, clients publish signed **Transaction Verdicts** into the DHT as an index of recent interactions. Consumers fetch those verdicts for fast heuristics, but they always re-validate against the chain (or cached receipts) before acting; if a verdict cannot be bridged back to finalized chain history, it is ignored. This hybrid model lets us iterate inside today's infrastructure while reserving long-term accuracy to the blockchain. Later releases may reuse the same storage model to incorporate additional metrics (uptime, relay quality, etc.) once the supporting evidence flow exists.
+Chiral Network tracks peer reputation through verifiable, transaction-centric evidence. Confirmed on-chain transactions are the authoritative record of successful payments. When a download completes and payment is broadcast and confirmed, that on-chain transfer is ground truth for successful behavior. For non-payment, there may be no on-chain footprint at all. In those cases, we rely on cryptographically signed off-chain payment promises from the downloader to the seeder as evidence, and store those promises (or hashes of them) in the DHT. To keep costs low and latency acceptable, clients publish signed **Transaction Verdicts** into the DHT as an index of recent interactions. Consumers fetch those verdicts for fast heuristics, but they always re-validate against the chain (or cached receipts) before acting; if a verdict cannot be bridged back to finalized chain history, it is ignored. This hybrid model lets us iterate inside today's infrastructure while reserving long-term accuracy to the blockchain. Later releases may reuse the same storage model to incorporate additional metrics (uptime, relay quality, etc.) once the supporting evidence flow exists.
 
 ### Core Principles
 
-1. **Blockchain as Source of Truth**: All reputation stems from completed on-chain transactions
-2. **DHT as Performance Cache**: Quick lookups without querying the full blockchain every time
-3. **Transaction-Centric**: Reputation grows with successful transaction history (seeding or downloading)
-4. **Proof-Backed Penalties**: Complaints require cryptographic evidence (signed handshakes, transaction data)
-5. **Hybrid Verification**: Recent activity via DHT, historical data via blockchain
+1. **Blockchain as Source of Truth for Success**: Positive reputation stems from completed on-chain payments.
+2. **Signed Promises for Failures**: Negative reputation for non-payment uses cryptographically signed off-chain payment messages when no on-chain transaction exists.
+3. **DHT as Performance Cache**: Quick lookups without querying the full blockchain every time
+4. **Transaction-Centric**: Reputation grows with successful transaction history (seeding or downloading)
+5. **Proof-Backed Penalties**: Complaints require cryptographic evidence (signed handshakes, transaction data)
+6. **Hybrid Verification**: Recent activity via DHT, historical data via blockchain
 
 ### Goals
 
@@ -311,6 +314,24 @@ Reliable penalties apply when a party can anchor their claim to the chain. For e
 
 Because these complaints rest on permanent chain data, they are treated as authoritative and can trigger automatic responses (e.g., lower trust buckets, blacklist thresholds) without waiting for additional reports.
 
+### Payment Handshake (Downloader → Seeder)
+
+Before any data transfer, the downloader MUST send a signed payment message to the seeder:
+payer_id = downloader’s peer/wallet ID
+payee_id = seeder’s ID
+amount = maximum amount the downloader is willing to pay
+expiry = deadline after which the promise is invalid
+chain_tx_template = transaction payload that can be broadcast to the chain as-is (or with minimal wrapping)
+payer_sig = downloader’s signature over the above
+
+The seeder only starts sending data if:
+1. The signature is valid, and
+2. The seeder verifies the downloader’s balance and reputation (see admission control below).
+
+If the downloader later refuses to pay or never broadcasts payment, the seeder retains this signed message as evidence and can:
+Optionally broadcast it (if the chain model allows a third party to submit signed transactions from the downloader).
+At minimum, publish a bad TransactionVerdict to the DHT with the signed promise attached in evidence_blobs.
+
 ### Non-payment Complaint Lifecycle
 
 This is the most critical reputation scenario: a downloader receives a file but never pays. The solution leverages **signed transaction messages** as cryptographic proof of payment obligation.
@@ -392,6 +413,8 @@ This is the most critical reputation scenario: a downloader receives a file but 
    - Short-term: Reputation-aware seeders refuse to serve this downloader
    - Long-term: If on-chain complaint filed, permanent reputation damage
    - Recovery: Downloader must complete many successful transactions to rebuild trust
+
+**Optional reliable penalty path:** If the payment model uses a channel that allows the seeder to reclaim funds on timeout, the seeder’s close transaction (the reclaim receipt) can be attached as `tx_receipt` for a stronger, chain-anchored `bad` verdict. This augments—not replaces—the signed transaction message evidence.
 
 #### Why Signed Messages Solve the Problem
 
@@ -528,6 +551,31 @@ The system tracks false complaint patterns:
 - Third false complaint: Automatic blacklist + permanent untrusted status
 
 This makes it extremely costly for seeders to file false complaints, protecting honest downloaders.
+
+### Pre-Transfer Admission Control (Seeder-side)
+
+Before a seeder commits to serving a downloader, it performs an admission check:
+
+1. Identity: Downloader includes `peer_id` and wallet address in the handshake.
+2. Reputation lookup: Seeder calls `reputationService.getPeerScore(peer_id)` and checks:
+   - Score ≥ configured threshold (e.g., 0.4 or 0.6).
+   - No automatic blacklist entry.
+3. Balance check: Seeder queries the chain (or a wallet service) to ensure:
+   - Downloader’s balance ≥ expected maximum payment.
+4. Signed payment message: Seeder verifies the off-chain signed transaction described above.
+
+If any of these steps fail, the seeder may refuse the transfer, reduce the amount of data it is willing to send, or require smaller, incremental payments.
+
+### Design Tradeoff: Asymmetric Protection (Downloader as Potential Victim)
+
+We explicitly prioritize protecting seeders from non-paying downloaders:
+
+1. If a downloader receives a file but never pays, we can use the signed off-chain payment message plus the absence of an on-chain payment within the agreed window (or a seeder-side timeout receipt, if channels are used) as strong negative evidence and penalize the downloader.
+2. If a seeder is malicious and never sends the file after the downloader signs a payment message, the downloader is harder to protect:
+   - The downloader can choose not to broadcast the payment, so there may be no on-chain footprint.
+   - Without privacy-invasive logging or complex cryptographic proofs of data transfer, it is difficult to prove seeder misbehavior beyond “they never replied.”
+
+Therefore the design chooses the downloader as the potential victim in the tricky seeder-misbehaves scenario. The system focuses on reliable penalties for non-paying downloaders, while seeder misbehavior is handled via weaker, gossip-style complaints and manual user judgments.
 
 ### Gossip-backed Penalty Signals
 

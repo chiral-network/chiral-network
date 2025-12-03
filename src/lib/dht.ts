@@ -1,8 +1,7 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppSettings } from "./stores";
-import { homeDir } from "@tauri-apps/api/path";
+import { join } from "@tauri-apps/api/path";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
 const __rep = ReputationStore.getInstance();
@@ -30,6 +29,7 @@ export interface DhtConfig {
   enableAutorelay?: boolean;
   preferredRelays?: string[];
   enableRelayServer?: boolean;
+  enableUpnp?: boolean;
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
 }
 
@@ -39,6 +39,21 @@ export interface HttpSourceInfo {
   verifySsl: boolean;
   headers?: Array<[string, string]>;
   timeoutSecs?: number;
+}
+
+export interface FtpSourceInfo {
+  url: string;
+  username?: string;
+  password?: string;
+  supportsResume: boolean;
+  fileSize?: number;
+  lastChecked?: number;
+  isAvailable: boolean;
+}
+
+export interface Ed2kSourceInfo {
+  server_url: string;
+  file_hash: string;
 }
 
 export interface FileMetadata {
@@ -57,32 +72,14 @@ export interface FileMetadata {
   manifest?: string;
   isRoot?: boolean;
   cids?: string[];
-  price?: number;
+  price: number;
   uploaderAddress?: string;
   httpSources?: HttpSourceInfo[];
+  ftpSources?: FtpSourceInfo[];
+  ed2kSources?: Ed2kSourceInfo[];
+  infoHash?: string;
+  trackers?: string[];
 }
-
-export interface FileManifestForJs {
-  merkleRoot: string;
-  chunks: any[]; // Define a proper type for ChunkInfo if you can
-  encryptedKeyBundle: string; // This is the JSON string
-}
-
-export const encryptionService = {
-  async encryptFile(filePath: string): Promise<FileManifestForJs> {
-    return await invoke("encrypt_file_for_upload", { filePath });
-  },
-
-  async decryptFile(
-    manifest: FileManifestForJs,
-    outputPath: string
-  ): Promise<void> {
-    await invoke("decrypt_and_reassemble_file", {
-      manifestJs: manifest,
-      outputPath,
-    });
-  },
-};
 
 export interface DhtHealth {
   peerCount: number;
@@ -102,6 +99,8 @@ export interface DhtHealth {
   autonatEnabled: boolean;
   // AutoRelay metrics
   autorelayEnabled: boolean;
+  lastAutorelayEnabledAt: number | null;
+  lastAutorelayDisabledAt: number | null;
   activeRelayPeerId: string | null;
   relayReservationStatus: string | null;
   lastReservationSuccess: number | null;
@@ -190,6 +189,9 @@ export class DhtService {
       if (typeof config?.enableRelayServer === "boolean") {
         payload.enableRelayServer = config.enableRelayServer;
       }
+      if (typeof config?.enableUpnp === "boolean") {
+        payload.enableUpnp = config.enableUpnp;
+      }
       if (
         typeof config?.relayServerAlias === "string" &&
         config.relayServerAlias.trim().length > 0
@@ -220,10 +222,14 @@ export class DhtService {
 
   async publishFileToNetwork(
     filePath: string,
-    price?: number
+    price?: number,
+    protocol?: string,
+    originalFileName?: string
   ): Promise<FileMetadata> {
     try {
       // Start listening for the published_file event
+      let timeoutId: NodeJS.Timeout;
+
       const metadataPromise = new Promise<FileMetadata>((resolve, reject) => {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
@@ -235,6 +241,8 @@ export class DhtService {
             if (!metadata.fileHash && metadata.merkleRoot) {
               metadata.fileHash = metadata.merkleRoot;
             }
+            // Clear timeout on success
+            if (timeoutId) clearTimeout(timeoutId);
             resolve(metadata);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
@@ -242,20 +250,22 @@ export class DhtService {
         );
 
         // Add timeout to reject the promise if publishing takes too long
-        setTimeout(() => {
+        timeoutId = setTimeout(() => {
           reject(
             new Error(
               "File publishing timeout - no published_file event received"
             )
           );
           unlistenPromise.then((unlistenFn) => unlistenFn());
-        }, 120000); // 2 minute timeout for file publishing
+        }, 30000); // Increase timeout to 30 seconds for ED2K and other protocols
       });
 
-      // Trigger the backend upload with price
+      // Trigger the backend upload with price and protocol
       await invoke("upload_file_to_network", {
         filePath,
-        price: price ?? null,
+        price: price ?? 0, // Default to 0 instead of null
+        protocol: protocol ?? "Bitswap", // Default to Bitswap if no protocol specified
+        originalFileName: originalFileName || null,
       });
 
       // Wait until the event arrives
@@ -268,47 +278,22 @@ export class DhtService {
 
   async downloadFile(fileMetadata: FileMetadata): Promise<FileMetadata> {
     try {
-      console.log("Initiating download for file:", fileMetadata.fileHash);
-
-      // Use the downloadPath from metadata if provided, otherwise fall back to settings
+      // Use the download path from metadata (must be provided by caller)
       let resolvedStoragePath: string;
 
       if (fileMetadata.downloadPath) {
         // Use the path that was already selected by the user in the file dialog
         resolvedStoragePath = fileMetadata.downloadPath;
-        console.log("Using provided download path:", resolvedStoragePath);
       } else {
-        // Fallback to settings path (old behavior)
-        const stored = localStorage.getItem("chiralSettings");
-        let storagePath = "."; // Default fallback
-
-        if (stored) {
-          try {
-            const loadedSettings: AppSettings = JSON.parse(stored);
-            storagePath = loadedSettings.storagePath;
-          } catch (e) {
-            console.error("Failed to load settings:", e);
-          }
-        }
+        // Get canonical download directory from backend (single source of truth)
+        const downloadDir = await invoke<string>("get_download_directory");
 
         // Construct full file path
-        if (storagePath.startsWith("~")) {
-          const home = await homeDir();
-          resolvedStoragePath = storagePath.replace("~", home);
-        } else {
-          resolvedStoragePath = storagePath;
-        }
-        resolvedStoragePath += "/" + fileMetadata.fileName;
-        console.log("Using settings storage path:", resolvedStoragePath);
+        resolvedStoragePath = await join(downloadDir, fileMetadata.fileName);
       }
 
       // Ensure the directory exists before starting download
-      try {
-        await invoke("ensure_directory_exists", { path: resolvedStoragePath });
-      } catch (error) {
-        console.error("Failed to create download directory:", error);
-        throw new Error(`Failed to create download directory: ${error}`);
-      }
+      await invoke("ensure_directory_exists", { path: resolvedStoragePath });
 
       // IMPORTANT: Set up the event listener BEFORE invoking the backend
       // to avoid race condition where event fires before we're listening
@@ -316,9 +301,6 @@ export class DhtService {
         const unlistenPromise = listen<FileMetadata>(
           "file_content",
           async (event) => {
-            console.log("Received file content event:", event.payload);
-            console.log(`File saved to: ${resolvedStoragePath}`);
-
             resolve(event.payload);
             // Unsubscribe once we got the event
             unlistenPromise.then((unlistenFn) => unlistenFn());
@@ -350,23 +332,24 @@ export class DhtService {
           : fileMetadata.cids[0] === fileMetadata.merkleRoot ||
             fileMetadata.cids.length === 1;
 
-      console.log("Prepared file metadata for Bitswap download:", fileMetadata);
-      console.log("Calling download_blocks_from_network with:", fileMetadata);
-
-      // Trigger the backend download AFTER setting up the listener
-      await invoke("download_blocks_from_network", {
-        fileMetadata,
-        downloadPath: resolvedStoragePath,
-      });
-
-      console.log(
-        "Backend download initiated, waiting for file_content event..."
-      );
+      try {
+        // Trigger the backend download AFTER setting up the listener
+        await invoke("download_blocks_from_network", {
+          fileMetadata,
+          downloadPath: resolvedStoragePath,
+        });
+      } catch (error) {
+        console.error(
+          "🔽 Frontend: download_blocks_from_network invoke failed:",
+          error
+        );
+        throw error;
+      }
 
       // Wait until the event arrives
       return await metadataPromise;
     } catch (error) {
-      console.error("Failed to download file:", error);
+      console.error("🔽 Frontend: Failed to download file:", error);
       throw error;
     }
   }
@@ -381,20 +364,6 @@ export class DhtService {
       console.log("Searching for file:", fileHash);
     } catch (error) {
       console.error("Failed to search file:", error);
-      throw error;
-    }
-  }
-
-  async searchFileByCid(cid: string): Promise<void> {
-    if (!this.peerId) {
-      throw new Error("DHT not started");
-    }
-
-    try {
-      await invoke("search_file_by_cid", { cidStr: cid });
-      console.log("Searching for file by CID:", cid);
-    } catch (error) {
-      console.error("Failed to search file by CID:", error);
       throw error;
     }
   }
@@ -554,9 +523,9 @@ export class DhtService {
           metadata.merkleRoot || metadata.fileHash || trimmed;
         if (hashForSeeders) {
           const seeders = await this.getSeedersForFile(hashForSeeders);
-          if (seeders.length > 0) {
-            metadata.seeders = seeders;
-          }
+          // Always update seeders with the current live list from DHT provider query
+          // This ensures we don't use stale seeders from the cached metadata
+          metadata.seeders = seeders;
         }
       }
       return metadata;

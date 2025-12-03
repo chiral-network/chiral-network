@@ -1,15 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 import { get } from "svelte/store";
 import {
+  blockReward,
   etcAccount,
   miningState,
   transactions,
+  transactionPagination,
+  miningPagination,
   wallet,
   type ETCAccount,
   type Transaction,
   type WalletInfo,
 } from "$lib/stores";
 import { showToast } from "$lib/toast";
+import { t } from "svelte-i18n";
+
+type TranslateParams = { values?: Record<string, unknown>; default?: string };
+type TranslateFn = (key: string, params?: TranslateParams) => string;
+
+const tr: TranslateFn = (key, params) =>
+  (get(t) as unknown as TranslateFn)(key, params);
 
 const DEFAULT_POLL_INTERVAL = 15_000;
 
@@ -56,6 +66,8 @@ export class WalletService {
   private readonly isTauri: boolean;
   private readonly seenHashes = new Set<string>();
   private isRestoringAccount = false; // Flag to prevent sync during account restoration
+  private progressiveLoadHandle: ReturnType<typeof setTimeout> | null = null;
+  private isProgressiveLoading = false;
 
   constructor() {
     this.isTauri =
@@ -71,6 +83,17 @@ export class WalletService {
     this.pollInterval = options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL;
 
     if (this.isTauri) {
+      // Fetch block reward from backend (single source of truth)
+      try {
+        const reward = await invoke<number>("get_block_reward");
+        blockReward.set(reward);
+      } catch (err) {
+        console.warn(
+          "Failed to fetch block reward from backend, using default:",
+          err
+        );
+      }
+
       await this.syncFromBackend();
       if (options?.autoStartPolling !== false) {
         this.startPolling();
@@ -103,6 +126,7 @@ export class WalletService {
       this.unsubscribeAccount();
       this.unsubscribeAccount = undefined;
     }
+    this.stopProgressiveLoading();
     this.initialized = false;
     this.seenHashes.clear();
   }
@@ -212,7 +236,6 @@ export class WalletService {
 
     // Skip if we're restoring an account
     if (this.isRestoringAccount) {
-      console.log("[refreshTransactions] Skipping - account is being restored");
       return;
     }
 
@@ -235,27 +258,113 @@ export class WalletService {
       return;
     }
 
+    // Check if account changed - if so, clear everything and reset
+    const currentPaginationState = get(transactionPagination);
+    if (
+      currentPaginationState.accountAddress !== accountAddress &&
+      currentPaginationState.accountAddress !== null
+    ) {
+      this.seenHashes.clear();
+      this.stopProgressiveLoading();
+      transactions.set([]); // Clear old account's transactions
+
+      // Reset pagination state for new account
+      transactionPagination.update((state) => ({
+        ...state,
+        accountAddress: null, // Will be set below
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+
+      // Reset mining pagination state for new account
+      miningPagination.update((state) => ({
+        ...state,
+        accountAddress: null, // Will be set below
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+    }
+
     try {
-      // Get data in parallel
-      const [blocks, totalBlockCount] = await Promise.all([
+      // Get current block number to track pagination
+      const currentBlock = await invoke<number>("get_current_block");
+
+      // Get data in parallel: mining blocks AND transaction history
+      const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
           address: accountAddress,
           lookback: 2000,
           limit: 50,
         }) as Promise<
-          Array<{ hash: string; timestamp: number; reward?: number }>
+          Array<{
+            hash: string;
+            timestamp: number;
+            number: number;
+            reward?: number;
+          }>
         >,
         invoke("get_blocks_mined", {
           address: accountAddress,
         }) as Promise<number>,
+        invoke("get_transaction_history", {
+          address: accountAddress,
+          lookback: 1000, // Scan last 1000 blocks for transactions
+        }) as Promise<
+          Array<{
+            hash: string;
+            from: string;
+            to: string | null;
+            value: string;
+            block_number: number;
+            timestamp: number;
+            status: string;
+            tx_type: string;
+            gas_used: string | null;
+            gas_price: string | null;
+          }>
+        >,
       ]);
 
-      // Update total count FIRST, before adding blocks
-      miningState.update((state) => ({
-        ...state,
-        blocksFound: totalBlockCount,
-      }));
+      // If backend returns no history but we already have imported history, keep existing
+      const existingTxs = get(transactions);
+      if (
+        txHistory.length === 0 &&
+        blocks.length === 0 &&
+        existingTxs.length > 0
+      ) {
+        transactionPagination.update((state) => ({
+          ...state,
+          accountAddress,
+          oldestBlockScanned: currentBlock,
+          hasMore: true,
+          isLoading: false,
+        }));
+        miningPagination.update((state) => ({
+          ...state,
+          accountAddress,
+          oldestBlockScanned: currentBlock,
+          hasMore: true,
+          isLoading: false,
+        }));
+        return;
+      }
 
+      // Update total count AND rewards together to keep them consistent
+      // During active mining, don't override with potentially inconsistent scan data
+      const reward = get(blockReward);
+      const currentMiningState = get(miningState);
+
+      if (!currentMiningState.isMining) {
+        miningState.update((state) => ({
+          ...state,
+          blocksFound: totalBlockCount,
+          totalRewards: totalBlockCount * reward,
+        }));
+      }
+
+      // Process mining rewards
       for (const block of blocks) {
         if (this.seenHashes.has(block.hash)) {
           continue;
@@ -264,11 +373,136 @@ export class WalletService {
         this.pushRecentBlock({
           hash: block.hash,
           timestamp: new Date((block.timestamp || 0) * 1000),
-          reward: block.reward ?? 2,
+          reward: block.reward ?? get(blockReward),
+          block_number: block.number,
         });
       }
+
+      // Process regular transactions (sent/received)
+      const newTransactions: Transaction[] = [];
+      for (const tx of txHistory) {
+        if (this.seenHashes.has(tx.hash)) {
+          continue; // Skip already seen transactions
+        }
+        this.seenHashes.add(tx.hash);
+
+        // Convert Wei to Chiral (1 Chiral = 10^18 Wei)
+        const valueInWei = BigInt(tx.value);
+        const valueInChiral = Number(valueInWei) / 1e18;
+
+        // Skip zero-value transactions (likely contract interactions)
+        if (valueInChiral === 0) {
+          continue;
+        }
+
+        // Convert gas data from hex to numbers
+        const gasUsed = tx.gas_used
+          ? parseInt(tx.gas_used.replace("0x", ""), 16)
+          : undefined;
+
+        const gasPrice = tx.gas_price
+          ? parseInt(tx.gas_price.replace("0x", ""), 16) / 1e9 // Convert Wei to Gwei
+          : undefined;
+
+        // Calculate fee in Chiral (gas_used * gas_price in Wei, then convert to Chiral)
+        const feeInWei =
+          gasUsed && tx.gas_price
+            ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
+            : undefined;
+        const feeInChiral = feeInWei ? feeInWei / 1e18 : undefined;
+
+        const transaction: Transaction = {
+          id: Date.now() + Math.random(), // Unique ID
+          type: tx.tx_type as "sent" | "received",
+          amount: valueInChiral,
+          from: tx.tx_type === "sent" ? accountAddress : tx.from,
+          to: tx.tx_type === "received" ? accountAddress : (tx.to ?? ""),
+          date: new Date(tx.timestamp * 1000),
+          description:
+            tx.tx_type === "sent"
+              ? `Sent to ${tx.to?.slice(0, 10)}...`
+              : `Received from ${tx.from.slice(0, 10)}...`,
+          status: tx.status === "success" ? "success" : "failed",
+          hash: tx.hash,
+          block_number: tx.block_number,
+          timestamp: tx.timestamp,
+          gas_used: gasUsed,
+          gas_price: gasPrice, // Store as Gwei for display
+          fee: feeInChiral,
+        };
+
+        newTransactions.push(transaction);
+      }
+
+      // Add new transactions to store (sorted by date, newest first)
+      if (newTransactions.length > 0) {
+        transactions.update((list) => {
+          const combined = [...newTransactions, ...list];
+          // Remove duplicates by hash, preferring confirmed blockchain data over pending
+          const uniqueMap = new Map();
+          for (const tx of combined) {
+            const key = tx.hash || tx.txHash || `${tx.id}`;
+
+            if (!uniqueMap.has(key)) {
+              uniqueMap.set(key, tx);
+            } else {
+              const existing = uniqueMap.get(key);
+              // Prefer confirmed transactions over pending
+              // Prefer transactions with block_number (from blockchain) over manual entries
+              if (
+                (tx.status !== "pending" && existing?.status === "pending") ||
+                (tx.block_number && !existing?.block_number)
+              ) {
+                uniqueMap.set(key, tx);
+              }
+            }
+          }
+          return Array.from(uniqueMap.values()).sort(
+            (a, b) => b.date.getTime() - a.date.getTime()
+          );
+        });
+      }
+
+      // Update pagination state - reset if account changed or first load
+      transactionPagination.update((state) => {
+        // Reset if account changed or this is the first load
+        if (
+          state.accountAddress !== accountAddress ||
+          state.oldestBlockScanned === null
+        ) {
+          const oldestScanned = Math.max(0, currentBlock - 1000);
+          return {
+            ...state,
+            accountAddress,
+            oldestBlockScanned: oldestScanned,
+            hasMore: oldestScanned > 0,
+          };
+        }
+        // Otherwise, keep existing state (preserve progress)
+        return state;
+      });
+
+      // Update mining pagination state - reset if account changed or first load
+      miningPagination.update((state) => {
+        // Reset if account changed or this is the first load
+        if (
+          state.accountAddress !== accountAddress ||
+          state.oldestBlockScanned === null
+        ) {
+          const oldestScanned = Math.max(0, currentBlock - 2000);
+          return {
+            ...state,
+            accountAddress,
+            oldestBlockScanned: oldestScanned,
+            hasMore: oldestScanned > 0,
+          };
+        }
+        // Otherwise, keep existing state (preserve progress)
+        return state;
+      });
     } catch (error) {
       // Expected when Geth is not running - silently skip
+      console.error("Failed to refresh transactions:", error);
     }
   }
 
@@ -279,7 +513,6 @@ export class WalletService {
 
     // Skip if we're restoring an account
     if (this.isRestoringAccount) {
-      console.log("[refreshBalance] Skipping - account is being restored");
       return;
     }
 
@@ -303,13 +536,6 @@ export class WalletService {
     }
 
     try {
-      // Get actual total blocks mined from miningState (set by refreshTransactions)
-      const currentMiningState = get(miningState);
-      const actualBlocksFound = currentMiningState.blocksFound ?? 0;
-
-      // Calculate total rewards based on ACTUAL blocks found, not recentBlocks length
-      const totalEarned = actualBlocksFound * 2;
-
       // Try to get balance from geth
       let realBalance = 0;
       try {
@@ -321,12 +547,70 @@ export class WalletService {
         // Expected when Geth is not running
       }
 
-      // Calculate pending sent transactions
+      const prevWallet = get(wallet);
+
+      // If geth returns zero but we already have a non-zero balance (e.g., from an imported snapshot),
+      // avoid clobbering it until real data is available.
+      if (realBalance === 0 && prevWallet.balance > 0) {
+        return;
+      }
+
+      // Reconcile any lingering pending/ submitted sent txs by checking their receipts
+      const pendingSentTxs = get(transactions).filter(
+        (tx) =>
+          (tx.status === "pending" || tx.status === "submitted") &&
+          tx.type === "sent" &&
+          (tx.hash || tx.txHash)
+      );
+
+      if (pendingSentTxs.length > 0) {
+        for (const tx of pendingSentTxs) {
+          const hash = tx.hash || tx.txHash;
+          if (!hash) continue;
+
+          try {
+            const receipt = await invoke<any>("get_transaction_receipt", {
+              txHash: hash,
+            });
+
+            if (receipt && receipt.block_number !== null) {
+              const status =
+                receipt.status === "success" ? "success" : "failed";
+              const confirmations = receipt.confirmations || 0;
+
+              transactions.update((txs) =>
+                txs.map((t) =>
+                  t.txHash === hash || t.hash === hash
+                    ? {
+                        ...t,
+                        status: status as "success" | "failed",
+                        confirmations,
+                        block_number: receipt.block_number ?? t.block_number,
+                      }
+                    : t
+                )
+              );
+
+              wallet.update((w) => ({
+                ...w,
+                pendingTransactions: Math.max(
+                  0,
+                  (w.pendingTransactions ?? 0) - 1
+                ),
+              }));
+            }
+          } catch (err) {
+            // Ignore receipt lookup errors; we'll try again on next poll
+          }
+        }
+      }
+
+      // Calculate pending sent transactions (after reconciliation)
       const pendingSent = get(transactions)
         .filter((tx) => tx.status === "pending" && tx.type === "sent")
         .reduce((sum, tx) => sum + tx.amount, 0);
 
-      // Use real balance from Geth (no fallback - if Geth says 0, show 0)
+      // Use real balance from Geth (no fallback - if Geth says 0, show 0 unless guarded above)
       const actualBalance = realBalance;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
       wallet.update((current) => ({
@@ -335,32 +619,292 @@ export class WalletService {
         actualBalance,
       }));
 
-      // Update pending transaction status if they've been confirmed
-      // If we have pending sent transactions, check if the balance has decreased
-      // to mark them as completed
-      if (pendingSent > 0 && realBalance > 0) {
-        const expectedBalanceAfterPending = availableBalance;
-        // If real balance is lower than expected (meaning pending txs were processed),
-        // mark pending sent transactions as completed
-        if (realBalance < expectedBalanceAfterPending + pendingSent - 0.01) {
-          transactions.update((txs) =>
-            txs.map((tx) =>
-              tx.status === "pending" && tx.type === "sent"
-                ? { ...tx, status: "success" as const }
-                : tx
-            )
-          );
-        }
-      }
-
-      // Update mining state totalRewards (don't override blocksFound - it's set by refreshTransactions)
-      miningState.update((state) => ({
-        ...state,
-        totalRewards: totalEarned,
-        // blocksFound is already correctly set by refreshTransactions
-      }));
+      // Note: totalRewards and blocksFound are now both set together in refreshTransactions
+      // to ensure they stay consistent (totalRewards = blocksFound * blockReward)
     } catch (error) {
       console.error("Failed to refresh balance:", error);
+    }
+  }
+
+  async loadMoreTransactions(): Promise<void> {
+    if (!this.isTauri) {
+      return;
+    }
+
+    // Check if we're already loading or if there are no more transactions
+    const paginationState = get(transactionPagination);
+    if (paginationState.isLoading || !paginationState.hasMore) {
+      return;
+    }
+
+    // Set loading state
+    transactionPagination.update((state) => ({ ...state, isLoading: true }));
+
+    try {
+      // Check if Geth is running
+      const isRunning = await invoke<boolean>("is_geth_running");
+      if (!isRunning) {
+        transactionPagination.update((state) => ({
+          ...state,
+          isLoading: false,
+        }));
+        return;
+      }
+
+      // Get account address
+      const accountAddress = await invoke<string>("get_active_account_address");
+
+      // Check if pagination state matches current account
+      // If not, skip this load and let refreshTransactions() initialize it properly
+      if (paginationState.accountAddress !== accountAddress) {
+        transactionPagination.update((state) => ({
+          ...state,
+          isLoading: false,
+        }));
+        return;
+      }
+
+      // If oldestBlockScanned is null, pagination hasn't been initialized yet
+      if (paginationState.oldestBlockScanned === null) {
+        transactionPagination.update((state) => ({
+          ...state,
+          isLoading: false,
+        }));
+        return;
+      }
+
+      // Calculate the block range for this batch
+      const toBlock = paginationState.oldestBlockScanned;
+      const fromBlock = Math.max(0, toBlock - paginationState.batchSize);
+
+      // Fetch transactions for this range
+      const txHistory = (await invoke("get_transaction_history_range", {
+        address: accountAddress,
+        fromBlock: fromBlock,
+        toBlock: toBlock,
+      })) as Array<{
+        hash: string;
+        from: string;
+        to: string | null;
+        value: string;
+        block_number: number;
+        timestamp: number;
+        status: string;
+        tx_type: string;
+        gas_used: string | null;
+        gas_price: string | null;
+      }>;
+
+      // Process transactions
+      const newTransactions: Transaction[] = [];
+      for (const tx of txHistory) {
+        if (this.seenHashes.has(tx.hash)) {
+          continue;
+        }
+        this.seenHashes.add(tx.hash);
+
+        const valueInWei = BigInt(tx.value);
+        const valueInChiral = Number(valueInWei) / 1e18;
+
+        if (valueInChiral === 0) {
+          continue;
+        }
+
+        const gasUsed = tx.gas_used
+          ? parseInt(tx.gas_used.replace("0x", ""), 16)
+          : undefined;
+
+        const gasPrice = tx.gas_price
+          ? parseInt(tx.gas_price.replace("0x", ""), 16) / 1e9
+          : undefined;
+
+        const feeInWei =
+          gasUsed && tx.gas_price
+            ? gasUsed * parseInt(tx.gas_price.replace("0x", ""), 16)
+            : undefined;
+        const feeInChiral = feeInWei ? feeInWei / 1e18 : undefined;
+
+        const transaction: Transaction = {
+          id: Date.now() + Math.random(),
+          type: tx.tx_type as "sent" | "received",
+          amount: valueInChiral,
+          from: tx.tx_type === "sent" ? accountAddress : tx.from,
+          to: tx.tx_type === "received" ? accountAddress : (tx.to ?? ""),
+          date: new Date(tx.timestamp * 1000),
+          description:
+            tx.tx_type === "sent"
+              ? `Sent to ${tx.to?.slice(0, 10)}...`
+              : `Received from ${tx.from.slice(0, 10)}...`,
+          status: tx.status === "success" ? "success" : "failed",
+          hash: tx.hash,
+          block_number: tx.block_number,
+          timestamp: tx.timestamp,
+          gas_used: gasUsed,
+          gas_price: gasPrice,
+          fee: feeInChiral,
+        };
+
+        newTransactions.push(transaction);
+      }
+
+      // Add new transactions to store
+      if (newTransactions.length > 0) {
+        transactions.update((list) => {
+          const combined = [...list, ...newTransactions];
+          const uniqueMap = new Map();
+          for (const tx of combined) {
+            const key = tx.hash || tx.txHash || `${tx.id}`;
+            if (!uniqueMap.has(key)) {
+              uniqueMap.set(key, tx);
+            } else {
+              const existing = uniqueMap.get(key);
+              if (
+                (tx.status !== "pending" && existing?.status === "pending") ||
+                (tx.block_number && !existing?.block_number)
+              ) {
+                uniqueMap.set(key, tx);
+              }
+            }
+          }
+          return Array.from(uniqueMap.values()).sort(
+            (a, b) => b.date.getTime() - a.date.getTime()
+          );
+        });
+      }
+
+      // Update pagination state
+      transactionPagination.update((state) => ({
+        ...state,
+        oldestBlockScanned: fromBlock,
+        hasMore: fromBlock > 0,
+        isLoading: false,
+      }));
+    } catch (error) {
+      console.error("Failed to load more transactions:", error);
+      transactionPagination.update((state) => ({ ...state, isLoading: false }));
+    }
+  }
+
+  async loadMoreMiningRewards(): Promise<void> {
+    if (!this.isTauri) {
+      return;
+    }
+
+    // Check if we're already loading or if there are no more mining rewards
+    const paginationState = get(miningPagination);
+    if (paginationState.isLoading || !paginationState.hasMore) {
+      return;
+    }
+
+    // Set loading state
+    miningPagination.update((state) => ({ ...state, isLoading: true }));
+
+    try {
+      // Check if Geth is running
+      const isRunning = await invoke<boolean>("is_geth_running");
+      if (!isRunning) {
+        miningPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // Get account address
+      const accountAddress = await invoke<string>("get_active_account_address");
+
+      // Check if pagination state matches current account
+      if (paginationState.accountAddress !== accountAddress) {
+        miningPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // If oldestBlockScanned is null, pagination hasn't been initialized yet
+      if (paginationState.oldestBlockScanned === null) {
+        miningPagination.update((state) => ({ ...state, isLoading: false }));
+        return;
+      }
+
+      // Calculate the block range for this batch
+      const toBlock = paginationState.oldestBlockScanned;
+      const fromBlock = Math.max(0, toBlock - paginationState.batchSize);
+
+      // Fetch mining blocks for this range
+      const miningBlocks = (await invoke("get_mined_blocks_range", {
+        address: accountAddress,
+        fromBlock: fromBlock,
+        toBlock: toBlock,
+      })) as Array<{
+        hash: string;
+        timestamp: number;
+        number: number;
+        reward?: number;
+      }>;
+
+      // Process mining blocks
+      for (const block of miningBlocks) {
+        if (this.seenHashes.has(block.hash)) {
+          continue;
+        }
+        this.seenHashes.add(block.hash);
+        this.pushRecentBlock({
+          hash: block.hash,
+          timestamp: new Date((block.timestamp || 0) * 1000),
+          reward: block.reward ?? get(blockReward),
+          block_number: block.number,
+        });
+      }
+
+      // Update pagination state
+      miningPagination.update((state) => ({
+        ...state,
+        oldestBlockScanned: fromBlock,
+        hasMore: fromBlock > 0,
+        isLoading: false,
+      }));
+    } catch (error) {
+      console.error("Failed to load more mining rewards:", error);
+      miningPagination.update((state) => ({ ...state, isLoading: false }));
+    }
+  }
+
+  async startProgressiveLoading(): Promise<void> {
+    if (this.isProgressiveLoading) {
+      return;
+    }
+
+    this.isProgressiveLoading = true;
+
+    const loadNextBatch = async () => {
+      if (!this.isProgressiveLoading) {
+        return;
+      }
+
+      const paginationState = get(transactionPagination);
+
+      // Stop if no more transactions or if we're manually loading
+      if (!paginationState.hasMore || paginationState.isLoading) {
+        this.isProgressiveLoading = false;
+        return;
+      }
+
+      // Load next batch
+      await this.loadMoreTransactions();
+
+      // Schedule next batch after a short delay (500ms)
+      if (this.isProgressiveLoading && get(transactionPagination).hasMore) {
+        this.progressiveLoadHandle = setTimeout(loadNextBatch, 500);
+      } else {
+        this.isProgressiveLoading = false;
+      }
+    };
+
+    // Start loading
+    loadNextBatch();
+  }
+
+  stopProgressiveLoading(): void {
+    this.isProgressiveLoading = false;
+    if (this.progressiveLoadHandle) {
+      clearTimeout(this.progressiveLoadHandle);
+      this.progressiveLoadHandle = null;
     }
   }
 
@@ -404,9 +948,26 @@ export class WalletService {
       const account = (await invoke("import_chiral_account", {
         privateKey,
       })) as AccountCreationResult;
-      transactions.set([]);
+      transactions.set([]); // clear old account's txs
       this.seenHashes.clear();
       this.setActiveAccount(account);
+
+      // Prime pagination state for the new account so we don't wipe imported tx snapshots
+      transactionPagination.update((state) => ({
+        ...state,
+        accountAddress: account.address,
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+      miningPagination.update((state) => ({
+        ...state,
+        accountAddress: account.address,
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+
       await this.syncFromBackend();
       return account;
     }
@@ -431,7 +992,9 @@ export class WalletService {
 
     // Get account address from backend for transaction record
     const accountAddress = await invoke<string>("get_active_account_address");
-    console.log(`[Transaction] Sending ${amount} CN from ${accountAddress} to ${toAddress}`);
+    console.log(
+      `[Transaction] Sending ${amount} CN from ${accountAddress} to ${toAddress}`
+    );
 
     const txHash = (await invoke("send_chiral_transaction", {
       toAddress,
@@ -439,7 +1002,9 @@ export class WalletService {
     })) as string;
 
     console.log(`[Transaction] ✅ Broadcast successful! Hash: ${txHash}`);
-    console.log(`[Transaction] Status: PENDING - monitoring for confirmation...`);
+    console.log(
+      `[Transaction] Status: PENDING - monitoring for confirmation...`
+    );
 
     wallet.update((w) => ({
       ...w,
@@ -455,8 +1020,9 @@ export class WalletService {
         to: toAddress,
         from: accountAddress,
         date: new Date(),
-        description: "Manual transfer",
+        description: `Sent to ${toAddress.slice(0, 10)}...`,
         status: "pending",
+        hash: txHash, // Use 'hash' to match blockchain-scanned transactions
         txHash,
       },
       ...existing,
@@ -468,7 +1034,11 @@ export class WalletService {
     return txHash;
   }
 
-  private async monitorTransaction(txHash: string, amount: number, toAddress: string): Promise<void> {
+  private async monitorTransaction(
+    txHash: string,
+    amount: number,
+    toAddress: string
+  ): Promise<void> {
     console.log(`[TX Monitor] 👀 Monitoring ${txHash.substring(0, 10)}...`);
 
     let attempts = 0;
@@ -478,7 +1048,9 @@ export class WalletService {
       attempts++;
 
       try {
-        const receipt = await invoke<any>("get_transaction_receipt", { txHash });
+        const receipt = await invoke<any>("get_transaction_receipt", {
+          txHash,
+        });
 
         if (receipt && receipt.block_number !== null) {
           clearInterval(checkInterval);
@@ -486,13 +1058,21 @@ export class WalletService {
           const confirmations = receipt.confirmations || 0;
           const status = receipt.status === "success" ? "success" : "failed";
 
-          console.log(`[TX Monitor] ✅ ${status.toUpperCase()} in block ${receipt.block_number}`);
-          console.log(`[TX Monitor] Confirmations: ${confirmations}, Gas: ${receipt.gas_used}`);
+          console.log(
+            `[TX Monitor] ✅ ${status.toUpperCase()} in block ${receipt.block_number}`
+          );
+          console.log(
+            `[TX Monitor] Confirmations: ${confirmations}, Gas: ${receipt.gas_used}`
+          );
 
           transactions.update((txs) =>
             txs.map((tx) =>
-              tx.txHash === txHash
-                ? { ...tx, status: status as "success" | "failed", confirmations }
+              tx.txHash === txHash || tx.hash === txHash
+                ? {
+                    ...tx,
+                    status: status as "success" | "failed",
+                    confirmations,
+                  }
                 : tx
             )
           );
@@ -505,20 +1085,44 @@ export class WalletService {
           await this.refreshBalance();
 
           if (status === "success") {
-            showToast(`Transaction confirmed! ${amount} CN sent to ${toAddress.substring(0, 10)}... (Block ${receipt.block_number})`, 'success');
+            // showToast(
+            //   `Transaction confirmed! ${amount} CN sent to ${toAddress.substring(0, 10)}... (Block ${receipt.block_number})`,
+            //   "success"
+            // );
+            showToast(
+              tr("toasts.wallet.transaction.confirmed", {
+                values: {
+                  amount,
+                  address: toAddress.substring(0, 10),
+                  block: receipt.block_number,
+                },
+              }),
+              "success"
+            );
           } else {
-            showToast(`Transaction failed in block ${receipt.block_number}. Your funds were not sent.`, 'error');
+            // showToast(
+            //   `Transaction failed in block ${receipt.block_number}. Your funds were not sent.`,
+            //   "error"
+            // );
+            showToast(
+              tr("toasts.wallet.transaction.failed", {
+                values: { block: receipt.block_number },
+              }),
+              "error"
+            );
           }
-
         } else if (attempts % 6 === 0) {
-          console.log(`[TX Monitor] ⏳ Pending... (${attempts * 5}s) - Mining active?`);
+          console.log(
+            `[TX Monitor] ⏳ Pending... (${attempts * 5}s) - Mining active?`
+          );
         }
 
         if (attempts >= maxAttempts) {
           clearInterval(checkInterval);
-          console.warn(`[TX Monitor] ⚠️ Timeout after ${maxAttempts * 5}s - check Blockchain page`);
+          console.warn(
+            `[TX Monitor] ⚠️ Timeout after ${maxAttempts * 5}s - check Blockchain page`
+          );
         }
-
       } catch (error) {
         if (attempts % 12 === 0) {
           console.log(`[TX Monitor] ⏳ Still pending (${attempts * 5}s)...`);
@@ -660,6 +1264,77 @@ export class WalletService {
     }
   }
 
+  async calculateAccurateTotals(): Promise<void> {
+    if (!this.isTauri) {
+      throw new Error(
+        "Accurate totals calculation is only available in the desktop app"
+      );
+    }
+
+    // Get account address from backend
+    let accountAddress: string;
+    try {
+      accountAddress = await invoke<string>("get_active_account_address");
+    } catch (error) {
+      throw new Error("No active account");
+    }
+
+    const {
+      isCalculatingAccurateTotals,
+      accurateTotals,
+      accurateTotalsProgress,
+    } = await import("$lib/stores");
+
+    // Set loading state
+    isCalculatingAccurateTotals.set(true);
+    accurateTotalsProgress.set(null);
+
+    // Listen for progress events
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<{
+      current_block: number;
+      total_blocks: number;
+      percentage: number;
+    }>("accurate-totals-progress", (event) => {
+      accurateTotalsProgress.set({
+        currentBlock: event.payload.current_block,
+        totalBlocks: event.payload.total_blocks,
+        percentage: event.payload.percentage,
+      });
+    });
+
+    try {
+      const result = await invoke<{
+        blocks_mined: number;
+        total_received: number;
+        total_sent: number;
+      }>("calculate_accurate_totals", {
+        address: accountAddress,
+      });
+
+      // Store the results
+      console.log("[Accurate Totals] Updating store with:", {
+        blocksMined: result.blocks_mined,
+        totalReceived: result.total_received,
+        totalSent: result.total_sent,
+      });
+      accurateTotals.set({
+        blocksMined: result.blocks_mined,
+        totalReceived: result.total_received,
+        totalSent: result.total_sent,
+      });
+
+      console.log(`[Accurate Totals] Complete!`, result);
+    } catch (error) {
+      console.error("Failed to calculate accurate totals:", error);
+      throw error;
+    } finally {
+      isCalculatingAccurateTotals.set(false);
+      accurateTotalsProgress.set(null);
+      unlisten();
+    }
+  }
+
   private setActiveAccount(account: AccountCreationResult): void {
     const formatted: ETCAccount = {
       address: account.address,
@@ -680,6 +1355,7 @@ export class WalletService {
     hash: string;
     reward?: number;
     timestamp?: Date;
+    block_number?: number;
   }): void {
     const reward = typeof block.reward === "number" ? block.reward : 0;
 
@@ -703,12 +1379,14 @@ export class WalletService {
       const last4 = block.hash.slice(-4);
       const tx: Transaction = {
         id: Date.now(),
-        type: "received",
+        type: "mining",
         amount: reward,
         from: "Mining reward",
         date: block.timestamp ?? new Date(),
         description: `Block Reward (…${last4})`,
         status: "success",
+        block_number: block.block_number,
+        hash: block.hash,
       };
       transactions.update((list) => [tx, ...list]);
     }

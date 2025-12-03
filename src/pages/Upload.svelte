@@ -1,6 +1,7 @@
 <script lang="ts">
   import Card from "$lib/components/ui/card.svelte";
   import Badge from "$lib/components/ui/badge.svelte";
+  import DropDown from "$lib/components/ui/dropDown.svelte";
   import {
     File as FileIcon,
     X,
@@ -18,13 +19,15 @@
     RefreshCw,
     Lock,
     Key,
-    Blocks,
-    Globe,
     DollarSign,
-    Copy,
-    Share2
+     Copy,
+     Share2,
+    Globe,
+    Blocks,
+    Network,
+    Server,
   } from "lucide-svelte";
-  import { files, type FileItem } from "$lib/stores";
+  import { files, coalescedFiles, type FileItem } from "$lib/stores";
   import {
     loadSeedList,
     saveSeedList,
@@ -37,15 +40,15 @@
   import { showToast } from "$lib/toast";
   import { getStorageStatus } from "$lib/uploadHelpers";
   import { fileService } from "$lib/services/fileService";
+  import { toHumanReadableSize } from "$lib/utils";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { dhtService } from "$lib/dht";
   import Label from "$lib/components/ui/label.svelte";
   import Input from "$lib/components/ui/input.svelte";
-  import { selectedProtocol as protocolStore } from "$lib/stores/protocolStore";
+  import { settings } from "$lib/stores";
   import { paymentService } from '$lib/services/paymentService';
-
-
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   const tr = (k: string, params?: Record<string, any>): string =>
     $t(k, params);
 
@@ -138,7 +141,7 @@
   // Helper function to check if DHT is connected (consistent with Network.svelte)
   async function isDhtConnected(): Promise<boolean> {
     if (!isTauri) return false;
-    
+
     try {
       const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
       return isRunning;
@@ -156,16 +159,12 @@
   let lastChecked: Date | null = null;
   let isUploading = false;
 
-  // Protocol selection state
-  $: selectedProtocol = $protocolStore;
-  $: hasSelectedProtocol = selectedProtocol !== null;
-
-  function handleProtocolSelect(protocol: "WebRTC" | "Bitswap" | "BitTorrent") {
-    protocolStore.set(protocol);
-  }
-
-  function changeProtocol() {
-    protocolStore.reset();
+  // Protocol selection state - read from settings with Bitswap fallback
+  $: selectedProtocol = $settings.selectedProtocol || "Bitswap";
+  
+  // Ensure settings store always has a valid protocol (defensive fix)
+  $: if (!$settings.selectedProtocol) {
+    settings.update(s => ({ ...s, selectedProtocol: "Bitswap" }));
   }
 
   // Encrypted sharing state
@@ -173,7 +172,6 @@
   let recipientPublicKey = "";
   let showEncryptionOptions = false;
 
-  // Calculate price using dynamic network metrics with safe fallbacks
   async function calculateFilePrice(sizeInBytes: number): Promise<number> {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
 
@@ -290,7 +288,177 @@
     }
   }
 
+  // Map to track active WebRTC sessions with downloaders
+  let activeSeederSessions = new Map<string, any>();
+  let signalingService: any = null;
+  let unlisten: (() => void) | null = null;
   onMount(async () => {
+    // Initialize WebRTC seeder to accept download requests
+    try {
+      const { SignalingService } = await import('$lib/services/signalingService');
+
+      signalingService = new SignalingService({
+        preferDht: true,  // Prefer DHT for signaling in desktop app
+        persistPeers: false  // Don't persist peers to avoid stale peer IDs
+      });
+
+      // Connect to signaling server
+      await signalingService.connect();
+
+      // Expose for debugging
+      if (typeof window !== 'undefined') {
+        (window as any).uploadSignalingService = signalingService;
+      }
+
+      // Listen for incoming WebRTC connection requests
+      // Don't use webrtcService - handle WebRTC directly to avoid handler conflicts
+      signalingService.setOnMessage(async (message: any) => {
+        console.log('[Upload] Received signaling message:', message);
+
+        if (message.type === 'offer') {
+          console.log('[Upload] Received download request from:', message.from);
+
+          // Check if we already have a session with this peer
+          if (activeSeederSessions.has(message.from)) {
+            console.log('[Upload] Already have session with peer:', message.from);
+            // Still handle the new offer - create new peer connection
+            const oldSession = activeSeederSessions.get(message.from);
+            try {
+              oldSession.pc?.close();
+            } catch (e) {
+              console.error('[Upload] Error closing old session:', e);
+            }
+            activeSeederSessions.delete(message.from);
+          }
+
+          try {
+            // Create RTCPeerConnection directly (not using webrtcService to avoid handler conflicts)
+            const pc = new RTCPeerConnection({
+              iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:global.stun.twilio.com:3478" }
+              ]
+            });
+
+            let dataChannel: RTCDataChannel | null = null;
+
+            // Handle incoming data channel (created by initiator)
+            pc.ondatachannel = (event) => {
+              console.log('[Upload] Data channel received');
+              dataChannel = event.channel;
+
+              dataChannel.onopen = () => {
+                console.log('[Upload] Data channel opened with downloader:', message.from);
+              };
+
+              dataChannel.onclose = () => {
+                console.log('[Upload] Data channel closed with downloader:', message.from);
+                activeSeederSessions.delete(message.from);
+              };
+
+              dataChannel.onerror = (e) => {
+                console.error('[Upload] Data channel error:', e);
+              };
+
+              dataChannel.onmessage = async (event) => {
+                const data = event.data;
+                console.log('[Upload] Received message from downloader:', data);
+
+                // Handle file chunk requests
+                if (typeof data === 'string') {
+                  try {
+                    const request = JSON.parse(data);
+
+                    // Handle chunk_request
+                    if (request.type === 'chunk_request') {
+                      const fileHash = request.fileHash;
+                      const chunkIndex = request.chunkIndex;
+
+                      const currentFiles = get(files);
+                      const requestedFile = currentFiles.find(f => f.hash === fileHash);
+
+                      if (requestedFile && requestedFile.path) {
+                        console.log(`[Upload] Sending chunk ${chunkIndex} for file ${requestedFile.name}`);
+
+                        try {
+                          const { readFile } = await import('@tauri-apps/plugin-fs');
+                          const fileData = await readFile(requestedFile.path);
+
+                          const CHUNK_SIZE = 16 * 1024;
+                          const start = chunkIndex * CHUNK_SIZE;
+                          const end = Math.min(start + CHUNK_SIZE, fileData.length);
+                          const chunk = fileData.slice(start, end);
+
+                          dataChannel?.send(chunk.buffer);
+                          console.log(`[Upload] Sent chunk ${chunkIndex} (${chunk.length} bytes)`);
+                        } catch (error) {
+                          console.error('[Upload] Error reading file chunk:', error);
+                        }
+                      } else {
+                        console.error('[Upload] Requested file not found or no path:', fileHash);
+                      }
+                    }
+                  } catch (e) {
+                    console.error('[Upload] Error handling message:', e);
+                  }
+                }
+              };
+            };
+
+            // Handle ICE candidates
+            pc.onicecandidate = (event) => {
+              if (event.candidate) {
+                signalingService.send({
+                  type: 'candidate',
+                  candidate: event.candidate.toJSON(),
+                  to: message.from
+                });
+              }
+            };
+
+            pc.onconnectionstatechange = () => {
+              console.log('[Upload] Connection state:', pc.connectionState);
+              if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                activeSeederSessions.delete(message.from);
+              }
+            };
+
+            // Accept the offer and create answer
+            await pc.setRemoteDescription(message.sdp);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            // Send answer
+            signalingService.send({
+              type: 'answer',
+              sdp: answer,
+              to: message.from
+            });
+            console.log('[Upload] Sent answer to:', message.from);
+
+            // Store session
+            activeSeederSessions.set(message.from, { pc, dataChannel });
+
+          } catch (error) {
+            console.error('[Upload] Failed to create WebRTC session:', error);
+          }
+        }
+        else if (message.type === 'candidate') {
+          // Handle incoming ICE candidates
+          const session = activeSeederSessions.get(message.from);
+          if (session && session.pc) {
+            try {
+              await session.pc.addIceCandidate(message.candidate);
+              console.log('[Upload] Added ICE candidate from:', message.from);
+            } catch (e) {
+              console.error('[Upload] Error adding ICE candidate:', e);
+            }
+          }
+        }
+      });
+    } catch (error) {
+      console.error('[Upload] Failed to initialize WebRTC seeder:', error);
+    }
 
     // Make storage refresh non-blocking on startup to prevent UI hanging
     setTimeout(() => refreshAvailableStorage(), 100);
@@ -336,229 +504,43 @@
       console.warn("Failed to restore persisted seed list", e);
     }
 
-    // HTML5 Drag and Drop functionality
-    const dropZone = document.querySelector(".drop-zone") as HTMLElement;
-
-    if (dropZone) {
-      const handleDragOver = (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer!.dropEffect = "copy";
-        isDragging = true;
-      };
-
-      const handleDragEnter = (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer!.dropEffect = "copy";
-        isDragging = true;
-      };
-
-      const handleDragLeave = (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.currentTarget && !dropZone.contains(e.relatedTarget as Node)) {
-          isDragging = false;
-        }
-      };
-
-      const handleDragEnd = (_e: DragEvent) => {
-        isDragging = false;
-      };
-
-      const handleDrop = async (e: DragEvent) => {
-        isDragging = false;
-
-        // IMPORTANT: Extract files immediately before any async operations
-        // dataTransfer.files becomes empty after the event completes
-        const droppedFiles = Array.from(e.dataTransfer?.files || []);
-
-        // STEP 1: Verify backend has active account before proceeding
-        if (isTauri) {
-          try {
-            const hasAccount = await invoke<boolean>("has_active_account");
-            if (!hasAccount) {
-              showToast(
-                "Please log in to your account before uploading files",
-                "error",
-              );
-              return;
+    if (isTauri) {
+      try {
+        unlisten = await getCurrentWindow().onDragDropEvent((event) => {
+          if (event.payload.type === 'over') {
+             // User is dragging files over the window
+            isDragging = true;
+          } else if (event.payload.type === 'drop') {
+             // User dropped the files
+            isDragging = false;
+            
+             // event.payload.paths is an array of strings (absolute paths)
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+               // No need to check other conditions. addFilesFromPaths checks those conditions.
+              addFilesFromPaths(paths);
             }
-          } catch (error) {
-            console.error("Failed to verify account status:", error);
-            showToast(
-              "Failed to verify account status. Please try logging in again.",
-              "error",
-            );
-            return;
+          } else {
+             // 'leave' or cancelled
+            isDragging = false;
           }
-        }
-
-        if (isUploading) {
-          showToast(
-            tr("upload.uploadInProgress"),
-            "warning",
-          );
-          return;
-        }
-
-        // STEP 2: Ensure DHT is connected before attempting upload
-        const dhtConnected = await isDhtConnected();
-        if (!dhtConnected) {
-          showToast(
-            "DHT network is not connected. Please start the DHT network before uploading files.",
+        });
+      } catch (err) {
+        console.error("Failed to setup Tauri drag drop listener:", err);
+      }
+    }
+    else{
+        showToast(
+            tr("upload.desktopOnly"),
             "error",
           );
-          return;
-        }
+      }
 
-        if (droppedFiles.length > 0) {
-          if (!isTauri) {
-            showToast(
-              tr("upload.desktopOnly"),
-              "error",
-            );
-            return;
-          }
-
-          try {
-            isUploading = true;
-            let duplicateCount = 0;
-            let addedCount = 0;
-            let blockedCount = 0;
-
-            // Process files sequentially (unified flow for all protocols)
-            for (const file of droppedFiles) {
-              const blockedExtensions = [
-                ".exe",
-                ".bat",
-                ".cmd",
-                ".com",
-                ".msi",
-                ".scr",
-                ".vbs",
-              ];
-              const fileName = file.name.toLowerCase();
-              if (blockedExtensions.some((ext) => fileName.endsWith(ext))) {
-                showToast(
-                  tr("upload.executableBlocked", { values: { name: file.name } }),
-                  "error",
-                );
-                blockedCount++;
-                continue;
-              }
-
-              if (file.size === 0) {
-                showToast(tr("upload.emptyFile", { values: { name: file.name } }), "error");
-                blockedCount++;
-                continue;
-              }
-
-              try {
-                const buffer = await file.arrayBuffer();
-                const fileData = Array.from(new Uint8Array(buffer));
-                const tempFilePath = await invoke<string>(
-                  "save_temp_file_for_upload",
-                  {
-                    fileName: file.name,
-                    fileData,
-                  },
-                );
-                const filePrice = await calculateFilePrice(file.size);
-
-                const metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice);
-
-                if (get(files).some((f) => f.hash === metadata.merkleRoot)) {
-                  duplicateCount++;
-                  continue;
-                }
-
-                const newFile = {
-                  id: `file-${Date.now()}-${Math.random()}`,
-                  name: metadata.fileName,
-                  path: file.name,
-                  hash: metadata.merkleRoot || "",
-                  size: metadata.fileSize,
-                  status: "seeding" as const,
-                  seeders: metadata.seeders?.length ?? 0,
-                  seederAddresses: metadata.seeders ?? [],
-                  leechers: 0,
-                  uploadDate: new Date(metadata.createdAt),
-                  price: filePrice,
-                  cids: metadata.cids,
-                };
-
-                files.update((currentFiles) => [...currentFiles, newFile]);
-                addedCount++;
-                showToast(`${file.name} uploaded successfully`, "success");
-              } catch (error) {
-                console.error("Error uploading dropped file:", file.name, error);
-                showToast(
-                  tr("upload.fileFailed", {
-                    values: { name: file.name, error: String(error) },
-                  }),
-                  "error",
-                );
-              }
-            }
-
-            if (duplicateCount > 0) {
-              showToast(
-                tr("upload.duplicateSkipped", {
-                  values: { count: duplicateCount },
-                }),
-                "warning",
-              );
-            }
-
-            // Refresh storage after uploads
-            if (addedCount > 0) {
-              setTimeout(() => refreshAvailableStorage(), 100);
-            }
-          } catch (error) {
-            console.error("Error handling dropped files:", error);
-            showToast(
-              tr("upload.uploadError"),
-              "error",
-            );
-          } finally {
-            isUploading = false;
-          }
-        }
-      };
-
-      dropZone.addEventListener("dragenter", handleDragEnter);
-      dropZone.addEventListener("dragover", handleDragOver);
-      dropZone.addEventListener("dragleave", handleDragLeave);
-      dropZone.addEventListener("drop", handleDrop);
-
-      const preventDefaults = (e: Event) => {
-        e.preventDefault();
-        e.stopPropagation();
-      };
-
-      window.addEventListener("dragover", preventDefaults);
-      window.addEventListener("drop", preventDefaults);
-
-      document.addEventListener("dragend", handleDragEnd);
-      document.addEventListener("drop", handleDragEnd);
-
-      (window as any).dragDropCleanup = () => {
-        dropZone.removeEventListener("dragenter", handleDragEnter);
-        dropZone.removeEventListener("dragover", handleDragOver);
-        dropZone.removeEventListener("dragleave", handleDragLeave);
-        dropZone.removeEventListener("drop", handleDrop);
-        window.removeEventListener("dragover", preventDefaults);
-        window.removeEventListener("drop", preventDefaults);
-        document.removeEventListener("dragend", handleDragEnd);
-        document.removeEventListener("drop", handleDragEnd);
-      };
-    }
   });
 
   onDestroy(() => {
-    if ((window as any).dragDropCleanup) {
-      (window as any).dragDropCleanup();
+    if (unlisten) {
+      unlisten();
     }
   });
 
@@ -599,7 +581,8 @@
         const hasAccount = await invoke<boolean>("has_active_account");
         if (!hasAccount) {
           showToast(
-            "Please log in to your account before uploading files",
+            // "Please log in to your account before uploading files",
+            tr('toasts.upload.loginRequired'),
             "error",
           );
           return;
@@ -607,7 +590,8 @@
       } catch (error) {
         console.error("Failed to verify account status:", error);
         showToast(
-          "Failed to verify account status. Please try logging in again.",
+          // "Failed to verify account status. Please try logging in again.",
+          tr('toasts.upload.verifyAccountFailed'),
           "error",
         );
         return;
@@ -632,7 +616,7 @@
     }
   }
 
-  async function removeFile(fileHash: string) {
+  async function removeFile(contentHash: string) {
     if (!isTauri) {
       showToast(
         tr("upload.fileManagementDesktopOnly"),
@@ -642,19 +626,30 @@
     }
 
     try {
-      try {
-        await invoke("stop_publishing_file", { fileHash });
-        console.log("File unpublished from DHT:", fileHash);
-      } catch (unpublishError) {
-        console.warn("Failed to unpublish file from DHT:", unpublishError);
+      // Find all files with this content hash and stop publishing each one
+      const filesToRemove = get(files).filter((file) => file.hash === contentHash);
+
+      for (const file of filesToRemove) {
+        try {
+          await invoke("stop_publishing_file", { fileHash: file.hash });
+        } catch (unpublishError) {
+          console.warn("Failed to unpublish file from DHT:", unpublishError);
+        }
       }
 
-      files.update((f) => f.filter((file) => file.hash !== fileHash));
+      // Remove all files with this content hash from the store
+      files.update((f) => f.filter((file) => file.hash !== contentHash));
+
+      const protocolCount = filesToRemove.length;
+      showToast(
+        `Stopped sharing file on ${protocolCount} protocol${protocolCount > 1 ? 's' : ''}`,
+        "success"
+      );
     } catch (error) {
       console.error(error);
       showToast(
         tr("upload.fileFailed", {
-          values: { name: fileHash, error: String(error) },
+          values: { name: contentHash.slice(0, 8) + "...", error: String(error) },
         }),
         "error",
       );
@@ -662,38 +657,53 @@
   }
 
   async function addFilesFromPaths(paths: string[]) {
+    // Fallback: Force reset isUploading after 30 seconds to prevent UI from being stuck
+    const forceResetTimeout = setTimeout(() => {
+      console.log(`[UPLOAD] Force resetting isUploading due to timeout`);
+      isUploading = false;
+      showToast("Upload timed out - please try again", "error");
+    }, 30000);
+
     // STEP 1: Verify backend has active account before proceeding
     if (isTauri) {
       try {
         const hasAccount = await invoke<boolean>("has_active_account");
         if (!hasAccount) {
           showToast(
-            "Please log in to your account before uploading files",
+            // "Please log in to your account before uploading files",
+            tr('toasts.upload.loginRequired'),
             "error",
           );
+          clearTimeout(forceResetTimeout);
+          isUploading = false;
+          return;
+          }
+        } catch (error) {
+          console.error("Failed to verify account status:", error);
+          showToast(
+            // "Failed to verify account status. Please try logging in again.",
+            tr('toasts.upload.verifyAccountFailed'),
+            "error",
+          );
+          clearTimeout(forceResetTimeout);
+          isUploading = false;
           return;
         }
-      } catch (error) {
-        console.error("Failed to verify account status:", error);
-        showToast(
-          "Failed to verify account status. Please try logging in again.",
-          "error",
-        );
-        return;
-      }
     }
 
     // STEP 2: Ensure DHT is connected before attempting upload
     const dhtConnected = await isDhtConnected();
     if (!dhtConnected) {
       showToast(
-        "DHT network is not connected. Please start the DHT network before uploading files.",
+        // "DHT network is not connected. Please start the DHT network before uploading files.",
+        tr('toasts.upload.dhtDisconnected'),
         "error",
       );
+      clearTimeout(forceResetTimeout);
+      isUploading = false;
       return;
     }
 
-    let duplicateCount = 0;
     let addedCount = 0;
 
     // Unified upload flow for all protocols
@@ -705,62 +715,72 @@
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
 
-        // Handle BitTorrent differently - create and seed torrent
-        if (selectedProtocol === "BitTorrent") {
-          const magnetLink = await invoke<string>('create_and_seed_torrent', { filePath });
-          
-          const torrentFile = {
-            id: `torrent-${Date.now()}-${Math.random()}`,
-            name: fileName,
-            hash: magnetLink, // Use magnet link as hash for torrents
-            size: fileSize,
-            path: filePath,
-            seederAddresses: [],
-            uploadDate: new Date(),
-            status: "seeding" as const,
-            price: 0, // BitTorrent is free
-          };
+        // Extract original filename from the file path
+        const originalFileName = filePath.split(/[/\\]/).pop() || filePath;
 
-          files.update(f => [...f, torrentFile]);
-          showToast(`${fileName} is now seeding as a torrent`, "success");
-          continue; // Skip the normal Chiral upload flow
+        const metadata = await dhtService.publishFileToNetwork(filePath, price, selectedProtocol, originalFileName);
+
+        // Use seeders from metadata (backend already adds local peer ID via heartbeat system)
+        // Only add WebSocket client ID if no seeders exist (shouldn't happen in normal flow)
+        const allSeederAddresses = metadata.seeders && metadata.seeders.length > 0
+          ? metadata.seeders
+          : (signalingService?.clientId ? [signalingService.clientId] : []);
+
+        // Construct protocol-specific hash for display
+        let protocolHash = metadata.merkleRoot || "";
+        if ((selectedProtocol as "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP") === "BitTorrent" && metadata.infoHash) {
+          // Construct magnet link for BitTorrent
+          const trackers = metadata.trackers ? metadata.trackers.join('&tr=') : 'udp://tracker.openbittorrent.com:80';
+          protocolHash = `magnet:?xt=urn:btih:${metadata.infoHash}&tr=${trackers}`;
+        } else if (selectedProtocol === "ED2K" && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
+          // Use the first ED2K source
+          const ed2kSource = metadata.ed2kSources[0];
+          protocolHash = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`;
+        } else if (selectedProtocol === "FTP" && metadata.ftpSources && metadata.ftpSources.length > 0) {
+          // Use the first FTP source
+          protocolHash = metadata.ftpSources[0].url;
         }
-
-        const metadata = await dhtService.publishFileToNetwork(filePath, price);
 
         const newFile = {
           id: `file-${Date.now()}-${Math.random()}`,
           name: metadata.fileName,
           path: filePath,
           hash: metadata.merkleRoot || "",
+          protocolHash,
           size: metadata.fileSize,
           status: "seeding" as const,
           seeders: metadata.seeders?.length ?? 0,
-          seederAddresses: metadata.seeders ?? [],
+          seederAddresses: allSeederAddresses,
           leechers: 0,
           uploadDate: new Date(metadata.createdAt),
           price: price,
           cids: metadata.cids,
+          protocol: selectedProtocol, // Track which protocol was used
         };
 
         let existed = false;
         files.update((f) => {
           const matchIndex = f.findIndex(
             (item) =>
-              (metadata.merkleRoot && item.hash === metadata.merkleRoot) ||
-              (item.name === metadata.fileName &&
-                item.size === metadata.fileSize),
+              metadata.merkleRoot && item.hash === metadata.merkleRoot && item.protocol === selectedProtocol,
           );
 
           if (matchIndex !== -1) {
             const existing = f[matchIndex];
+            // Use seeders from metadata (backend already adds local peer ID via heartbeat system)
+            // Only add WebSocket client ID if no seeders exist (shouldn't happen in normal flow)
+            const mergedSeederAddresses = (metadata.seeders && metadata.seeders.length > 0)
+              ? metadata.seeders
+              : (existing.seederAddresses && existing.seederAddresses.length > 0)
+                ? existing.seederAddresses
+                : (signalingService?.clientId ? [signalingService.clientId] : []);
             const updated = {
               ...existing,
               name: metadata.fileName || existing.name,
               hash: metadata.merkleRoot || existing.hash,
               size: metadata.fileSize ?? existing.size,
               seeders: metadata.seeders?.length ?? existing.seeders,
-              seederAddresses: metadata.seeders ?? existing.seederAddresses,
+              seederAddresses: mergedSeederAddresses,
               uploadDate: new Date(
                 (metadata.createdAt ??
                   existing.uploadDate?.getTime() ??
@@ -780,17 +800,21 @@
         });
 
         if (existed) {
-          duplicateCount++;
+          // File was updated, not skipped - don't count as duplicate
           showToast(
             tr("upload.fileUpdated", { values: { name: fileName } }),
             "info",
           );
         } else {
           addedCount++;
-          showToast(`${fileName} uploaded successfully`, "success");
+          // showToast(`${fileName} uploaded successfully`, "success");
+          showToast(
+            tr('toasts.upload.fileSuccess', { values: { name: fileName } }),
+            "success"
+          );
         }
       } catch (error) {
-        console.error(error);
+        console.error(`[UPLOAD] Error uploading ${filePath}:`, error);
         showToast(
           tr("upload.fileFailed", {
             values: {
@@ -803,31 +827,43 @@
       }
     }
 
-    if (duplicateCount > 0) {
-      showToast(
-        tr("upload.duplicateSkipped", { values: { count: duplicateCount } }),
-        "warning",
-      );
-    }
-
     if (addedCount > 0) {
       setTimeout(() => refreshAvailableStorage(), 100);
     }
+    clearTimeout(forceResetTimeout);
+    isUploading = false;
   }
 
-  function formatFileSize(bytes: number): string {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1048576) return (bytes / 1024).toFixed(2) + " KB";
-    return (bytes / 1048576).toFixed(2) + " MB";
-  }
+  // Use centralized file size formatting for consistency
+  const formatFileSize = toHumanReadableSize;
+
+  // Protocol options for dropdown
+  const protocolOptions = [
+    { value: "Bitswap", label: "Bitswap" },
+    { value: "WebRTC", label: "WebRTC" },
+    { value: "BitTorrent", label: "BitTorrent" },
+    { value: "ED2K", label: "ED2K" },
+    { value: "FTP", label: "FTP" },
+  ];
+
 
   async function handleCopy(hash: string) {
     await navigator.clipboard.writeText(hash);
     showToast(tr("upload.hashCopiedClipboard"), "success");
   }
 
-  // BitTorrent seeding functions - REMOVED: Now integrated into main upload flow
+  // Extract info hash from magnet link
+  function extractInfoHash(magnetLink: string): string {
+    const match = magnetLink.match(/xt=urn:btih:([a-fA-F0-9]{40})/);
+    return match ? match[1] : "unknown";
+  }
 
+  // Extract MD4 hash from ed2k link
+  function extractEd2kHash(ed2kLink: string): string {
+    const parts = ed2kLink.split('|');
+    // ed2k://|file|name|size|hash|/
+    return parts.length >= 5 ? parts[4] : "unknown";
+  }
 </script>
 
 <div class="space-y-6">
@@ -881,6 +917,37 @@
         <p class="text-sm text-muted-foreground">
           {$t("upload.storageMonitoringDesktopOnly")}
         </p>
+      </div>
+    </Card>
+  {/if}
+
+  <!-- Upload Protocol Selection -->
+  {#if isTauri}
+    <Card class="p-4">
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <div
+            class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20"
+          >
+            <Upload class="h-5 w-5 text-blue-600" />
+          </div>
+          <div class="text-left">
+            <h3 class="text-sm font-semibold text-foreground">
+              Upload Protocol
+            </h3>
+            <p class="text-xs text-muted-foreground">
+              Choose which protocol to use for uploading files
+            </p>
+          </div>
+        </div>
+
+        <div class="w-fit min-w-32">
+          <DropDown
+            id="upload-protocol"
+            options={protocolOptions}
+            bind:value={$settings.selectedProtocol}
+          />
+        </div>
       </div>
     </Card>
   {/if}
@@ -968,48 +1035,6 @@
     </Card>
   {/if}
 
-  <!-- Protocol Selection/Indicator Card -->
-  {#if hasSelectedProtocol}
-    <Card>
-      <div class="p-4">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <div
-              class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500/10 to-blue-500/5 rounded-lg border border-blue-500/20"
-            >
-              {#if selectedProtocol === "WebRTC"}
-                <Globe class="h-5 w-5 text-blue-600" />
-              {:else if selectedProtocol === "Bitswap"}
-                <Blocks class="h-5 w-5 text-blue-600" />
-              {:else}
-                <Share2 class="h-5 w-5 text-green-600" />
-              {/if}
-            </div>
-            <div>
-              <p class="text-sm font-semibold">
-                {$t("upload.currentProtocol")}: {selectedProtocol}
-              </p>
-              <p class="text-xs text-muted-foreground">
-                {selectedProtocol === "WebRTC"
-                  ? $t("upload.webrtcDescription")
-                  : selectedProtocol === "Bitswap"
-                  ? $t("upload.bitswapDescription")
-                  : $t("torrent.seed.description")}
-              </p>
-            </div>
-          </div>
-          <button
-            on:click={changeProtocol}
-            class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium border border-input bg-background hover:bg-muted transition-colors"
-          >
-            <RefreshCw class="h-4 w-4 mr-2" />
-            {$t("upload.changeProtocol")}
-          </button>
-        </div>
-      </div>
-    </Card>
-  {/if}
-
   <!-- BitTorrent Seeding Section (Collapsible) - REMOVED: Now integrated as protocol option -->
 
   <Card
@@ -1019,84 +1044,11 @@
         ? 'border-orange-500 bg-orange-500/5'
         : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
   >
-    {#if !hasSelectedProtocol}
-      <Card>
-        <div class="p-6">
-          <h2 class="text-2xl font-bold mb-6 text-center">
-            {$t("upload.selectProtocol")}
-          </h2>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-4xl mx-auto">
-            <!-- WebRTC Option -->
-            <button
-              class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol ===
-              'WebRTC'
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                : 'border-gray-200 dark:border-gray-700'}"
-              on:click={() => handleProtocolSelect("WebRTC")}
-            >
-              <div
-                class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full"
-              >
-                <Globe class="w-8 h-8 text-blue-600" />
-              </div>
-              <div class="text-center">
-                <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                  {$t("upload.webrtcDescription")}
-                </p>
-              </div>
-            </button>
-
-            <!-- Bitswap Option -->
-            <button
-              class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol ===
-              'Bitswap'
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                : 'border-gray-200 dark:border-gray-700'}"
-              on:click={() => handleProtocolSelect("Bitswap")}
-            >
-              <div
-                class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full"
-              >
-                <Blocks class="w-8 h-8 text-blue-600" />
-              </div>
-              <div class="text-center">
-                <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                  {$t("upload.bitswapDescription")}
-                </p>
-              </div>
-            </button>
-
-            <!-- BitTorrent Option -->
-            <button
-              class="p-6 border-2 rounded-lg hover:border-green-500 transition-colors duration-200 flex flex-col items-center gap-4 {selectedProtocol ===
-              'BitTorrent'
-                ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-                : 'border-gray-200 dark:border-gray-700'}"
-              on:click={() => handleProtocolSelect("BitTorrent")}
-            >
-              <div
-                class="w-16 h-16 flex items-center justify-center bg-green-100 rounded-full"
-              >
-                <Share2 class="w-8 h-8 text-green-600" />
-              </div>
-              <div class="text-center">
-                <h3 class="text-lg font-semibold mb-2">BitTorrent</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                  {$t("torrent.seed.description")}
-                </p>
-              </div>
-            </button>
-          </div>
-        </div>
-      </Card>
-    {:else}
-      <!-- Drag & Drop Indicator -->
-            {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length === 0}
-              <div
-                class="text-center py-12 transition-all duration-300 relative overflow-hidden"
-              >
+    <!-- Drag & Drop Indicator -->
+    {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length === 0}
+      <div
+        class="text-center py-12 transition-all duration-300 relative overflow-hidden"
+      >
                 <div class="relative z-10">
                   <div class="relative mb-6">
                     {#if isDragging}
@@ -1189,26 +1141,15 @@
                     {$t("upload.sharedFiles")}
                   </h2>
                   <p class="text-sm text-muted-foreground mt-1">
-                    {$files.filter(
-                      (f) => f.status === "seeding" || f.status === "uploaded",
-                    ).length}
-                    {$files.filter(
-                      (f) => f.status === "seeding" || f.status === "uploaded",
-                    ).length === 1 ? $t("upload.file") : $t("upload.files")} •
+                    {$coalescedFiles.length}
+                    {$coalescedFiles.length === 1 ? $t("upload.file") : $t("upload.files")} •
                     {formatFileSize(
-                      $files
-                        .filter(
-                          (f) =>
-                            f.status === "seeding" || f.status === "uploaded",
-                        )
-                        .reduce((sum, f) => sum + f.size, 0),
+                      $coalescedFiles.reduce((sum, f) => sum + f.size, 0),
                     )}
                     {$t("upload.total")}
-                    {#if $files.filter((f) => f.status === "seeding").length > 0}
-                      <span class="text-green-600 font-medium">
-                        ({$files.filter((f) => f.status === "seeding").length} {$files.filter((f) => f.status === "seeding").length === 1 ? "seeding" : "seeding"})
-                      </span>
-                    {/if}
+                    <span class="text-green-600 font-medium">
+                      ({$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0)} {$coalescedFiles.reduce((sum, f) => sum + f.totalSeeders, 0) === 1 ? "seeder" : "seeders"})
+                    </span>
                   </p>
                   <p class="text-xs text-muted-foreground mt-1">
                     {$t("upload.tip")}
@@ -1236,9 +1177,9 @@
               </div>
 
               <!-- File List -->
-              {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length > 0}
+              {#if $coalescedFiles.length > 0}
                 <div class="space-y-3 relative px-4">
-                  {#each $files.filter((f) => f.status === "seeding" || f.status === "uploaded") as file}
+                  {#each $coalescedFiles as coalescedFile}
                     <div
                       class="group relative bg-gradient-to-r from-card to-card/80 border border-border/50 rounded-xl p-4 hover:shadow-lg hover:border-border transition-all duration-300 overflow-hidden mb-3"
                     >
@@ -1259,8 +1200,8 @@
                               class="relative flex items-center justify-center w-12 h-12 bg-gradient-to-br from-primary/10 to-primary/5 rounded-lg border border-primary/20"
                             >
                               <svelte:component
-                                this={getFileIcon(file.name)}
-                                class="h-6 w-6 {getFileColor(file.name)}"
+                                this={getFileIcon(coalescedFile.name)}
+                                class="h-6 w-6 {getFileColor(coalescedFile.name)}"
                               />
                             </div>
                           </div>
@@ -1271,10 +1212,10 @@
                               <p
                                 class="text-sm font-semibold truncate text-foreground"
                               >
-                                {file.name}
+                                {coalescedFile.name || 'Unnamed File'}
                               </p>
 
-                              {#if file.isEncrypted}
+                              {#if coalescedFile.primaryProtocol?.fileItem.isEncrypted}
                                 <Badge
                                   class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5 flex items-center gap-1"
                                   title={$t("upload.encryptedEndToEnd")}
@@ -1286,79 +1227,129 @@
                             </div>
 
                             <div class="space-y-2 text-xs text-muted-foreground">
-                              <div class="flex items-center gap-1">
-                                <span class="opacity-60">{$t("upload.hashLabel")}</span>
-                                <code
-                                  class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono"
-                                >
-                                  {file.hash.slice(0, 8)}...{file.hash.slice(
-                                    -6,
-                                  )}
-                                </code>
-                                <button
-                                  on:click={() => handleCopy(file.hash)}
-                                  class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                  title={$t("upload.copyHash")}
-                                  aria-label="Copy file hash"
-                                >
-                                  <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
-                                </button>
+                              <!-- Protocol Badges -->
+                              <div class="flex items-center gap-2 flex-wrap">
+                                {#each coalescedFile.protocols as protocolEntry}
+                                  <Badge class={`text-xs px-2 py-0.5 ${
+                                    protocolEntry.protocol === 'WebRTC' ? 'bg-blue-100 text-blue-800' :
+                                    protocolEntry.protocol === 'Bitswap' ? 'bg-purple-100 text-purple-800' :
+                                    protocolEntry.protocol === 'BitTorrent' ? 'bg-green-100 text-green-800' :
+                                    protocolEntry.protocol === 'ED2K' ? 'bg-orange-100 text-orange-800' :
+                                    'bg-gray-100 text-gray-800'
+                                  }`}>
+                                    {#if protocolEntry.protocol === 'WebRTC'}
+                                      <Globe class="h-3 w-3 mr-1" />
+                                    {:else if protocolEntry.protocol === 'Bitswap'}
+                                      <Blocks class="h-3 w-3 mr-1" />
+                                    {:else if protocolEntry.protocol === 'BitTorrent'}
+                                      <Share2 class="h-3 w-3 mr-1" />
+                                    {:else if protocolEntry.protocol === 'ED2K'}
+                                      <Network class="h-3 w-3 mr-1" />
+                                    {:else if protocolEntry.protocol === 'FTP'}
+                                      <Server class="h-3 w-3 mr-1" />
+                                    {/if}
+                                    {protocolEntry.protocol}
+                                  </Badge>
+                                {/each}
                               </div>
 
-                              {#if file.cids && file.cids.length > 0}
+                              <!-- All Identifiers/Links at the top -->
+                              <div class="space-y-1 mb-3">
+                                <!-- Merkle Hash -->
                                 <div class="flex items-center gap-1">
-                                  <span class="opacity-60">CID:</span>
-                                  <code
-                                    class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono"
-                                  >
-                                    {file.cids[0].slice(0, 8)}...{file.cids[0].slice(-6)}
+                                  <span class="text-xs opacity-70">Merkle Hash:</span>
+                                  <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono">
+                                    {coalescedFile.contentHash.slice(0, 8)}...{coalescedFile.contentHash.slice(-6)}
                                   </code>
                                   <button
-                                    on:click={() => handleCopy(file.cids![0])}
+                                    on:click={() => handleCopy(coalescedFile.contentHash)}
                                     class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
-                                    title="Copy CID"
-                                    aria-label="Copy file CID"
+                                    title="Copy Merkle Hash (use this to search and download)"
+                                    aria-label="Copy Merkle hash"
                                   >
                                     <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
                                   </button>
                                 </div>
-                              {/if}
 
-                              {#if file.hash.startsWith('magnet:')}
-                                <div class="flex items-center gap-1">
-                                  <Badge class="bg-green-100 text-green-800 text-xs px-2 py-0.5">
-                                    <Share2 class="h-3 w-3 mr-1" />
-                                    BitTorrent
-                                  </Badge>
-                                  <button
-                                    on:click={() => handleCopy(file.hash)}
-                                    class="text-xs text-muted-foreground hover:text-primary"
-                                    title="Copy magnet link"
-                                  >
-                                    Copy Magnet Link
-                                  </button>
-                                </div>
-                              {/if}
+                                <!-- Protocol-Specific Links -->
+                                {#each coalescedFile.protocols as protocolEntry}
+                                  {#if protocolEntry.protocol === 'BitTorrent' && protocolEntry.hash.startsWith('magnet:')}
+                                    <div class="flex items-center gap-1">
+                                      <span class="text-xs opacity-70">Magnet Link:</span>
+                                      <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                        magnet:?xt=urn:btih:{extractInfoHash(protocolEntry.hash)}
+                                      </code>
+                                      <button
+                                        on:click={() => handleCopy(protocolEntry.hash)}
+                                        class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                        title="Copy Magnet Link"
+                                        aria-label="Copy magnet link"
+                                      >
+                                        <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                      </button>
+                                    </div>
+                                  {:else if protocolEntry.protocol === 'ED2K' && protocolEntry.hash.startsWith('ed2k://')}
+                                    <div class="flex items-center gap-1">
+                                      <span class="text-xs opacity-70">eD2k Link:</span>
+                                      <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                        ed2k://|file|{coalescedFile.name}|{coalescedFile.size}|{extractEd2kHash(protocolEntry.hash)}|/
+                                      </code>
+                                      <button
+                                        on:click={() => handleCopy(protocolEntry.hash)}
+                                        class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                        title="Copy eD2k Link"
+                                        aria-label="Copy eD2k link"
+                                      >
+                                        <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                      </button>
+                                    </div>
+                                  {:else if protocolEntry.protocol === 'FTP' && protocolEntry.hash.startsWith('ftp://')}
+                                    <div class="flex items-center gap-1">
+                                      <span class="text-xs opacity-70">FTP URL:</span>
+                                      <code class="bg-muted/50 px-1.5 py-0.5 rounded text-xs font-mono truncate max-w-32">
+                                        {protocolEntry.hash}
+                                      </code>
+                                      <button
+                                        on:click={() => handleCopy(protocolEntry.hash)}
+                                        class="group/btn p-1 hover:bg-primary/10 rounded transition-colors"
+                                        title="Copy FTP URL"
+                                        aria-label="Copy FTP URL"
+                                      >
+                                        <Copy class="h-3 w-3 text-muted-foreground group-hover/btn:text-primary transition-colors" />
+                                      </button>
+                                    </div>
+                                  {/if}
+                                {/each}
+                              </div>
+
+                              <!-- Protocol Seeder Status -->
+                              <div class="space-y-1">
+                                {#each coalescedFile.protocols as protocolEntry}
+                                  <div class="text-xs opacity-70">
+                                    <span>{coalescedFile.protocols.length > 1 ? protocolEntry.protocol + ' ' : ''}Seeders: {protocolEntry.technicalInfo.seederCount || 0}</span>
+                                  </div>
+                                {/each}
+                              </div>
 
                               <div class="flex items-center gap-3">
                                 <span class="font-medium"
-                                  >{formatFileSize(file.size)}</span
+                                  >{formatFileSize(coalescedFile.size)}</span
                                 >
 
-                                {#if file.seeders !== undefined}
+                                {#if coalescedFile.totalSeeders > 0}
                                   <div class="flex items-center gap-1">
                                     <Upload class="h-3 w-3 text-green-500" />
                                     <span class="text-green-600 font-medium"
-                                      >{file.seeders || 1}</span
+                                      >{coalescedFile.totalSeeders}</span
                                     >
                                   </div>
                                 {/if}
 
-                                {#if file.leechers && file.leechers > 0}
+                                {#if coalescedFile.totalLeechers > 0}
                                   <div class="flex items-center gap-1">
                                     <Download class="h-3 w-3 text-orange-500" />
                                     <span class="text-orange-600 font-medium"
-                                      >{file.leechers}</span
+                                      >{coalescedFile.totalLeechers}</span
                                     >
                                   </div>
                                 {/if}
@@ -1370,23 +1361,22 @@
                         <!-- Price and Actions -->
                         <div class="flex items-center gap-2">
                           <!-- Price Badge -->
-                          {#if file.price !== undefined && file.price !== null}
+                          {#if coalescedFile.averagePrice > 0}
                             <div
                               class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
-                              title={$t("upload.priceTooltip")}
+                              title={`Average price across ${coalescedFile.protocols.length} protocol${coalescedFile.protocols.length > 1 ? 's' : ''}`}
                             >
-                              <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
-                                >{file.price.toFixed(8)} Chiral</span
+                                >{coalescedFile.averagePrice.toFixed(4)} Chiral</span
                               >
                             </div>
                           {/if}
 
                           {#if isTauri}
                             <button
-                              on:click={() => removeFile(file.hash)}
+                              on:click={() => removeFile(coalescedFile.contentHash)}
                               class="group/btn p-2 hover:bg-destructive/10 rounded-lg transition-all duration-200 hover:scale-110"
-                              title={$t("upload.stopSharing")}
+                              title={`Stop sharing this file on all ${coalescedFile.protocols.length} protocol${coalescedFile.protocols.length > 1 ? 's' : ''}`}
                               aria-label="Stop sharing file"
                             >
                               <X
@@ -1421,6 +1411,5 @@
                 </div>
               {/if}
             {/if}
-    {/if}
   </Card>
 </div>

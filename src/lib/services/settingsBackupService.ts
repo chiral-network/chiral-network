@@ -82,11 +82,62 @@ class SettingsBackupService {
       return { valid: false, error: 'Invalid or missing settings object' };
     }
 
+    // Validate exportDate format
+    if (!data.exportDate || typeof data.exportDate !== 'string') {
+      return { valid: false, error: 'Invalid or missing exportDate' };
+    }
+    
+    // Check if exportDate is a valid ISO date
+    const dateCheck = new Date(data.exportDate);
+    if (isNaN(dateCheck.getTime())) {
+      return { valid: false, error: 'Invalid exportDate format - must be ISO 8601' };
+    }
+
     // Check for critical settings fields
     const criticalFields = ['storagePath', 'port', 'maxConnections'];
     for (const field of criticalFields) {
       if (!(field in data.settings)) {
         return { valid: false, error: `Missing critical setting: ${field}` };
+      }
+    }
+
+    // Validate data types for critical numeric fields
+    const numericFields = ['port', 'maxConnections', 'maxStorageSize', 'cleanupThreshold'];
+    for (const field of numericFields) {
+      if (field in data.settings && typeof data.settings[field] !== 'number') {
+        return { valid: false, error: `Setting '${field}' must be a number` };
+      }
+    }
+
+    // Validate data types for boolean fields
+    const booleanFields = [
+      'autoCleanup',
+      'enableUPnP',
+      'enableNAT',
+      'enableProxy',
+      'anonymousMode',
+      'shareAnalytics',
+      'enableWalletAutoLock',
+    ];
+    for (const field of booleanFields) {
+      if (field in data.settings && typeof data.settings[field] !== 'boolean') {
+        return { valid: false, error: `Setting '${field}' must be a boolean` };
+      }
+    }
+
+    // Validate data types for string fields
+    const stringFields = ['storagePath', 'proxyAddress', 'userLocation', 'logLevel'];
+    for (const field of stringFields) {
+      if (field in data.settings && data.settings[field] !== null && data.settings[field] !== undefined && typeof data.settings[field] !== 'string') {
+        return { valid: false, error: `Setting '${field}' must be a string` };
+      }
+    }
+
+    // Validate array fields
+    const arrayFields = ['customBootstrapNodes', 'trustedProxyRelays', 'autonatServers', 'preferredRelays', 'bandwidthSchedules', 'capWarningThresholds'];
+    for (const field of arrayFields) {
+      if (field in data.settings && data.settings[field] !== null && data.settings[field] !== undefined && !Array.isArray(data.settings[field])) {
+        return { valid: false, error: `Setting '${field}' must be an array` };
       }
     }
 

@@ -12,7 +12,7 @@
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
-    import BlockchainDashboard from './pages/BlockchainDashboard.svelte'
+    import Blockchain from './pages/Blockchain.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
@@ -25,11 +25,16 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { t } from 'svelte-i18n';
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
-    import { startNetworkMonitoring } from './lib/services/networkService';
-    import { fileService } from '$lib/services/fileService';
+    import KeyboardShortcutsPanel from './lib/components/KeyboardShortcutsPanel.svelte';
+    import CommandPalette from './lib/components/CommandPalette.svelte';
+import { startNetworkMonitoring } from './lib/services/networkService';
+import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
-    import { paymentService } from '$lib/services/paymentService';
+import { paymentService } from '$lib/services/paymentService';
+import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+    import { showToast } from '$lib/toast';
+import { walletService } from '$lib/wallet';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { exit } from '@tauri-apps/plugin-process';
@@ -55,6 +60,55 @@ let unsubscribeScheduler: (() => void) | null = null;
 let unsubscribeBandwidth: (() => void) | null = null;
 let lastAppliedBandwidthSignature: string | null = null;
 let showFirstRunWizard = false;
+let showShortcutsPanel = false;
+let showCommandPalette = false;
+let transferStoreUnsubscribe: (() => void) | null = null;
+const notifiedCompletedTransfers = new Set<string>();
+const scrollPositions: Record<string, number> = {};
+
+// Helper to get the main scroll container (if present)
+const getMainContent = () =>
+  document.querySelector("#main-content") as HTMLElement | null;
+
+// Save scroll position for the current page
+const saveScrollPosition = (page: string) => {
+  if (!page || typeof window === 'undefined') return;
+
+  const mainContent = getMainContent();
+
+  if (mainContent && mainContent.scrollHeight > mainContent.clientHeight) {
+    // App is using the #main-content div as scroll container
+    scrollPositions[page] = mainContent.scrollTop;
+  } else {
+    // Fallback to window scroll (body/document scrolling)
+    scrollPositions[page] = window.scrollY || window.pageYOffset || 0;
+  }
+};
+
+// Restore scroll position for a page
+const restoreScrollPosition = async (page: string) => {
+  if (!page || typeof window === 'undefined') return;
+
+  await tick();
+
+  const y = scrollPositions[page] ?? 0;
+  const mainContent = getMainContent();
+
+  if (mainContent && mainContent.scrollHeight > mainContent.clientHeight) {
+    mainContent.scrollTop = y;
+  } else {
+    window.scrollTo(0, y);
+  }
+};
+
+
+const navigateTo = (page: string, path: string) => {
+  if (page !== currentPage) {
+    saveScrollPosition(currentPage);
+  }
+  currentPage = page;
+  goto(path);
+};
 
   const syncBandwidthScheduler = (config: AppSettings) => {
     const enabledSchedules =
@@ -107,13 +161,17 @@ let showFirstRunWizard = false;
 function handleFirstRunComplete() {
   showFirstRunWizard = false;
   // Navigate to account page after completing wizard
-  currentPage = 'account';
-  goto('/account');
+  navigateTo('account', '/account');
 }
+
 
   onMount(() => {
     let stopNetworkMonitoring: () => void = () => {};
+    let stopGethMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
+    let unlistenTorrentPayment: (() => void) | null = null;
+    let transferEventsUnsubscribe: (() => void) | null = null;
+    let unsubscribeGethStatus: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
     syncBandwidthScheduler(get(settings));
@@ -121,12 +179,106 @@ function handleFirstRunComplete() {
     pushBandwidthLimits(get(activeBandwidthLimits));
 
     (async () => {
+      // Subscribe to transfer events from backend
+      try {
+        transferEventsUnsubscribe = await subscribeToTransferEvents();
+        transferStoreUnsubscribe = transferStore.subscribe(($store) => {
+
+          if (!$store || !$store.transfers) {
+            return;
+          }
+
+          for (const [transferId, transfer] of $store.transfers.entries()) {
+            if (transfer.status === 'completed') {
+              // First time we see this transfer as completed → fire toast
+              if (!notifiedCompletedTransfers.has(transferId)) {
+                notifiedCompletedTransfers.add(transferId);
+
+                const fileName = transfer.fileName ?? 'file';
+                const message = `Download complete: "${fileName}"`;
+
+                showToast(message, 'success');
+              }
+            } else {
+              // If the transfer goes back to a non-completed status (e.g. retry),
+              // allow a later completion to trigger a new toast
+              notifiedCompletedTransfers.delete(transferId);
+            }
+          }
+        });
+      } catch (error) {
+        console.warn('Failed to subscribe to transfer events:', error);
+      }
+
       // Initialize payment service to load wallet and transactions
       await paymentService.initialize();
+      // Initialize wallet service early so imports/polls populate balance/tx history
+      await walletService.initialize();
+
+      // When geth starts running, immediately sync wallet state (balance + txs)
+      unsubscribeGethStatus = gethStatus.subscribe(async (status) => {
+        if (status === 'running') {
+          try {
+            const hasAccount = await invoke<boolean>('has_active_account');
+            if (hasAccount) {
+              await walletService.refreshTransactions();
+              await walletService.refreshBalance();
+              walletService.startProgressiveLoading();
+            }
+          } catch (err) {
+            console.warn('Failed to sync wallet after geth start:', err);
+          }
+        }
+      });
 
       // Listen for payment notifications from backend
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
+          // Listener for BitTorrent protocol payments
+          const torrentUnlisten = await listen(
+            "torrent_seeder_payment_received",
+            async (event: any) => {
+              const payload = event.payload;
+              console.log(
+                "💰 Torrent seeder payment notification received:",
+                payload,
+              );
+
+              const currentWalletAddress = get(wallet).address;
+              const seederAddress = payload.seeder_wallet_address;
+
+              if (
+                !seederAddress ||
+                !currentWalletAddress ||
+                currentWalletAddress.toLowerCase() !==
+                  seederAddress.toLowerCase()
+              ) {
+                console.log("⏭️ Skipping torrent payment credit - not for us.");
+                return;
+              }
+
+              console.log(
+                "✅ This torrent payment is for us! Crediting...",
+              );
+
+              const result = await paymentService.creditSeederPayment(
+                payload.info_hash, // For torrents, this would be the info_hash
+                payload.file_name,
+                payload.file_size,
+                payload.downloader_address,
+                payload.transaction_hash,
+              );
+
+              if (!result.success) {
+                console.error(
+                  "❌ Failed to credit torrent seeder payment:",
+                  result.error,
+                );
+              }
+            },
+          );
+          unlistenTorrentPayment = torrentUnlisten;
+
           const unlisten = await listen(
             "seeder_payment_received",
             async (event: any) => {
@@ -163,6 +315,7 @@ function handleFirstRunComplete() {
                 payload.file_name,
                 payload.file_size,
                 payload.downloader_address,
+                payload.downloader_peer_id || payload.downloader_address, // Use peer ID or fallback to address
                 payload.transaction_hash,
               );
 
@@ -226,6 +379,7 @@ function handleFirstRunComplete() {
                   // Now sync from blockchain
                   await walletService.refreshTransactions();
                   await walletService.refreshBalance();
+                  walletService.startProgressiveLoading();
                 } catch (error) {
                   console.error('Failed to restore account from backend:', error);
                 }
@@ -314,18 +468,157 @@ function handleFirstRunComplete() {
       } catch (error) {
         console.warn("Automatic location detection failed:", error);
       }
-      // Initialize backend services (File Transfer, DHT - conditionally)
+      
+      // Load settings from localStorage before auto-starting services
       try {
-        const currentSettings = get(settings);
-        if (currentSettings.autoStartDHT) {
-          await fileService.initializeServices();
-        } else {
-          // Only start file transfer service, not DHT
-          await invoke("start_file_transfer_service");
+        const storedSettings = localStorage.getItem("chiralSettings");
+        if (storedSettings) {
+          const parsed = JSON.parse(storedSettings);
+          // Ensure selectedProtocol always has a valid default
+          if (!parsed.selectedProtocol) {
+            parsed.selectedProtocol = "Bitswap";
+          }
+          settings.update(prev => ({ ...prev, ...parsed }));
         }
       } catch (error) {
-        // Ignore "already running" errors - this is normal during hot reload
-        // Silently skip all errors since services may already be initialized
+        console.warn("Failed to load settings from localStorage:", error);
+      }
+      
+      // Initialize backend services (DHT first - it initializes chunk manager, then File Transfer)
+      try {
+        const currentSettings = get(settings);
+        
+        // Check if DHT is already running first (to avoid duplicate start attempts)
+        let isDhtAlreadyRunning = false;
+        try {
+          isDhtAlreadyRunning = await invoke<boolean>("is_dht_running");
+        } catch (err) {
+          // Command might not be available, assume not running
+          isDhtAlreadyRunning = false;
+        }
+        
+        // Start DHT first if auto-start is enabled (DHT initializes chunk manager needed by file transfer)
+        if (currentSettings.autoStartDHT) {
+          if (isDhtAlreadyRunning) {
+            // Import dhtService and sync the peer ID
+            const { dhtService } = await import("$lib/dht");
+            try {
+              const peerId = await invoke<string | null>("get_dht_peer_id");
+              if (peerId) {
+                dhtService.setPeerId(peerId);
+              }
+            } catch {}
+            
+            // Update network status
+            networkStatus.set('connected');
+          } else {
+            console.log("🚀 Auto-starting DHT node...");
+            
+            try {
+              // Import dhtService to start DHT with full settings
+              const { dhtService } = await import("$lib/dht");
+              
+              // Get bootstrap nodes - use custom ones if specified, otherwise use defaults
+              let bootstrapNodes = currentSettings.customBootstrapNodes || [];
+              if (bootstrapNodes.length === 0) {
+                bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+              }
+              
+              // Start DHT with all user settings (same as Network page does)
+              const peerId = await dhtService.start({
+                port: currentSettings.port || 4001,
+                bootstrapNodes,
+                enableAutonat: currentSettings.enableAutonat,
+                autonatProbeIntervalSeconds: currentSettings.autonatProbeInterval,
+                autonatServers: currentSettings.autonatServers,
+                proxyAddress: currentSettings.enableProxy ? currentSettings.proxyAddress : undefined,
+                enableAutorelay: currentSettings.enableAutorelay,
+                preferredRelays: currentSettings.preferredRelays || [],
+                enableRelayServer: currentSettings.enableRelayServer,
+                relayServerAlias: currentSettings.relayServerAlias || '',
+                chunkSizeKb: currentSettings.chunkSize,
+                cacheSizeMb: currentSettings.cacheSize,
+                enableUpnp: currentSettings.enableUPnP,
+              });
+              
+              console.log("✅ DHT node auto-started successfully with peer ID:", peerId);
+              
+              // Update network status
+              networkStatus.set('connected');
+            } catch (dhtError) {
+              const dhtErrorMsg = dhtError instanceof Error ? dhtError.message : String(dhtError);
+              if (dhtErrorMsg.includes("already running")) {
+                // Race condition - DHT was started between our check and start attempt
+                console.log("ℹ️ DHT started by another process (race condition)");
+                
+                // Sync the peer ID since DHT is running
+                const { dhtService } = await import("$lib/dht");
+                try {
+                  const peerId = await invoke<string | null>("get_dht_peer_id");
+                  if (peerId) {
+                    dhtService.setPeerId(peerId);
+                    console.log("✅ Synced peer ID after race condition:", peerId);
+                  }
+                } catch {}
+                
+                networkStatus.set('connected');
+              } else {
+                // Real error
+                console.error("❌ Failed to auto-start DHT:", dhtErrorMsg);
+              }
+            }
+          }
+        }
+        
+        // Start file transfer service AFTER DHT (needs chunk manager initialized by DHT)
+        try {
+          await invoke("start_file_transfer_service");
+        } catch (ftError) {
+          const ftErrorMsg = ftError instanceof Error ? ftError.message : String(ftError);
+          // Suppress known non-critical warnings
+          if (!ftErrorMsg.includes("already running") && 
+              !ftErrorMsg.includes("already initialized") &&
+              !ftErrorMsg.includes("Chunk manager not initialized")) {
+            console.warn("⚠️ File transfer service start warning:", ftErrorMsg);
+          }
+        }
+        
+        // Start Geth blockchain node if auto-start is enabled
+        if (currentSettings.autoStartGeth && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+          try {
+            // Check if Geth is already running
+            const isGethRunning = await invoke<boolean>('is_geth_running').catch(() => false);
+            
+            if (isGethRunning) {
+              console.log("✅ Geth blockchain node already running (detected on startup)");
+            } else {
+              console.log("🚀 Auto-starting Geth blockchain node...");
+              
+              try {
+                await invoke('start_geth_node', { dataDir: './bin/geth-data' });
+                console.log("✅ Geth blockchain node auto-started successfully");
+                
+                // Update geth status
+                const { gethStatus } = await import('./lib/services/gethService');
+                gethStatus.set('running');
+              } catch (gethError) {
+                const gethErrorMsg = gethError instanceof Error ? gethError.message : String(gethError);
+                if (gethErrorMsg.includes("already running") || gethErrorMsg.includes("already started")) {
+                  console.log("ℹ️ Geth started by another process");
+                } else if (gethErrorMsg.includes("not found") || gethErrorMsg.includes("No such file")) {
+                  console.log("ℹ️ Geth not downloaded yet. Download it from the Network page.");
+                } else {
+                  console.error("❌ Failed to auto-start Geth:", gethErrorMsg);
+                }
+              }
+            }
+          } catch (error) {
+            console.error("⚠️ Error checking/starting Geth:", error);
+          }
+        }
+      } catch (error) {
+        // Unexpected error in the initialization block
+        console.error("⚠️ Unexpected error during service initialization:", error);
       }
 
       // set the currentPage var
@@ -333,16 +626,85 @@ function handleFirstRunComplete() {
 
       // Start network monitoring
       stopNetworkMonitoring = startNetworkMonitoring();
+
+      // Start Geth monitoring
+      stopGethMonitoring = startGethMonitoring();
     })();
 
       // popstate - event that tracks history of current tab
-      const onPop = () => syncFromUrl();
-      window.addEventListener('popstate', onPop);
-
+      // const onPop = () => syncFromUrl();
+      // window.addEventListener('popstate', onPop);
+      // popstate - event that tracks history of current tab
+    const onPop = () => {
+      // Save where we were on the page we're leaving
+      saveScrollPosition(currentPage);
+      // Update currentPage based on URL
+      syncFromUrl();
+      // restoreScrollPosition will run via the reactive currentPage block
+    };
+    window.addEventListener('popstate', onPop);
 
 
     // keyboard shortcuts
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore shortcuts if user is typing in an input/textarea
+      const target = event.target as HTMLElement;
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      
+      // ? or F1 - Show keyboard shortcuts help
+      if ((event.key === '?' || event.key === 'F1') && !isInputField) {
+        event.preventDefault();
+        showShortcutsPanel = true;
+        return;
+      }
+      
+      // Ctrl/Cmd + K - Open command palette
+      if ((event.ctrlKey || event.metaKey) && event.key === 'k' && !isInputField) {
+        event.preventDefault();
+        showCommandPalette = true;
+        return;
+      }
+      
+      // Ctrl/Cmd + D - Go to Download
+      if ((event.ctrlKey || event.metaKey) && event.key === 'd' && !isInputField) {
+        event.preventDefault();
+        navigateTo('download', '/download');
+        return;
+      }
+
+      
+      // Ctrl/Cmd + U - Go to Upload
+      if ((event.ctrlKey || event.metaKey) && event.key === 'u' && !isInputField) {
+        event.preventDefault();
+        navigateTo('upload', '/upload');
+        return;
+      }
+
+      
+      // Ctrl/Cmd + N - Go to Network
+      if ((event.ctrlKey || event.metaKey) && event.key === 'n' && !isInputField) {
+        event.preventDefault();
+        navigateTo('network', '/network');
+        return;
+      }
+
+      
+      // Ctrl/Cmd + M - Go to Mining
+      if ((event.ctrlKey || event.metaKey) && event.key === 'm' && !isInputField) {
+        event.preventDefault();
+        navigateTo('mining', '/mining');
+        return;
+      }
+
+      
+      // Ctrl/Cmd + A - Go to Account (only if not in input field)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'a' && !isInputField) {
+        event.preventDefault();
+        navigateTo('account', '/account');
+        return;
+      }
+
+
       // Ctrl/Cmd + Q - Quit application
       if ((event.ctrlKey || event.metaKey) && event.key === "q") {
         event.preventDefault();
@@ -353,10 +715,10 @@ function handleFirstRunComplete() {
       // Ctrl/Cmd + , - Open Settings
       if ((event.ctrlKey || event.metaKey) && event.key === ",") {
         event.preventDefault();
-        currentPage = "settings";
-        goto("/settings");
+        navigateTo('settings', '/settings');
         return;
       }
+
 
       // Ctrl/Cmd + R - Refresh current page
       if ((event.ctrlKey || event.metaKey) && event.key === "r") {
@@ -391,6 +753,10 @@ function handleFirstRunComplete() {
       window.removeEventListener("popstate", onPop);
       window.removeEventListener("keydown", handleKeyDown);
       stopNetworkMonitoring();
+      stopGethMonitoring();
+      if (unsubscribeGethStatus) {
+        unsubscribeGethStatus();
+      }
       if (schedulerRunning) {
         bandwidthScheduler.stop();
         schedulerRunning = false;
@@ -400,6 +766,18 @@ function handleFirstRunComplete() {
       if (unlistenSeederPayment) {
         unlistenSeederPayment();
       }
+      if (unlistenTorrentPayment) {
+        unlistenTorrentPayment();
+      }
+      if (transferEventsUnsubscribe) {
+        transferEventsUnsubscribe();
+      }
+      if (transferStoreUnsubscribe) {
+        transferStoreUnsubscribe();
+        transferStoreUnsubscribe = null;
+      }
+      // Also ensure transfer events are fully unsubscribed
+      unsubscribeFromTransferEvents();
       if (unsubscribeScheduler) {
         unsubscribeScheduler();
         unsubscribeScheduler = null;
@@ -414,22 +792,23 @@ function handleFirstRunComplete() {
 
   setContext("navigation", {
     setCurrentPage: (page: string) => {
+      if (page !== currentPage) {
+        saveScrollPosition(currentPage);
+      }
       currentPage = page;
     },
+    navigateTo,
   });
+
 
   let sidebarCollapsed = false;
   let sidebarMenuOpen = false;
 
-  // Scroll to top when page changes
+  // Restore the previous scroll position when page changes
   $: if (currentPage) {
-    tick().then(() => {
-      const mainContent = document.querySelector("#main-content");
-      if (mainContent) {
-        mainContent.scrollTop = 0;
-      }
-    });
+    restoreScrollPosition(currentPage);
   }
+
 
   type MenuItem = {
     id: string;
@@ -497,7 +876,7 @@ function handleFirstRunComplete() {
     },
     {
       path: "blockchain",
-      component: BlockchainDashboard,
+      component: Blockchain,
     },
     {
       path: "account",
@@ -566,20 +945,23 @@ function handleFirstRunComplete() {
 
         <!-- Sidebar Nav Items -->
         {#each menuItems as item}
+          {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
           <button
             on:click={() => {
-              currentPage = item.id;
-              goto(`/${item.id}`);
+              if (isBlockchainDisabled) return;
+              navigateTo(item.id, `/${item.id}`);
             }}
-            class="w-full group"
+            class="w-full group {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : ''}"
             aria-current={currentPage === item.id ? "page" : undefined}
+            disabled={isBlockchainDisabled}
+            title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
           >
             <div
               class="flex items-center {sidebarCollapsed
                 ? 'justify-center'
                 : ''} rounded {currentPage === item.id
                 ? 'bg-gray-200'
-                : 'group-hover:bg-gray-100'}"
+                : isBlockchainDisabled ? '' : 'group-hover:bg-gray-100'}"
             >
               <span
                 class="flex items-center justify-center rounded w-10 h-10 relative"
@@ -659,14 +1041,17 @@ function handleFirstRunComplete() {
         <!-- Sidebar Nav Items -->
         <nav class="flex-1 p-4 space-y-2">
           {#each menuItems as item}
+            {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
             <button
               on:click={() => {
-                currentPage = item.id;
-                goto(`/${item.id}`);
+                if (isBlockchainDisabled) return;
+                navigateTo(item.id, `/${item.id}`);
                 sidebarMenuOpen = false;
               }}
-              class="w-full flex items-center rounded px-4 py-3 text-lg hover:bg-gray-100"
+              class="w-full flex items-center rounded px-4 py-3 text-lg {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-gray-100'}"
               aria-current={currentPage === item.id ? "page" : undefined}
+              disabled={isBlockchainDisabled}
+              title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
             >
               <svelte:component this={item.icon} class="h-5 w-5 mr-3" />
               {item.label}
@@ -704,6 +1089,18 @@ function handleFirstRunComplete() {
     onComplete={handleFirstRunComplete}
   />
 {/if}
+
+<!-- Keyboard Shortcuts Help Panel -->
+<KeyboardShortcutsPanel 
+  isOpen={showShortcutsPanel}
+  onClose={() => showShortcutsPanel = false}
+/>
+
+<!-- Command Palette -->
+<CommandPalette 
+  isOpen={showCommandPalette}
+  onClose={() => showCommandPalette = false}
+/>
 
   <!-- add Toast  -->
 <SimpleToast />
