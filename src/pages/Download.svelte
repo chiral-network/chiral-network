@@ -31,7 +31,7 @@ import type { FileMetadata } from '$lib/dht'
     activeTransfers as storeActiveTransfers
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
-  import { homeDir } from '@tauri-apps/api/path'
+  import { homeDir, join } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
@@ -446,32 +446,33 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       );
       return;
     }
-    
-    const settings = JSON.parse(stored);
-    let storagePath = settings.storagePath;
-    
-    if (!storagePath || storagePath === '.') {
+
+    // Get canonical download directory from backend (single source of truth)
+    let storagePath: string;
+    try {
+      storagePath = await invoke('get_download_directory');
+    } catch (error) {
       showNotification(
-        'Please set a valid download path in Settings.',
+        'Failed to resolve download directory. Please check your settings.',
         'error',
-        8000
+        6000
       );
+      files.update(f => f.map(file =>
+        file.hash === data.fileHash
+          ? { ...file, status: 'failed' }
+          : file
+      ));
       return;
     }
     
-    // Expand ~ to home directory if needed
-    if (storagePath.startsWith("~")) {
-      const home = await homeDir();
-      storagePath = storagePath.replace("~", home);
-    }
-    
-    // Validate directory exists
-    const dirExists = await invoke('check_directory_exists', { path: storagePath });
-    if (!dirExists) {
+    // Ensure directory exists (create it if it doesn't)
+    try {
+      await invoke('ensure_directory_exists', { path: storagePath });
+    } catch (error) {
       showNotification(
-        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        `Failed to create download directory: ${error instanceof Error ? error.message : String(error)}`,
         'error',
-        8000
+        6000
       );
       return;
     }
@@ -964,6 +965,9 @@ async function loadAndResumeDownloads() {
 
   async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
     diagnosticLogger.debug('Download', 'handleSearchDownload called', { metadata });
+    console.log('🔍 DEBUG DOWNLOAD: handleSearchDownload metadata =', metadata);
+    console.log('🔍 DEBUG DOWNLOAD: metadata.seeders =', metadata.seeders);
+    console.log('🔍 DEBUG DOWNLOAD: metadata.seeders.length =', metadata.seeders?.length);
 
     // Use user's protocol selection if provided, otherwise auto-detect
     if (metadata.selectedProtocol) {
@@ -1311,14 +1315,15 @@ async function loadAndResumeDownloads() {
       return;
     }
     
-    const settings = JSON.parse(stored);
-    let storagePath = settings.storagePath;
-    
-    if (!storagePath || storagePath === '.') {
+    // Get canonical download directory from backend (single source of truth)
+    let storagePath: string;
+    try {
+      storagePath = await invoke('get_download_directory');
+    } catch (error) {
       showNotification(
-        'Please set a valid download path in Settings before downloading files.',
+        'Failed to resolve download directory. Please check your settings.',
         'error',
-        8000
+        6000
       );
       files.update(f => f.map(file =>
         file.id === downloadingFile.id
@@ -1328,19 +1333,14 @@ async function loadAndResumeDownloads() {
       return;
     }
     
-    // Expand ~ to home directory if needed
-    if (storagePath.startsWith("~")) {
-      const home = await homeDir();
-      storagePath = storagePath.replace("~", home);
-    }
-    
-    // Validate directory exists using Tauri command
-    const dirExists = await invoke('check_directory_exists', { path: storagePath });
-    if (!dirExists) {
+    // Ensure directory exists (create it if it doesn't)
+    try {
+      await invoke('ensure_directory_exists', { path: storagePath });
+    } catch (error) {
       showNotification(
-        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        `Failed to create download directory: ${error instanceof Error ? error.message : String(error)}`,
         'error',
-        8000
+        6000
       );
       files.update(f => f.map(file =>
         file.id === downloadingFile.id
@@ -1373,9 +1373,9 @@ async function loadAndResumeDownloads() {
 
 
     // Construct full file path: directory + filename
-    const fullPath = `${storagePath}/${downloadingFile.name}`;
+    const fullPath = await join(storagePath, downloadingFile.name);
     
-    diagnosticLogger.debug('Download', 'Using settings download path', { fullPath });
+    diagnosticLogger.debug('Download', 'Using resolved download path', { fullPath });
 
     // Now start the actual Bitswap download
     const metadata = {

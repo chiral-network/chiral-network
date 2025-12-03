@@ -1050,6 +1050,17 @@
           ...(metadata.seeders ?? []),
           ...webrtcSeederIds,
         ];
+        console.log('🔍 DEBUG UPLOAD: Received metadata from backend:', JSON.stringify(metadata, null, 2));
+        console.log('🔍 DEBUG UPLOAD: metadata.seeders =', metadata.seeders);
+        console.log('🔍 DEBUG UPLOAD: signalingService?.clientId =', signalingService?.clientId);
+
+        // Use seeders from metadata (backend already adds local peer ID via heartbeat system)
+        // Only add WebSocket client ID if no seeders exist (shouldn't happen in normal flow)
+        const allSeederAddresses = metadata.seeders && metadata.seeders.length > 0
+          ? metadata.seeders
+          : (signalingService?.clientId ? [signalingService.clientId] : []);
+
+        console.log('🔍 DEBUG UPLOAD: allSeederAddresses after processing =', allSeederAddresses);
 
         // Construct protocol-specific hash for display
         let protocolHash = metadata.merkleRoot || "";
@@ -1112,6 +1123,13 @@
               ...(metadata.seeders ?? existing.seederAddresses ?? []),
               ...webrtcSeederIds,
             ];
+            // Use seeders from metadata (backend already adds local peer ID via heartbeat system)
+            // Only add WebSocket client ID if no seeders exist (shouldn't happen in normal flow)
+            const mergedSeederAddresses = (metadata.seeders && metadata.seeders.length > 0)
+              ? metadata.seeders
+              : (existing.seederAddresses && existing.seederAddresses.length > 0)
+                ? existing.seederAddresses
+                : (signalingService?.clientId ? [signalingService.clientId] : []);
             const updated = {
               ...existing,
               name: metadata.fileName || existing.name,
