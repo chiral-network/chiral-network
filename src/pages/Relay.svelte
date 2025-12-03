@@ -4,7 +4,7 @@
   import { t } from 'svelte-i18n';
   import { settings } from '$lib/stores';
   import type { AppSettings } from '$lib/stores';
-  import { dhtService } from '$lib/dht';
+  import { dhtService, type DhtHealth } from '$lib/dht';
   import { relayErrorService } from '$lib/services/relayErrorService';
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
@@ -19,6 +19,7 @@
   let dhtIsRunning: boolean | null = null;
   let relayServerAlias = '';
   let isRestartingAutorelay = false;
+  let dhtHealth: DhtHealth | null = null;
 
   // AutoRelay client settings
   let autoRelayEnabled = true;
@@ -202,6 +203,12 @@
   }
 
   let statusCheckInterval: number | undefined;
+  let healthPollInterval: number | undefined;
+
+  const formatNatTimestamp = (epoch?: number | null) => {
+    if (!epoch) return $t('network.dht.health.never');
+    return new Date(epoch * 1000).toLocaleString();
+  };
 
   onMount(() => {
     settingsUnsubscribe = settings.subscribe(applySettingsState);
@@ -209,9 +216,12 @@
     // Load settings and start status checking
     (async () => {
       await loadSettings();
+      await pollHealth();
 
       // Periodically check DHT status (every 3 seconds)
       statusCheckInterval = window.setInterval(checkDhtStatus, 3000);
+      // Poll health snapshot (every 5 seconds) to reflect backend relay state
+      healthPollInterval = window.setInterval(pollHealth, 5000);
 
       // Initialize relay error service with preferred relays
       const preferredRelays = get(settings).preferredRelays || [];
@@ -244,9 +254,28 @@
       if (statusCheckInterval !== undefined) {
         clearInterval(statusCheckInterval);
       }
+      if (healthPollInterval !== undefined) {
+        clearInterval(healthPollInterval);
+      }
       settingsUnsubscribe?.();
     };
   });
+
+  async function pollHealth() {
+    if (!dhtIsRunning) return;
+
+    try {
+      const health = await dhtService.getHealth();
+      if (health) {
+        dhtHealth = health;
+        autoRelayEnabled = health.autorelayEnabled;
+        // Keep relay error service in sync with backend active relay
+        relayErrorService.syncFromHealthSnapshot(health);
+      }
+    } catch (error) {
+      console.error('Failed to poll DHT health:', error);
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -402,6 +431,55 @@
       </div>
     </Card>
   </div>
+
+  {#if dhtHealth}
+    <Card class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <p class="text-xs uppercase text-muted-foreground">Relay status</p>
+          <h3 class="text-lg font-semibold text-foreground">Active relay snapshot</h3>
+        </div>
+        <div class="px-3 py-1 rounded-full text-xs font-semibold"
+          class:bg-green-100={dhtHealth.autorelayEnabled}
+          class:text-green-800={dhtHealth.autorelayEnabled}
+          class:bg-gray-100={!dhtHealth.autorelayEnabled}
+          class:text-gray-800={!dhtHealth.autorelayEnabled}
+        >
+          {dhtHealth.autorelayEnabled ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
+        </div>
+      </div>
+
+      <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
+          <p class="text-xs uppercase text-muted-foreground">Active relay</p>
+          <p class="text-sm font-mono mt-1 break-all">{dhtHealth.activeRelayPeerId ?? $t('network.dht.relay.noPeer')}</p>
+          <p class="text-xs text-muted-foreground mt-1">
+            Status: {dhtHealth.relayReservationStatus ?? $t('network.dht.relay.pending')}
+          </p>
+        </div>
+        <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
+          <p class="text-xs uppercase text-muted-foreground">Pool</p>
+          <p class="text-sm font-medium mt-1">
+            {dhtHealth.totalRelaysInPool ?? 0} total · {dhtHealth.activeRelayCount ?? 0} active
+          </p>
+          <p class="text-xs text-muted-foreground mt-1">Renewals: {dhtHealth.reservationRenewals ?? 0}</p>
+        </div>
+        <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
+          <p class="text-xs uppercase text-muted-foreground">Health</p>
+          <p class="text-sm font-medium mt-1">
+            {#if typeof dhtHealth.relayHealthScore === 'number'}
+              {(dhtHealth.relayHealthScore * 100).toFixed(0)}%
+            {:else}
+              N/A
+            {/if}
+          </p>
+          <p class="text-xs text-muted-foreground mt-1">
+            Last renewal: {dhtHealth.lastReservationRenewal ? formatNatTimestamp(dhtHealth.lastReservationRenewal) : $t('network.dht.health.never')}
+          </p>
+        </div>
+      </div>
+    </Card>
+  {/if}
 
   <!-- Relay Error Monitor -->
   {#if autoRelayEnabled && dhtIsRunning === true}

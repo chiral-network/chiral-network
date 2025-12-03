@@ -14,10 +14,10 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { dhtService } from '$lib/dht'
+  import { dhtService, type DhtHealth as DhtHealthSnapshot, type NatConfidence, type NatReachabilityState } from '$lib/dht'
   import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
   import { resetConnectionAttempts } from '$lib/dhtHelpers'
-  import type { DhtHealth, NatConfidence, NatReachabilityState } from '$lib/dht'
+  import { relayErrorService } from '$lib/services/relayErrorService'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
@@ -101,7 +101,7 @@
   let dhtBootstrapNode = 'Loading bootstrap nodes...'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
-  let dhtHealth: DhtHealth | null = null
+  let dhtHealth: DhtHealthSnapshot | null = null
   let dhtError: string | null = null
   let connectionAttempts = 0
   let dhtPollInterval: number | undefined
@@ -338,16 +338,17 @@
         const payload = event.payload as NatStatusPayload
         if (!payload) return
         showNatToast(payload)
-        try {
-          const snapshot = await dhtService.getHealth()
-          if (snapshot) {
-            dhtHealth = snapshot
-            lastNatState = snapshot.reachability
-            lastNatConfidence = snapshot.reachabilityConfidence
-          }
-        } catch (error) {
-          errorLogger.networkError(`Failed to refresh NAT status: ${error instanceof Error ? error.message : String(error)}`);
+      try {
+        const snapshot = await dhtService.getHealth()
+        if (snapshot) {
+          dhtHealth = snapshot
+          lastNatState = snapshot.reachability
+          lastNatConfidence = snapshot.reachabilityConfidence
+          relayErrorService.syncFromHealthSnapshot(snapshot)
         }
+      } catch (error) {
+        errorLogger.networkError(`Failed to refresh NAT status: ${error instanceof Error ? error.message : String(error)}`);
+      }
       })
     } catch (error) {
       errorLogger.networkError(`Failed to subscribe to NAT status updates: ${error instanceof Error ? error.message : String(error)}`);
@@ -399,6 +400,7 @@
           if (health) {
             dhtHealth = health
             dhtPeerCount = health.peerCount
+            relayErrorService.syncFromHealthSnapshot(health)
           }
 
           // Set status based on peer count
@@ -551,6 +553,14 @@
       return
     }
 
+    const applyHealth = (health: DhtHealthSnapshot) => {
+      dhtHealth = health
+      dhtPeerCount = health.peerCount
+      lastNatState = health.reachability
+      lastNatConfidence = health.reachabilityConfidence
+      relayErrorService.syncFromHealthSnapshot(health)
+    }
+
     dhtPollInterval = setInterval(async () => {
       try {
         // Only call getEvents if running in Tauri mode
@@ -575,13 +585,10 @@
         let peerCount = dhtPeerCount
         const health = await dhtService.getHealth()
         if (health) {
-          dhtHealth = health
+          applyHealth(health)
           peerCount = health.peerCount
           // Fetch public multiaddresses
           await fetchPublicMultiaddrs()
-          dhtPeerCount = peerCount
-          lastNatState = health.reachability
-          lastNatConfidence = health.reachabilityConfidence
         } else {
           peerCount = await dhtService.getPeerCount()
           dhtPeerCount = peerCount
@@ -711,16 +718,17 @@
         dhtPeerCount = peerCount
         
         // Also restore health snapshot
-        try {
-          const health = await dhtService.getHealth()
-          if (health) {
-            dhtHealth = health
-            lastNatState = health.reachability
-            lastNatConfidence = health.reachabilityConfidence
+          try {
+            const health = await dhtService.getHealth()
+            if (health) {
+              dhtHealth = health
+              lastNatState = health.reachability
+              lastNatConfidence = health.reachabilityConfidence
+              relayErrorService.syncFromHealthSnapshot(health)
+            }
+          } catch (healthError) {
+            diagnosticLogger.debug('Network', 'Could not fetch health snapshot', { error: healthError instanceof Error ? healthError.message : String(healthError) });
           }
-        } catch (healthError) {
-          diagnosticLogger.debug('Network', 'Could not fetch health snapshot', { error: healthError instanceof Error ? healthError.message : String(healthError) });
-        }
         
         // Set status based on peer count - polling will handle dynamic updates
         dhtStatus = peerCount > 0 ? 'connected' : 'connecting'
@@ -1770,6 +1778,33 @@
           </div>
 
           {#if dhtHealth}
+            <div class="pt-4 space-y-3 border-t border-muted/40">
+              <div class="flex items-center justify-between">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.title')}</p>
+                <Badge class={dhtHealth.autorelayEnabled ? 'bg-green-600' : 'bg-gray-500'}>
+                  {dhtHealth.autorelayEnabled ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
+                </Badge>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.enabledAt')}</p>
+                  <p class="text-sm font-medium mt-1">
+                    {dhtHealth.lastAutorelayEnabledAt
+                      ? formatHealthTimestamp(dhtHealth.lastAutorelayEnabledAt)
+                      : $t('network.dht.relay.neverEnabled')}
+                  </p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.disabledAt')}</p>
+                  <p class="text-sm font-medium mt-1">
+                    {dhtHealth.lastAutorelayDisabledAt
+                      ? formatHealthTimestamp(dhtHealth.lastAutorelayDisabledAt)
+                      : $t('network.dht.relay.neverDisabled')}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
               <div class="bg-muted/40 rounded-lg p-3">
                 <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastBootstrap')}</p>
@@ -1925,12 +1960,15 @@
 
   <!-- Relay health & monitoring (DHT snapshot) -->
   <Card class="p-6 mt-6">
-
     {#if dhtHealth}
       {#if $settings.enableAutorelay && dhtStatus === 'connected'}
-        <div class="mt-6">
+        <div>
           <h3 class="text-lg font-semibold text-foreground mb-3">{$t('relay.monitoring.title')}</h3>
           <RelayErrorMonitor />
+        </div>
+      {:else}
+        <div class="text-sm text-muted-foreground">
+          Enable auto-relay and connect to the DHT to view relay monitoring details.
         </div>
       {/if}
     {:else}
