@@ -1417,13 +1417,6 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
-    // Create a ChunkManager instance
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {}", e))?;
-    let chunk_storage_path = app_data_dir.join("chunk_storage");
-    let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
 
     // --- AutoRelay is now disabled by default (can be enabled via config or env var)
     // Disable AutoRelay on bootstrap nodes (and via env var)
@@ -1477,7 +1470,7 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
-        Some(chunk_manager), // Pass the chunk manager
+        None, // Chunk manager will be set later for multi-source downloads
         chunk_size_kb,
         cache_size_mb,
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
@@ -3368,6 +3361,14 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
+        // Create ChunkManager instance
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Could not get app data directory: {}", e))?;
+        let chunk_storage_path = app_data_dir.join("chunk_storage");
+        let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
+
         // Create transfer event bus for unified event emission
         let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
         let multi_source_service = MultiSourceDownloadService::new(
@@ -3376,8 +3377,14 @@ async fn start_file_transfer_service(
             state.bittorrent_handler.clone(),
             transfer_event_bus,
             state.analytics.clone(),
+            chunk_manager.clone(),
         );
         let multi_source_arc = Arc::new(multi_source_service);
+
+        // Load any persisted download states
+        if let Err(e) = multi_source_arc.load_download_states().await {
+            tracing::warn!("Failed to load persisted download states: {}", e);
+        }
 
         {
             let mut multi_source_guard = state.multi_source_download.lock().await;
@@ -3652,6 +3659,7 @@ async fn upload_file_to_network(
                                 file_name: Some(original_file_name.clone()),
                                 sources: None,
                                 timeout: None,
+                                chunk_hashes: None,
                             }]),
                             download_path: None,
                         };
@@ -5160,12 +5168,23 @@ async fn pump_file_transfer_events(app: tauri::AppHandle, ft: Arc<FileTransferSe
 }
 
 async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDownloadService>) {
+    let mut save_state_counter = 0;
     loop {
         let events = ms.drain_events(64).await;
         if events.is_empty() {
             if Arc::strong_count(&ms) <= 1 {
                 break;
             }
+
+            // Save download states every ~30 seconds (120 * 250ms)
+            save_state_counter += 1;
+            if save_state_counter >= 120 {
+                save_state_counter = 0;
+                if let Err(e) = ms.save_download_state().await {
+                    warn!("Failed to save download states: {}", e);
+                }
+            }
+
             sleep(Duration::from_millis(250)).await;
             continue;
         }
@@ -6849,6 +6868,7 @@ fn main() {
 
     // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
+    let dht_service_for_protocols = dht_service_arc.clone();
 
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -6904,7 +6924,10 @@ fn main() {
         manager.register(Box::new(bittorrent_protocol_handler));
 
         // Register ED2K and FTP handlers
-        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
+        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::with_dht_service(
+            "ed2k://|server|45.82.80.155|5687|/".to_string(),
+            dht_service_for_protocols,
+        );
         manager.register(Box::new(ed2k_handler));
 
         let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
@@ -7609,6 +7632,18 @@ fn main() {
                             proxies_arc_for_pump,
                             relay_reputation_arc_for_pump,
                         ).await;
+                    });
+                }
+            }
+
+            // Set app handle on bandwidth controller for event emission
+            {
+                let app_handle = app.handle().clone();
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    let bandwidth_controller = state.bandwidth.clone();
+                    let app_handle_for_bandwidth = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        bandwidth_controller.set_app_handle(app_handle_for_bandwidth).await;
                     });
                 }
             }

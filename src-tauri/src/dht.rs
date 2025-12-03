@@ -5328,8 +5328,7 @@ async fn handle_dcutr_event(
             metrics_guard.last_dcutr_success = Some(SystemTime::now());
             let success_rate = if metrics_guard.dcutr_hole_punch_attempts > 0 {
                 metrics_guard.dcutr_hole_punch_successes as f64
-                    / metrics_guard.dcutr_hole_punch_attempts as f64
-                    * 100.0
+                    / metrics_guard.dcutr_hole_punch_attempts as f64 * 100.0
             } else {
                 0.0
             };
@@ -5353,8 +5352,7 @@ async fn handle_dcutr_event(
             metrics_guard.last_dcutr_failure = Some(SystemTime::now());
             let success_rate = if metrics_guard.dcutr_hole_punch_attempts > 0 {
                 metrics_guard.dcutr_hole_punch_successes as f64
-                    / metrics_guard.dcutr_hole_punch_attempts as f64
-                    * 100.0
+                    / metrics_guard.dcutr_hole_punch_attempts as f64 * 100.0
             } else {
                 0.0
             };
