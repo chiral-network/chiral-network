@@ -3562,29 +3562,8 @@ async fn upload_file_to_network(
                         };
 
                         // Check for existing metadata and merge BitTorrent info if found
-                        let final_metadata = {
-                            let dht_guard = state.dht.lock().await;
-                            if let Some(dht) = dht_guard.as_ref() {
-                                // Search for existing metadata using content hash
-                                match dht.synchronous_search_metadata(file_hash.clone(), 5000).await {
-                                    Ok(Some(existing_metadata)) => {
-                                        // Merge existing metadata with new BitTorrent info
-                                        let mut merged = existing_metadata.clone();
-                                        merged.info_hash = info_hash.clone(); // Add BitTorrent info_hash
-                                        merged.trackers = Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]); // Add trackers
-                                        // Keep existing sources (HTTP, FTP, BitSwap, etc.) but add BitTorrent capability
-                                        info!("Merged BitTorrent info with existing metadata for file: {}", file_hash);
-                                        merged
-                                    }
-                                    _ => {
-                                        // No existing metadata, use the new BitTorrent metadata
-                                        metadata
-                                    }
-                                }
-                            } else {
-                                metadata
-                            }
-                        };
+                        // Use the metadata directly - PublishFile handler will handle merging
+                        let final_metadata = metadata;
 
                         // Publish merged metadata to DHT for discoverability
                         let dht = {
@@ -3684,36 +3663,8 @@ async fn upload_file_to_network(
                             download_path: None,
                         };
 
-                        // Check for existing metadata and merge ED2K info if found
-                        let final_metadata = {
-                            let dht_guard = state.dht.lock().await;
-                            if let Some(dht) = dht_guard.as_ref() {
-                                // Search for existing metadata using content hash
-                                match dht.synchronous_search_metadata(file_hash.clone(), 5000).await {
-                                    Ok(Some(existing_metadata)) => {
-                                        // Merge existing metadata with new ED2K sources
-                                        let mut merged = existing_metadata.clone();
-                                        merged.ed2k_sources = Some(vec![dht::models::Ed2kSourceInfo {
-                                            server_url: "ed2k://|server|45.82.80.155|5687|/".to_string(),
-                                            file_hash: ed2k_hash.clone().unwrap_or_else(|| "unknown".to_string()),
-                                            file_size,
-                                            file_name: Some(original_file_name.clone()),
-                                            sources: None,
-                                            timeout: None,
-                                        }]); // Add ED2K sources
-                                        // Keep existing sources (HTTP, FTP, BitSwap, etc.) but add ED2K capability
-                                        info!("Merged ED2K sources with existing metadata for file: {}", file_hash);
-                                        merged
-                                    }
-                                    _ => {
-                                        // No existing metadata, use the new ED2K metadata
-                                        metadata
-                                    }
-                                }
-                            } else {
-                                metadata
-                            }
-                        };
+                        // Use the metadata directly - PublishFile handler will handle merging
+                        let final_metadata = metadata;
 
                         // Publish merged metadata to DHT for discoverability
                         let dht = {
@@ -3798,40 +3749,8 @@ async fn upload_file_to_network(
                         };
 
 
-                        // Check for existing metadata and merge FTP sources if found
-                        let final_metadata = {
-                            let dht_guard = state.dht.lock().await;
-                            if let Some(dht) = dht_guard.as_ref() {
-                                // Search for existing metadata using content hash
-                                match dht.synchronous_search_metadata(file_hash.clone(), 5000).await {
-                                    Ok(Some(existing_metadata)) => {
-                                        // Merge existing metadata with new FTP sources
-                                        let mut merged = existing_metadata.clone();
-                                        merged.ftp_sources = Some(vec![dht::models::FtpSourceInfo {
-                                            url: seeding_info.identifier.clone(),
-                                            username: None,
-                                            password: None,
-                                            supports_resume: true,
-                                            file_size,
-                                            last_checked: Some(std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs()),
-                                            is_available: true,
-                                        }]); // Add FTP sources
-                                        // Keep existing sources (HTTP, BitSwap, etc.) but add FTP capability
-                                        info!("Merged FTP sources with existing metadata for file: {}", file_hash);
-                                        merged
-                                    }
-                                    _ => {
-                                        // No existing metadata, use the new FTP metadata
-                                        metadata
-                                    }
-                                }
-                            } else {
-                                metadata
-                            }
-                        };
+                        // Use the metadata directly - PublishFile handler will handle merging
+                        let final_metadata = metadata;
 
                         // Publish merged metadata to DHT for discoverability
                         let dht = {
@@ -3998,26 +3917,8 @@ async fn upload_file_to_network(
                             ed2k_sources: None,
                         };
 
-                        // Check for existing metadata and merge if found
-                        let final_metadata = if let Some(dht) = &dht_opt {
-                            // Search for existing metadata for this file
-                            match dht.synchronous_search_metadata(merkle_root.clone(), 5000).await {
-                                Ok(Some(existing_metadata)) => {
-                                    // Merge existing metadata with new BitSwap CIDs
-                                    let mut merged = existing_metadata.clone();
-                                    merged.cids = Some(vec![root_cid.clone()]); // Add BitSwap CIDs
-                                    // Keep existing sources (HTTP, FTP, etc.) but add BitSwap capability
-                                    info!("Merged BitSwap CIDs with existing metadata for file: {}", merkle_root);
-                                    merged
-                                }
-                                _ => {
-                                    // No existing metadata, use the new BitSwap metadata
-                                    metadata
-                                }
-                            }
-                        } else {
-                            metadata
-                        };
+                        // Use the metadata directly - PublishFile handler will handle merging
+                        let final_metadata = metadata;
 
                         // Publish merged metadata to DHT
                         if let Some(dht) = dht_opt {

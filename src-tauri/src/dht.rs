@@ -942,61 +942,6 @@ impl rr::Codec for WebRTCSignalingCodec {
     }
 }
 
-/// Merge two DHT metadata JSON objects, combining protocol-specific fields
-fn merge_dht_metadata(existing: &serde_json::Value, new: &serde_json::Value) -> serde_json::Value {
-    let mut merged = existing.clone();
-
-    if let (Some(existing_obj), Some(new_obj)) = (existing.as_object(), new.as_object()) {
-        let merged_obj = merged.as_object_mut().unwrap();
-
-        // Merge protocol-specific arrays/vectors
-        merge_array_field(merged_obj, new_obj, "cids");
-        merge_array_field(merged_obj, new_obj, "seeders");
-        merge_array_field(merged_obj, new_obj, "http_sources");
-        merge_array_field(merged_obj, new_obj, "ftp_sources");
-        merge_array_field(merged_obj, new_obj, "ed2k_sources");
-        merge_array_field(merged_obj, new_obj, "trackers");
-
-        // For single-value fields, prefer the new value if it exists
-        for (key, value) in new_obj {
-            if !matches!(
-                key.as_str(),
-                "cids" | "seeders" | "http_sources" | "ftp_sources" | "ed2k_sources" | "trackers"
-            ) {
-                merged_obj.insert(key.clone(), value.clone());
-            }
-        }
-    }
-
-    merged
-}
-
-/// Helper function to merge array fields in DHT metadata
-fn merge_array_field(
-    merged: &mut serde_json::Map<String, serde_json::Value>,
-    new: &serde_json::Map<String, serde_json::Value>,
-    field_name: &str,
-) {
-    if let (Some(existing_array), Some(new_array)) = (
-        merged.get(field_name).and_then(|v| v.as_array()),
-        new.get(field_name).and_then(|v| v.as_array()),
-    ) {
-        let mut combined = existing_array.clone();
-        for item in new_array {
-            if !combined.contains(item) {
-                combined.push(item.clone());
-            }
-        }
-        merged.insert(field_name.to_string(), serde_json::Value::Array(combined));
-    } else if let Some(new_array) = new.get(field_name).and_then(|v| v.as_array()) {
-        // Only new has this field, use it
-        merged.insert(
-            field_name.to_string(),
-            serde_json::Value::Array(new_array.clone()),
-        );
-    }
-    // If only existing has it, keep existing
-}
 
 #[derive(Clone)]
 struct Socks5Transport {
@@ -1738,26 +1683,14 @@ async fn run_dht_node(
 
                                 let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
 
-                                // Check for existing metadata and merge if found
-                                let merged_dht_metadata = {
-                                    // Try to get existing record from heartbeat cache first
-                                    if let Some(existing_entry) = seeder_heartbeats_cache.lock().await.get(&metadata.merkle_root) {
-                                        // Merge with existing DHT metadata from heartbeat cache
-                                        merge_dht_metadata(&existing_entry.metadata, &dht_metadata)
-                                    } else {
-                                        // No existing record, use the new metadata as-is
-                                        dht_metadata.clone()
-                                    }
-                                };
-
-                                // Update the heartbeat cache with merged metadata
+                                // Update the heartbeat cache with new metadata (no merging needed)
                                 {
                                     let mut cache = seeder_heartbeats_cache.lock().await;
                                     cache.insert(
                                         metadata.merkle_root.clone(),
                                         FileHeartbeatCacheEntry {
                                             heartbeats: active_heartbeats.clone(),
-                                            metadata: merged_dht_metadata.clone(),
+                                            metadata: dht_metadata.clone(),
                                         },
                                     );
                                 }
@@ -1767,7 +1700,7 @@ async fn run_dht_node(
                                 // immediately would always fail with NotFound. Heartbeat updates will
                                 // happen on subsequent seeder refresh cycles.
 
-                                let dht_record_data = match serde_json::to_vec(&merged_dht_metadata) {
+                                let dht_record_data = match serde_json::to_vec(&dht_metadata) {
                                     Ok(data) => data,
                                     Err(e) => {
                                         eprintln!("Failed to serialize DHT metadata: {}", e);
@@ -1881,36 +1814,29 @@ async fn run_dht_node(
                                     "mime_type": metadata.mime_type,
                                     "is_encrypted": metadata.is_encrypted,
                                     "encryption_method": metadata.encryption_method,
+                                    "key_fingerprint": metadata.key_fingerprint,
                                     "cids": metadata.cids,
                                     "encrypted_key_bundle": metadata.encrypted_key_bundle,
-
+                                    "ftp_sources": metadata.ftp_sources,
+                                    "ed2k_sources": metadata.ed2k_sources,
+                                    "http_sources": metadata.http_sources,
                                     "info_hash": metadata.info_hash,
                                     "trackers": metadata.trackers,
                                     "parent_hash": metadata.parent_hash,
+                                    "price": metadata.price,
+                                    "uploader_address": metadata.uploader_address,
                                     "seeders": metadata.seeders,
                                     "seederHeartbeats": active_heartbeats,
                                 });
 
-                                // Check for existing metadata and merge if found
-                                let merged_dht_metadata = {
-                                    // Try to get existing record from heartbeat cache first
-                                    if let Some(existing_entry) = seeder_heartbeats_cache.lock().await.get(&metadata.merkle_root) {
-                                        // Merge with existing DHT metadata from heartbeat cache
-                                        merge_dht_metadata(&existing_entry.metadata, &dht_metadata)
-                                    } else {
-                                        // No existing record, use the new metadata as-is
-                                        dht_metadata.clone()
-                                    }
-                                };
-
-                                // Update the heartbeat cache with merged metadata
+                                // Update the heartbeat cache with new metadata (no merging needed)
                                 {
                                     let mut cache = seeder_heartbeats_cache.lock().await;
                                     cache.insert(
                                         metadata.merkle_root.clone(),
                                         FileHeartbeatCacheEntry {
                                             heartbeats: active_heartbeats.clone(),
-                                            metadata: merged_dht_metadata.clone(),
+                                            metadata: dht_metadata.clone(),
                                         },
                                     );
                                 }
@@ -1925,7 +1851,7 @@ async fn run_dht_node(
                                     .kademlia
                                     .get_record(record_key.clone());
 
-                                let record_value = match serde_json::to_vec(&merged_dht_metadata).map_err(|e| e.to_string()) {
+                                let record_value = match serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()) {
                                     Ok(val) => val,
                                     Err(e) => {
                                         warn!("Failed to serialize DHT metadata: {}", e);
