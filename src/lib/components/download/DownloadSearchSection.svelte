@@ -397,12 +397,8 @@
     hasSearched = false;
   }
 
-  function handleCopy(event: CustomEvent<string>) {
-    pushMessage(
-      tr('download.search.notifications.copied', { values: { value: event.detail } }),
-      'info',
-      2000,
-    );
+  function handleCopy(_event: CustomEvent<string>) {
+    // Silently copy without toast notification
   }
 
 

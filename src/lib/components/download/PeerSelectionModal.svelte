@@ -260,8 +260,7 @@
                     </td>
                     <td class="p-3">
                       <div class="flex items-center gap-1 text-sm">
-                        <DollarSign class="h-3.5 w-3.5 text-muted-foreground" />
-                        {peer.price_per_mb.toFixed(4)}
+                        {peer.price_per_mb.toFixed(4)} Chiral
                       </div>
                     </td>
                     {#if mode === 'manual'}
@@ -307,7 +306,7 @@
           <div class="flex justify-between items-center">
             <span class="font-medium text-sm">Estimated Cost:</span>
             <span class="text-green-600 dark:text-green-400 font-bold">
-              ${totalCost.toFixed(4)} CHR
+              {Math.max(totalCost, 0.0001).toFixed(4)} Chiral
             </span>
           </div>
           {#if mode === 'manual'}

@@ -1,6 +1,6 @@
 pub mod models;
 // pub mod protocol;
-use self::models::*;
+pub use self::models::*;
 use rand::seq::SliceRandom;
 
 // use self::protocol::*;
