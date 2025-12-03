@@ -358,14 +358,4 @@
     transform: rotateY(180deg);
   }
 
-  .wizard-card-content {
-    width: 100%;
-    border-radius: 1.25rem;
-  }
-
-  @media (max-width: 640px) {
-    .wizard-card-content {
-      padding: 1.5rem;
-    }
-  }
 </style>

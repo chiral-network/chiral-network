@@ -40,8 +40,7 @@
   let activeHistoryId: string | null = null;
   let showHistoryDropdown = false;
 
-  // Protocol selection modal state
-  let showProtocolSelectionModal = false;
+  // Protocol selection state
   let availableProtocols: Array<{id: string, name: string, description: string, available: boolean}> = [];
 
   // Peer selection modal state
@@ -334,7 +333,7 @@
       const entry = dhtSearchHistory.addPending(trimmed);
       activeHistoryId = entry.id;
 
-      pushMessage(tr('download.search.status.started'), 'info', 2000);
+      // Removed "Searching the network..." toast
       const metadata = await dhtService.searchFileMetadata(trimmed, SEARCH_TIMEOUT_MS);
       const elapsed = Math.round(performance.now() - startedAt);
       lastSearchDuration = elapsed;
@@ -505,32 +504,18 @@
     availableProtocols = getAvailableProtocols(metadata);
     const availableProtocolList = availableProtocols.filter(p => p.available);
 
-    // If only one protocol available, use it directly
-    if (availableProtocolList.length === 1) {
-      selectedProtocol = availableProtocolList[0].id as any;
-      await proceedWithProtocolSelection(metadata, availableProtocolList[0].id);
+    // If no protocols available
+    if (availableProtocolList.length === 0) {
+      pushMessage('No download protocols available for this file', 'warning');
       return;
     }
 
-    // If multiple protocols available, show selection modal
-    if (availableProtocolList.length > 1) {
-      selectedFile = metadata;
-      showProtocolSelectionModal = true;
-      return;
-    }
-
-    // No protocols available
-    pushMessage('No download protocols available for this file', 'warning');
-  }
-
-  // Handle protocol selection and proceed to download
-  async function selectProtocol(protocolId: string) {
-    if (!selectedFile) return;
-
-    selectedProtocol = protocolId as any;
-    showProtocolSelectionModal = false;
-
-    await proceedWithProtocolSelection(selectedFile, protocolId);
+    // Select the first available protocol as default (user can change in peer selection modal)
+    selectedProtocol = availableProtocolList[0].id as any;
+    
+    // Go directly to peer selection modal (protocol can be changed there)
+    selectedFile = metadata;
+    await proceedWithProtocolSelection(metadata, selectedProtocol);
   }
 
   // Proceed with download using selected protocol
@@ -593,19 +578,13 @@
     try {
       const allMetrics = await PeerSelectionService.getPeerMetrics();
 
-      const sizeInMb = metadata.fileSize > 0 ? metadata.fileSize / (1024 * 1024) : 0;
-      let perMbPrice =
-        metadata.price && sizeInMb > 0
-          ? metadata.price / sizeInMb
-          : 0;
-
-      if (!Number.isFinite(perMbPrice) || perMbPrice <= 0) {
-        try {
-          perMbPrice = await paymentService.getDynamicPricePerMB(1.2);
-        } catch (pricingError) {
-          console.warn('Falling back to static per MB price:', pricingError);
-          perMbPrice = 0.001;
-        }
+      // Always calculate dynamic price per MB for peer selection
+      let perMbPrice = 0;
+      try {
+        perMbPrice = await paymentService.getDynamicPricePerMB(1.2);
+      } catch (pricingError) {
+        console.warn('Failed to get dynamic per MB price, using fallback:', pricingError);
+        perMbPrice = 0.001;
       }
 
       availablePeers = metadata.seeders.map(seederId => {
@@ -777,7 +756,6 @@
     // Route download based on selected protocol
     if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap' || selectedProtocol === 'bittorrent') {
       // P2P download flow (WebRTC, Bitswap, BitTorrent)
-      console.log(`🔍 DEBUG: Initiating ${selectedProtocol} download for file: ${selectedFile.fileName}`);
 
       const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {
         ...selectedFile,
@@ -798,7 +776,7 @@
     // Close modal and reset state
     showPeerSelectionModal = false;
     selectedFile = null;
-    pushMessage(`Starting ${selectedProtocol.toUpperCase()} download with ${selectedPeers.length} selected peer${selectedPeers.length === 1 ? '' : 's'}`, 'info', 3000);
+    pushMessage(`Starting ${selectedProtocol.toUpperCase()} download with ${selectedPeers.length} selected peer${selectedPeers.length === 1 ? '' : 's'}`, 'success', 3000);
   }
 
 
@@ -997,41 +975,6 @@
   </div>
 </Card>
 
-<!-- Protocol Selection Modal -->
-{#if showProtocolSelectionModal}
-  <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4">
-      <h3 class="text-lg font-semibold mb-4">Choose Download Protocol</h3>
-      <p class="text-sm text-muted-foreground mb-4">
-        Multiple download protocols are available for "{selectedFile?.fileName}". Choose your preferred method:
-      </p>
-
-      <div class="space-y-2">
-        {#each availableProtocols.filter(p => p.available) as protocol}
-          <button
-            class="w-full text-left p-3 rounded-md border border-border hover:bg-muted transition-colors"
-            on:click={() => selectProtocol(protocol.id)}
-          >
-            <div class="flex items-center justify-between">
-              <div>
-                <div class="font-medium">{protocol.name}</div>
-                <div class="text-sm text-muted-foreground">{protocol.description}</div>
-              </div>
-              <div class="text-primary">→</div>
-            </div>
-          </button>
-        {/each}
-      </div>
-
-      <div class="flex justify-end mt-6">
-        <Button variant="outline" on:click={() => { showProtocolSelectionModal = false; selectedFile = null; }}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  </div>
-{/if}
-
 <!-- Peer Selection Modal -->
 <PeerSelectionModal
   show={showPeerSelectionModal}
@@ -1040,7 +983,6 @@
   bind:peers={availablePeers}
   bind:mode={peerSelectionMode}
   bind:protocol={selectedProtocol}
-  autoSelectionInfo={autoSelectionInfo}
   isTorrent={pendingTorrentType !== null}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}

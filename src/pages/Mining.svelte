@@ -461,10 +461,12 @@
             console.error('[Mining Page] Failed to update blocks count:', error);
           }
 
-          // Wait minimal time for block propagation, then refresh mining stats
+          // Wait minimal time for block propagation, then refresh mining stats and balance
           setTimeout(async () => {
             try {
               await walletService.refreshTransactions();
+              // Refresh balance to update wallet.balance with new mining rewards
+              await walletService.refreshBalance();
             } catch (error) {
               console.error('[Mining Page] Backend refresh failed:', error);
             }
