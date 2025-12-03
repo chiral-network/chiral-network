@@ -556,9 +556,10 @@ export class DhtService {
           metadata.merkleRoot || metadata.fileHash || trimmed;
         if (hashForSeeders) {
           const seeders = await this.getSeedersForFile(hashForSeeders);
-          if (seeders.length > 0) {
-            metadata.seeders = seeders;
-          }
+          // Always update seeders with the current live list from DHT provider query
+          // This ensures we don't use stale seeders from the cached metadata
+          metadata.seeders = seeders;
+          console.log(`🔍 DEBUG DHT.TS: Updated metadata.seeders to current live list (${seeders.length} seeders)`);
         }
       }
       return metadata;
