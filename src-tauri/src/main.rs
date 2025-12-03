@@ -133,7 +133,7 @@ struct BackendSettings {
 impl Default for BackendSettings {
     fn default() -> Self {
         Self {
-            storage_path: "".to_string(), // Will be set to platform-specific default
+            storage_path: "".to_string(), // No hardcoded default - get_download_directory handles this
             enable_file_logging: false,
             max_log_size_mb: 10,
         }
@@ -1633,7 +1633,10 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
+                        println!("🔍 DEBUG MAIN: PublishedFile event received");
+                        println!("🔍 DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
                         let payload = serde_json::json!(metadata);
+                        println!("🔍 DEBUG MAIN: Emitting published_file event to frontend");
                         let _ = app_handle.emit("published_file", payload);
                         // Update analytics: record upload completion
                         analytics_arc.record_upload_completed().await;
@@ -3240,26 +3243,6 @@ fn get_windows_temperature() -> Option<f32> {
 #[tauri::command]
 fn detect_locale() -> String {
     sys_locale::get_locale().unwrap_or_else(|| "en-US".into())
-}
-
-#[tauri::command]
-fn get_default_storage_path(app: tauri::AppHandle) -> Result<String, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {}", e))?;
-
-    // Get the parent of app data dir to place storage at user level
-    let user_dir = app_data_dir
-        .parent()
-        .ok_or_else(|| "Failed to get parent directory".to_string())?;
-
-    let storage_path = user_dir.join("Chiral-Network-Storage");
-
-    storage_path
-        .to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| "Failed to convert path to string".to_string())
 }
 
 /// Get the resolved download directory.
@@ -5502,13 +5485,16 @@ async fn get_file_seeders(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<Vec<String>, String> {
+    println!("🔍 DEBUG MAIN: get_file_seeders called with hash = {}", file_hash);
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
     if let Some(dht_service) = dht {
-        Ok(dht_service.get_seeders_for_file(&file_hash).await)
+        let seeders = dht_service.get_seeders_for_file(&file_hash).await;
+        println!("🔍 DEBUG MAIN: get_file_seeders returning seeders = {:?}", seeders);
+        Ok(seeders)
     } else {
         Err("DHT node is not running".to_string())
     }
@@ -7201,7 +7187,6 @@ fn main() {
             connect_to_peer,
             get_dht_events,
             detect_locale,
-            get_default_storage_path,
             get_download_directory,
             check_directory_exists,
             ensure_directory_exists,

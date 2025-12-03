@@ -280,6 +280,10 @@
     "enableUpnp": "تفعيل UPnP",
     "enableNat": "تفعيل تعيين منافذ NAT",
     "enableDht": "تفعيل DHT",
+    "autoStartNode": "بدء تلقائي لعقدة DHT عند التشغيل",
+    "autoStartNodeDescription": "بدء عقدة DHT لمشاركة الملفات تلقائيًا عند تشغيل التطبيق",
+    "autoStartGeth": "بدء تلقائي لعقدة البلوكشين عند التشغيل",
+    "autoStartGethDescription": "بدء عقدة Geth للبلوكشين تلقائيًا عند تشغيل التطبيق (يفعل المحفظة والتعدين)",
 
     "geoDistribution": {
       "title": "التوزيع الجغرافي",

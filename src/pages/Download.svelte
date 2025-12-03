@@ -31,7 +31,7 @@ import type { FileMetadata } from '$lib/dht'
     activeTransfers as storeActiveTransfers
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
-  import { homeDir } from '@tauri-apps/api/path'
+  import { homeDir, join } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
@@ -402,29 +402,30 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       );
       return;
     }
-    
-    const settings = JSON.parse(stored);
-    let storagePath = settings.storagePath;
-    
-    if (!storagePath || storagePath === '.') {
+
+    // Get canonical download directory from backend (single source of truth)
+    let storagePath: string;
+    try {
+      storagePath = await invoke('get_download_directory');
+    } catch (error) {
       showToast(
-        'Please set a valid download path in Settings.',
+        'Failed to resolve download directory. Please check your settings.',
         'error'
       );
+      files.update(f => f.map(file =>
+        file.hash === data.fileHash
+          ? { ...file, status: 'failed' }
+          : file
+      ));
       return;
     }
     
-    // Expand ~ to home directory if needed
-    if (storagePath.startsWith("~")) {
-      const home = await homeDir();
-      storagePath = storagePath.replace("~", home);
-    }
-    
-    // Validate directory exists
-    const dirExists = await invoke('check_directory_exists', { path: storagePath });
-    if (!dirExists) {
+    // Ensure directory exists (create it if it doesn't)
+    try {
+      await invoke('ensure_directory_exists', { path: storagePath });
+    } catch (error) {
       showToast(
-        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
+        `Failed to create download directory: ${error instanceof Error ? error.message : String(error)}`,
         'error'
       );
       return;
@@ -839,6 +840,11 @@ async function loadAndResumeDownloads() {
   }
 
   async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
+    diagnosticLogger.debug('Download', 'handleSearchDownload called', { metadata });
+    console.log('🔍 DEBUG DOWNLOAD: handleSearchDownload metadata =', metadata);
+    console.log('🔍 DEBUG DOWNLOAD: metadata.seeders =', metadata.seeders);
+    console.log('🔍 DEBUG DOWNLOAD: metadata.seeders.length =', metadata.seeders?.length);
+
     // Use user's protocol selection if provided, otherwise auto-detect
     if (metadata.selectedProtocol) {
       detectedProtocol = metadata.selectedProtocol === 'webrtc' ? 'WebRTC' : 'Bitswap';
@@ -1150,10 +1156,79 @@ async function loadAndResumeDownloads() {
   }
 
   try {
-    const storagePath = await invoke("get_download_directory");
+    const stored = localStorage.getItem("chiralSettings");
+    if (!stored) {
+      showToast(
+        'Please configure a download path in Settings before downloading files.',
+        'error'
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+    
+    // Get canonical download directory from backend (single source of truth)
+    let storagePath: string;
+    try {
+      storagePath = await invoke('get_download_directory');
+    } catch (error) {
+      showToast(
+        'Failed to resolve download directory. Please check your settings.',
+        'error'
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+    
+    // Ensure directory exists (create it if it doesn't)
+    try {
+      await invoke('ensure_directory_exists', { path: storagePath });
+    } catch (error) {
+      showToast(
+        `Failed to create download directory: ${error instanceof Error ? error.message : String(error)}`,
+        'error'
+      );
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
+
+
+    // ✅ ADD SEEDING CONFIRMATION
+    const userConfirmed = confirm(
+      `Download "${downloadingFile.name}"?\n\n` +
+      `You will automatically become a seeder for this file after downloading.\n\n` +
+      `This means:\n` +
+      `• The file will be shared with other users\n` +
+      `• You can stop seeding anytime from the Uploads page\n\n` +
+      `Continue with download?`
+    );
+
+    if (!userConfirmed) {
+      console.log('User cancelled download');
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'queued' }
+          : file
+      ));
+      return;
+    }
+
 
     // Construct full file path: directory + filename
-    const fullPath = `${storagePath}/${downloadingFile.name}`;
+    const fullPath = await join(storagePath, downloadingFile.name);
+    
+    diagnosticLogger.debug('Download', 'Using resolved download path', { fullPath });
 
     // Now start the actual Bitswap download
     const metadata = {

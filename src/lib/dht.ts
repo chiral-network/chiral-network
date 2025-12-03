@@ -1,6 +1,7 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { join } from "@tauri-apps/api/path";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
 const __rep = ReputationStore.getInstance();
@@ -233,13 +234,25 @@ export class DhtService {
         const unlistenPromise = listen<FileMetadata>(
           "published_file",
           (event) => {
+            console.log(
+              "🔍 DEBUG DHT.TS: Received published_file event:",
+              event
+            );
             const metadata = event.payload;
+            console.log(
+              "🔍 DEBUG DHT.TS: event.payload.seeders =",
+              metadata.seeders
+            );
             if (!metadata.merkleRoot && metadata.fileHash) {
               metadata.merkleRoot = metadata.fileHash;
             }
             if (!metadata.fileHash && metadata.merkleRoot) {
               metadata.fileHash = metadata.merkleRoot;
             }
+            console.log(
+              "🔍 DEBUG DHT.TS: Resolving with metadata.seeders =",
+              metadata.seeders
+            );
             // Clear timeout on success
             if (timeoutId) clearTimeout(timeoutId);
             resolve(metadata);
@@ -280,27 +293,21 @@ export class DhtService {
       // Use the download path from metadata (must be provided by caller)
       let resolvedStoragePath: string;
 
-      // Use the download path from metadata (must be provided by caller)
-      if (!fileMetadata.downloadPath) {
-        throw new Error("Download path must be provided in file metadata");
+      if (fileMetadata.downloadPath) {
+        // Use the path that was already selected by the user in the file dialog
+        resolvedStoragePath = fileMetadata.downloadPath;
+        console.log("Using provided download path:", resolvedStoragePath);
+      } else {
+        // Get canonical download directory from backend (single source of truth)
+        const downloadDir = await invoke<string>("get_download_directory");
+
+        // Construct full file path
+        resolvedStoragePath = await join(downloadDir, fileMetadata.fileName);
+        console.log("Using resolved download path:", resolvedStoragePath);
       }
-
-      resolvedStoragePath = fileMetadata.downloadPath;
-
-      // Extract directory path from file path
-      const pathParts = resolvedStoragePath.split("/");
-      const directoryPath = pathParts.slice(0, -1).join("/") || ".";
 
       // Ensure the directory exists before starting download
-      try {
-        await invoke("ensure_directory_exists", { path: directoryPath });
-      } catch (error) {
-        console.error(
-          "🔽 Frontend: Failed to create download directory:",
-          error
-        );
-        throw new Error(`Failed to create download directory: ${error}`);
-      }
+      await invoke("ensure_directory_exists", { path: resolvedStoragePath });
 
       // IMPORTANT: Set up the event listener BEFORE invoking the backend
       // to avoid race condition where event fires before we're listening
@@ -431,9 +438,14 @@ export class DhtService {
 
   async getSeedersForFile(fileHash: string): Promise<string[]> {
     try {
+      console.log(
+        "🔍 DEBUG DHT.TS: getSeedersForFile called with hash =",
+        fileHash
+      );
       const seeders = await invoke<string[]>("get_file_seeders", {
         fileHash,
       });
+      console.log("🔍 DEBUG DHT.TS: getSeedersForFile returned =", seeders);
       return Array.isArray(seeders) ? seeders : [];
     } catch (error) {
       console.error("Failed to fetch seeders:", error);
@@ -530,9 +542,12 @@ export class DhtService {
           metadata.merkleRoot || metadata.fileHash || trimmed;
         if (hashForSeeders) {
           const seeders = await this.getSeedersForFile(hashForSeeders);
-          if (seeders.length > 0) {
-            metadata.seeders = seeders;
-          }
+          // Always update seeders with the current live list from DHT provider query
+          // This ensures we don't use stale seeders from the cached metadata
+          metadata.seeders = seeders;
+          console.log(
+            `🔍 DEBUG DHT.TS: Updated metadata.seeders to current live list (${seeders.length} seeders)`
+          );
         }
       }
       return metadata;

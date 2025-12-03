@@ -1644,6 +1644,8 @@ async fn run_dht_node(
 
                                 let now = unix_timestamp();
                                 let peer_id_str = peer_id.to_string();
+                                info!("🔍 DEBUG DHT PUBLISH: Local peer_id = {}", peer_id_str);
+                                info!("🔍 DEBUG DHT PUBLISH: File hash = {}", metadata.merkle_root);
                                 let existing_heartbeats = {
                                     let cache = seeder_heartbeats_cache.lock().await;
                                     cache
@@ -1651,10 +1653,13 @@ async fn run_dht_node(
                                         .map(|entry| entry.heartbeats.clone())
                                         .unwrap_or_default()
                                 };
+                                info!("🔍 DEBUG DHT PUBLISH: Existing heartbeats count = {}", existing_heartbeats.len());
                                 let mut heartbeat_entries = existing_heartbeats;
                                 upsert_heartbeat(&mut heartbeat_entries, &peer_id_str, now);
                                 let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
+                                info!("🔍 DEBUG DHT PUBLISH: Active heartbeats after prune = {}", active_heartbeats.len());
                                 metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
+                                info!("🔍 DEBUG DHT PUBLISH: metadata.seeders after heartbeat = {:?}", metadata.seeders);
 
                                 // Store minimal metadata in DHT
                                 let dht_metadata = serde_json::json!({
@@ -1766,6 +1771,8 @@ async fn run_dht_node(
                                 }
 
                                 // notify frontend
+                                info!("🔍 DEBUG DHT: About to send PublishedFile event");
+                                info!("🔍 DEBUG DHT: metadata.seeders before sending event = {:?}", metadata.seeders);
                                 let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
                                 // store in file_uploaded_cache
 
@@ -3442,6 +3449,8 @@ async fn run_dht_node(
                                                 ed2k_sources: json_val.get("ed2k_sources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
                                             };
+                                            // Don't send FileDiscovered events for general discoveries to avoid interfering with searches
+                                            // let _ = event_tx.send(DhtEvent::FileDiscovered(metadata)).await;
                                         }
                                     }
                                 }
@@ -7235,9 +7244,11 @@ impl DhtService {
 
     /// Get seeders for a specific file (searches DHT for providers)
     pub async fn get_seeders_for_file(&self, file_hash: &str) -> Vec<String> {
+        info!("🔍 DEBUG DHT: get_seeders_for_file called for hash = {}", file_hash);
         // Fast path: consult local heartbeat cache and prune expired entries
         let now = unix_timestamp();
         if let Some(entry) = self.seeder_heartbeats_cache.lock().await.get_mut(file_hash) {
+            info!("🔍 DEBUG DHT: Found entry in heartbeat cache");
             entry.heartbeats = prune_heartbeats(entry.heartbeats.clone(), now);
             entry.metadata["seeders"] = serde_json::Value::Array(
                 heartbeats_to_peer_list(&entry.heartbeats)
@@ -7250,11 +7261,16 @@ impl DhtService {
                 .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
 
             let peers = heartbeats_to_peer_list(&entry.heartbeats);
+            info!("🔍 DEBUG DHT: Peers from heartbeat cache = {:?}", peers);
             if !peers.is_empty() {
+                info!("🔍 DEBUG DHT: Returning {} seeders from cache", peers.len());
                 // return the pruned local view immediately to keep UI responsive/fresh
                 return peers;
             }
             // otherwise fall back to querying the DHT providers
+            info!("🔍 DEBUG DHT: Heartbeat cache empty, falling back to DHT query");
+        } else {
+            info!("🔍 DEBUG DHT: No entry in heartbeat cache, querying DHT");
         }
 
         // Send command to DHT task to query provider records for this file
@@ -7272,34 +7288,35 @@ impl DhtService {
             return Vec::new();
         }
 
-        // Wait for response with timeout
-        match tokio::time::timeout(Duration::from_secs(5), rx).await {
+        // Wait for response with timeout - increased to 10s for better DHT propagation
+        match tokio::time::timeout(Duration::from_secs(10), rx).await {
             Ok(Ok(Ok(providers))) => {
                 info!(
                     "Found {} providers for file: {}",
                     providers.len(),
                     file_hash
                 );
+                info!("🔍 DEBUG DHT: Providers from DHT query = {:?}", providers);
                 // Optionally filter unreachable providers here (try connect/ping) before returning.
                 providers
             }
             Ok(Ok(Err(e))) => {
-                warn!("GetProviders command failed: {}", e);
-                // Fallback to connected peers
-                let connected = self.connected_peers.lock().await;
-                connected.iter().take(3).map(|p| p.to_string()).collect()
+                warn!("GetProviders command failed for {}: {}", file_hash, e);
+                warn!("🔍 DEBUG DHT: No providers found via DHT query - returning empty list");
+                // Return empty list - don't fall back to random connected peers as they won't have the file
+                Vec::new()
             }
             Ok(Err(e)) => {
-                warn!("Receiver error: {}", e);
-                // Fallback to connected peers
-                let connected = self.connected_peers.lock().await;
-                connected.iter().take(3).map(|p| p.to_string()).collect()
+                warn!("GetProviders receiver error for {}: {}", file_hash, e);
+                warn!("🔍 DEBUG DHT: Channel error - returning empty list");
+                // Return empty list - don't fall back to random connected peers
+                Vec::new()
             }
             Err(_) => {
-                warn!("GetProviders command timed out for file: {}", file_hash);
-                // Fallback to connected peers
-                let connected = self.connected_peers.lock().await;
-                connected.iter().take(3).map(|p| p.to_string()).collect()
+                warn!("GetProviders command timed out for file: {} (waited 10s)", file_hash);
+                warn!("🔍 DEBUG DHT: Timeout waiting for providers - returning empty list");
+                // Return empty list - the file truly has no providers available
+                Vec::new()
             }
         }
     }

@@ -266,6 +266,10 @@
     "enableUpnp": "UPnP 활성화",
     "enableNat": "NAT 포트 매핑 활성화",
     "enableDht": "DHT 활성화",
+    "autoStartNode": "시작 시 DHT 노드 자동 시작",
+    "autoStartNodeDescription": "애플리케이션 시작 시 DHT 파일 공유 노드를 자동으로 시작합니다",
+    "autoStartGeth": "시작 시 블록체인 노드 자동 시작",
+    "autoStartGethDescription": "애플리케이션 시작 시 Geth 블록체인 노드를 자동으로 시작합니다(지갑 및 채굴 활성화)",
     "geoDistribution": {
       "title": "지리 분포",
       "subtitle": "{peers}개의 피어 위치를 추적 중",

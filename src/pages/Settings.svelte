@@ -106,7 +106,8 @@
     shareAnalytics: true,
     enableWalletAutoLock: false,
     customBootstrapNodes: [],
-    autoStartDHT: false,
+    autoStartDHT: true, // Auto-start DHT by default
+    autoStartGeth: false, // Don't auto-start Geth by default
 
     // Notifications
     enableNotifications: true,
@@ -889,9 +890,17 @@
 
     onMount(async () => {
     // Get the canonical download directory from backend (single source of truth)
-    const defaultPath = await invoke<string>("get_download_directory");
-    defaultSettings.storagePath = defaultPath;
-    storagePathPlaceholder = defaultPath; // Update placeholder to show actual default
+    try {
+      // Pass null/undefined to get the default when no frontend settings exist
+      const defaultPath = await invoke<string>("get_download_directory");
+      defaultSettings.storagePath = defaultPath;
+      storagePathPlaceholder = defaultPath; // Update placeholder to show actual default
+    } catch (e) {
+      errorLogger.fileOperationError('Get download directory', e instanceof Error ? e.message : String(e));
+      // Fallback if backend fails
+      defaultSettings.storagePath = "~/Downloads/Chiral";
+      storagePathPlaceholder = "~/Downloads/Chiral";
+    }
 
     // Load settings from local storage
     const stored = localStorage.getItem("chiralSettings");
@@ -1467,15 +1476,36 @@ function sectionMatches(section: string, query: string) {
             </Label>
           </div>
 
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="auto-start-dht"
-              bind:checked={localSettings.autoStartDHT}
-            />
-            <Label for="auto-start-dht" class="cursor-pointer">
-              Auto-start DHT on launch
-            </Label>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-start-dht"
+                bind:checked={localSettings.autoStartDHT}
+              />
+              <Label for="auto-start-dht" class="cursor-pointer">
+                {$t("network.autoStartNode")}
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              {$t("network.autoStartNodeDescription")}
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-start-geth"
+                bind:checked={localSettings.autoStartGeth}
+              />
+              <Label for="auto-start-geth" class="cursor-pointer">
+                {$t("network.autoStartGeth")}
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              {$t("network.autoStartGethDescription")}
+            </p>
           </div>
 
         </div>
