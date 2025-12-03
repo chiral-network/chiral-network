@@ -101,8 +101,9 @@ import type { FileMetadata } from '$lib/dht'
           const progress = event.payload as MultiSourceProgress
 
           // Find the corresponding file and update its progress
+          // Only update files that are actively downloading, not seeding files with the same hash
           files.update(f => f.map(file => {
-            if (file.hash === progress.fileHash) {
+            if (file.hash === progress.fileHash && file.status === 'downloading') {
               const percentage = MultiSourceDownloadService.getCompletionPercentage(progress);
               return {
                 ...file,
@@ -174,8 +175,9 @@ import type { FileMetadata } from '$lib/dht'
                 chunkSize: number;
             };
 
+            // Only update files that are actively downloading, not seeding files with the same hash
             files.update(f => f.map(file => {
-                if (file.hash === progress.fileHash) {
+                if (file.hash === progress.fileHash && file.status === 'downloading') {
                     const downloadedChunks = new Set(file.downloadedChunks || []);
                     
                     if (downloadedChunks.has(progress.chunkIndex)) {
@@ -376,8 +378,9 @@ import type { FileMetadata } from '$lib/dht'
           };
 
           // Update file progress (FileItem uses 'hash' property)
+          // Only update files that are actively downloading, not seeding files with the same hash
           files.update(f => f.map(file =>
-            file.hash === data.fileHash
+            file.hash === data.fileHash && file.status === 'downloading'
               ? { ...file, status: 'downloading', progress: data.progress }
               : file
           ));
@@ -412,8 +415,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         'Failed to resolve download directory. Please check your settings.',
         'error'
       );
+      // Only update files that are actively downloading, not seeding files with the same hash
       files.update(f => f.map(file =>
-        file.hash === data.fileHash
+        file.hash === data.fileHash && file.status === 'downloading'
           ? { ...file, status: 'failed' }
           : file
       ));
@@ -445,8 +449,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     fileLogger.downloadCompleted(data.fileName);
 
     // Update status to completed
+    // Only update files that are actively downloading, not seeding files with the same hash
     files.update(f => f.map(file => 
-      file.hash === data.fileHash
+      file.hash === data.fileHash && file.status === 'downloading'
         ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
         : file
     ));
@@ -458,8 +463,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     const errorMessage = error instanceof Error ? error.message : String(error);
     showToast(`Failed to save file: ${errorMessage}`, 'error');
 
+    // Only update files that are actively downloading, not seeding files with the same hash
     files.update(f => f.map(file =>
-      file.hash === data.fileHash
+      file.hash === data.fileHash && file.status === 'downloading'
         ? { ...file, status: 'failed' }
         : file
     ));
