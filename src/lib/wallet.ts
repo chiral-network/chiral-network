@@ -545,20 +545,67 @@ export class WalletService {
         // Expected when Geth is not running
       }
 
-      // Calculate pending sent transactions
-      const pendingSent = get(transactions)
-        .filter((tx) => tx.status === "pending" && tx.type === "sent")
-        .reduce((sum, tx) => sum + tx.amount, 0);
-
       const prevWallet = get(wallet);
 
-      // If geth returns zero but we already have a non-zero balance and history,
-      // avoid clobbering the imported snapshot until real data is available.
       // If geth returns zero but we already have a non-zero balance (e.g., from an imported snapshot),
       // avoid clobbering it until real data is available.
       if (realBalance === 0 && prevWallet.actualBalance > 0) {
         return;
       }
+
+      // Reconcile any lingering pending/ submitted sent txs by checking their receipts
+      const pendingSentTxs = get(transactions).filter(
+        (tx) =>
+          (tx.status === "pending" || tx.status === "submitted") &&
+          tx.type === "sent" &&
+          (tx.hash || tx.txHash)
+      );
+
+      if (pendingSentTxs.length > 0) {
+        for (const tx of pendingSentTxs) {
+          const hash = tx.hash || tx.txHash;
+          if (!hash) continue;
+
+          try {
+            const receipt = await invoke<any>("get_transaction_receipt", {
+              txHash: hash,
+            });
+
+            if (receipt && receipt.block_number !== null) {
+              const status = receipt.status === "success" ? "success" : "failed";
+              const confirmations = receipt.confirmations || 0;
+
+              transactions.update((txs) =>
+                txs.map((t) =>
+                  t.txHash === hash || t.hash === hash
+                    ? {
+                        ...t,
+                        status: status as "success" | "failed",
+                        confirmations,
+                        block_number: receipt.block_number ?? t.block_number,
+                      }
+                    : t
+                )
+              );
+
+              wallet.update((w) => ({
+                ...w,
+                pendingTransactions: Math.max(
+                  0,
+                  (w.pendingTransactions ?? 0) - 1
+                ),
+              }));
+            }
+          } catch (err) {
+            // Ignore receipt lookup errors; we'll try again on next poll
+          }
+        }
+      }
+
+      // Calculate pending sent transactions (after reconciliation)
+      const pendingSent = get(transactions)
+        .filter((tx) => tx.status === "pending" && tx.type === "sent")
+        .reduce((sum, tx) => sum + tx.amount, 0);
 
       // Use real balance from Geth (no fallback - if Geth says 0, show 0 unless guarded above)
       const actualBalance = realBalance;
@@ -568,24 +615,6 @@ export class WalletService {
         balance: availableBalance,
         actualBalance,
       }));
-
-      // Update pending transaction status if they've been confirmed
-      // If we have pending sent transactions, check if the balance has decreased
-      // to mark them as completed
-      if (pendingSent > 0 && realBalance > 0) {
-        const expectedBalanceAfterPending = availableBalance;
-        // If real balance is lower than expected (meaning pending txs were processed),
-        // mark pending sent transactions as completed
-        if (realBalance < expectedBalanceAfterPending + pendingSent - 0.01) {
-          transactions.update((txs) =>
-            txs.map((tx) =>
-              tx.status === "pending" && tx.type === "sent"
-                ? { ...tx, status: "success" as const }
-                : tx
-            )
-          );
-        }
-      }
 
       // Note: totalRewards and blocksFound are now both set together in refreshTransactions
       // to ensure they stay consistent (totalRewards = blocksFound * blockReward)
@@ -648,8 +677,8 @@ export class WalletService {
       // Fetch transactions for this range
       const txHistory = (await invoke("get_transaction_history_range", {
         address: accountAddress,
-        fromBlock,
-        toBlock,
+        from_block: fromBlock,
+        to_block: toBlock,
       })) as Array<{
         hash: string;
         from: string;
@@ -797,8 +826,8 @@ export class WalletService {
       // Fetch mining blocks for this range
       const miningBlocks = (await invoke("get_mined_blocks_range", {
         address: accountAddress,
-        fromBlock,
-        toBlock,
+        from_block: fromBlock,
+        to_block: toBlock,
       })) as Array<{
         hash: string;
         timestamp: number;

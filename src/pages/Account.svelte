@@ -190,9 +190,9 @@
         .filter(tx => {
           if (!tx) return false;
 
-          // 'transactions' shows sent + received (excludes mining)
+          // Default view now shows all types (sent/received/mining)
           const matchesType = filterType === 'transactions'
-            ? (tx.type === 'sent' || tx.type === 'received')
+            ? (tx.type === 'sent' || tx.type === 'received' || tx.type === 'mining')
             : tx.type === filterType;
 
           let txDate: Date;
