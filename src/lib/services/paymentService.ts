@@ -635,7 +635,7 @@ export class PaymentService {
   }> {
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
     const amount = await this.calculateDownloadCost(fileSizeInBytes);
-    console.log(`Download cost: ${amount.toFixed(8)} Chiral`);
+    console.log(`Download cost: ${amount.toFixed(4)} Chiral`);
 
     let pricePerMb = await this.getDynamicPricePerMB(1.2);
     if (!Number.isFinite(pricePerMb) || pricePerMb <= 0) {
@@ -646,7 +646,7 @@ export class PaymentService {
       amount,
       pricePerMb: Number(pricePerMb.toFixed(8)),
       sizeInMB,
-      formattedAmount: `${amount.toFixed(8)} Chiral`,
+      formattedAmount: `${amount.toFixed(4)} Chiral`,
     };
   }
 

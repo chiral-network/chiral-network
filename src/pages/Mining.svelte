@@ -1295,7 +1295,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.totalRewards')}</p>
-          <p class="text-2xl font-bold">{($miningState.totalRewards || 0).toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($miningState.totalRewards || 0).toFixed(4)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$miningState.blocksFound} {$t('mining.blocksFound')}
@@ -1451,7 +1451,7 @@
                 </div>
                 <div>
                   <p class="text-muted-foreground">{$t('mining.poolDetails.est24hPayout')}</p>
-                  <p class="font-semibold">{currentPool.stats.estimated_payout_24h.toFixed(3)} Chiral</p>
+                  <p class="font-semibold">{currentPool.stats.estimated_payout_24h.toFixed(4)} Chiral</p>
                 </div>
                 <div>
                   <p class="text-muted-foreground">{$t('mining.poolDetails.shares')}</p>
@@ -1949,7 +1949,7 @@
               </div>
               <div class="text-right">
                 <Badge variant="outline" class="text-green-600">
-                  +{block.reward.toFixed(2)} Chiral
+                  +{block.reward.toFixed(4)} Chiral
                 </Badge>
                 <p class="text-xs text-muted-foreground mt-1">
                   {block.timestamp.toLocaleTimeString()}
