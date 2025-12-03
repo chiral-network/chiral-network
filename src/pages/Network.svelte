@@ -9,9 +9,11 @@
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import { peers, networkStats, networkStatus, userLocation, settings } from '$lib/stores'
+  import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Wifi, UserMinus, Square, Play, Download, AlertCircle } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
+  import { get } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, type DhtHealth as DhtHealthSnapshot, type NatConfidence, type NatReachabilityState } from '$lib/dht'
@@ -103,6 +105,7 @@
   let dhtPeerCount = 0
   let dhtHealth: DhtHealthSnapshot | null = null
   let dhtError: string | null = null
+  let autorelayToggling = false
   let connectionAttempts = 0
   let dhtPollInterval: number | undefined
   let natStatusUnlisten: (() => void) | null = null
@@ -268,6 +271,48 @@
   function formatNatTimestamp(epoch?: number | null): string {
     if (!epoch) return tr('network.dht.health.never')
     return new Date(epoch * 1000).toLocaleString()
+  }
+
+  function persistSettingsPatch(patch: Partial<AppSettings>): AppSettings {
+    let storedSettings: Partial<AppSettings> = {}
+    try {
+      storedSettings = JSON.parse(localStorage.getItem('chiralSettings') || '{}')
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to parse stored settings', { error: error instanceof Error ? error.message : String(error) })
+    }
+
+    const merged = { ...get(settings), ...storedSettings, ...patch } as AppSettings
+    localStorage.setItem('chiralSettings', JSON.stringify(merged))
+    settings.set(merged)
+    return merged
+  }
+
+  async function setAutorelay(enabled: boolean) {
+    if (autorelayToggling) return
+    autorelayToggling = true
+    try {
+      persistSettingsPatch({ enableAutorelay: enabled })
+      if (isTauri) {
+        const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+        if (isRunning) {
+          if (dhtPollInterval) {
+            clearInterval(dhtPollInterval)
+            dhtPollInterval = undefined
+          }
+          await stopDht()
+          if (!dhtBootstrapNodes.length) {
+            await fetchBootstrapNodes()
+          }
+          await startDht()
+        }
+      }
+      showToast(enabled ? 'AutoRelay enabled' : 'AutoRelay disabled', 'success')
+    } catch (error) {
+      errorLogger.networkError(`Failed to toggle AutoRelay: ${error instanceof Error ? error.message : String(error)}`)
+      showToast('Failed to update AutoRelay setting', 'error')
+    } finally {
+      autorelayToggling = false
+    }
   }
 
   async function copyObservedAddr(addr: string) {
@@ -1960,6 +2005,29 @@
 
   <!-- Relay health & monitoring (DHT snapshot) -->
   <Card class="p-6 mt-6">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div>
+        <p class="text-xs uppercase text-muted-foreground">AutoRelay</p>
+        <p class="text-sm text-muted-foreground">{ $settings.enableAutorelay ? 'Enabled' : 'Disabled' }</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <Button
+          size="sm"
+          on:click={() => setAutorelay(true)}
+          disabled={autorelayToggling || $settings.enableAutorelay}
+        >
+          Enable AutoRelay
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          on:click={() => setAutorelay(false)}
+          disabled={autorelayToggling || !$settings.enableAutorelay}
+        >
+          Disable AutoRelay
+        </Button>
+      </div>
+    </div>
     {#if dhtHealth}
       {#if $settings.enableAutorelay && dhtStatus === 'connected'}
         <div>
