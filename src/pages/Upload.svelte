@@ -1024,7 +1024,7 @@
             tr('toasts.upload.torrentSeeding', { values: { name: fileName } }),
             "success"
           );
-          continue; // Skip the normal Chiral upload flow
+          // continue; // Skip the normal Chiral upload flow
         }
 
         // Copy file to temp location to prevent original file from being moved
@@ -1043,13 +1043,6 @@
         );
 
         // Add WebSocket client ID to seeder addresses for WebRTC discovery
-        const webrtcSeederIds = signalingService?.clientId
-          ? [signalingService.clientId]
-          : [];
-        const allSeederAddresses = [
-          ...(metadata.seeders ?? []),
-          ...webrtcSeederIds,
-        ];
         console.log('🔍 DEBUG UPLOAD: Received metadata from backend:', JSON.stringify(metadata, null, 2));
         console.log('🔍 DEBUG UPLOAD: metadata.seeders =', metadata.seeders);
         console.log('🔍 DEBUG UPLOAD: signalingService?.clientId =', signalingService?.clientId);
@@ -1115,14 +1108,6 @@
 
           if (matchIndex !== -1) {
             const existing = f[matchIndex];
-            // Merge WebSocket client ID with existing seeder addresses
-            const webrtcSeederIds = signalingService?.clientId
-              ? [signalingService.clientId]
-              : [];
-            const mergedSeederAddresses = [
-              ...(metadata.seeders ?? existing.seederAddresses ?? []),
-              ...webrtcSeederIds,
-            ];
             // Use seeders from metadata (backend already adds local peer ID via heartbeat system)
             // Only add WebSocket client ID if no seeders exist (shouldn't happen in normal flow)
             const mergedSeederAddresses = (metadata.seeders && metadata.seeders.length > 0)
