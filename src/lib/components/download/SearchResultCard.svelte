@@ -23,6 +23,7 @@
 
   let canAfford = true;
   let checkingBalance = false;
+  let currentPrice: number | null = null;
   let hashCopied = false;
   let seederCopiedIndex: number | null = null;
   let magnetCopied = false;
@@ -207,7 +208,7 @@
     showDownloadConfirmDialog = false;
     
     // If already seeding and paid, show payment confirmation
-    if (isSeeding && metadata.price && metadata.price > 0) {
+    if (isSeeding && currentPrice && currentPrice > 0) {
       showPaymentConfirmDialog = true;
     }
     // If already seeding and free, proceed directly with download/decrypt
@@ -215,7 +216,7 @@
       confirmDecryptAndQueue();
     }
     // Show payment confirmation if file has a price (not seeding case)
-    else if (metadata.price && metadata.price > 0) {
+    else if (currentPrice && currentPrice > 0) {
       showPaymentConfirmDialog = true;
     } else {
       // Free file - download directly
@@ -310,13 +311,18 @@
 
   // Check if user can afford the download when price is set
   async function checkBalance() {
-    if (metadata.price && metadata.price > 0) {
+    if (metadata.fileSize && metadata.fileSize > 0) {
       checkingBalance = true;
       try {
-        // Use wallet store balance instead of invoking backend
+        // Calculate current dynamic price instead of using static metadata.price
+        const currentDynamicPrice = await paymentService.calculateDownloadCost(metadata.fileSize);
         const currentBalance = get(wallet).balance;
-        canAfford = currentBalance >= metadata.price;
-        console.log('💰 Balance check:', { currentBalance, price: metadata.price, canAfford });
+        canAfford = currentBalance >= currentDynamicPrice;
+
+        // Store the dynamic price for display
+        currentPrice = currentDynamicPrice;
+
+        console.log('💰 Balance check:', { currentBalance, price: currentDynamicPrice, canAfford });
       } catch (error) {
         console.error('Failed to check balance:', error);
         canAfford = false;
@@ -326,9 +332,14 @@
     }
   }
 
-  // Reactive check for affordability when balance or price changes
-  $: if (metadata.price && metadata.price > 0) {
-    canAfford = $wallet.balance >= metadata.price;
+  // Trigger balance check when metadata or wallet balance changes
+  $: if (metadata.fileSize && metadata.fileSize > 0) {
+    checkBalance();
+  }
+
+  // Reactive check for affordability when balance changes and we have a current price
+  $: if (currentPrice !== null && currentPrice > 0) {
+    canAfford = $wallet.balance >= currentPrice;
   }
 
   // Check balance when component mounts
@@ -493,14 +504,19 @@
           </li>
           <li class="flex items-center justify-between">
             <span class="text-muted-foreground">Price</span>
-            <span class="font-semibold {metadata.price && metadata.price > 0 ? 'text-emerald-600' : 'text-muted-foreground'}">
-              {#if metadata.price && metadata.price > 0}
-                {metadata.price} Chiral
+            <span class="font-semibold {currentPrice && currentPrice > 0 ? 'text-emerald-600' : 'text-muted-foreground'}">
+              {#if currentPrice && currentPrice > 0}
+                {currentPrice.toFixed(8)} Chiral
               {:else}
                 Free
               {/if}
             </span>
           </li>
+          {#if currentPrice && currentPrice > 0}
+            <li class="text-xs text-muted-foreground text-center col-span-2">
+              Price calculated based on current network conditions
+            </li>
+          {/if}
         </ul>
       </div>
     </div>
@@ -552,7 +568,7 @@
         {#if metadata.isEncrypted}
           <span class="ml-2 text-xs text-amber-600">(encrypted)</span>
         {/if}
-      {:else if !canAfford && metadata.price && metadata.price > 0}
+      {:else if !canAfford && currentPrice && currentPrice > 0}
         <span class="text-red-600 font-semibold">Insufficient balance to download this file</span>
       {:else if metadata.seeders?.length}
         {metadata.seeders.length > 1 ? 'Choose any seeder to initiate a download.' : 'Single seeder available for download.'}
@@ -563,13 +579,13 @@
     <div class="flex items-center gap-2">
       <Button
         on:click={handleDownload}
-        disabled={isBusy || checkingBalance || (!canAfford && metadata.price && metadata.price > 0)}
-        class={!canAfford && metadata.price && metadata.price > 0 ? 'opacity-50 cursor-not-allowed' : ''}
+        disabled={isBusy || checkingBalance || (!canAfford && currentPrice && currentPrice > 0)}
+        class={!canAfford && currentPrice && currentPrice > 0 ? 'opacity-50 cursor-not-allowed' : ''}
       >
         <Download class="h-4 w-4 mr-2" />
         {#if checkingBalance}
           Checking balance...
-        {:else if !canAfford && metadata.price && metadata.price > 0}
+        {:else if !canAfford && currentPrice && currentPrice > 0}
           Insufficient funds
         {:else}
           Download
@@ -611,11 +627,11 @@
           </div>
         </div>
 
-        {#if metadata.price && metadata.price > 0}
+        {#if currentPrice && currentPrice > 0}
           <div class="p-4 bg-blue-500/10 rounded-lg border-2 border-blue-500/30">
             <div class="text-center">
               <p class="text-sm text-muted-foreground mb-1">Price</p>
-              <p class="text-2xl font-bold text-blue-600">{metadata.price} Chiral</p>
+              <p class="text-2xl font-bold text-blue-600">{currentPrice.toFixed(8)} Chiral</p>
             </div>
           </div>
           {#if isSeeding}
@@ -643,10 +659,10 @@
       </div>
 
       <p class="text-sm text-muted-foreground text-center mb-6">
-        {#if metadata.price && metadata.price > 0}
+        {#if currentPrice && currentPrice > 0}
           {isSeeding
-            ? `Do you want to download a local copy for ${metadata.price} Chiral?`
-            : `You will be charged ${metadata.price} Chiral. Continue?`}
+            ? `Do you want to download a local copy for ${currentPrice.toFixed(8)} Chiral?`
+            : `You will be charged ${currentPrice.toFixed(8)} Chiral. Continue?`}
         {:else}
           {isSeeding
             ? 'Do you want to download a local decrypted copy?'
@@ -695,13 +711,13 @@
 
         <div class="flex justify-between items-center p-3 bg-blue-500/10 rounded-lg border border-blue-500/30">
           <span class="text-sm text-muted-foreground">File Price</span>
-          <span class="text-lg font-bold text-blue-600">{(metadata.price || 0).toFixed(8)} Chiral</span>
+          <span class="text-lg font-bold text-blue-600">{(currentPrice || 0).toFixed(8)} Chiral</span>
         </div>
 
         <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg border-2 border-border">
           <span class="text-sm font-semibold">Balance After Purchase</span>
           <span class="text-lg font-bold {canAfford ? 'text-emerald-600' : 'text-red-600'}">
-            {(userBalance - (metadata.price || 0)).toFixed(8)} Chiral
+            {(userBalance - (currentPrice || 0)).toFixed(8)} Chiral
           </span>
         </div>
       </div>
@@ -709,7 +725,7 @@
       {#if !canAfford}
         <div class="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
           <p class="text-sm text-red-600 font-semibold text-center">
-            Insufficient balance! You need {(metadata.price || 0) - userBalance} more Chiral.
+            Insufficient balance! You need {(currentPrice || 0) - userBalance} more Chiral.
           </p>
         </div>
       {/if}
