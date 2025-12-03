@@ -5,7 +5,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { blockReward, miningState, type MiningHistoryPoint, wallet } from '$lib/stores';
+  import { blockReward, miningState, type MiningHistoryPoint, wallet, accurateTotals, isCalculatingAccurateTotals } from '$lib/stores';
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
 
@@ -103,6 +103,19 @@
   // $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model (unused)
   $: profitMargin = dailyRevenue > 0 ? ((dailyProfit / dailyRevenue) * 100) : 0
   $: isProfitable = dailyProfit > 0
+
+  // Sync mining state with accurate totals when available
+  // This ensures "mined rewards" display matches actual blockchain data
+  $: if ($accurateTotals && !$miningState.isMining) {
+    const reward = $blockReward || 2;
+    if ($miningState.blocksFound !== $accurateTotals.blocksMined) {
+      miningState.update((state) => ({
+        ...state,
+        blocksFound: $accurateTotals.blocksMined,
+        totalRewards: $accurateTotals.blocksMined * reward,
+      }));
+    }
+  }
 
   function calculateDailyBlocks(hashRate: number, networkDiff: number): number {
     if (hashRate === 0 || networkDiff === 0) return 0
@@ -434,6 +447,14 @@
       await invoke('clear_blocks_cache');
       await walletService.refreshTransactions()
       await walletService.refreshBalance()
+
+      // Trigger accurate totals calculation if not already available or calculating
+      // This ensures "mined rewards" shows accurate blockchain data, not just session data
+      if (!$accurateTotals && !$isCalculatingAccurateTotals) {
+        walletService.calculateAccurateTotals().catch((error) => {
+          console.warn('[Mining Page] Failed to calculate accurate totals:', error);
+        });
+      }
 
       // Start power sensor detection
       await updatePowerConsumption()

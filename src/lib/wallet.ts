@@ -1324,6 +1324,26 @@ export class WalletService {
         totalSent: result.total_sent,
       });
 
+      // Initialize the backend session counter with the accurate blockchain count
+      // This ensures "mined rewards" display matches the actual blockchain data
+      try {
+        await invoke("initialize_mined_blocks_count", {
+          address: accountAddress,
+          count: result.blocks_mined,
+        });
+        console.log(`[Accurate Totals] Initialized backend blocks count to: ${result.blocks_mined}`);
+        
+        // Also update the mining state store to reflect accurate totals
+        const reward = get(blockReward);
+        miningState.update((state) => ({
+          ...state,
+          blocksFound: result.blocks_mined,
+          totalRewards: result.blocks_mined * reward,
+        }));
+      } catch (initError) {
+        console.warn("[Accurate Totals] Failed to initialize backend counter:", initError);
+      }
+
       console.log(`[Accurate Totals] Complete!`, result);
     } catch (error) {
       console.error("Failed to calculate accurate totals:", error);

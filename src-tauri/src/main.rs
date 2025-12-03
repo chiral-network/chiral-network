@@ -1337,6 +1337,16 @@ async fn get_total_mined_blocks(miner_address: &str) -> u64 {
     *counts.get(miner_address).unwrap_or(&0)
 }
 
+/// Set the mined blocks count for an address (used to initialize from blockchain data)
+pub async fn set_mined_blocks_count(miner_address: &str, count: u64) {
+    let mut counts = TOTAL_MINED_BLOCKS.lock().await;
+    counts.insert(miner_address.to_string(), count);
+    println!(
+        "📊 Initialized mined blocks count for {}: {}",
+        miner_address, count
+    );
+}
+
 #[tauri::command]
 async fn clear_blocks_cache() {
     let mut cache = BLOCKS_CACHE.lock().await;
@@ -1344,6 +1354,14 @@ async fn clear_blocks_cache() {
 
     // Don't reset incremental scanning - let it continue from where it left off
     // This ensures we maintain our scanning progress and don't lose discovered blocks
+}
+
+/// Initialize the mined blocks count for an address from blockchain data
+/// This should be called when an account is loaded to sync session counter with blockchain
+#[tauri::command]
+async fn initialize_mined_blocks_count(address: String, count: u64) -> Result<(), String> {
+    set_mined_blocks_count(&address, count).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -7327,6 +7345,7 @@ fn main() {
             start_mining_monitor,
             clear_blocks_cache,
             get_blocks_mined,
+            initialize_mined_blocks_count,
             get_recent_mined_blocks_pub,
             get_mined_blocks_range,
             get_total_mining_rewards,
