@@ -159,8 +159,13 @@
   let lastChecked: Date | null = null;
   let isUploading = false;
 
-  // Protocol selection state - read from settings
-  $: selectedProtocol = $settings.selectedProtocol;
+  // Protocol selection state - read from settings with Bitswap fallback
+  $: selectedProtocol = $settings.selectedProtocol || "Bitswap";
+  
+  // Ensure settings store always has a valid protocol (defensive fix)
+  $: if (!$settings.selectedProtocol) {
+    settings.update(s => ({ ...s, selectedProtocol: "Bitswap" }));
+  }
 
   // Encrypted sharing state
   let useEncryptedSharing = false;
