@@ -298,7 +298,7 @@
       const { SignalingService } = await import('$lib/services/signalingService');
 
       signalingService = new SignalingService({
-        preferDht: false,  // Force WebSocket instead of DHT
+        preferDht: true,  // Prefer DHT for signaling in desktop app
         persistPeers: false  // Don't persist peers to avoid stale peer IDs
       });
 
@@ -720,17 +720,11 @@
 
         const metadata = await dhtService.publishFileToNetwork(filePath, price, selectedProtocol, originalFileName);
 
-        console.log('🔍 DEBUG UPLOAD: Received metadata from backend:', JSON.stringify(metadata, null, 2));
-        console.log('🔍 DEBUG UPLOAD: metadata.seeders =', metadata.seeders);
-        console.log('🔍 DEBUG UPLOAD: signalingService?.clientId =', signalingService?.clientId);
-
         // Use seeders from metadata (backend already adds local peer ID via heartbeat system)
         // Only add WebSocket client ID if no seeders exist (shouldn't happen in normal flow)
         const allSeederAddresses = metadata.seeders && metadata.seeders.length > 0
           ? metadata.seeders
           : (signalingService?.clientId ? [signalingService.clientId] : []);
-
-        console.log('🔍 DEBUG UPLOAD: allSeederAddresses after processing =', allSeederAddresses);
 
         // Construct protocol-specific hash for display
         let protocolHash = metadata.merkleRoot || "";
@@ -1372,7 +1366,6 @@
                               class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
                               title={`Average price across ${coalescedFile.protocols.length} protocol${coalescedFile.protocols.length > 1 ? 's' : ''}`}
                             >
-                              <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
                                 >{coalescedFile.averagePrice.toFixed(4)} Chiral</span
                               >
