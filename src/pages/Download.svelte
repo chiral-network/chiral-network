@@ -125,17 +125,42 @@ import type { FileMetadata } from '$lib/dht'
 
           // Update file status to completed - only update files that are actively downloading
           // to avoid overwriting seeding files with the same hash
-          files.update(f => f.map(file => {
-            if (file.hash === data.file_hash && file.status === 'downloading') {
-              return {
-                ...file,
-                status: 'completed' as const,
+          files.update(f => {
+            let found = false;
+            const updated = f.map(file => {
+              if (file.hash === data.file_hash && file.status === 'downloading') {
+                found = true;
+                return {
+                  ...file,
+                  status: 'completed' as const,
+                  progress: 100,
+                  downloadPath: data.output_path,
+                  path: data.output_path,
+                  isDownload: true,
+                  isSeedingDownload: true,
+                };
+              }
+              return file;
+            });
+
+            if (!found) {
+              updated.push({
+                id: `download-${Date.now()}`,
+                name: data.file_name,
+                hash: data.file_hash,
+                size: data.file_size ?? 0,
+                status: 'completed',
                 progress: 100,
-                downloadPath: data.output_path
-              };
+                downloadPath: data.output_path,
+                path: data.output_path,
+                uploadDate: new Date(),
+                isDownload: true,
+                isSeedingDownload: true,
+                price: data.price ?? 0,
+              });
             }
-            return file;
-          }));
+            return updated;
+          });
 
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
@@ -313,6 +338,47 @@ import type { FileMetadata } from '$lib/dht'
                 }
                 return file;
             }));
+            files.update(f => {
+                let found = false;
+                const updated = f.map(file => {
+                    if (file.hash === metadata.merkleRoot) {
+                        found = true;
+                        return {
+                            ...file,
+                            status: 'completed' as const,
+                            progress: 100,
+                            downloadPath: metadata.downloadPath,
+                            path: metadata.downloadPath,
+                            seederAddresses: metadata.seeders ?? file.seederAddresses,
+                            seeders: metadata.seeders?.length ?? file.seeders,
+                            isDownload: true,
+                            isSeedingDownload: true
+                        };
+                    }
+                    return file;
+                });
+
+                if (!found) {
+                    updated.push({
+                        id: `download-${Date.now()}`,
+                        name: metadata.fileName,
+                        hash: metadata.merkleRoot,
+                        size: metadata.fileSize ?? 0,
+                        status: 'completed',
+                        progress: 100,
+                        downloadPath: metadata.downloadPath,
+                        path: metadata.downloadPath,
+                        seeders: metadata.seeders?.length ?? 1,
+                        seederAddresses: metadata.seeders ?? [],
+                        uploadDate: new Date(),
+                        isDownload: true,
+                        isSeedingDownload: true,
+                        price: metadata.price ?? 0,
+                    });
+                }
+
+                return updated;
+            });
         });
 
         // Listen for DHT errors (like missing CIDs)
@@ -1096,9 +1162,15 @@ async function loadAndResumeDownloads() {
   $: if ($files.length > 0) {
     $files.forEach(file => {
       if (file.status === 'downloading' && !activeSimulations.has(file.id)) {
-    // Start simulation only if not already active
-        if (detectedProtocol!=='Bitswap')
-        simulateDownloadProgress(file.id)
+        // Start simulation only if not already active
+        // Skip WebRTC downloads - they handle their own dialog in downloadFile function
+        const fileProtocol = file.protocol || detectedProtocol;
+        if (fileProtocol !== 'Bitswap' && fileProtocol !== 'WebRTC') {
+          simulateDownloadProgress(file.id)
+        } else if (fileProtocol === 'WebRTC' && file.downloadPath) {
+          // WebRTC download already started (has downloadPath), so we can simulate progress
+          simulateDownloadProgress(file.id)
+        }
       }
     })
   }
@@ -1278,6 +1350,28 @@ async function loadAndResumeDownloads() {
       return;
     }
 
+
+    // ✅ ADD SEEDING CONFIRMATION
+  const userConfirmed = confirm(
+    `Download "${downloadingFile.name}"?\n\n` +
+    `You will automatically become a seeder for this file after downloading.\n\n` +
+    `This means:\n` +
+    `• The file will be shared with other users\n` +
+    `• You can stop seeding anytime from the Uploads page\n\n` +
+    `Continue with download?`
+  );
+
+  if (!userConfirmed) {
+    console.log('User cancelled download');
+    files.update(f => f.map(file =>
+      file.id === downloadingFile.id
+        ? { ...file, status: 'idle' }
+        : file
+    ));
+    return;
+  }
+
+
     // Construct full file path: directory + filename
     const fullPath = `${storagePath}/${downloadingFile.name}`;
     
@@ -1443,14 +1537,30 @@ async function loadAndResumeDownloads() {
     downloadQueue.update(queue => {
       const file = queue.find(f => f.id === fileId)
       if (file) {
-        files.update(f => [...f, {
-          ...file,
-          status: 'downloading',
-          progress: 0,
-          speed: '0 B/s', // Ensure speed property exists
-          eta: 'N/A'      // Ensure eta property exists
-        }])
-        simulateDownloadProgress(fileId)
+        // For WebRTC downloads, add to files and let processQueue handle it
+        // WebRTC downloads need to show dialog first before starting
+        const fileProtocol = file.protocol || detectedProtocol;
+        if (fileProtocol === 'WebRTC') {
+          // Add file to files store and let processQueue handle WebRTC download
+          files.update(f => [...f, {
+            ...file,
+            status: 'downloading',
+            progress: 0,
+            speed: '0 B/s',
+            eta: 'N/A'
+          }])
+          // processQueue will handle WebRTC download with dialog
+          processQueue()
+        } else {
+          files.update(f => [...f, {
+            ...file,
+            status: 'downloading',
+            progress: 0,
+            speed: '0 B/s', // Ensure speed property exists
+            eta: 'N/A'      // Ensure eta property exists
+          }])
+          simulateDownloadProgress(fileId)
+        }
       }
       return queue.filter(f => f.id !== fileId)
     })
@@ -1464,13 +1574,28 @@ async function loadAndResumeDownloads() {
 
     activeSimulations.add(fileId)
 
-    // Get the file to download
-    const fileToDownload = $files.find(f => f.id === fileId);
-    if (!fileToDownload) {
-      activeSimulations.delete(fileId);
-      return;
-    }
+    try {
+      // Get the file to download
+      const fileToDownload = $files.find(f => f.id === fileId);
+      if (!fileToDownload) {
+        activeSimulations.delete(fileId);
+        return;
+      }
 
+      // Skip if this is a WebRTC download - WebRTC downloads handle their own dialog
+      // WebRTC downloads are initiated via downloadFile function which shows dialog before calling backend
+      if (fileToDownload.protocol === 'WebRTC' && !fileToDownload.downloadPath) {
+        // WebRTC download hasn't started yet, so don't show dialog here
+        // The downloadFile function will handle the dialog
+        activeSimulations.delete(fileId);
+        return;
+      }
+
+      // If downloadPath already exists (e.g., from WebRTC download), use it instead of showing dialog again
+      let outputPath = fileToDownload.downloadPath;
+
+    // Only show dialog if downloadPath is not already set
+    if (!outputPath) {
       // Proceed directly to file dialog
       try {
         diagnosticLogger.debug('Download', 'Starting download for file', { fileName: fileToDownload.name });
@@ -1478,7 +1603,8 @@ async function loadAndResumeDownloads() {
 
         // Show file save dialog
         diagnosticLogger.debug('Download', 'Opening file save dialog', { fileName: fileToDownload.name });
-        const outputPath = await save(buildSaveDialogOptions(fileToDownload.name));
+        const savedPath = await save(buildSaveDialogOptions(fileToDownload.name));
+        outputPath = savedPath || undefined;
         diagnosticLogger.debug('Download', 'File save dialog result', { outputPath });
 
         if (!outputPath) {
@@ -1491,32 +1617,49 @@ async function loadAndResumeDownloads() {
           ));
           return;
         }
+      } catch (error) {
+        errorLogger.fileOperationError('File dialog', error instanceof Error ? error.message : String(error));
+        activeSimulations.delete(fileId);
+        files.update(f => f.map(file =>
+          file.id === fileId
+            ? { ...file, status: 'failed' }
+            : file
+        ));
+        return;
+      }
+    }
 
-        // PAYMENT PROCESSING: Calculate and deduct payment before download
+    // If we don't have outputPath at this point, something went wrong
+    if (!outputPath) {
+      activeSimulations.delete(fileId);
+      return;
+    }
+
+    // PAYMENT PROCESSING: Calculate and deduct payment before download
         const paymentAmount = await paymentService.calculateDownloadCost(fileToDownload.size);
-        diagnosticLogger.info('Download', 'Payment required', { 
-          fileName: fileToDownload.name, 
-          amount: paymentAmount.toFixed(6) 
-        });
+    diagnosticLogger.info('Download', 'Payment required', { 
+      fileName: fileToDownload.name, 
+      amount: paymentAmount.toFixed(6) 
+    });
 
-        // Check if user has sufficient balance
-        if (paymentAmount > 0 && !paymentService.hasSufficientBalance(paymentAmount)) {
-          showNotification(
-            `Insufficient balance. Need ${paymentAmount.toFixed(4)} Chiral, have ${$wallet.balance.toFixed(4)} Chiral`,
-            'error',
-            6000
-          );
-          activeSimulations.delete(fileId);
-          files.update(f => f.map(file =>
-            file.id === fileId
-              ? { ...file, status: 'failed' }
-              : file
-          ));
-          return;
-        }
+    // Check if user has sufficient balance
+    if (paymentAmount > 0 && !paymentService.hasSufficientBalance(paymentAmount)) {
+      showNotification(
+        `Insufficient balance. Need ${paymentAmount.toFixed(4)} Chiral, have ${$wallet.balance.toFixed(4)} Chiral`,
+        'error',
+        6000
+      );
+      activeSimulations.delete(fileId);
+      files.update(f => f.map(file =>
+        file.id === fileId
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      return;
+    }
 
-      // Determine seeders, prefer local seeder when available
-        let seeders = (fileToDownload.seederAddresses || []).slice();
+    // Determine seeders, prefer local seeder when available
+    let seeders = (fileToDownload.seederAddresses || []).slice();
         try {
           const localPeerId = dhtService.getPeerId ? dhtService.getPeerId() : null;
           if ((!seeders || seeders.length === 0) && fileToDownload.status === 'seeding') {
@@ -1602,27 +1745,27 @@ async function loadAndResumeDownloads() {
               }
             }
 
-            files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
-            activeSimulations.delete(fileId);
-            diagnosticLogger.debug('Download', 'Done with downloading file', { fileName: fileToDownload.name, outputPath });
-            return;
-          } catch (e) {
-            errorLogger.fileOperationError('Local copy fallback', e instanceof Error ? e.message : String(e));
-            showNotification(`Download failed: ${e}`, 'error');
-            activeSimulations.delete(fileId);
-            files.update(f => f.map(file =>
-              file.id === fileId
-                ? { ...file, status: 'failed' }
-                : file
-            ));
-            return; // Don't continue to P2P download
-          }
-        }
+        files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
+        activeSimulations.delete(fileId);
+        diagnosticLogger.debug('Download', 'Done with downloading file', { fileName: fileToDownload.name, outputPath });
+        return;
+      } catch (e) {
+        errorLogger.fileOperationError('Local copy fallback', e instanceof Error ? e.message : String(e));
+        showNotification(`Download failed: ${e}`, 'error');
+        activeSimulations.delete(fileId);
+        files.update(f => f.map(file =>
+          file.id === fileId
+            ? { ...file, status: 'failed' }
+            : file
+        ));
+        return; // Don't continue to P2P download
+      }
+    }
 
-      // Show "automatically started" message now that download is proceeding
-      showNotification(tr('download.notifications.autostart'), 'info');
+    // Show "automatically started" message now that download is proceeding
+    showNotification(tr('download.notifications.autostart'), 'info');
 
-       if (fileToDownload.isEncrypted && fileToDownload.manifest) {
+    if (fileToDownload.isEncrypted && fileToDownload.manifest) {
         // 1. Download all the required encrypted chunks using the P2P service.
         //    This new function will handle fetching multiple chunks in parallel.
         showNotification(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
@@ -1928,6 +2071,7 @@ async function loadAndResumeDownloads() {
       }
     } catch (error) {
       // Download failed
+      const fileToDownload = $files.find(f => f.id === fileId);
       const errorMessage = error instanceof Error ? error.message : String(error);
       showNotification(`Download failed: ${errorMessage}`, 'error');
       activeSimulations.delete(fileId);
