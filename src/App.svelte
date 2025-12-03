@@ -484,7 +484,7 @@ function handleFirstRunComplete() {
         console.warn("Failed to load settings from localStorage:", error);
       }
       
-      // Initialize backend services (File Transfer, DHT - conditionally)
+      // Initialize backend services (DHT first - it initializes chunk manager, then File Transfer)
       try {
         const currentSettings = get(settings);
         
@@ -497,28 +497,15 @@ function handleFirstRunComplete() {
           isDhtAlreadyRunning = false;
         }
         
-        // Always start file transfer service (unless already running)
-        try {
-          await invoke("start_file_transfer_service");
-        } catch (ftError) {
-          const ftErrorMsg = ftError instanceof Error ? ftError.message : String(ftError);
-          if (!ftErrorMsg.includes("already running") && !ftErrorMsg.includes("already initialized")) {
-            console.warn("⚠️ File transfer service start warning:", ftErrorMsg);
-          }
-        }
-        
-        // Start DHT if auto-start is enabled AND not already running
+        // Start DHT first if auto-start is enabled (DHT initializes chunk manager needed by file transfer)
         if (currentSettings.autoStartDHT) {
           if (isDhtAlreadyRunning) {
-            console.log("✅ DHT node already running (detected on startup)");
-            
             // Import dhtService and sync the peer ID
             const { dhtService } = await import("$lib/dht");
             try {
               const peerId = await invoke<string | null>("get_dht_peer_id");
               if (peerId) {
                 dhtService.setPeerId(peerId);
-                console.log("✅ Synced with existing DHT node, peer ID:", peerId);
               }
             } catch {}
             
@@ -580,6 +567,19 @@ function handleFirstRunComplete() {
                 console.error("❌ Failed to auto-start DHT:", dhtErrorMsg);
               }
             }
+          }
+        }
+        
+        // Start file transfer service AFTER DHT (needs chunk manager initialized by DHT)
+        try {
+          await invoke("start_file_transfer_service");
+        } catch (ftError) {
+          const ftErrorMsg = ftError instanceof Error ? ftError.message : String(ftError);
+          // Suppress known non-critical warnings
+          if (!ftErrorMsg.includes("already running") && 
+              !ftErrorMsg.includes("already initialized") &&
+              !ftErrorMsg.includes("Chunk manager not initialized")) {
+            console.warn("⚠️ File transfer service start warning:", ftErrorMsg);
           }
         }
         

@@ -22,7 +22,7 @@
   export let isBusy = false;
 
   let canAfford = true;
-  let checkingBalance = false;
+  let checkingBalance = true; // Start as true since we check on mount
   let currentPrice: number | null = null;
   let showDecryptDialog = false;
   let showDownloadConfirmDialog = false;
@@ -182,21 +182,9 @@
   async function confirmDownload() {
     showDownloadConfirmDialog = false;
     
-    // If already seeding and paid, show payment confirmation
-    if (isSeeding && currentPrice && currentPrice > 0) {
-      showPaymentConfirmDialog = true;
-    }
-    // If already seeding and free, proceed directly with download/decrypt
-    else if (isSeeding) {
-      confirmDecryptAndQueue();
-    }
-    // Show payment confirmation if file has a price (not seeding case)
-    else if (currentPrice && currentPrice > 0) {
-      showPaymentConfirmDialog = true;
-    } else {
-      // Free file - download directly
-      proceedWithDownload();
-    }
+    // All downloads require payment (minimum 0.0001 Chiral)
+    // Always show payment confirmation
+    showPaymentConfirmDialog = true;
   }
 
   function cancelDownload() {
@@ -462,19 +450,19 @@
           </li>
           <li class="flex items-center justify-between">
             <span class="text-muted-foreground">Price</span>
-            <span class="font-semibold {currentPrice && currentPrice > 0 ? 'text-emerald-600' : 'text-muted-foreground'}">
-              {#if currentPrice && currentPrice > 0}
+            <span class="font-semibold text-emerald-600">
+              {#if checkingBalance}
+                Calculating...
+              {:else if currentPrice !== null}
                 {currentPrice.toFixed(4)} Chiral
               {:else}
-                Free
+                0.0001 Chiral
               {/if}
             </span>
           </li>
-          {#if currentPrice && currentPrice > 0}
-            <li class="text-xs text-muted-foreground text-center col-span-2">
-              Price calculated based on current network conditions
-            </li>
-          {/if}
+          <li class="text-xs text-muted-foreground text-center col-span-2">
+            Price calculated based on current network conditions
+          </li>
         </ul>
       </div>
     </div>
@@ -582,47 +570,31 @@
           </div>
         </div>
 
-        {#if currentPrice && currentPrice > 0}
-          <div class="p-4 bg-blue-500/10 rounded-lg border-2 border-blue-500/30">
-            <div class="text-center">
-              <p class="text-sm text-muted-foreground mb-1">Price</p>
-              <p class="text-2xl font-bold text-blue-600">{currentPrice.toFixed(4)} Chiral</p>
-            </div>
+        <div class="p-4 bg-blue-500/10 rounded-lg border-2 border-blue-500/30">
+          <div class="text-center">
+            <p class="text-sm text-muted-foreground mb-1">Price</p>
+            <p class="text-2xl font-bold text-blue-600">
+              {#if checkingBalance}
+                Calculating...
+              {:else}
+                {(currentPrice ?? 0.0001).toFixed(4)} Chiral
+              {/if}
+            </p>
           </div>
-          {#if isSeeding}
-            <div class="p-3 bg-amber-500/10 rounded-lg border border-amber-500/30">
-              <p class="text-xs text-amber-600 text-center">
-                You're already seeding this file. Downloading will create a decrypted local copy.
-              </p>
-            </div>
-          {/if}
-        {:else}
-          <div class="p-4 bg-emerald-500/10 rounded-lg border-2 border-emerald-500/30">
-            <div class="text-center">
-              <p class="text-sm text-muted-foreground mb-1">Price</p>
-              <p class="text-2xl font-bold text-emerald-600">Free</p>
-            </div>
+        </div>
+        {#if isSeeding}
+          <div class="p-3 bg-amber-500/10 rounded-lg border border-amber-500/30">
+            <p class="text-xs text-amber-600 text-center">
+              You're already seeding this file. Downloading will create a decrypted local copy.
+            </p>
           </div>
-          {#if isSeeding}
-            <div class="p-3 bg-amber-500/10 rounded-lg border border-amber-500/30">
-              <p class="text-xs text-amber-600 text-center">
-                You're already seeding this file. Downloading will create a decrypted local copy.
-              </p>
-            </div>
-          {/if}
         {/if}
       </div>
 
       <p class="text-sm text-muted-foreground text-center mb-6">
-        {#if currentPrice && currentPrice > 0}
-          {isSeeding
-            ? `Do you want to download a local copy for ${currentPrice.toFixed(4)} Chiral?`
-            : `You will be charged ${currentPrice.toFixed(4)} Chiral. Continue?`}
-        {:else}
-          {isSeeding
-            ? 'Do you want to download a local decrypted copy?'
-            : 'Are you sure you want to download this file?'}
-        {/if}
+        {isSeeding
+          ? `Do you want to download a local copy for ${(currentPrice ?? 0.0001).toFixed(4)} Chiral?`
+          : `You will be charged ${(currentPrice ?? 0.0001).toFixed(4)} Chiral. Continue?`}
       </p>
 
       <div class="flex gap-3">
