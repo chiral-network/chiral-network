@@ -57,7 +57,6 @@ impl HttpServerState {
     /// Create new HTTP server state
     ///
     /// The storage_dir should point to the FileTransferService storage directory
-    /// (e.g., ~/.local/share/chiral-network/files/)
     pub fn new(storage_dir: PathBuf) -> Self {
         Self {
             storage_dir,

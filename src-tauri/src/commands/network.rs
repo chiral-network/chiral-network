@@ -1,4 +1,3 @@
-use tracing::info;
 use serde::Serialize;
 use crate::ethereum::{
     get_network_hashrate,
@@ -31,11 +30,9 @@ pub async fn get_full_network_stats(app: tauri::AppHandle, address: Option<Strin
 
     let hashrate_str = hashrate_res
     .map_err(|e| format!("Failed to get hashrate: {}", e))?;
-    info!("📊 BACKEND: Network hashrate (string): {}", hashrate_str);
 
     // Convert string to numeric value
     let hashrate = parse_hashrate(&hashrate_str).unwrap_or(0.0);
-    info!("📊 BACKEND: Network hashrate (number): {}", hashrate);
 
     let difficulty = difficulty_res
         .map_err(|e| format!("Failed to get difficulty: {}", e))?

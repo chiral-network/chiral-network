@@ -48,6 +48,7 @@
   import Input from "$lib/components/ui/input.svelte";
   import { settings } from "$lib/stores";
   import { paymentService } from '$lib/services/paymentService';
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   const tr = (k: string, params?: Record<string, any>): string =>
     $t(k, params);
 
@@ -165,40 +166,6 @@
   let useEncryptedSharing = false;
   let recipientPublicKey = "";
   let showEncryptionOptions = false;
-
-  // Calculate price using dynamic network metrics with safe fallbacks
-  async function uploadFileStreamingToDisk(file: File) {
-    const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-    try {
-      // Create a temporary file path for streaming upload to disk
-      const tempFilePath = await invoke<string>("create_temp_file_for_streaming", {
-        fileName: file.name,
-      });
-
-      // Stream file to disk in chunks
-      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-        const start = chunkIndex * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        const chunk = file.slice(start, end);
-
-        const buffer = await chunk.arrayBuffer();
-        const chunkData = Array.from(new Uint8Array(buffer));
-
-        // Append chunk to temp file
-        await invoke("append_chunk_to_temp_file", {
-          tempFilePath,
-          chunkData,
-        });
-      }
-
-      return tempFilePath;
-    } catch (error) {
-      console.error("Streaming upload to disk failed:", error);
-      throw error;
-    }
-  }
 
   async function calculateFilePrice(sizeInBytes: number): Promise<number> {
     const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
@@ -319,7 +286,7 @@
   // Map to track active WebRTC sessions with downloaders
   let activeSeederSessions = new Map<string, any>();
   let signalingService: any = null;
-
+  let unlisten: (() => void) | null = null;
   onMount(async () => {
     // Initialize WebRTC seeder to accept download requests
     try {
@@ -532,245 +499,43 @@
       console.warn("Failed to restore persisted seed list", e);
     }
 
-    // HTML5 Drag and Drop functionality
-    const dropZone = document.querySelector(".drop-zone") as HTMLElement;
-
-    if (dropZone) {
-      const handleDragOver = (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer!.dropEffect = "copy";
-        isDragging = true;
-      };
-
-      const handleDragEnter = (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer!.dropEffect = "copy";
-        isDragging = true;
-      };
-
-      const handleDragLeave = (e: DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.currentTarget && !dropZone.contains(e.relatedTarget as Node)) {
-          isDragging = false;
-        }
-      };
-
-      const handleDragEnd = (_e: DragEvent) => {
-        isDragging = false;
-      };
-
-      const handleDrop = async (e: DragEvent) => {
-        isDragging = false;
-
-        // IMPORTANT: Extract files immediately before any async operations
-        // dataTransfer.files becomes empty after the event completes
-        const droppedFiles = Array.from(e.dataTransfer?.files || []);
-
-        // STEP 1: Verify backend has active account before proceeding
-        if (isTauri) {
-          try {
-            const hasAccount = await invoke<boolean>("has_active_account");
-            if (!hasAccount) {
-              showToast(
-                // "Please log in to your account before uploading files",
-                tr('toasts.upload.loginRequired'),
-                "error",
-              );
-              return;
+    if (isTauri) {
+      try {
+        unlisten = await getCurrentWindow().onDragDropEvent((event) => {
+          if (event.payload.type === 'over') {
+             // User is dragging files over the window
+            isDragging = true;
+          } else if (event.payload.type === 'drop') {
+             // User dropped the files
+            isDragging = false;
+            
+             // event.payload.paths is an array of strings (absolute paths)
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+               // No need to check other conditions. addFilesFromPaths checks those conditions.
+              addFilesFromPaths(paths);
             }
-          } catch (error) {
-            console.error("Failed to verify account status:", error);
-            showToast(
-              // "Failed to verify account status. Please try logging in again.",
-              tr('toasts.upload.verifyAccountFailed'),
-              "error",
-            );
-            return;
+          } else {
+             // 'leave' or cancelled
+            isDragging = false;
           }
-        }
-
-        if (isUploading) {
-          showToast(
-            tr("upload.uploadInProgress"),
-            "warning",
-          );
-          return;
-        }
-
-        // STEP 2: Ensure DHT is connected before attempting upload
-        const dhtConnected = await isDhtConnected();
-        if (!dhtConnected) {
-          showToast(
-            // "DHT network is not connected. Please start the DHT network before uploading files.",
-            tr('toasts.upload.dhtDisconnected'),
+        });
+      } catch (err) {
+        console.error("Failed to setup Tauri drag drop listener:", err);
+      }
+    }
+    else{
+        showToast(
+            tr("upload.desktopOnly"),
             "error",
           );
-          return;
-        }
+      }
 
-        if (droppedFiles.length > 0) {
-          if (!isTauri) {
-            showToast(
-              tr("upload.desktopOnly"),
-              "error",
-            );
-            return;
-          }
-
-          try {
-            isUploading = true;
-            let duplicateCount = 0;
-            let addedCount = 0;
-            let blockedCount = 0;
-
-            // Process files sequentially (unified flow for all protocols)
-            for (const file of droppedFiles) {
-              const blockedExtensions = [
-                ".exe",
-                ".bat",
-                ".cmd",
-                ".com",
-                ".msi",
-                ".scr",
-                ".vbs",
-              ];
-              const fileName = file.name.toLowerCase();
-              if (blockedExtensions.some((ext) => fileName.endsWith(ext))) {
-                showToast(
-                  tr("upload.executableBlocked", { values: { name: file.name } }),
-                  "error",
-                );
-                blockedCount++;
-                continue;
-              }
-
-              if (file.size === 0) {
-                showToast(tr("upload.emptyFile", { values: { name: file.name } }), "error");
-                blockedCount++;
-                continue;
-              }
-
-              try {
-                let metadata;
-                const filePrice = await calculateFilePrice(file.size);
-
-                // Use streaming upload for all protocols to avoid memory issues with large files
-                // All protocol handlers read from file paths on disk
-                const tempFilePath = await uploadFileStreamingToDisk(file);
-                metadata = await dhtService.publishFileToNetwork(tempFilePath, filePrice, selectedProtocol, file.name);
-
-                // Check for same content + same protocol (true duplicate)
-                if (get(files).some((f) => f.hash === metadata.merkleRoot && f.protocol === selectedProtocol)) {
-                  duplicateCount++;
-                  showToast(
-                    tr('upload.duplicateSkipped', { values: { count: 1 } }),
-                    "warning"
-                  );
-                  continue;
-                }
-
-                // Construct protocol-specific hash for display
-                let protocolHash = metadata.merkleRoot || "";
-                if (selectedProtocol === "BitTorrent" && metadata.infoHash) {
-                  // Construct magnet link for BitTorrent
-                  const trackers = metadata.trackers ? metadata.trackers.join('&tr=') : 'udp://tracker.openbittorrent.com:80';
-                  protocolHash = `magnet:?xt=urn:btih:${metadata.infoHash}&tr=${trackers}`;
-                }
-
-                const newFile = {
-                  id: `file-${Date.now()}-${Math.random()}`,
-                  name: metadata.fileName,
-                  path: file.name,
-                  hash: metadata.merkleRoot || "",
-                  protocolHash,
-                  size: metadata.fileSize,
-                  status: "seeding" as const,
-                  seeders: metadata.seeders?.length ?? 0,
-                  seederAddresses: metadata.seeders ?? [],
-                  leechers: 0,
-                  uploadDate: new Date(metadata.createdAt),
-                  price: filePrice,
-                  cids: metadata.cids,
-                  protocol: selectedProtocol,
-                };
-
-                files.update((currentFiles) => [...currentFiles, newFile]);
-                addedCount++;
-                showToast(
-                  tr('toasts.upload.fileSuccess', { values: { name: file.name } }),
-                  "success"
-                );
-              } catch (error) {
-                console.error("Error uploading dropped file:", file.name, error);
-                showToast(
-                  tr("upload.fileFailed", {
-                    values: { name: file.name, error: String(error) },
-                  }),
-                  "error",
-                );
-              }
-            }
-
-            if (duplicateCount > 0) {
-              showToast(
-                tr("upload.duplicateSkipped", {
-                  values: { count: duplicateCount },
-                }),
-                "warning",
-              );
-            }
-
-            // Refresh storage after uploads
-            if (addedCount > 0) {
-              setTimeout(() => refreshAvailableStorage(), 100);
-            }
-          } catch (error) {
-            console.error("Error handling dropped files:", error);
-            showToast(
-              tr("upload.uploadError"),
-              "error",
-            );
-          } finally {
-            isUploading = false;
-          }
-        }
-      };
-
-      dropZone.addEventListener("dragenter", handleDragEnter);
-      dropZone.addEventListener("dragover", handleDragOver);
-      dropZone.addEventListener("dragleave", handleDragLeave);
-      dropZone.addEventListener("drop", handleDrop);
-
-      const preventDefaults = (e: Event) => {
-        e.preventDefault();
-        e.stopPropagation();
-      };
-
-      window.addEventListener("dragover", preventDefaults);
-      window.addEventListener("drop", preventDefaults);
-
-      document.addEventListener("dragend", handleDragEnd);
-      document.addEventListener("drop", handleDragEnd);
-
-      (window as any).dragDropCleanup = () => {
-        dropZone.removeEventListener("dragenter", handleDragEnter);
-        dropZone.removeEventListener("dragover", handleDragOver);
-        dropZone.removeEventListener("dragleave", handleDragLeave);
-        dropZone.removeEventListener("drop", handleDrop);
-        window.removeEventListener("dragover", preventDefaults);
-        window.removeEventListener("drop", preventDefaults);
-        document.removeEventListener("dragend", handleDragEnd);
-        document.removeEventListener("drop", handleDragEnd);
-      };
-    }
   });
 
   onDestroy(() => {
-    if ((window as any).dragDropCleanup) {
-      (window as any).dragDropCleanup();
+    if (unlisten) {
+      unlisten();
     }
   });
 
@@ -946,41 +711,10 @@
         const fileSize = await invoke<number>('get_file_size', { filePath });
         const price = await calculateFilePrice(fileSize);
 
-        // Handle BitTorrent differently - create and seed torrent
-        if (selectedProtocol === "BitTorrent") {
-          const magnetLink = await invoke<string>('torrent_seed', { filePath, announceUrls: null });
-
-          const torrentFile = {
-            id: `torrent-${Date.now()}-${Math.random()}`,
-            name: fileName,
-            hash: magnetLink, // Use magnet link as hash for torrents
-            size: fileSize,
-            path: filePath,
-            seederAddresses: [],
-            uploadDate: new Date(),
-            seeders: 1,
-            status: "seeding" as const,
-            price: 0, // BitTorrent is free
-          };
-
-          files.update(f => [...f, torrentFile]);
-          // showToast(`${fileName} is now seeding as a torrent`, "success");
-          showToast(
-            tr('toasts.upload.torrentSeeding', { values: { name: fileName } }),
-            "success"
-          );
-          continue; // Skip the normal Chiral upload flow
-        }
-
-        // Copy file to temp location to prevent original file from being moved
-        const tempFilePath = await invoke<string>("copy_file_to_temp", {
-          filePath,
-        });
-
         // Extract original filename from the file path
         const originalFileName = filePath.split(/[/\\]/).pop() || filePath;
 
-        const metadata = await dhtService.publishFileToNetwork(tempFilePath, price, selectedProtocol, originalFileName);
+        const metadata = await dhtService.publishFileToNetwork(filePath, price, selectedProtocol, originalFileName);
 
         console.log('🔍 DEBUG UPLOAD: Received metadata from backend:', JSON.stringify(metadata, null, 2));
         console.log('🔍 DEBUG UPLOAD: metadata.seeders =', metadata.seeders);
@@ -996,7 +730,7 @@
 
         // Construct protocol-specific hash for display
         let protocolHash = metadata.merkleRoot || "";
-        if (selectedProtocol === "BitTorrent" && metadata.infoHash) {
+        if ((selectedProtocol as "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP") === "BitTorrent" && metadata.infoHash) {
           // Construct magnet link for BitTorrent
           const trackers = metadata.trackers ? metadata.trackers.join('&tr=') : 'udp://tracker.openbittorrent.com:80';
           protocolHash = `magnet:?xt=urn:btih:${metadata.infoHash}&tr=${trackers}`;
