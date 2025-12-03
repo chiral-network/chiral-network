@@ -699,7 +699,6 @@
       return;
     }
 
-    let duplicateCount = 0;
     let addedCount = 0;
 
     // Unified upload flow for all protocols
@@ -802,7 +801,7 @@
         });
 
         if (existed) {
-          duplicateCount++;
+          // File was updated, not skipped - don't count as duplicate
           showToast(
             tr("upload.fileUpdated", { values: { name: fileName } }),
             "info",
@@ -827,13 +826,6 @@
           "error",
         );
       }
-    }
-
-    if (duplicateCount > 0) {
-      showToast(
-        tr("upload.duplicateSkipped", { values: { count: duplicateCount } }),
-        "warning",
-      );
     }
 
     if (addedCount > 0) {
@@ -1377,7 +1369,7 @@
                             >
                               <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
-                                >{coalescedFile.averagePrice.toFixed(8)} Chiral</span
+                                >{coalescedFile.averagePrice.toFixed(4)} Chiral</span
                               >
                             </div>
                           {/if}

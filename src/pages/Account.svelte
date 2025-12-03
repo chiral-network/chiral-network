@@ -271,14 +271,14 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(2) } });
+        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(4) } });
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue + estimatedFeeNumeric > $wallet.balance) {
         validationWarning = tr('errors.amount.insufficientWithFee', {
           values: {
-            total: (inputValue + estimatedFeeNumeric).toFixed(2),
-            balance: $wallet.balance.toFixed(2)
+            total: (inputValue + estimatedFeeNumeric).toFixed(4),
+            balance: $wallet.balance.toFixed(4)
           }
         });
         isAmountValid = false;
@@ -1357,7 +1357,7 @@
 
   // Helper function to set max amount
   function setMaxAmount() {
-    rawAmountInput = $wallet.balance.toFixed(2);
+    rawAmountInput = $wallet.balance.toFixed(4);
   }
 
   // async function handleLogout() {
@@ -1709,7 +1709,7 @@
         {:else}
         <div>
           <p class="text-sm text-muted-foreground">{$t('wallet.balance')}</p>
-          <p class="text-2xl font-bold">{$wallet.balance.toFixed(8)} Chiral</p>
+          <p class="text-2xl font-bold">{$wallet.balance.toFixed(4)} Chiral</p>
         </div>
         
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
@@ -1724,17 +1724,17 @@
           <div class="min-w-0">
             <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
             {#if $accurateTotals}
-              <p class="text-sm font-medium text-blue-600 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
+              <p class="text-sm font-medium text-blue-600 break-words">+{$accurateTotals.totalReceived.toFixed(4)}</p>
             {:else}
-              <p class="text-sm font-medium text-blue-600 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
+              <p class="text-sm font-medium text-blue-600 opacity-60 break-words">+{$totalReceived.toFixed(4)}</p>
             {/if}
           </div>
           <div class="min-w-0">
             <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
             {#if $accurateTotals}
-              <p class="text-sm font-medium text-red-600 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
+              <p class="text-sm font-medium text-red-600 break-words">-{$accurateTotals.totalSent.toFixed(4)}</p>
             {:else}
-              <p class="text-sm font-medium text-red-600 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
+              <p class="text-sm font-medium text-red-600 opacity-60 break-words">-{$totalSpent.toFixed(4)}</p>
             {/if}
           </div>
         </div>
@@ -1942,7 +1942,7 @@
           </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
-              {$t('transfer.available', { values: { amount: $wallet.balance.toFixed(2) } })}
+              {$t('transfer.available', { values: { amount: $wallet.balance.toFixed(4) } })}
             </p>
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
