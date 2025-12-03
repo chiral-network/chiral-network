@@ -29,7 +29,6 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import CommandPalette from './lib/components/CommandPalette.svelte';
 import { startNetworkMonitoring } from './lib/services/networkService';
 import { startGethMonitoring, gethStatus } from './lib/services/gethService';
-    import { fileService } from '$lib/services/fileService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
 import { paymentService } from '$lib/services/paymentService';

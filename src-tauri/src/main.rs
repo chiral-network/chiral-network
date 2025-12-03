@@ -25,9 +25,9 @@ pub mod transaction_services;
 
 // Re-export modules from the lib crate
 use chiral_network::{
-    analytics, bandwidth, bittorrent_handler, dht, download_restart, download_scheduler,
-    download_source, ed2k_client, encryption, file_transfer, ftp_client, http_download, keystore,
-    logger, manager, multi_source_download, peer_cache, peer_selection, protocols, reputation,
+    analytics, bandwidth, bittorrent_handler, dht, download_restart,
+    ed2k_client, encryption, file_transfer, http_download, keystore,
+    logger, manager, multi_source_download, peer_selection, protocols, reputation,
     stream_auth, webrtc_service,
 };
 
@@ -311,6 +311,7 @@ pub struct StreamingUploadSession {
     pub chunk_cids: Vec<String>,
     pub file_data: Vec<u8>,
     pub price: f64,
+    pub is_complete: bool,
 }
 
 /// Session for streaming WebRTC downloads - writes chunks directly to disk
@@ -397,6 +398,9 @@ struct AppState {
     file_logger: Arc<Mutex<Option<logger::ThreadSafeWriter>>>,
     // BitTorrent handler for creating and seeding torrents
     bittorrent_handler: Arc<bittorrent_handler::BitTorrentHandler>,
+
+    // Chunk manager for file chunking operations
+    chunk_manager: Mutex<Option<Arc<ChunkManager>>>,
 
     // Download restart service for pause/resume functionality
     download_restart: Mutex<Option<Arc<download_restart::DownloadRestartService>>>,
@@ -1451,6 +1455,14 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
+    // Create a ChunkManager instance
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {}", e))?;
+    let chunk_storage_path = app_data_dir.join("chunk_storage");
+    let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
+
     // --- AutoRelay is now disabled by default (can be enabled via config or env var)
     // Disable AutoRelay on bootstrap nodes (and via env var)
     let mut final_enable_autorelay = enable_autorelay.unwrap_or(false);
@@ -1503,7 +1515,7 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
-        None, // Chunk manager will be set later for multi-source downloads
+        Some(chunk_manager.clone()), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
@@ -1531,25 +1543,6 @@ async fn start_dht_node(
 
     // DHT node is already running in a spawned background task
     let dht_arc = Arc::new(dht_service);
-
-    // Load peer cache and attempt reconnection to known peers
-    let dht_for_cache = dht_arc.clone();
-    tokio::spawn(async move {
-        match dht_for_cache.load_peer_cache().await {
-            Ok(cached_peers) => {
-                if !cached_peers.is_empty() {
-                    info!(
-                        "Attempting to reconnect to {} cached peers",
-                        cached_peers.len()
-                    );
-                    dht_for_cache.reconnect_cached_peers(cached_peers).await;
-                }
-            }
-            Err(e) => {
-                warn!("Failed to load peer cache: {}", e);
-            }
-        }
-    });
 
     // Spawn the event pump
     let app_handle = app.clone();
@@ -1664,15 +1657,18 @@ async fn start_dht_node(
                         }
                     }
                     DhtEvent::DownloadedFile(metadata) => {
-                        let payload = serde_json::json!(metadata.clone());
+                        info!("Emitting file_content event for completed download: {} ({})", metadata.file_name, metadata.merkle_root);
+                        let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("file_content", payload);
 
                         let file_size = metadata.file_size;
 
-                        if let Err(err) = dht_clone_for_pump.promote_downloaded_file(metadata).await
-                        {
-                            warn!("Failed to promote downloaded file to seeder: {}", err);
-                        }
+                        // TODO: Implement promote_downloaded_file in DhtService to publish the user as a seeder in the DHT for that file
+                        // if let Err(err) = dht_clone_for_pump.promote_downloaded_file(metadata).await
+                        // {
+                        //     warn!("Failed to promote downloaded file to seeder: {}", err);
+                        // }
+
                         // Update analytics: record download completion and bandwidth
                         analytics_arc.record_download_completed().await;
                         analytics_arc.record_download(file_size).await;
@@ -1790,6 +1786,12 @@ async fn start_dht_node(
         *dht_guard = Some(dht_arc.clone());
     }
 
+    // Store chunk manager in AppState
+    {
+        let mut chunk_guard = state.chunk_manager.lock().await;
+        *chunk_guard = Some(chunk_manager.clone());
+    }
+
     // Also attach DHT to HTTP server state for provider-side metrics
     state.http_server_state.set_dht(dht_arc).await;
 
@@ -1804,12 +1806,6 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     };
 
     if let Some(dht) = dht {
-        // Save peer cache before shutdown for faster startup next time
-        if let Err(e) = dht.save_peer_cache().await {
-            warn!("Failed to save peer cache: {}", e);
-            // Continue with shutdown even if cache save fails
-        }
-
         let (last_enabled, last_disabled) = dht.autorelay_history().await;
         {
             let mut guard = state.autorelay_last_enabled.lock().await;
@@ -3351,7 +3347,17 @@ async fn start_file_transfer_service(
     }
 
     info!("🔧 Creating FileTransferService...");
-    let file_transfer_service = FileTransferService::new_with_encryption(true)
+    // Get the configurable storage directory
+    let storage_path = get_download_directory(app.clone())
+        .map_err(|e| format!("Failed to get storage directory: {}", e))?;
+    let storage_dir = PathBuf::from(storage_path);
+
+    let file_transfer_service = FileTransferService::new_with_storage_dir(
+        storage_dir,
+        true, // encryption enabled
+        state.keystore.clone(),
+        Some(app.clone())
+    )
         .await
         .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
 
@@ -3398,30 +3404,25 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
-        // Create ChunkManager instance
-        let app_data_dir = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| format!("Could not get app data directory: {}", e))?;
-        let chunk_storage_path = app_data_dir.join("chunk_storage");
-        let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
-
         // Create transfer event bus for unified event emission
         let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
+        // Get chunk manager from AppState
+        let chunk_manager_arc = {
+            let chunk_guard = state.chunk_manager.lock().await;
+            chunk_guard.as_ref().cloned()
+        };
+
+        let chunk_manager = chunk_manager_arc.ok_or_else(|| "Chunk manager not initialized".to_string())?;
+
         let multi_source_service = MultiSourceDownloadService::new(
             dht_service,
             webrtc_arc.clone(),
             state.bittorrent_handler.clone(),
             transfer_event_bus,
             state.analytics.clone(),
-            chunk_manager.clone(),
+            chunk_manager,
         );
-        let multi_source_arc = Arc::new(multi_source_service);
-
-        // Load any persisted download states
-        if let Err(e) = multi_source_arc.load_download_states().await {
-            tracing::warn!("Failed to load persisted download states: {}", e);
-        }
+        let multi_source_arc                                                                                                                                                                                                             = Arc::new(multi_source_service);
 
         {
             let mut multi_source_guard = state.multi_source_download.lock().await;
@@ -3613,13 +3614,13 @@ async fn upload_file_to_network(
                             uploader_address: Some(account),
                             ftp_sources: None,
                             http_sources: None,
-                            info_hash,
+                            info_hash: info_hash.clone(),
                             trackers: Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]),
                             ed2k_sources: None,
                             download_path: None,
                         };
 
-                        // Publish metadata to DHT for discoverability
+                        // Publish merged metadata to DHT for discoverability
                         let dht = {
                             let dht_guard = state.dht.lock().await;
                             dht_guard.as_ref().cloned()
@@ -3722,7 +3723,7 @@ async fn upload_file_to_network(
                             download_path: None,
                         };
 
-                        // Publish metadata to DHT for discoverability
+                        // Publish merged metadata to DHT for discoverability
                         let dht = {
                             let dht_guard = state.dht.lock().await;
                             dht_guard.as_ref().cloned()
@@ -3806,7 +3807,6 @@ async fn upload_file_to_network(
                             download_path: None,
                         };
 
-                        // Publish metadata to DHT for discoverability
                         let dht = {
                             let dht_guard = state.dht.lock().await;
                             dht_guard.as_ref().cloned()
@@ -3886,7 +3886,7 @@ async fn upload_file_to_network(
                     let is_last_chunk = chunk_index >= total_chunks - 1; // Use >= to handle edge cases
 
                     // Send chunk
-                    let result = upload_file_chunk(
+                    upload_file_chunk(
                         upload_id.clone(),
                         chunk_data,
                         chunk_index as u32,
@@ -3905,15 +3905,6 @@ async fn upload_file_to_network(
                         );
                     }
 
-                    if is_last_chunk {
-                        if let Some(file_hash) = result {
-                            println!("✅ Bitswap streaming upload completed: {}", file_hash);
-                            return Ok(());
-                        } else {
-                            return Err("Upload completed but no file hash returned".to_string());
-                        }
-                    }
-
                     chunk_index += 1;
 
                     // Prevent too many concurrent operations
@@ -3921,6 +3912,88 @@ async fn upload_file_to_network(
                         tokio::task::yield_now().await;
                     }
                 }
+
+                // After all chunks are uploaded, finalize the metadata
+                let mut upload_sessions = state.upload_sessions.lock().await;
+                if let Some(session) = upload_sessions.get_mut(&upload_id) {
+                    if session.is_complete {
+                        // Calculate Merkle root for integrity verification
+                        let hasher = std::mem::replace(&mut session.hasher, sha2::Sha256::new());
+                        let merkle_root = format!("{:x}", hasher.finalize());
+
+                        // Create root block containing the list of chunk CIDs
+                        let chunk_cids = std::mem::take(&mut session.chunk_cids);
+                        let root_block_data = match serde_json::to_vec(&chunk_cids) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return Err(format!("Failed to serialize chunk CIDs: {}", e));
+                            }
+                        };
+
+                        // Generate CID for the root block
+                        use dht::{Cid, Code, MultihashDigest, RAW_CODEC};
+                        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+
+                        // Store root block in Bitswap
+                        let dht_opt = { state.dht.lock().await.as_ref().cloned() };
+                        if let Some(dht) = &dht_opt {
+                            if let Err(e) = dht.store_block(root_cid.clone(), root_block_data).await {
+                                error!("failed to store root block: {}", e);
+                                return Err(format!("failed to store root block: {}", e));
+                            }
+                        } else {
+                            return Err("DHT not running".into());
+                        }
+
+                        // Create minimal metadata (without file_data to avoid DHT size limits)
+                        let created_at = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or(std::time::Duration::from_secs(0))
+                            .as_secs();
+
+                        // Get the account address for the uploader
+                        let account = get_active_account(&state).await?;
+
+                        let metadata = dht::models::FileMetadata {
+                            merkle_root: merkle_root.clone(), // Store Merkle root for verification
+                            file_name: session.file_name.clone(),
+                            file_size: session.file_size,
+                            file_data: vec![], // Empty - data is stored in Bitswap blocks
+                            seeders: vec![],
+                            created_at,
+                            mime_type: None,
+                            is_encrypted: false,
+                            encryption_method: None,
+                            key_fingerprint: None,
+                            cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
+                            encrypted_key_bundle: None,
+                            parent_hash: None,
+                            is_root: true,
+                            download_path: None,
+                            price: session.price,
+                            uploader_address: Some(account),
+                            ftp_sources: None,
+                            http_sources: None,
+                            info_hash: None,
+                            trackers: None,
+                            ed2k_sources: None,
+                        };
+
+                        // Publish merged metadata to DHT
+                        if let Some(dht) = dht_opt {
+                            dht.publish_file(metadata.clone(), None).await?;
+                        } else {
+                            return Err("DHT not running".into());
+                        }
+
+                        let file_hash = root_cid.to_string();
+                        println!("✅ Bitswap streaming upload completed: {}", file_hash);
+
+                        // Clean up session
+                        upload_sessions.remove(&upload_id);
+                    }
+                }
+                drop(upload_sessions);
 
                 return Ok(());
             }
@@ -4036,9 +4109,25 @@ async fn upload_file_to_network(
                 file_name, metadata.merkle_root, file_hash
             );
 
-            match dht.publish_file(metadata.clone(), None).await {
-                Ok(_) => info!("Published file metadata to DHT: {}", file_hash),
-                Err(e) => warn!("Failed to publish file metadata to DHT: {}", e),
+            // Add HTTP source information to metadata for multi-protocol downloads
+            let mut metadata_with_http = metadata.clone();
+            if let Some(http_addr) = *state.http_server_addr.lock().await {
+                use chiral_network::download_source::HttpSourceInfo;
+                // Replace 0.0.0.0 with 127.0.0.1 so clients can actually connect
+                let url = format!("http://{}", http_addr).replace("0.0.0.0", "127.0.0.1");
+                metadata_with_http.http_sources = Some(vec![HttpSourceInfo {
+                    url: url.clone(),
+                    auth_header: None,
+                    verify_ssl: true,
+                    headers: None,
+                    timeout_secs: None,
+                }]);
+                info!("Added HTTP source to metadata: {}", url);
+            }
+
+            match dht.publish_file(metadata_with_http.clone(), None).await {
+                Ok(_) => info!("Published merged file metadata to DHT: {}", file_hash),
+                Err(e) => warn!("Failed to publish merged file metadata to DHT: {}", e),
             }
 
             Ok(())
@@ -4348,15 +4437,19 @@ async fn download_blocks_from_network(
     file_metadata: FileMetadata,
     download_path: String,
 ) -> Result<(), String> {
+    info!("🔽 download_blocks_from_network called for file: {} to path: {}", file_metadata.file_name, download_path);
+    info!("🔽 file has {} seeders, cids: {:?}", file_metadata.seeders.len(), file_metadata.cids);
+
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
     };
 
     if let Some(dht) = dht {
-        info!("calling dht download_file");
+        info!("🔽 DHT node is running, calling dht.download_file");
         dht.download_file(file_metadata, download_path).await
     } else {
+        error!("🔽 DHT node is not running!");
         Err("DHT node is not running".to_string())
     }
 }
@@ -4802,6 +4895,7 @@ async fn start_streaming_upload(
             chunk_cids: Vec::new(),
             file_data: Vec::new(),
             price,
+            is_complete: false,
         },
     );
 
@@ -4815,7 +4909,7 @@ async fn upload_file_chunk(
     _chunk_index: u32,
     is_last_chunk: bool,
     state: State<'_, AppState>,
-) -> Result<Option<String>, String> {
+) -> Result<(), String> {
     let mut upload_sessions = state.upload_sessions.lock().await;
     let session = upload_sessions
         .get_mut(&upload_id)
@@ -4851,86 +4945,12 @@ async fn upload_file_chunk(
         }
     }
 
+    // Mark session as complete when last chunk is received
     if is_last_chunk {
-        // Calculate Merkle root for integrity verification
-        let hasher = std::mem::replace(&mut session.hasher, sha2::Sha256::new());
-        let merkle_root = format!("{:x}", hasher.finalize());
-
-        // Create root block containing the list of chunk CIDs
-        let chunk_cids = std::mem::take(&mut session.chunk_cids);
-        let root_block_data = match serde_json::to_vec(&chunk_cids) {
-            Ok(data) => data,
-            Err(e) => {
-                return Err(format!("Failed to serialize chunk CIDs: {}", e));
-            }
-        };
-
-        // Generate CID for the root block
-        use dht::{Cid, Code, MultihashDigest, RAW_CODEC};
-        let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
-
-        // Store root block in Bitswap
-        let dht_opt = { state.dht.lock().await.as_ref().cloned() };
-        if let Some(dht) = &dht_opt {
-            if let Err(e) = dht.store_block(root_cid.clone(), root_block_data).await {
-                error!("failed to store root block: {}", e);
-                return Err(format!("failed to store root block: {}", e));
-            }
-        } else {
-            return Err("DHT not running".into());
-        }
-
-        // Create minimal metadata (without file_data to avoid DHT size limits)
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(std::time::Duration::from_secs(0))
-            .as_secs();
-
-        // Get the account address for the uploader
-        let account = get_active_account(&state).await?;
-
-        let metadata = dht::models::FileMetadata {
-            merkle_root: merkle_root, // Store Merkle root for verification
-            file_name: session.file_name.clone(),
-            file_size: session.file_size,
-            file_data: vec![], // Empty - data is stored in Bitswap blocks
-            seeders: vec![],
-            created_at,
-            mime_type: None,
-            is_encrypted: false,
-            encryption_method: None,
-            key_fingerprint: None,
-            cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
-            encrypted_key_bundle: None,
-            parent_hash: None,
-            is_root: true,
-            download_path: None,
-            price: session.price,
-            uploader_address: Some(account),
-            ftp_sources: None,
-            http_sources: None,
-            info_hash: None,
-            trackers: None,
-            ed2k_sources: None,
-        };
-
-        // Clean up session - rely entirely on Bitswap for distribution
-        // No local file storage needed since chunks are stored in Bitswap
-        let file_hash = root_cid.to_string();
-        upload_sessions.remove(&upload_id);
-        drop(upload_sessions);
-
-        // Publish to DHT
-        if let Some(dht) = dht_opt {
-            dht.publish_file(metadata.clone(), None).await?;
-        } else {
-            return Err("DHT not running".into());
-        }
-
-        Ok(Some(file_hash))
-    } else {
-        Ok(None)
+        session.is_complete = true;
     }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -5313,23 +5333,12 @@ async fn pump_file_transfer_events(app: tauri::AppHandle, ft: Arc<FileTransferSe
 }
 
 async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDownloadService>) {
-    let mut save_state_counter = 0;
     loop {
         let events = ms.drain_events(64).await;
         if events.is_empty() {
             if Arc::strong_count(&ms) <= 1 {
                 break;
             }
-
-            // Save download states every ~30 seconds (120 * 250ms)
-            save_state_counter += 1;
-            if save_state_counter >= 120 {
-                save_state_counter = 0;
-                if let Err(e) = ms.save_download_state().await {
-                    warn!("Failed to save download states: {}", e);
-                }
-            }
-
             sleep(Duration::from_millis(250)).await;
             continue;
         }
@@ -5607,10 +5616,6 @@ async fn get_file_seeders(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<Vec<String>, String> {
-    println!(
-        "🔍 DEBUG MAIN: get_file_seeders called with hash = {}",
-        file_hash
-    );
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
@@ -5618,10 +5623,6 @@ async fn get_file_seeders(
 
     if let Some(dht_service) = dht {
         let seeders = dht_service.get_seeders_for_file(&file_hash).await;
-        println!(
-            "🔍 DEBUG MAIN: get_file_seeders returning seeders = {:?}",
-            seeders
-        );
         Ok(seeders)
     } else {
         Err("DHT node is not running".to_string())
@@ -7024,7 +7025,6 @@ fn main() {
 
     // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
-    let dht_service_for_protocols = dht_service_arc.clone();
 
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -7084,10 +7084,7 @@ fn main() {
         manager.register(Box::new(bittorrent_protocol_handler));
 
         // Register ED2K and FTP handlers
-        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::with_dht_service(
-            "ed2k://|server|45.82.80.155|5687|/".to_string(),
-            dht_service_for_protocols,
-        );
+        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
         manager.register(Box::new(ed2k_handler));
 
         let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
@@ -7239,6 +7236,9 @@ fn main() {
 
             // BitTorrent handler for creating and seeding torrents
             bittorrent_handler: bittorrent_handler_arc,
+
+            // Chunk manager (will be initialized when DHT starts)
+            chunk_manager: Mutex::new(None),
 
             // Download restart service (will be initialized in setup)
             download_restart: Mutex::new(None),
@@ -7457,13 +7457,12 @@ fn main() {
             check_directory_exists,
             get_multiaddresses,
             clear_seed_list,
-            stop_seeding_file,
             get_full_network_stats,
             // Download restart commands
             start_download_restart,
             pause_download_restart,
             resume_download_restart,
-            get_download_status_restart,
+            get_download_status_restart
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -8370,42 +8369,7 @@ async fn clear_seed_list() -> Result<(), String> {
 fn check_directory_exists(path: String) -> Result<bool, String> {
     use std::path::Path;
     let p = Path::new(&path);
-
-    // If directory already exists, return true
-    if p.exists() && p.is_dir() {
-        return Ok(true);
-    }
-
-    // If it doesn't exist, try to create it
-    if !p.exists() {
-        match std::fs::create_dir_all(p) {
-            Ok(_) => {
-                info!("Created storage directory: {}", path);
-                return Ok(true);
-            }
-            Err(e) => {
-                warn!("Failed to create directory {}: {}", path, e);
-                return Ok(false);
-            }
-        }
-    }
-
-    // Path exists but is not a directory
-    Ok(false)
-}
-
-#[tauri::command]
-async fn stop_seeding_file(state: State<'_, AppState>, file_hash: String) -> Result<(), String> {
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-
-    if let Some(dht_service) = dht {
-        dht_service.stop_publishing_file(file_hash).await
-    } else {
-        Err("DHT service not available".to_string())
-    }
+    Ok(p.exists() && p.is_dir())
 }
 
 /// Event pump for DHT events, moved out of start_dht_node
