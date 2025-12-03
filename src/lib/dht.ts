@@ -1,8 +1,7 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppSettings } from "./stores";
-import { homeDir } from "@tauri-apps/api/path";
+import { join } from "@tauri-apps/api/path";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
 const __rep = ReputationStore.getInstance();
@@ -292,37 +291,16 @@ export class DhtService {
         resolvedStoragePath = fileMetadata.downloadPath;
         console.log("Using provided download path:", resolvedStoragePath);
       } else {
-        // Fallback to settings path (old behavior)
-        const stored = localStorage.getItem("chiralSettings");
-        let storagePath = "."; // Default fallback
-
-        if (stored) {
-          try {
-            const loadedSettings: AppSettings = JSON.parse(stored);
-            storagePath = loadedSettings.storagePath;
-          } catch (e) {
-            console.error("Failed to load settings:", e);
-          }
-        }
+        // Get canonical download directory from backend (single source of truth)
+        const downloadDir = await invoke<string>("get_download_directory");
 
         // Construct full file path
-        if (storagePath.startsWith("~")) {
-          const home = await homeDir();
-          resolvedStoragePath = storagePath.replace("~", home);
-        } else {
-          resolvedStoragePath = storagePath;
-        }
-        resolvedStoragePath += "/" + fileMetadata.fileName;
-        console.log("Using settings storage path:", resolvedStoragePath);
+        resolvedStoragePath = await join(downloadDir, fileMetadata.fileName);
+        console.log("Using resolved download path:", resolvedStoragePath);
       }
 
       // Ensure the directory exists before starting download
-      try {
-        await invoke("ensure_directory_exists", { path: resolvedStoragePath });
-      } catch (error) {
-        console.error("Failed to create download directory:", error);
-        throw new Error(`Failed to create download directory: ${error}`);
-      }
+      await invoke("ensure_directory_exists", { path: resolvedStoragePath });
 
       // IMPORTANT: Set up the event listener BEFORE invoking the backend
       // to avoid race condition where event fires before we're listening
