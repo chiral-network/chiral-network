@@ -474,6 +474,10 @@ function handleFirstRunComplete() {
         const storedSettings = localStorage.getItem("chiralSettings");
         if (storedSettings) {
           const parsed = JSON.parse(storedSettings);
+          // Ensure selectedProtocol always has a valid default
+          if (!parsed.selectedProtocol) {
+            parsed.selectedProtocol = "Bitswap";
+          }
           settings.update(prev => ({ ...prev, ...parsed }));
         }
       } catch (error) {

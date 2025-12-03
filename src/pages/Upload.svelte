@@ -161,8 +161,13 @@
   let lastChecked: Date | null = null;
   let isUploading = false;
 
-  // Protocol selection state - read from settings
-  $: selectedProtocol = $settings.selectedProtocol;
+  // Protocol selection state - read from settings with Bitswap fallback
+  $: selectedProtocol = $settings.selectedProtocol || "Bitswap";
+  
+  // Ensure settings store always has a valid protocol (defensive fix)
+  $: if (!$settings.selectedProtocol) {
+    settings.update(s => ({ ...s, selectedProtocol: "Bitswap" }));
+  }
 
   // Encrypted sharing state
   let useEncryptedSharing = false;
@@ -1022,7 +1027,6 @@
       return;
     }
 
-    let duplicateCount = 0;
     let addedCount = 0;
 
     // Unified upload flow for all protocols
@@ -1174,7 +1178,7 @@
         });
 
         if (existed) {
-          duplicateCount++;
+          // File was updated, not skipped - don't count as duplicate
           showToast(
             tr("upload.fileUpdated", { values: { name: fileName } }),
             "info",
@@ -1199,13 +1203,6 @@
           "error",
         );
       }
-    }
-
-    if (duplicateCount > 0) {
-      showToast(
-        tr("upload.duplicateSkipped", { values: { count: duplicateCount } }),
-        "warning",
-      );
     }
 
     if (addedCount > 0) {
@@ -1791,6 +1788,21 @@
                                 />
                               </button>
                             </div>
+                          {/if}
+                          </div>
+                        </div>
+
+                        <!-- Price and Actions -->
+                        <div class="flex items-center gap-2">
+                          <!-- Price Badge -->
+                          {#if coalescedFile.averagePrice > 0}
+                            <div
+                              class="flex items-center gap-1.5 bg-green-500/10 text-green-600 border border-green-500/20 font-medium px-2.5 py-1 rounded-md"
+                              title={`Average price across ${coalescedFile.protocols.length} protocol${coalescedFile.protocols.length > 1 ? 's' : ''}`}
+                            >
+                              <DollarSign class="h-3.5 w-3.5" />
+                              <span class="text-sm"
+                                  >{coalescedFile.averagePrice.toFixed(4)} Chiral</span>
                           {/if}
                         {/each}
                       </div>

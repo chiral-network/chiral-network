@@ -105,10 +105,12 @@ import type { FileMetadata } from '$lib/dht'
           files.update(f => f.map(file => {
             if (file.hash === progress.fileHash && file.status === 'downloading') {
               const percentage = MultiSourceDownloadService.getCompletionPercentage(progress);
+              // If download is complete (100%), set status to completed
+              const isComplete = percentage >= 100;
               return {
                 ...file,
                 progress: percentage,
-                status: 'downloading' as const,
+                status: isComplete ? 'completed' as const : 'downloading' as const,
                 speed: MultiSourceDownloadService.formatSpeed(progress.downloadSpeedBps),
                 eta: MultiSourceDownloadService.formatETA(progress.etaSeconds)
               };
@@ -224,11 +226,13 @@ import type { FileMetadata } from '$lib/dht'
                     }
                     
                     const percentage = (newSize / progress.totalChunks) * 100;
-                    
+                    // If download is complete (100% progress), set status to completed
+                    const isComplete = percentage >= 100;
+
                     return {
                         ...file,
                         progress: percentage,
-                        status: 'downloading' as const,
+                        status: isComplete ? 'completed' as const : 'downloading' as const,
                         downloadedChunks: Array.from(downloadedChunks),
                         totalChunks: progress.totalChunks,
                         downloadStartTime: bitswapStartTime,
@@ -308,10 +312,12 @@ import type { FileMetadata } from '$lib/dht'
 
             // Update file status - update files that are actively downloading OR might be stuck
             // Allow completion for downloading, paused, or queued files to handle edge cases
+            // Also update completed files that don't have downloadPath set yet
             files.update(f => f.map(file => {
                 const hashMatches = file.hash === metadata.merkleRoot;
                 const isActiveDownload = ['downloading', 'paused', 'queued'].includes(file.status);
                 const isStuck = file.status === 'downloading' && file.progress === 0;
+                const isCompletedWithoutPath = file.status === 'completed' && !file.downloadPath;
 
                 diagnosticLogger.info('Download', 'Checking file for completion update', {
                     fileName: file.name,
@@ -321,14 +327,18 @@ import type { FileMetadata } from '$lib/dht'
                     hashMatches,
                     isActiveDownload,
                     isStuck,
-                    willUpdate: hashMatches && (isActiveDownload || isStuck)
+                    isCompletedWithoutPath,
+                    willUpdate: hashMatches && (isActiveDownload || isStuck || isCompletedWithoutPath)
                 });
 
-                if (file.hash === metadata.merkleRoot && (isActiveDownload || isStuck)) {
-                    diagnosticLogger.info('Download', 'Updating file status to completed', {
+                if (file.hash === metadata.merkleRoot && (isActiveDownload || isStuck || isCompletedWithoutPath)) {
+                    const reason = isStuck ? 'stuck download recovery' :
+                                   isCompletedWithoutPath ? 'setting download path for completed file' :
+                                   'normal completion';
+                    diagnosticLogger.info('Download', 'Updating file', {
                         fileName: file.name,
                         downloadPath: metadata.downloadPath,
-                        reason: isStuck ? 'stuck download recovery' : 'normal completion'
+                        reason
                     });
                     return {
                         ...file,
@@ -381,7 +391,7 @@ import type { FileMetadata } from '$lib/dht'
           // Only update files that are actively downloading, not seeding files with the same hash
           files.update(f => f.map(file =>
             file.hash === data.fileHash && file.status === 'downloading'
-              ? { ...file, status: 'downloading', progress: data.progress }
+              ? { ...file, status: data.progress >= 100 ? 'completed' : 'downloading', progress: data.progress }
               : file
           ));
         });
@@ -1876,16 +1886,15 @@ async function loadAndResumeDownloads() {
     ))
   }
 
-  async function showInFolder(fileId: string) {
-    const file = $files.find(f => f.id === fileId);
-    if (file && file.downloadPath) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('show_in_folder', { path: file.downloadPath });
-      } catch (error) {
-        errorLogger.fileOperationError('Show file in folder', error instanceof Error ? error.message : String(error));
-        showToast('Failed to open file location', 'error');
-      }
+  async function showInFolder(_fileId: string) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      // Always open the storage directory set by user in Settings
+      const storagePath = await invoke('get_download_directory');
+      await invoke('show_in_folder', { path: storagePath });
+    } catch (error) {
+      errorLogger.fileOperationError('Show storage folder', error instanceof Error ? error.message : String(error));
+      showToast('Failed to open storage folder', 'error');
     }
   }
 
