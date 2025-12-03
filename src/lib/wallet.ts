@@ -352,11 +352,14 @@ export class WalletService {
       }
 
       // Update total count AND rewards together to keep them consistent
-      // During active mining, don't override with potentially inconsistent scan data
+      // During active mining, don't override - the backend counter is the source of truth
+      // The backend counter is initialized from accurateTotals and incremented when new blocks are mined
       const reward = get(blockReward);
       const currentMiningState = get(miningState);
 
       if (!currentMiningState.isMining) {
+        // Use the backend counter (totalBlockCount from get_blocks_mined) as the source of truth
+        // This counter is initialized from accurateTotals and incremented during mining
         miningState.update((state) => ({
           ...state,
           blocksFound: totalBlockCount,

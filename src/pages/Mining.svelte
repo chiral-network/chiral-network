@@ -104,17 +104,37 @@
   $: profitMargin = dailyRevenue > 0 ? ((dailyProfit / dailyRevenue) * 100) : 0
   $: isProfitable = dailyProfit > 0
 
-  // Sync mining state with accurate totals when available
-  // This ensures "mined rewards" display matches actual blockchain data
-  $: if ($accurateTotals && !$miningState.isMining) {
-    const reward = $blockReward || 2;
-    if ($miningState.blocksFound !== $accurateTotals.blocksMined) {
-      miningState.update((state) => ({
-        ...state,
-        blocksFound: $accurateTotals.blocksMined,
-        totalRewards: $accurateTotals.blocksMined * reward,
-      }));
-    }
+  // Track if we've synced with accurate totals to avoid repeated fetches
+  let hasSyncedWithAccurateTotals = false;
+
+  // Reset sync flag when accurateTotals is cleared (account change/logout)
+  $: if (!$accurateTotals) {
+    hasSyncedWithAccurateTotals = false;
+  }
+
+  // Re-fetch blocks count from backend when accurateTotals is calculated
+  // This ensures the Mining page picks up the initialized backend counter
+  $: if ($accurateTotals && !hasSyncedWithAccurateTotals && !$miningState.isMining && isTauri) {
+    hasSyncedWithAccurateTotals = true;
+    // Re-fetch from backend to get the initialized count
+    (async () => {
+      try {
+        const currentWallet = get(wallet);
+        if (currentWallet?.address) {
+          const blocksCount = await invoke<number>('get_blocks_mined', {
+            address: currentWallet.address
+          });
+          const reward = get(blockReward) || 2;
+          miningState.update((state) => ({
+            ...state,
+            blocksFound: blocksCount,
+            totalRewards: blocksCount * reward,
+          }));
+        }
+      } catch (error) {
+        console.error('[Mining Page] Failed to sync blocks count after accurate totals:', error);
+      }
+    })();
   }
 
   function calculateDailyBlocks(hashRate: number, networkDiff: number): number {
