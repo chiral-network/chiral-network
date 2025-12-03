@@ -25,8 +25,8 @@ pub mod reassembly;
 
 // Re-export modules from the lib crate
 use chiral_network::{
-    analytics, bandwidth, bittorrent_handler, download_restart,
-    dht, ed2k_client, encryption, file_transfer,
+    analytics, bandwidth, bittorrent_handler, download_restart, download_scheduler, download_source,
+    dht, ed2k_client, encryption, file_transfer, ftp_client, peer_cache,
     http_download, keystore, logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
@@ -1137,7 +1137,13 @@ async fn get_miner_status() -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn get_blockchain_sync_status() -> Result<ethereum::SyncStatus, String> {
+async fn get_blockchain_sync_status(state: State<'_, AppState>) -> Result<ethereum::SyncStatus, String> {
+    // Only query sync status if Geth is actually running
+    let geth = state.geth.lock().await;
+    if !geth.is_running() {
+        return Err("Geth node is not running".to_string());
+    }
+
     ethereum::get_sync_status().await
 }
 
@@ -1417,13 +1423,6 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
-    // Create a ChunkManager instance
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {}", e))?;
-    let chunk_storage_path = app_data_dir.join("chunk_storage");
-    let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
 
     // --- AutoRelay is now disabled by default (can be enabled via config or env var)
     // Disable AutoRelay on bootstrap nodes (and via env var)
@@ -1477,7 +1476,7 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
-        Some(chunk_manager), // Pass the chunk manager
+        None, // Chunk manager will be set later for multi-source downloads
         chunk_size_kb,
         cache_size_mb,
         /* enable AutoRelay (disabled by default) */ final_enable_autorelay,
@@ -1505,6 +1504,22 @@ async fn start_dht_node(
 
     // DHT node is already running in a spawned background task
     let dht_arc = Arc::new(dht_service);
+
+    // Load peer cache and attempt reconnection to known peers
+    let dht_for_cache = dht_arc.clone();
+    tokio::spawn(async move {
+        match dht_for_cache.load_peer_cache().await {
+            Ok(cached_peers) => {
+                if !cached_peers.is_empty() {
+                    info!("Attempting to reconnect to {} cached peers", cached_peers.len());
+                    dht_for_cache.reconnect_cached_peers(cached_peers).await;
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load peer cache: {}", e);
+            }
+        }
+    });
 
     // Spawn the event pump
     let app_handle = app.clone();
@@ -1619,11 +1634,19 @@ async fn start_dht_node(
                         }
                     }
                     DhtEvent::DownloadedFile(metadata) => {
-                        let payload = serde_json::json!(metadata);
+                        let payload = serde_json::json!(metadata.clone());
                         let _ = app_handle.emit("file_content", payload);
+
+                        let file_size = metadata.file_size;
+
+                        if let Err(err) =
+                            dht_clone_for_pump.promote_downloaded_file(metadata).await
+                        {
+                            warn!("Failed to promote downloaded file to seeder: {}", err);
+                        }
                         // Update analytics: record download completion and bandwidth
                         analytics_arc.record_download_completed().await;
-                        analytics_arc.record_download(metadata.file_size).await;
+                        analytics_arc.record_download(file_size).await;
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
@@ -1749,6 +1772,12 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     };
 
     if let Some(dht) = dht {
+        // Save peer cache before shutdown for faster startup next time
+        if let Err(e) = dht.save_peer_cache().await {
+            warn!("Failed to save peer cache: {}", e);
+            // Continue with shutdown even if cache save fails
+        }
+        
         let (last_enabled, last_disabled) = dht.autorelay_history().await;
         {
             let mut guard = state.autorelay_last_enabled.lock().await;
@@ -3338,6 +3367,14 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc {
+        // Create ChunkManager instance
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Could not get app data directory: {}", e))?;
+        let chunk_storage_path = app_data_dir.join("chunk_storage");
+        let chunk_manager = Arc::new(ChunkManager::new(chunk_storage_path));
+
         // Create transfer event bus for unified event emission
         let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
         let multi_source_service = MultiSourceDownloadService::new(
@@ -3346,8 +3383,14 @@ async fn start_file_transfer_service(
             state.bittorrent_handler.clone(),
             transfer_event_bus,
             state.analytics.clone(),
+            chunk_manager.clone(),
         );
         let multi_source_arc = Arc::new(multi_source_service);
+
+        // Load any persisted download states
+        if let Err(e) = multi_source_arc.load_download_states().await {
+            tracing::warn!("Failed to load persisted download states: {}", e);
+        }
 
         {
             let mut multi_source_guard = state.multi_source_download.lock().await;
@@ -3622,6 +3665,7 @@ async fn upload_file_to_network(
                                 file_name: Some(original_file_name.clone()),
                                 sources: None,
                                 timeout: None,
+                                chunk_hashes: None,
                             }]),
                             download_path: None,
                         };
@@ -5130,12 +5174,23 @@ async fn pump_file_transfer_events(app: tauri::AppHandle, ft: Arc<FileTransferSe
 }
 
 async fn pump_multi_source_events(app: tauri::AppHandle, ms: Arc<MultiSourceDownloadService>) {
+    let mut save_state_counter = 0;
     loop {
         let events = ms.drain_events(64).await;
         if events.is_empty() {
             if Arc::strong_count(&ms) <= 1 {
                 break;
             }
+
+            // Save download states every ~30 seconds (120 * 250ms)
+            save_state_counter += 1;
+            if save_state_counter >= 120 {
+                save_state_counter = 0;
+                if let Err(e) = ms.save_download_state().await {
+                    warn!("Failed to save download states: {}", e);
+                }
+            }
+
             sleep(Duration::from_millis(250)).await;
             continue;
         }
@@ -6819,6 +6874,7 @@ fn main() {
 
     // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
+    let dht_service_for_protocols = dht_service_arc.clone();
 
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
@@ -6874,7 +6930,10 @@ fn main() {
         manager.register(Box::new(bittorrent_protocol_handler));
 
         // Register ED2K and FTP handlers
-        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
+        let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::with_dht_service(
+            "ed2k://|server|45.82.80.155|5687|/".to_string(),
+            dht_service_for_protocols,
+        );
         manager.register(Box::new(ed2k_handler));
 
         let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
@@ -7244,12 +7303,13 @@ fn main() {
             check_directory_exists,
             get_multiaddresses,
             clear_seed_list,
+            stop_seeding_file,
             get_full_network_stats,
             // Download restart commands
             start_download_restart,
             pause_download_restart,
             resume_download_restart,
-            get_download_status_restart
+            get_download_status_restart,
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -7578,6 +7638,18 @@ fn main() {
                             proxies_arc_for_pump,
                             relay_reputation_arc_for_pump,
                         ).await;
+                    });
+                }
+            }
+
+            // Set app handle on bandwidth controller for event emission
+            {
+                let app_handle = app.handle().clone();
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    let bandwidth_controller = state.bandwidth.clone();
+                    let app_handle_for_bandwidth = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        bandwidth_controller.set_app_handle(app_handle_for_bandwidth).await;
                     });
                 }
             }
@@ -8137,8 +8209,49 @@ async fn clear_seed_list() -> Result<(), String> {
 fn check_directory_exists(path: String) -> Result<bool, String> {
     use std::path::Path;
     let p = Path::new(&path);
-    Ok(p.exists() && p.is_dir())
+    
+    // If directory already exists, return true
+    if p.exists() && p.is_dir() {
+        return Ok(true);
+    }
+    
+    // If it doesn't exist, try to create it
+    if !p.exists() {
+        match std::fs::create_dir_all(p) {
+            Ok(_) => {
+                info!("Created storage directory: {}", path);
+                return Ok(true);
+            }
+            Err(e) => {
+                warn!("Failed to create directory {}: {}", path, e);
+                return Ok(false);
+            }
+        }
+    }
+    
+    // Path exists but is not a directory
+    Ok(false)
 }
+
+
+#[tauri::command]
+async fn stop_seeding_file(
+    state: State<'_, AppState>,
+    file_hash: String,
+) -> Result<(), String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht {
+        dht_service.stop_publishing_file(file_hash).await
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+
 
 /// Event pump for DHT events, moved out of start_dht_node
 async fn pump_dht_events(
