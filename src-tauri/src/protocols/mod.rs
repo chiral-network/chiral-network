@@ -37,6 +37,8 @@ pub mod ftp;
 pub mod ed2k;
 pub mod seeding;
 pub mod detection;
+pub mod options;
+pub mod api;
 
 // Re-export commonly used types
 pub use traits::{
@@ -55,15 +57,25 @@ pub use traits::{
     SimpleProtocolManager,
 };
 
+// Re-export unified API types
+pub use options::{
+    FileTransferOptions,
+    TransferProgress,
+    TransferResult,
+    TransferStatus,
+    DetectionPreferences,
+};
+
+pub use api::ActiveTransfer;
+
 use crate::protocols::seeding::{SeedingEntry, SeedingRegistry};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 use detection::ProtocolDetector;
-
-// Re-export detection types for external use
-pub use detection::DetectionPreferences;
 
 // Re-export legacy trait with the old name for backward compatibility
 // This allows existing code like bittorrent_handler.rs to continue working
@@ -82,8 +94,11 @@ pub use ed2k::Ed2kProtocolHandler;
 pub struct ProtocolManager {
     handlers: Vec<Box<dyn ProtocolHandler>>,
     simple_handlers: Vec<std::sync::Arc<dyn SimpleProtocolHandler>>,
-    seeding_registry: SeedingRegistry, // <-- ADDED
-    detector: ProtocolDetector, // <-- ADDED
+    seeding_registry: SeedingRegistry,
+    detector: ProtocolDetector,
+    /// Active file transfers (downloads and uploads)
+    /// Maps transfer_id -> ActiveTransfer
+    pub(crate) active_transfers: Arc<RwLock<HashMap<String, ActiveTransfer>>>,
 }
 
 impl ProtocolManager {
@@ -92,8 +107,9 @@ impl ProtocolManager {
         Self {
             handlers: Vec::new(),
             simple_handlers: Vec::new(),
-            seeding_registry: SeedingRegistry::new(), // <-- INITIALIZED
-            detector: ProtocolDetector::new(),   // <-- ADDED
+            seeding_registry: SeedingRegistry::new(),
+            detector: ProtocolDetector::new(),
+            active_transfers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
