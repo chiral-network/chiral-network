@@ -236,7 +236,6 @@ export class WalletService {
 
     // Skip if we're restoring an account
     if (this.isRestoringAccount) {
-      console.log("[refreshTransactions] Skipping - account is being restored");
       return;
     }
 
@@ -514,7 +513,6 @@ export class WalletService {
 
     // Skip if we're restoring an account
     if (this.isRestoringAccount) {
-      console.log("[refreshBalance] Skipping - account is being restored");
       return;
     }
 
@@ -682,8 +680,8 @@ export class WalletService {
       // Fetch transactions for this range
       const txHistory = (await invoke("get_transaction_history_range", {
         address: accountAddress,
-        from_block: fromBlock,
-        to_block: toBlock,
+        fromBlock: fromBlock,
+        toBlock: toBlock,
       })) as Array<{
         hash: string;
         from: string;
@@ -831,8 +829,8 @@ export class WalletService {
       // Fetch mining blocks for this range
       const miningBlocks = (await invoke("get_mined_blocks_range", {
         address: accountAddress,
-        from_block: fromBlock,
-        to_block: toBlock,
+        fromBlock: fromBlock,
+        toBlock: toBlock,
       })) as Array<{
         hash: string;
         timestamp: number;
