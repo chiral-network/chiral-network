@@ -1789,8 +1789,6 @@
                               </button>
                             </div>
                           {/if}
-                          </div>
-                        </div>
 
                         <!-- Price and Actions -->
                         <div class="flex items-center gap-2">
@@ -1803,7 +1801,9 @@
                               <DollarSign class="h-3.5 w-3.5" />
                               <span class="text-sm"
                                   >{coalescedFile.averagePrice.toFixed(4)} Chiral</span>
+                            </div>
                           {/if}
+                        </div>
                         {/each}
                       </div>
 
