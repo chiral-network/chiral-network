@@ -1137,7 +1137,13 @@ async fn get_miner_status() -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn get_blockchain_sync_status() -> Result<ethereum::SyncStatus, String> {
+async fn get_blockchain_sync_status(state: State<'_, AppState>) -> Result<ethereum::SyncStatus, String> {
+    // Only query sync status if Geth is actually running
+    let geth = state.geth.lock().await;
+    if !geth.is_running() {
+        return Err("Geth node is not running".to_string());
+    }
+
     ethereum::get_sync_status().await
 }
 
