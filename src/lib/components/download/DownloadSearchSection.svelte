@@ -983,7 +983,6 @@
   bind:peers={availablePeers}
   bind:mode={peerSelectionMode}
   bind:protocol={selectedProtocol}
-  autoSelectionInfo={autoSelectionInfo}
   isTorrent={pendingTorrentType !== null}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}
