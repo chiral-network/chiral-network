@@ -464,7 +464,7 @@
             <span class="text-muted-foreground">Price</span>
             <span class="font-semibold {currentPrice && currentPrice > 0 ? 'text-emerald-600' : 'text-muted-foreground'}">
               {#if currentPrice && currentPrice > 0}
-                {currentPrice.toFixed(8)} Chiral
+                {currentPrice.toFixed(4)} Chiral
               {:else}
                 Free
               {/if}
@@ -586,7 +586,7 @@
           <div class="p-4 bg-blue-500/10 rounded-lg border-2 border-blue-500/30">
             <div class="text-center">
               <p class="text-sm text-muted-foreground mb-1">Price</p>
-              <p class="text-2xl font-bold text-blue-600">{currentPrice.toFixed(8)} Chiral</p>
+              <p class="text-2xl font-bold text-blue-600">{currentPrice.toFixed(4)} Chiral</p>
             </div>
           </div>
           {#if isSeeding}
@@ -616,8 +616,8 @@
       <p class="text-sm text-muted-foreground text-center mb-6">
         {#if currentPrice && currentPrice > 0}
           {isSeeding
-            ? `Do you want to download a local copy for ${currentPrice.toFixed(8)} Chiral?`
-            : `You will be charged ${currentPrice.toFixed(8)} Chiral. Continue?`}
+            ? `Do you want to download a local copy for ${currentPrice.toFixed(4)} Chiral?`
+            : `You will be charged ${currentPrice.toFixed(4)} Chiral. Continue?`}
         {:else}
           {isSeeding
             ? 'Do you want to download a local decrypted copy?'
@@ -661,18 +661,18 @@
       <div class="space-y-4 mb-6">
         <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
           <span class="text-sm text-muted-foreground">Your Balance</span>
-          <span class="text-lg font-bold">{userBalance.toFixed(8)} Chiral</span>
+          <span class="text-lg font-bold">{userBalance.toFixed(4)} Chiral</span>
         </div>
 
         <div class="flex justify-between items-center p-3 bg-blue-500/10 rounded-lg border border-blue-500/30">
           <span class="text-sm text-muted-foreground">File Price</span>
-          <span class="text-lg font-bold text-blue-600">{(currentPrice || 0).toFixed(8)} Chiral</span>
+          <span class="text-lg font-bold text-blue-600">{(currentPrice || 0).toFixed(4)} Chiral</span>
         </div>
 
         <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg border-2 border-border">
           <span class="text-sm font-semibold">Balance After Purchase</span>
           <span class="text-lg font-bold {canAfford ? 'text-emerald-600' : 'text-red-600'}">
-            {(userBalance - (currentPrice || 0)).toFixed(8)} Chiral
+            {(userBalance - (currentPrice || 0)).toFixed(4)} Chiral
           </span>
         </div>
       </div>

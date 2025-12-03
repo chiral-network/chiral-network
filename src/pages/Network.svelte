@@ -9,15 +9,17 @@
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import { peers, networkStats, networkStatus, userLocation, settings } from '$lib/stores'
+  import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Wifi, UserMinus, Square, Play, Download, AlertCircle } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
+  import { get } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
-  import { dhtService } from '$lib/dht'
+  import { dhtService, type DhtHealth as DhtHealthSnapshot, type NatConfidence, type NatReachabilityState } from '$lib/dht'
   import { getStatus as fetchGethStatus, type GethStatus } from '$lib/services/gethService'
   import { resetConnectionAttempts } from '$lib/dhtHelpers'
-  import type { DhtHealth, NatConfidence, NatReachabilityState } from '$lib/dht'
+  import { relayErrorService } from '$lib/services/relayErrorService'
   import { Clipboard } from "lucide-svelte"
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
@@ -25,6 +27,7 @@
   import { SignalingService } from '$lib/services/signalingService';
   import { createWebRTCSession } from '$lib/services/webrtcService';
   import { peerDiscoveryStore, startPeerEventStream, type PeerDiscovery } from '$lib/services/peerEventService';
+  import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte'
   import type { GeoRegionConfig } from '$lib/geo';
   import { calculateRegionDistance } from '$lib/services/geolocation';
   import { diagnosticLogger, errorLogger, networkLogger } from '$lib/diagnostics/logger';
@@ -100,8 +103,9 @@
   let dhtBootstrapNode = 'Loading bootstrap nodes...'
   let dhtEvents: string[] = []
   let dhtPeerCount = 0
-  let dhtHealth: DhtHealth | null = null
+  let dhtHealth: DhtHealthSnapshot | null = null
   let dhtError: string | null = null
+  let autorelayToggling = false
   let connectionAttempts = 0
   let dhtPollInterval: number | undefined
   let natStatusUnlisten: (() => void) | null = null
@@ -269,6 +273,48 @@
     return new Date(epoch * 1000).toLocaleString()
   }
 
+  function persistSettingsPatch(patch: Partial<AppSettings>): AppSettings {
+    let storedSettings: Partial<AppSettings> = {}
+    try {
+      storedSettings = JSON.parse(localStorage.getItem('chiralSettings') || '{}')
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to parse stored settings', { error: error instanceof Error ? error.message : String(error) })
+    }
+
+    const merged = { ...get(settings), ...storedSettings, ...patch } as AppSettings
+    localStorage.setItem('chiralSettings', JSON.stringify(merged))
+    settings.set(merged)
+    return merged
+  }
+
+  async function setAutorelay(enabled: boolean) {
+    if (autorelayToggling) return
+    autorelayToggling = true
+    try {
+      persistSettingsPatch({ enableAutorelay: enabled })
+      if (isTauri) {
+        const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
+        if (isRunning) {
+          if (dhtPollInterval) {
+            clearInterval(dhtPollInterval)
+            dhtPollInterval = undefined
+          }
+          await stopDht()
+          if (!dhtBootstrapNodes.length) {
+            await fetchBootstrapNodes()
+          }
+          await startDht()
+        }
+      }
+      showToast(enabled ? 'AutoRelay enabled' : 'AutoRelay disabled', 'success')
+    } catch (error) {
+      errorLogger.networkError(`Failed to toggle AutoRelay: ${error instanceof Error ? error.message : String(error)}`)
+      showToast('Failed to update AutoRelay setting', 'error')
+    } finally {
+      autorelayToggling = false
+    }
+  }
+
   async function copyObservedAddr(addr: string) {
     try {
       await navigator.clipboard.writeText(addr)
@@ -337,16 +383,17 @@
         const payload = event.payload as NatStatusPayload
         if (!payload) return
         showNatToast(payload)
-        try {
-          const snapshot = await dhtService.getHealth()
-          if (snapshot) {
-            dhtHealth = snapshot
-            lastNatState = snapshot.reachability
-            lastNatConfidence = snapshot.reachabilityConfidence
-          }
-        } catch (error) {
-          errorLogger.networkError(`Failed to refresh NAT status: ${error instanceof Error ? error.message : String(error)}`);
+      try {
+        const snapshot = await dhtService.getHealth()
+        if (snapshot) {
+          dhtHealth = snapshot
+          lastNatState = snapshot.reachability
+          lastNatConfidence = snapshot.reachabilityConfidence
+          relayErrorService.syncFromHealthSnapshot(snapshot)
         }
+      } catch (error) {
+        errorLogger.networkError(`Failed to refresh NAT status: ${error instanceof Error ? error.message : String(error)}`);
+      }
       })
     } catch (error) {
       errorLogger.networkError(`Failed to subscribe to NAT status updates: ${error instanceof Error ? error.message : String(error)}`);
@@ -398,6 +445,7 @@
           if (health) {
             dhtHealth = health
             dhtPeerCount = health.peerCount
+            relayErrorService.syncFromHealthSnapshot(health)
           }
 
           // Set status based on peer count
@@ -550,6 +598,14 @@
       return
     }
 
+    const applyHealth = (health: DhtHealthSnapshot) => {
+      dhtHealth = health
+      dhtPeerCount = health.peerCount
+      lastNatState = health.reachability
+      lastNatConfidence = health.reachabilityConfidence
+      relayErrorService.syncFromHealthSnapshot(health)
+    }
+
     dhtPollInterval = setInterval(async () => {
       try {
         // Only call getEvents if running in Tauri mode
@@ -574,13 +630,10 @@
         let peerCount = dhtPeerCount
         const health = await dhtService.getHealth()
         if (health) {
-          dhtHealth = health
+          applyHealth(health)
           peerCount = health.peerCount
           // Fetch public multiaddresses
           await fetchPublicMultiaddrs()
-          dhtPeerCount = peerCount
-          lastNatState = health.reachability
-          lastNatConfidence = health.reachabilityConfidence
         } else {
           peerCount = await dhtService.getPeerCount()
           dhtPeerCount = peerCount
@@ -710,16 +763,17 @@
         dhtPeerCount = peerCount
         
         // Also restore health snapshot
-        try {
-          const health = await dhtService.getHealth()
-          if (health) {
-            dhtHealth = health
-            lastNatState = health.reachability
-            lastNatConfidence = health.reachabilityConfidence
+          try {
+            const health = await dhtService.getHealth()
+            if (health) {
+              dhtHealth = health
+              lastNatState = health.reachability
+              lastNatConfidence = health.reachabilityConfidence
+              relayErrorService.syncFromHealthSnapshot(health)
+            }
+          } catch (healthError) {
+            diagnosticLogger.debug('Network', 'Could not fetch health snapshot', { error: healthError instanceof Error ? healthError.message : String(healthError) });
           }
-        } catch (healthError) {
-          diagnosticLogger.debug('Network', 'Could not fetch health snapshot', { error: healthError instanceof Error ? healthError.message : String(healthError) });
-        }
         
         // Set status based on peer count - polling will handle dynamic updates
         dhtStatus = peerCount > 0 ? 'connected' : 'connecting'
@@ -1768,80 +1822,34 @@
             </div>
           </div>
 
-          <!-- AutoRelay Status -->
-          <div class="pt-4 space-y-4 border-t border-muted/40">
-            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
+          {#if dhtHealth}
+            <div class="pt-4 space-y-3 border-t border-muted/40">
+              <div class="flex items-center justify-between">
                 <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.title')}</p>
-                <div class="mt-2 flex items-center gap-2">
-                  {#if dhtHealth?.autorelayEnabled}
-                    <Badge class="bg-green-600">{$t('network.dht.relay.enabled')}</Badge>
-                  {:else}
-                    <Badge class="bg-gray-500">{$t('network.dht.relay.disabled')}</Badge>
-                  {/if}
-                  {#if dhtHealth?.activeRelayPeerId}
-                    <span class="text-xs font-mono text-muted-foreground">{dhtHealth.activeRelayPeerId.slice(0, 12)}...</span>
-                  {/if}
+                <Badge class={dhtHealth.autorelayEnabled ? 'bg-green-600' : 'bg-gray-500'}>
+                  {dhtHealth.autorelayEnabled ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
+                </Badge>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.enabledAt')}</p>
+                  <p class="text-sm font-medium mt-1">
+                    {dhtHealth.lastAutorelayEnabledAt
+                      ? formatHealthTimestamp(dhtHealth.lastAutorelayEnabledAt)
+                      : $t('network.dht.relay.neverEnabled')}
+                  </p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.disabledAt')}</p>
+                  <p class="text-sm font-medium mt-1">
+                    {dhtHealth.lastAutorelayDisabledAt
+                      ? formatHealthTimestamp(dhtHealth.lastAutorelayDisabledAt)
+                      : $t('network.dht.relay.neverDisabled')}
+                  </p>
                 </div>
               </div>
-              {#if dhtHealth?.autorelayEnabled}
-                <div class="text-sm text-muted-foreground space-y-1 text-right">
-                  {#if dhtHealth?.activeRelayPeerId}
-                    <p class="text-green-600">{$t('network.dht.relay.status')}: {dhtHealth.relayReservationStatus ?? $t('network.dht.relay.pending')}</p>
-                  {:else}
-                    <p class="text-yellow-600">{$t('network.dht.relay.noPeer')}</p>
-                  {/if}
-                </div>
-              {/if}
             </div>
 
-            {#if dhtHealth}
-              <div class="bg-muted/40 rounded-lg p-3 border border-dashed border-muted/60">
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.timeline')}</p>
-                <div class="mt-2 grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <p class="text-xs text-muted-foreground">{$t('network.dht.relay.enabledAt')}</p>
-                    <p class="text-sm font-medium">
-                      {dhtHealth.lastAutorelayEnabledAt
-                        ? formatHealthTimestamp(dhtHealth.lastAutorelayEnabledAt)
-                        : $t('network.dht.relay.neverEnabled')}
-                    </p>
-                  </div>
-                  <div>
-                    <p class="text-xs text-muted-foreground">{$t('network.dht.relay.disabledAt')}</p>
-                    <p class="text-sm font-medium">
-                      {dhtHealth.lastAutorelayDisabledAt
-                        ? formatHealthTimestamp(dhtHealth.lastAutorelayDisabledAt)
-                        : $t('network.dht.relay.neverDisabled')}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            {/if}
-
-            {#if dhtHealth?.autorelayEnabled}
-              <div class="grid gap-3 md:grid-cols-2">
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.activePeer')}</p>
-                  <p class="text-sm font-mono mt-1">{dhtHealth?.activeRelayPeerId ?? $t('network.dht.relay.noPeer')}</p>
-                </div>
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.renewals')}</p>
-                  <p class="text-sm font-medium mt-1">{dhtHealth?.reservationRenewals ?? 0}</p>
-                </div>
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.lastSuccess')}</p>
-                  <p class="text-sm font-medium mt-1">{formatNatTimestamp(dhtHealth?.lastReservationSuccess ?? null)}</p>
-                </div>
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.evictions')}</p>
-                  <p class="text-sm font-medium mt-1">{dhtHealth?.reservationEvictions ?? 0}</p>
-                </div>
-              </div>
-            {/if}
-          </div>
-
-          {#if dhtHealth}
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
               <div class="bg-muted/40 rounded-lg p-3">
                 <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastBootstrap')}</p>
@@ -1994,6 +2002,49 @@
   <div class="mt-6">
     <GeoDistributionCard />
   </div>
+
+  <!-- Relay health & monitoring (DHT snapshot) -->
+  <Card class="p-6 mt-6">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div>
+        <p class="text-xs uppercase text-muted-foreground">AutoRelay</p>
+        <p class="text-sm text-muted-foreground">{ $settings.enableAutorelay ? 'Enabled' : 'Disabled' }</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <Button
+          size="sm"
+          on:click={() => setAutorelay(true)}
+          disabled={autorelayToggling || $settings.enableAutorelay}
+        >
+          Enable AutoRelay
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          on:click={() => setAutorelay(false)}
+          disabled={autorelayToggling || !$settings.enableAutorelay}
+        >
+          Disable AutoRelay
+        </Button>
+      </div>
+    </div>
+    {#if dhtHealth}
+      {#if $settings.enableAutorelay && dhtStatus === 'connected'}
+        <div>
+          <h3 class="text-lg font-semibold text-foreground mb-3">{$t('relay.monitoring.title')}</h3>
+          <RelayErrorMonitor />
+        </div>
+      {:else}
+        <div class="text-sm text-muted-foreground">
+          Enable auto-relay and connect to the DHT to view relay monitoring details.
+        </div>
+      {/if}
+    {:else}
+      <div class="mt-4 rounded-lg border border-dashed border-muted/40 bg-muted/20 p-4 text-sm text-muted-foreground">
+        Start the DHT to capture a relay snapshot from the health report.
+      </div>
+    {/if}
+  </Card>
   
   <!-- Peer Discovery -->
   <Card class="p-6">

@@ -4724,24 +4724,43 @@ async fn download_file_from_network(
 
 #[tauri::command]
 async fn show_in_folder(path: String) -> Result<(), String> {
+    let path_obj = Path::new(&path);
+
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .args(["/select,", &path])
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+        // If it's a directory, just open it. If it's a file, select it.
+        if path_obj.is_dir() {
+            std::process::Command::new("explorer")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        } else {
+            std::process::Command::new("explorer")
+                .args(["/select,", &path])
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        }
     }
 
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .args(["-R", &path])
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+        // If it's a directory, just open it. If it's a file, reveal it.
+        if path_obj.is_dir() {
+            std::process::Command::new("open")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        } else {
+            std::process::Command::new("open")
+                .args(["-R", &path])
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        }
     }
 
     #[cfg(target_os = "linux")]
     {
+        // On Linux, xdg-open works for both files and directories
         std::process::Command::new("xdg-open")
             .arg(&path)
             .spawn()
