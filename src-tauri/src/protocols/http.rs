@@ -14,6 +14,7 @@ use crate::transfer_events::{
     TransferFailedEvent, TransferProgressEvent, TransferStartedEvent,
 };
 use async_trait::async_trait;
+use futures::stream::StreamExt;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -48,6 +49,10 @@ struct HttpDownloadState {
     file_name: String,
     /// Total file size (if known)
     total_bytes: u64,
+    /// Whether download is paused
+    is_paused: bool,
+    /// Bytes downloaded so far (for resume support)
+    downloaded_bytes: u64,
 }
 
 impl HttpProtocolHandler {
@@ -371,6 +376,13 @@ impl HttpProtocolHandler {
                             }
                             drop(prog);
 
+                            // Update active download state
+                            let mut downloads = active_downloads.lock().await;
+                            if let Some(state) = downloads.get_mut(&download_id) {
+                                state.downloaded_bytes = downloaded_bytes;
+                            }
+                            drop(downloads);
+
                             // Emit progress event (throttled to every 2 seconds)
                             if let Some(ref bus) = event_bus {
                                 if now_ms - last_progress_event >= 2000 {
@@ -480,6 +492,116 @@ impl HttpProtocolHandler {
         info!("HTTP: Download completed: {} bytes in {} seconds", downloaded_bytes, duration_secs);
         Ok(())
     }
+
+    /// Download file with range support for resuming paused downloads
+    async fn download_with_range(
+        client: Client,
+        url: &str,
+        output_path: PathBuf,
+        resume_from: u64,
+        progress: Arc<Mutex<HashMap<String, DownloadProgress>>>,
+        download_id: String,
+        mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<u64, ProtocolError> {
+        let start_time = Instant::now();
+
+        // Open file in append mode for resuming
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&output_path)
+            .await
+            .map_err(|e| ProtocolError::Internal(format!("Failed to open file for resume: {}", e)))?;
+
+        // Create range header for resume
+        let range_header = format!("bytes={}-", resume_from);
+
+        // Make request with Range header
+        let response = client
+            .get(url)
+            .header("Range", range_header)
+            .send()
+            .await
+            .map_err(|e| ProtocolError::NetworkError(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            return Err(ProtocolError::NetworkError(format!("HTTP {}: {}", status, status.canonical_reason().unwrap_or("Unknown"))));
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut downloaded_bytes = resume_from;
+        let mut last_progress_event = current_timestamp_ms();
+
+        // Update initial progress for resume
+        {
+            let mut prog = progress.lock().await;
+            if let Some(p) = prog.get_mut(&download_id) {
+                p.downloaded_bytes = downloaded_bytes;
+                p.status = DownloadStatus::Downloading;
+            }
+        }
+
+        loop {
+            tokio::select! {
+                chunk = stream.next() => {
+                    let chunk = match chunk {
+                        Some(chunk) => chunk,
+                        None => break, // Stream ended
+                    };
+
+                    let bytes = chunk.map_err(|e| ProtocolError::NetworkError(e.to_string()))?;
+
+                    // Write to file
+                    file.write_all(&bytes)
+                        .await
+                        .map_err(|e| ProtocolError::Internal(format!("Failed to write to file: {}", e)))?;
+
+                    downloaded_bytes += bytes.len() as u64;
+
+                    // Update progress periodically
+                    let now_ms = current_timestamp_ms();
+                    if now_ms - last_progress_event >= 1000 { // Update every second
+                        last_progress_event = now_ms;
+
+                        let mut prog = progress.lock().await;
+                        if let Some(p) = prog.get_mut(&download_id) {
+                            p.downloaded_bytes = downloaded_bytes;
+
+                            // Calculate speed and ETA
+                            let elapsed = start_time.elapsed().as_secs_f64();
+                            let speed = if elapsed > 0.0 {
+                                (downloaded_bytes - resume_from) as f64 / elapsed
+                            } else {
+                                0.0
+                            };
+                            p.download_speed = speed;
+                        }
+                    }
+                }
+                _ = cancel_rx.changed() => {
+                    if *cancel_rx.borrow() {
+                        info!("HTTP: Download {} cancelled during resume", download_id);
+                        return Ok(downloaded_bytes);
+                    }
+                }
+            }
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+
+        // Update final progress
+        let mut prog = progress.lock().await;
+        if let Some(p) = prog.get_mut(&download_id) {
+            p.downloaded_bytes = downloaded_bytes;
+            p.status = DownloadStatus::Completed;
+        }
+
+        info!("HTTP: Resume download completed: {} total bytes", downloaded_bytes);
+        Ok(downloaded_bytes)
+    }
 }
 
 impl Default for HttpProtocolHandler {
@@ -545,6 +667,8 @@ impl ProtocolHandler for HttpProtocolHandler {
                 cancel_token: cancel_tx,
                 file_name: file_name.clone(),
                 total_bytes: 0,
+                is_paused: false,
+                downloaded_bytes: 0,
             });
         }
 
@@ -596,16 +720,125 @@ impl ProtocolHandler for HttpProtocolHandler {
     }
 
     async fn pause_download(&self, identifier: &str) -> Result<(), ProtocolError> {
-        // HTTP doesn't easily support pause without range requests
-        // For now, we cancel and would need to resume with range request
-        warn!("HTTP: pause_download - cancelling download (resume requires range request support)");
-        self.cancel_download(identifier).await
+        let mut downloads = self.active_downloads.lock().await;
+
+        if let Some(state) = downloads.get_mut(identifier) {
+            if state.status == DownloadStatus::Downloading && !state.is_paused {
+                // Mark as paused
+                state.is_paused = true;
+                state.status = DownloadStatus::Paused;
+
+                // Send cancel signal to stop the current download task
+                let _ = state.cancel_token.send(true);
+
+                info!("HTTP: download {} paused at {} bytes", identifier, state.downloaded_bytes);
+
+                // Emit pause event if event bus is available
+                if let Some(event_bus) = &self.event_bus {
+                    use crate::transfer_events::{TransferPausedEvent, PauseReason};
+
+                    event_bus.emit_paused(TransferPausedEvent {
+                        transfer_id: identifier.to_string(),
+                        paused_at: current_timestamp_ms(),
+                        reason: PauseReason::UserRequested,
+                        can_resume: true,
+                        downloaded_bytes: state.downloaded_bytes,
+                        total_bytes: state.total_bytes,
+                    });
+                }
+
+                Ok(())
+            } else {
+                Err(ProtocolError::ProtocolSpecific(format!("Cannot pause download {}: current status {:?}", identifier, state.status)))
+            }
+        } else {
+            Err(ProtocolError::DownloadNotFound(format!("Download {} not found", identifier)))
+        }
     }
 
-    async fn resume_download(&self, _identifier: &str) -> Result<(), ProtocolError> {
-        // Would need to track partial file and use Range header
-        warn!("HTTP: resume_download not yet implemented");
-        Err(ProtocolError::NotSupported)
+    async fn resume_download(&self, identifier: &str) -> Result<(), ProtocolError> {
+        let mut downloads = self.active_downloads.lock().await;
+
+        if let Some(state) = downloads.get_mut(identifier) {
+            if state.status == DownloadStatus::Paused && state.is_paused {
+                // Create new cancel token for resumed download
+                let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+                // Update state
+                state.is_paused = false;
+                state.status = DownloadStatus::Downloading;
+                state.cancel_token = cancel_tx;
+
+                info!("HTTP: resuming download {} from {} bytes", identifier, state.downloaded_bytes);
+
+                // Emit resume event if event bus is available
+                if let Some(event_bus) = &self.event_bus {
+                    use crate::transfer_events::TransferResumedEvent;
+
+                    let remaining_bytes = if state.total_bytes > state.downloaded_bytes {
+                        state.total_bytes - state.downloaded_bytes
+                    } else {
+                        0
+                    };
+
+                    event_bus.emit_resumed(TransferResumedEvent {
+                        transfer_id: identifier.to_string(),
+                        resumed_at: current_timestamp_ms(),
+                        downloaded_bytes: state.downloaded_bytes,
+                        remaining_bytes,
+                        active_sources: 1, // HTTP downloads use single source
+                    });
+                }
+
+                // Spawn resumed download task
+                let client = self.client.clone();
+                let url = state.url.clone();
+                let output_path = state.output_path.clone();
+                let progress = self.download_progress.clone();
+                let active_downloads = self.active_downloads.clone();
+                let resume_from = state.downloaded_bytes;
+                let download_id = identifier.to_string();
+
+                // Drop the lock before spawning the task
+                drop(downloads);
+
+                tokio::spawn(async move {
+                    match Self::download_with_range(
+                        client,
+                        &url,
+                        output_path.clone(),
+                        resume_from,
+                        progress,
+                        download_id.clone(),
+                        cancel_rx,
+                    ).await {
+                        Ok(final_bytes) => {
+                            // Update the state with final downloaded bytes
+                            let mut downloads = active_downloads.lock().await;
+                            if let Some(state) = downloads.get_mut(&download_id) {
+                                state.downloaded_bytes = final_bytes;
+                                state.status = DownloadStatus::Completed;
+                                info!("HTTP: Resume completed for {} ({} bytes)", download_id, final_bytes);
+                            }
+                        }
+                        Err(e) => {
+                            error!("HTTP resume download failed: {}", e);
+                            // Update state to failed
+                            let mut downloads = active_downloads.lock().await;
+                            if let Some(state) = downloads.get_mut(&download_id) {
+                                state.status = DownloadStatus::Failed;
+                            }
+                        }
+                    }
+                });
+
+                Ok(())
+            } else {
+                Err(ProtocolError::ProtocolSpecific(format!("Cannot resume download {}: current status {:?}, paused: {}", identifier, state.status, state.is_paused)))
+            }
+        } else {
+            Err(ProtocolError::DownloadNotFound(format!("Download {} not found", identifier)))
+        }
     }
 
     async fn cancel_download(&self, identifier: &str) -> Result<(), ProtocolError> {

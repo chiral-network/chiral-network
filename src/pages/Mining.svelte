@@ -41,7 +41,7 @@
   let error = ''
 
   // Blockchain sync status - updated from gethSyncStatus store
-  $: isSyncing = $gethSyncStatus?.syncing ?? true
+  $: isSyncing = $gethSyncStatus?.syncing ?? false
   $: syncProgress = $gethSyncStatus?.progress_percent ?? 0
   $: syncCurrentBlock = $gethSyncStatus?.current_block ?? 0
   $: syncHighestBlock = $gethSyncStatus?.highest_block ?? 0
@@ -754,8 +754,8 @@
       return
     }
 
-    // Check if blockchain is still syncing
-    if (isSyncing) {
+    // Check if blockchain is still syncing (only when Geth is running)
+    if (isGethRunning && isSyncing) {
       error = `Cannot start mining while blockchain is syncing (${syncProgress.toFixed(1)}% complete). Please wait for sync to finish.`
       return
     }
@@ -1605,7 +1605,7 @@
       {/if}
 
       <!-- Blockchain Sync Status -->
-      {#if isSyncing}
+      {#if isGethRunning && isSyncing}
         <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 mt-2">
           <div class="space-y-3">
             <div class="flex items-center justify-between">
