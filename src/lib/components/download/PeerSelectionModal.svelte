@@ -307,7 +307,7 @@
           <div class="flex justify-between items-center">
             <span class="font-medium text-sm">Estimated Cost:</span>
             <span class="text-green-600 dark:text-green-400 font-bold">
-              ${totalCost.toFixed(4)} CHR
+              {Math.max(totalCost, 0.0001).toFixed(4)} CHR
             </span>
           </div>
           {#if mode === 'manual'}

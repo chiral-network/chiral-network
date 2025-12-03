@@ -284,14 +284,12 @@ export class DhtService {
       if (fileMetadata.downloadPath) {
         // Use the path that was already selected by the user in the file dialog
         resolvedStoragePath = fileMetadata.downloadPath;
-        console.log("Using provided download path:", resolvedStoragePath);
       } else {
         // Get canonical download directory from backend (single source of truth)
         const downloadDir = await invoke<string>("get_download_directory");
 
         // Construct full file path
         resolvedStoragePath = await join(downloadDir, fileMetadata.fileName);
-        console.log("Using resolved download path:", resolvedStoragePath);
       }
 
       // Ensure the directory exists before starting download

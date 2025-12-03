@@ -260,13 +260,7 @@ import type { FileMetadata } from '$lib/dht'
                 diagnosticLogger.info('Download', 'Bitswap download completed, processing payment', { fileName: completedFile.name });
                 const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
                 
-                // Skip payment check for free files (price = 0)
-                if (paymentAmount === 0) {
-                    diagnosticLogger.info('Download', 'Free file, skipping payment', { fileName: completedFile.name });
-                    paidFiles.add(completedFile.hash);
-                    showToast(`Download complete! "${completedFile.name}" (Free)`, 'success');
-                    return;
-                }
+                // Payment is always required (minimum 0.0001 Chiral enforced by paymentService)
 
 
                 const seederPeerId = completedFile.seederAddresses?.[0];
@@ -856,10 +850,6 @@ async function loadAndResumeDownloads() {
   }
 
   async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
-    diagnosticLogger.debug('Download', 'handleSearchDownload called', { metadata });
-    console.log('🔍 DEBUG DOWNLOAD: handleSearchDownload metadata =', metadata);
-    console.log('🔍 DEBUG DOWNLOAD: metadata.seeders =', metadata.seeders);
-    console.log('🔍 DEBUG DOWNLOAD: metadata.seeders.length =', metadata.seeders?.length);
 
     // Use user's protocol selection if provided, otherwise auto-detect
     if (metadata.selectedProtocol) {
@@ -1224,8 +1214,6 @@ async function loadAndResumeDownloads() {
 
     // Construct full file path: directory + filename
     const fullPath = await join(storagePath, downloadingFile.name);
-    
-    diagnosticLogger.debug('Download', 'Using resolved download path', { fullPath });
 
     // Now start the actual Bitswap download
     const metadata = {
