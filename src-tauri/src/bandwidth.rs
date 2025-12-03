@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
+use tauri::{AppHandle, Emitter};
 
 use crate::transfer_events::TransferEventBus;
 
@@ -91,6 +92,7 @@ fn current_timestamp_ms() -> u64 {
 pub struct BandwidthController {
     inner: Mutex<Inner>,
     event_bus: Option<Arc<TransferEventBus>>,
+    app_handle: Mutex<Option<AppHandle>>,
 }
 
 struct Inner {
@@ -114,6 +116,7 @@ impl BandwidthController {
                 stats_last_reset: Instant::now(),
             }),
             event_bus: None,
+            app_handle: Mutex::new(None),
         }
     }
     
@@ -128,12 +131,19 @@ impl BandwidthController {
                 stats_last_reset: Instant::now(),
             }),
             event_bus: Some(event_bus),
+            app_handle: Mutex::new(None),
         }
     }
     
     /// Set the event bus after construction
     pub async fn set_event_bus(&mut self, event_bus: Arc<TransferEventBus>) {
         self.event_bus = Some(event_bus);
+    }
+
+    /// Set the app handle for frontend event emission
+    pub async fn set_app_handle(&self, app_handle: AppHandle) {
+        let mut handle_guard = self.app_handle.lock().await;
+        *handle_guard = Some(app_handle);
     }
 
     pub async fn set_limits(&self, upload_kbps: u64, download_kbps: u64) {
@@ -155,7 +165,7 @@ impl BandwidthController {
                 previous_download_limit_kbps: prev_download,
                 timestamp: current_timestamp_ms(),
             });
-            emit_bandwidth_event(bus, event);
+            emit_bandwidth_event(self, event).await;
         }
         
         debug!(
@@ -221,7 +231,7 @@ impl BandwidthController {
                                 wait_duration_ms: delay.as_millis() as u64,
                                 timestamp: current_timestamp_ms(),
                             });
-                            emit_bandwidth_event(bus, event);
+                            emit_bandwidth_event(self, event).await;
                         }
                     }
                 }
@@ -257,7 +267,7 @@ impl BandwidthController {
                     waited_ms: throttle_start.elapsed().as_millis() as u64,
                     timestamp: current_timestamp_ms(),
                 });
-                emit_bandwidth_event(bus, event);
+                emit_bandwidth_event(self, event).await;
             }
         }
     }
@@ -309,7 +319,7 @@ impl BandwidthController {
                 period_seconds: period,
                 timestamp: current_timestamp_ms(),
             });
-            emit_bandwidth_event(bus, event);
+            emit_bandwidth_event(self, event).await;
         }
     }
     
@@ -427,20 +437,25 @@ impl TokenBucket {
 // ============================================================================
 
 /// Emit a bandwidth event to the frontend
-fn emit_bandwidth_event(bus: &TransferEventBus, event: BandwidthEvent) {
+async fn emit_bandwidth_event(controller: &BandwidthController, event: BandwidthEvent) {
     let event_type = match &event {
         BandwidthEvent::LimitsChanged(_) => "limits_changed",
         BandwidthEvent::Throttled(_) => "throttled",
         BandwidthEvent::ThrottleReleased(_) => "throttle_released",
         BandwidthEvent::UsageStats(_) => "usage_stats",
     };
-    
+
     debug!("Emitting bandwidth event: {} - {:?}", event_type, event);
-    
-    // Note: Full event emission would require extending TransferEventBus
-    // to support bandwidth events with app_handle.emit("bandwidth:{}", event)
-    // For now, events are logged for debugging/observability
-    let _ = (bus, event); // Acknowledge usage to avoid warnings
+
+    // Emit to frontend via Tauri if app_handle is available
+    let handle_guard = controller.app_handle.lock().await;
+    if let Some(app_handle) = &*handle_guard {
+        let event_name = format!("bandwidth:{}", event_type);
+        let _ = app_handle.emit(&event_name, &event);
+    }
+
+    // Also log for debugging/observability
+    debug!("Bandwidth event emitted: {} - {:?}", event_type, event);
 }
 
 // ============================================================================
