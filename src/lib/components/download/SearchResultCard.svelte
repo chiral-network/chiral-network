@@ -44,11 +44,23 @@
 
 
   // Helper function to determine available protocols for a file
+  // Files can only be downloaded via the protocol they were uploaded with
   $: availableProtocols = (() => {
     const protocols = [];
+    
+    // Determine what metadata exists
+    const hasCids = !!(metadata.cids && metadata.cids.length > 0);
+    const hasInfoHash = !!metadata.infoHash;
+    const hasHttpSources = !!(metadata.httpSources && metadata.httpSources.length > 0);
+    const hasFtpSources = !!(metadata.ftpSources && metadata.ftpSources.length > 0);
+    const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
+    const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
+    
+    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs or other protocol indicators)
+    const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
 
-    // Check for Bitswap (has CIDs) - comes first
-    if (metadata.cids && metadata.cids.length > 0) {
+    // Check for Bitswap (has CIDs) - files uploaded via Bitswap
+    if (hasCids && hasSeeders) {
       protocols.push({
         id: 'bitswap',
         name: 'Bitswap',
@@ -57,8 +69,8 @@
       });
     }
 
-    // Check for WebRTC (has seeders)
-    if (metadata.seeders && metadata.seeders.length > 0) {
+    // Check for WebRTC - only if uploaded via WebRTC (no CIDs, no other protocol sources)
+    if (isWebRTCUpload) {
       protocols.push({
         id: 'webrtc',
         name: 'WebRTC',
@@ -68,7 +80,7 @@
     }
 
     // Check for BitTorrent (has info_hash)
-    if (metadata.infoHash) {
+    if (hasInfoHash) {
       protocols.push({
         id: 'bittorrent',
         name: 'BitTorrent',
@@ -78,7 +90,7 @@
     }
 
     // Check for HTTP (has HTTP sources)
-    if (metadata.httpSources && metadata.httpSources.length > 0) {
+    if (hasHttpSources) {
       protocols.push({
         id: 'http',
         name: 'HTTP',
@@ -88,7 +100,7 @@
     }
 
     // Check for FTP (has FTP sources)
-    if (metadata.ftpSources && metadata.ftpSources.length > 0) {
+    if (hasFtpSources) {
       protocols.push({
         id: 'ftp',
         name: 'FTP',
@@ -98,7 +110,7 @@
     }
 
     // Check for ED2K (has ED2K sources)
-    if (metadata.ed2kSources && metadata.ed2kSources.length > 0) {
+    if (hasEd2kSources) {
       protocols.push({
         id: 'ed2k',
         name: 'ED2K',
