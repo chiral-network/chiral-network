@@ -24,7 +24,6 @@
   export let fileSize: number;
   export let peers: PeerInfo[];
   export let mode: 'auto' | 'manual' = 'auto';
-  export let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
   export let protocol: 'http' | 'webrtc' | 'bitswap' | 'bittorrent' | 'ed2k' | 'ftp' = 'http'; 
   export let isTorrent = false; // Flag to indicate torrent download (no peer selection needed)
 

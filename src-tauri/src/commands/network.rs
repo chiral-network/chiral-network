@@ -1,4 +1,3 @@
-use tracing::info;
 use serde::Serialize;
 use crate::ethereum::{
     get_network_hashrate,
