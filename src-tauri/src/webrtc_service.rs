@@ -378,7 +378,9 @@ impl WebRTCService {
                     Self::send_file_request_to_peer(&peer_id, &request, &connections).await;
                 }
                 WebRTCCommand::SendFileChunk { peer_id, chunk } => {
-                    Self::handle_send_chunk(&peer_id, &chunk, &connections, &bandwidth).await;
+                    if let Err(e) = Self::handle_send_chunk(&peer_id, &chunk, &connections, &bandwidth).await {
+                        error!("Failed to send file chunk to {}: {}", peer_id, e);
+                    }
                 }
                 WebRTCCommand::RequestFileChunk {
                     peer_id,
@@ -1055,7 +1057,7 @@ impl WebRTCService {
         chunk: &FileChunk,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         bandwidth: &Arc<BandwidthController>,
-    ) {
+    ) -> Result<(), String> {
         bandwidth.acquire_upload(chunk.data.len()).await;
 
         // Wait for data channel to open (with timeout)
@@ -1073,19 +1075,19 @@ impl WebRTCService {
                     }
                     if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing {
                         error!("Data channel is closed or closing for peer {}", peer_id);
-                        return;
+                        return Err(format!("Data channel closed for peer {}", peer_id));
                     }
                     if start.elapsed() > timeout {
                         error!("Timeout waiting for data channel to open for peer {}", peer_id);
-                        return;
+                        return Err(format!("Data channel timeout for peer {}", peer_id));
                     }
                 } else {
                     error!("No data channel found for peer {}", peer_id);
-                    return;
+                    return Err(format!("No data channel for peer {}", peer_id));
                 }
             } else {
                 error!("Peer {} not found in connections", peer_id);
-                return;
+                return Err(format!("Peer {} not found", peer_id));
             }
             drop(conns); // Release lock before sleeping
             sleep(Duration::from_millis(50)).await;
@@ -1096,10 +1098,13 @@ impl WebRTCService {
             Ok(chunk_json) => {
                 if let Err(e) = dc.send_text(chunk_json).await {
                     error!("Failed to send chunk over data channel: {}", e);
+                    return Err(format!("Failed to send chunk: {}", e));
                 }
+                Ok(())
             }
             Err(e) => {
                 error!("Failed to serialize chunk: {}", e);
+                Err(format!("Failed to serialize chunk: {}", e))
             }
         }
     }
@@ -1444,6 +1449,7 @@ impl WebRTCService {
         for chunk_index in 0..total_chunks {
             // Flow control: wait if too many pending ACKs
             let wait_start = Instant::now();
+            let mut timeout_count = 0;
             loop {
                 let pending_count = {
                     let conns = connections.lock().await;
@@ -1458,7 +1464,34 @@ impl WebRTCService {
 
                 // Timeout check
                 if wait_start.elapsed().as_millis() > ACK_WAIT_TIMEOUT_MS as u128 {
-                    warn!("ACK timeout waiting for peer {}, continuing anyway", peer_id);
+                    timeout_count += 1;
+                    warn!("ACK timeout #{} waiting for peer {} (pending: {}, chunk: {}/{})", 
+                          timeout_count, peer_id, pending_count, chunk_index, total_chunks);
+                    
+                    // After 3 consecutive timeouts, check if connection is still alive
+                    if timeout_count >= 3 {
+                        let dc_state = {
+                            let conns = connections.lock().await;
+                            conns.get(peer_id)
+                                .and_then(|c| c.data_channel.as_ref())
+                                .map(|dc| dc.ready_state())
+                        };
+                        
+                        if let Some(state) = dc_state {
+                            use webrtc::data_channel::data_channel_state::RTCDataChannelState;
+                            if state != RTCDataChannelState::Open {
+                                error!("Data channel no longer open (state: {:?}), aborting transfer", state);
+                                let _ = event_tx
+                                    .send(WebRTCEvent::TransferFailed {
+                                        peer_id: peer_id.to_string(),
+                                        file_hash: request.file_hash.clone(),
+                                        error: "Connection lost - data channel closed".to_string(),
+                                    })
+                                    .await;
+                                return Err("Data channel closed".to_string());
+                            }
+                        }
+                    }
                     break;
                 }
 
@@ -1507,10 +1540,20 @@ impl WebRTCService {
                 encrypted_key_bundle,
             };
 
-            // Send chunk via WebRTC data channel
-            Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await;
+            // Send chunk via WebRTC data channel - abort transfer if send fails
+            if let Err(e) = Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await {
+                error!("Failed to send chunk {}/{} to peer {}: {}", chunk_index, total_chunks, peer_id, e);
+                let _ = event_tx
+                    .send(WebRTCEvent::TransferFailed {
+                        peer_id: peer_id.to_string(),
+                        file_hash: request.file_hash.clone(),
+                        error: format!("Connection lost: {}", e),
+                    })
+                    .await;
+                return Err(format!("Transfer aborted: {}", e));
+            }
 
-            // Increment pending ACK count
+            // Increment pending ACK count (only if send succeeded)
             {
                 let mut conns = connections.lock().await;
                 if let Some(connection) = conns.get_mut(peer_id) {
