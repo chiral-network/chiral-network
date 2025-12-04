@@ -1683,7 +1683,8 @@ impl WebRTCService {
             }
 
             // Increment pending ACK count (only if send succeeded)
-            {
+            // IMPORTANT: Don't hold lock while sending events to avoid deadlock
+            let progress_to_send = {
                 let mut conns = connections.lock().await;
                 if let Some(connection) = conns.get_mut(peer_id) {
                     *connection.pending_acks.entry(request.file_hash.clone()).or_insert(0) += 1;
@@ -1693,8 +1694,8 @@ impl WebRTCService {
                         transfer.chunks_sent += 1;
                         transfer.bytes_sent += chunk.data.len() as u64;
 
-                        // Send progress update
-                        let progress = TransferProgress {
+                        // Prepare progress update (send outside lock)
+                        Some(TransferProgress {
                             file_hash: request.file_hash.clone(),
                             bytes_transferred: transfer.bytes_sent,
                             total_bytes: transfer.file_size,
@@ -1703,18 +1704,30 @@ impl WebRTCService {
                             percentage: (transfer.chunks_sent as f32
                                 / transfer.total_chunks as f32)
                                 * 100.0,
-                        };
-
-                        let _ = event_tx
-                            .send(WebRTCEvent::TransferProgress {
-                                peer_id: peer_id.to_string(),
-                                progress,
-                            })
-                            .await;
+                        })
+                    } else {
+                        None
                     }
                 } else {
                     // This should never happen - peer not in connections after successful send
                     error!("❌ CRITICAL: Peer {} disappeared from connections after sending chunk {}!", peer_id, chunk_index);
+                    None
+                }
+            };
+            
+            // Send progress event OUTSIDE the lock to avoid deadlock
+            if let Some(progress) = progress_to_send {
+                if chunk_index < 100 {
+                    info!("📊 Sending progress event for chunk {}", chunk_index);
+                }
+                let _ = event_tx
+                    .send(WebRTCEvent::TransferProgress {
+                        peer_id: peer_id.to_string(),
+                        progress,
+                    })
+                    .await;
+                if chunk_index < 100 {
+                    info!("📊 Progress event sent for chunk {}", chunk_index);
                 }
             }
             
