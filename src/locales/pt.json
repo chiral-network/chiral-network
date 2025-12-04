@@ -797,7 +797,8 @@
       "invalid": "Por favor, digite uma quantidade válida maior que 0.",
       "min": "A quantidade deve ser pelo menos {min} Chiral.",
       "insufficient": "Saldo insuficiente - Necessário mais {more} Chiral.",
-      "insufficientWithFee": "Fundos insuficientes. Total de {total} Chiral (quantidade + taxa) excede seu saldo de {balance} Chiral."
+      "insufficientWithFee": "Fundos insuficientes. Total de {total} Chiral (quantidade + taxa) excede seu saldo de {balance} Chiral.",
+      "insufficientWithGas": "Saldo insuficiente (incluindo gás) - Necessário mais {more} Chiral."
     },
     "exportFailed": "Exportação falhou. Por favor, tente novamente.",
     "createAccount": "Falha ao criar conta: {error}"

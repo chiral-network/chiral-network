@@ -823,7 +823,8 @@
       "invalid": "Please enter a valid amount greater than 0.",
       "min": "Amount must be at least {min} Chiral.",
       "insufficient": "Insufficient balance - Need {more} more Chiral.",
-      "insufficientWithFee": "Insufficient funds. Total of {total} Chiral (amount + fee) exceeds your balance of {balance} Chiral."
+      "insufficientWithFee": "Insufficient funds. Total of {total} Chiral (amount + fee) exceeds your balance of {balance} Chiral.",
+      "insufficientWithGas": "Insufficient balance (including gas) - Need {more} more Chiral."
     },
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"

@@ -270,7 +270,7 @@
     }
   }
 
-  // Amount validation
+  // Amount validation (accounts for gas fees)
   $: {
     if (rawAmountInput === '') {
       validationWarning = '';
@@ -278,6 +278,8 @@
       sendAmount = 0;
     } else {
       const inputValue = parseFloat(rawAmountInput);
+      const currentGasFee = gasEstimate?.gasPrices[selectedGasOption]?.fee ?? 0;
+      const totalCost = inputValue + currentGasFee;
 
       if (isNaN(inputValue) || inputValue <= 0) {
         validationWarning = tr('errors.amount.invalid');
@@ -287,8 +289,9 @@
         validationWarning = tr('errors.amount.min', { min: '0.01' });
         isAmountValid = false;
         sendAmount = 0;
-      } else if (inputValue > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(4) } });
+      } else if (totalCost > $wallet.balance) {
+        const shortage = (totalCost - $wallet.balance).toFixed(4);
+        validationWarning = tr('errors.amount.insufficientWithGas', { values: { more: shortage } });
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -1368,9 +1371,14 @@
     }
     
     // Calculate max amount accounting for gas fee
-    const currentGasFee = gasEstimate?.gasPrices[selectedGasOption]?.fee ?? 0;
+    const currentGasFee = gasEstimate?.gasPrices?.[selectedGasOption]?.fee ?? 0;
     const maxAmount = Math.max(0, $wallet.balance - currentGasFee);
-    rawAmountInput = maxAmount.toFixed(4);
+    
+    // Round DOWN to 4 decimal places to ensure we don't exceed available balance
+    // Using floor instead of round to be safe
+    const roundedMax = Math.floor(maxAmount * 10000) / 10000;
+    
+    rawAmountInput = roundedMax.toFixed(4);
   }
 
   // Fetch gas estimate for transaction
@@ -1413,8 +1421,8 @@
     }
   }
 
-  // Refresh gas estimate when recipient or amount changes
-  $: if (recipientAddress && isAddressValid && isGethRunning) {
+  // Refresh gas estimate when recipient or amount changes, or when geth starts
+  $: if (isGethRunning && $etcAccount) {
     fetchGasEstimate();
   }
 
@@ -2081,16 +2089,16 @@
 
           <!-- Estimated Fee Summary -->
           {#if gasEstimate}
-            <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-lg">
-              <span class="text-sm text-muted-foreground">{$t('transfer.gas.estimatedFee')}</span>
-              <span class="text-sm font-medium">
+            <div class="flex items-center justify-between p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-700">
+              <span class="text-sm text-gray-700 dark:text-gray-200">{$t('transfer.gas.estimatedFee')}</span>
+              <span class="text-sm font-medium text-gray-900 dark:text-white">
                 {gasEstimate.gasPrices[selectedGasOption].fee.toFixed(6)} CHR
               </span>
             </div>
             {#if sendAmount > 0}
-              <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                <span class="text-sm text-muted-foreground">{$t('transfer.gas.totalCost')}</span>
-                <span class="text-sm font-bold">
+              <div class="flex items-center justify-between p-2 bg-green-50 dark:bg-green-900/30 rounded-lg border border-green-200 dark:border-green-700">
+                <span class="text-sm text-gray-700 dark:text-gray-200">{$t('transfer.gas.totalCost')}</span>
+                <span class="text-sm font-bold text-gray-900 dark:text-white">
                   {(sendAmount + gasEstimate.gasPrices[selectedGasOption].fee).toFixed(6)} CHR
                 </span>
               </div>
