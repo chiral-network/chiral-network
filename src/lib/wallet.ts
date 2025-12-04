@@ -1292,6 +1292,18 @@ export class WalletService {
     isCalculatingAccurateTotals.set(true);
     accurateTotalsProgress.set(null);
 
+    // Capture session counter BEFORE starting the scan
+    // This tells us how many blocks were mined before the scan started
+    // Any blocks in this counter might already be on the blockchain and included in the scan
+    let sessionCounterAtStart = 0;
+    try {
+      sessionCounterAtStart = await invoke<number>("get_blocks_mined", {
+        address: accountAddress,
+      });
+    } catch (e) {
+      // Ignore - assume 0
+    }
+
     // Listen for progress events
     const { listen } = await import("@tauri-apps/api/event");
     const unlisten = await listen<{
@@ -1327,21 +1339,40 @@ export class WalletService {
         totalSent: result.total_sent,
       });
 
-      // Initialize the backend session counter with the accurate blockchain count
-      // This ensures "mined rewards" display matches the actual blockchain data
+      // Initialize the backend counter with accurate count + blocks mined during scan
+      // - sessionCounterAtStart: blocks mined before scan (might be included in scan result)
+      // - sessionCounterAtEnd: blocks mined before + during scan
+      // - blocksDuringCalc = sessionCounterAtEnd - sessionCounterAtStart (blocks mined DURING scan)
+      // - These blocks are NOT in scan result (scan captured current_block at start)
+      // - Total = scan result + blocks mined during scan
       try {
+        // Get current session counter (after scan completed)
+        const sessionCounterAtEnd = await invoke<number>("get_blocks_mined", {
+          address: accountAddress,
+        });
+        
+        // Blocks mined DURING the scan are not included in the scan result
+        // (because scan only goes up to current_block captured at start)
+        const blocksDuringCalc = sessionCounterAtEnd - sessionCounterAtStart;
+        
+        // Total = historical (from scan) + blocks mined during scan
+        // This avoids double-counting:
+        // - Blocks before scan start might be in scan result (we don't add them again)
+        // - Blocks during scan are definitely NOT in scan result (we add them)
+        const totalCount = result.blocks_mined + blocksDuringCalc;
+        
         await invoke("initialize_mined_blocks_count", {
           address: accountAddress,
-          count: result.blocks_mined,
+          count: totalCount,
         });
-        console.log(`[Accurate Totals] Initialized backend blocks count to: ${result.blocks_mined}`);
+        console.log(`[Accurate Totals] Initialized backend blocks count to: ${totalCount} (scan: ${result.blocks_mined}, during calc: ${blocksDuringCalc}, session start: ${sessionCounterAtStart}, session end: ${sessionCounterAtEnd})`);
         
-        // Also update the mining state store to reflect accurate totals
+        // Update the mining state store
         const reward = get(blockReward);
         miningState.update((state) => ({
           ...state,
-          blocksFound: result.blocks_mined,
-          totalRewards: result.blocks_mined * reward,
+          blocksFound: totalCount,
+          totalRewards: totalCount * reward,
         }));
       } catch (initError) {
         console.warn("[Accurate Totals] Failed to initialize backend counter:", initError);
