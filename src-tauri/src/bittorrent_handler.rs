@@ -484,11 +484,6 @@ impl BitTorrentHandler {
         })?;
 
         let state_manager = TorrentStateManager::new(state_file_path.clone()).await;
-        
-        // if let Err(e) = state_manager.load().await {
-        //     warn!("Failed to load torrent state from {:?}: {}", state_file_path, e);
-        //     info!("Starting with empty torrent state");
-        // }
 
         let event_bus = app_handle.as_ref().map(|handle| Arc::new(TransferEventBus::new(handle.clone())));
 
@@ -505,7 +500,9 @@ impl BitTorrentHandler {
         };
         
         handler.spawn_stats_poller();
-        handler.restore_torrents_from_state().await?;
+        if let Err(e) = handler.restore_torrents_from_state().await {
+            warn!("Error restoring torrents from state: {}. Continuing with empty state.", e);
+        }
 
         info!(
             "Initializing BitTorrentHandler with download directory: {:?}",
