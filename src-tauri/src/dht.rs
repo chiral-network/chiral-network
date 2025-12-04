@@ -666,23 +666,23 @@ fn construct_file_metadata_from_json_simple(
         seeders: Vec::new(), // Will be populated from heartbeat cache during download
         created_at,
         mime_type: metadata_json
-            .get("mime_type")
+            .get("mimeType")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         is_encrypted: metadata_json
-            .get("is_encrypted")
+            .get("isEncrypted")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         encryption_method: metadata_json
-            .get("encryption_method")
+            .get("encryptionMethod")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         key_fingerprint: metadata_json
-            .get("key_fingerprint")
+            .get("keyFingerprint")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         parent_hash: metadata_json
-            .get("parent_hash")
+            .get("parentHash")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         cids: metadata_json.get("cids").and_then(|v| {
@@ -699,7 +699,7 @@ fn construct_file_metadata_from_json_simple(
                 .unwrap_or(None)
             }),
         info_hash: metadata_json
-            .get("info_hash")
+            .get("infoHash")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         trackers: metadata_json.get("trackers").and_then(|v| {
@@ -714,13 +714,13 @@ fn construct_file_metadata_from_json_simple(
             .get("price")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0),
-        http_sources: metadata_json.get("http_sources").and_then(|v| {
+        http_sources: metadata_json.get("httpSources").and_then(|v| {
             serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(
                 v.clone(),
             )
             .unwrap_or(None)
         }),
-        ed2k_sources: metadata_json.get("ed2k_sources").and_then(|v| {
+        ed2k_sources: metadata_json.get("ed2kSources").and_then(|v| {
             serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(
                 v.clone(),
             )
@@ -730,7 +730,7 @@ fn construct_file_metadata_from_json_simple(
             .get("uploader_address")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        ftp_sources: metadata_json.get("ftp_sources").and_then(|v| {
+        ftp_sources: metadata_json.get("ftpSources").and_then(|v| {
             serde_json::from_value::<Option<Vec<FtpSourceInfo>>>(
                 v.clone(),
             )
@@ -1509,10 +1509,10 @@ async fn run_dht_node(
                                     // notify UI with updated metadata so frontend refreshes immediately
                                     if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                                         if let (Some(merkle_root), Some(file_name), Some(file_size), Some(created_at)) = (
-                                            json_val.get("merkle_root").and_then(|v| v.as_str()),
-                                            json_val.get("file_name").and_then(|v| v.as_str()),
-                                            json_val.get("file_size").and_then(|v| v.as_u64()),
-                                            json_val.get("created_at").and_then(|v| v.as_u64()),
+                                            json_val.get("merkleRoot").and_then(|v| v.as_str()),
+                                            json_val.get("fileName").and_then(|v| v.as_str()),
+                                            json_val.get("fileSize").and_then(|v| v.as_u64()),
+                                            json_val.get("createdAt").and_then(|v| v.as_u64()),
                                         ) {
                                             let seeders = json_val
                                                 .get("seeders")
@@ -1527,21 +1527,22 @@ async fn run_dht_node(
                                                 file_data: Vec::new(),
                                                 seeders,
                                                 created_at,
-                                                mime_type: json_val.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
-                                                encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                mime_type: json_val.get("mimeType").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                is_encrypted: json_val.get("isEncrypted").and_then(|v| v.as_bool()).unwrap_or(false),
+                                                encryption_method: json_val.get("encryptionMethod").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                key_fingerprint: json_val.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
 
-                                                parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                parent_hash: json_val.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                info_hash: json_val.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                 price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                 uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
-                                                ed2k_sources: json_val.get("ed2k_sources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                http_sources: json_val.get("httpSources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                ed2k_sources: json_val.get("ed2kSources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                ftp_sources: json_val.get("ftpSources").and_then(|v| {serde_json::from_value::<Option<Vec<FtpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
                                             };
                                             // Don't send FileDiscovered events for general discoveries to avoid interfering with searches
@@ -1661,29 +1662,30 @@ async fn run_dht_node(
                                 metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
                                 info!("🔍 DEBUG DHT PUBLISH: metadata.seeders after heartbeat = {:?}", metadata.seeders);
 
-                                // Store minimal metadata in DHT
+                                // Store minimal metadata in DHT (use camelCase keys to match serde renames)
                                 let dht_metadata = serde_json::json!({
-                                    "file_hash":metadata.merkle_root,
-                                    "merkle_root": metadata.merkle_root,
-                                    "file_name": metadata.file_name,
-                                    "file_size": metadata.file_size,
-                                    "created_at": metadata.created_at,
-                                    "mime_type": metadata.mime_type,
-                                    "is_encrypted": metadata.is_encrypted,
-                                    "encryption_method": metadata.encryption_method,
-                                    "key_fingerprint": metadata.key_fingerprint,
+                                    "fileHash": metadata.merkle_root,
+                                    "merkleRoot": metadata.merkle_root,
+                                    "fileName": metadata.file_name,
+                                    "fileSize": metadata.file_size,
+                                    "createdAt": metadata.created_at,
+                                    "mimeType": metadata.mime_type,
+                                    "isEncrypted": metadata.is_encrypted,
+                                    "encryptionMethod": metadata.encryption_method,
+                                    "keyFingerprint": metadata.key_fingerprint,
 
-                                    "parent_hash": metadata.parent_hash,
+                                    "parentHash": metadata.parent_hash,
                                     "cids": metadata.cids, // The root CID for Bitswap
-                                    "encrypted_key_bundle": metadata.encrypted_key_bundle,
-                                    "info_hash": metadata.info_hash,
+                                    "encryptedKeyBundle": metadata.encrypted_key_bundle,
+                                    "infoHash": metadata.info_hash,
                                     "trackers": metadata.trackers,
                                     "seeders": metadata.seeders,
                                     "seederHeartbeats": active_heartbeats,
                                     "price": metadata.price,
                                     "uploader_address": metadata.uploader_address,
-                                    "http_sources": metadata.http_sources,
-                                    "ed2k_sources": metadata.ed2k_sources,
+                                    "httpSources": metadata.http_sources,
+                                    "ed2kSources": metadata.ed2k_sources,
+                                    "ftpSources": metadata.ftp_sources,
                                 });
 
                                 let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
@@ -1812,24 +1814,24 @@ async fn run_dht_node(
                                 let active_heartbeats = prune_heartbeats(heartbeat_entries, now);
                                 metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
 
-                                // 3. Create and publish the DHT record pointing to the file
+                                // 3. Create and publish the DHT record pointing to the file (use camelCase keys)
                                 let dht_metadata = serde_json::json!({
-                                    "merkle_root": metadata.merkle_root,
-                                    "file_name": metadata.file_name,
-                                    "file_size": metadata.file_size,
-                                    "created_at": metadata.created_at,
-                                    "mime_type": metadata.mime_type,
-                                    "is_encrypted": metadata.is_encrypted,
-                                    "encryption_method": metadata.encryption_method,
-                                    "key_fingerprint": metadata.key_fingerprint,
+                                    "merkleRoot": metadata.merkle_root,
+                                    "fileName": metadata.file_name,
+                                    "fileSize": metadata.file_size,
+                                    "createdAt": metadata.created_at,
+                                    "mimeType": metadata.mime_type,
+                                    "isEncrypted": metadata.is_encrypted,
+                                    "encryptionMethod": metadata.encryption_method,
+                                    "keyFingerprint": metadata.key_fingerprint,
                                     "cids": metadata.cids,
-                                    "encrypted_key_bundle": metadata.encrypted_key_bundle,
-                                    "ftp_sources": metadata.ftp_sources,
-                                    "ed2k_sources": metadata.ed2k_sources,
-                                    "http_sources": metadata.http_sources,
-                                    "info_hash": metadata.info_hash,
+                                    "encryptedKeyBundle": metadata.encrypted_key_bundle,
+                                    "ftpSources": metadata.ftp_sources,
+                                    "ed2kSources": metadata.ed2k_sources,
+                                    "httpSources": metadata.http_sources,
+                                    "infoHash": metadata.info_hash,
                                     "trackers": metadata.trackers,
-                                    "parent_hash": metadata.parent_hash,
+                                    "parentHash": metadata.parent_hash,
                                     "price": metadata.price,
                                     "uploader_address": metadata.uploader_address,
                                     "seeders": metadata.seeders,
@@ -1970,12 +1972,12 @@ async fn run_dht_node(
 
                                 // Also proactively publish an updated DHT record with no seeders so remote nodes
                                 // that fetch the JSON record see that there are no seeders immediately.
-                                // Build minimal "empty" metadata
+                                // Build minimal "empty" metadata (use camelCase keys)
                                 let empty_meta = serde_json::json!({
-                                    "merkle_root": file_hash,
-                                    "file_name": serde_json::Value::Null,
-                                    "file_size": 0u64,
-                                    "created_at": unix_timestamp(),
+                                    "merkleRoot": file_hash,
+                                    "fileName": serde_json::Value::Null,
+                                    "fileSize": 0u64,
+                                    "createdAt": unix_timestamp(),
                                     "seeders": Vec::<String>::new(),
                                     "seederHeartbeats": Vec::<SeederHeartbeat>::new()
                                 });
@@ -3414,10 +3416,10 @@ async fn run_dht_node(
                                     // notify UI with updated metadata so frontend refreshes immediately
                                     if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                                         if let (Some(merkle_root), Some(file_name), Some(file_size), Some(created_at)) = (
-                                            json_val.get("merkle_root").and_then(|v| v.as_str()),
-                                            json_val.get("file_name").and_then(|v| v.as_str()),
-                                            json_val.get("file_size").and_then(|v| v.as_u64()),
-                                            json_val.get("created_at").and_then(|v| v.as_u64()),
+                                            json_val.get("merkleRoot").and_then(|v| v.as_str()),
+                                            json_val.get("fileName").and_then(|v| v.as_str()),
+                                            json_val.get("fileSize").and_then(|v| v.as_u64()),
+                                            json_val.get("createdAt").and_then(|v| v.as_u64()),
                                         ) {
                                             let seeders = json_val
                                                 .get("seeders")
@@ -3432,21 +3434,22 @@ async fn run_dht_node(
                                                 file_data: Vec::new(),
                                                 seeders,
                                                 created_at,
-                                                mime_type: json_val.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                is_encrypted: json_val.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
-                                                encryption_method: json_val.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                key_fingerprint: json_val.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                mime_type: json_val.get("mimeType").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                is_encrypted: json_val.get("isEncrypted").and_then(|v| v.as_bool()).unwrap_or(false),
+                                                encryption_method: json_val.get("encryptionMethod").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                key_fingerprint: json_val.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
 
-                                                parent_hash: json_val.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                parent_hash: json_val.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                info_hash: json_val.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 is_root: json_val.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                 price: json_val.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                 uploader_address: json_val.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                http_sources: json_val.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
-                                                ed2k_sources: json_val.get("ed2k_sources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                http_sources: json_val.get("httpSources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                ed2k_sources: json_val.get("ed2kSources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                ftp_sources: json_val.get("ftpSources").and_then(|v| {serde_json::from_value::<Option<Vec<FtpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                 ..Default::default()
                                             };
                                             // Don't send FileDiscovered events for general discoveries to avoid interfering with searches
@@ -4219,11 +4222,11 @@ async fn handle_kademlia_event(
                                     Some(file_size),
                                     Some(created_at),
                                 ) = (
-                                    // Use merkle_root as the primary identifier
-                                    metadata_json.get("merkle_root").and_then(|v| v.as_str()),
-                                    metadata_json.get("file_name").and_then(|v| v.as_str()),
-                                    metadata_json.get("file_size").and_then(|v| v.as_u64()),
-                                    metadata_json.get("created_at").and_then(|v| v.as_u64()),
+                                    // Use merkleRoot as the primary identifier (camelCase as per serde rename)
+                                    metadata_json.get("merkleRoot").and_then(|v| v.as_str()),
+                                    metadata_json.get("fileName").and_then(|v| v.as_str()),
+                                    metadata_json.get("fileSize").and_then(|v| v.as_u64()),
+                                    metadata_json.get("createdAt").and_then(|v| v.as_u64()),
                                 ) {
                                     // Verify this is the file we were searching for
                                     if file_hash == pending_search.file_hash {
@@ -4306,10 +4309,10 @@ async fn handle_kademlia_event(
                                 Some(created_at),
                             ) = (
                                 // Use merkle_root as the primary identifier
-                                metadata_json.get("merkle_root").and_then(|v| v.as_str()),
-                                metadata_json.get("file_name").and_then(|v| v.as_str()),
-                                metadata_json.get("file_size").and_then(|v| v.as_u64()),
-                                metadata_json.get("created_at").and_then(|v| v.as_u64()),
+                                metadata_json.get("merkleRoot").and_then(|v| v.as_str()),
+                                metadata_json.get("fileName").and_then(|v| v.as_str()),
+                                metadata_json.get("fileSize").and_then(|v| v.as_u64()),
+                                metadata_json.get("createdAt").and_then(|v| v.as_u64()),
                             ) {
                                 let peer_from_record =
                                     peer_record.peer.clone().map(|p| p.to_string());
@@ -4486,23 +4489,23 @@ async fn handle_kademlia_event(
                                     },
                                     created_at,
                                     mime_type: metadata_json
-                                        .get("mime_type")
+                                        .get("mimeType")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
                                     is_encrypted: metadata_json
-                                        .get("is_encrypted")
+                                        .get("isEncrypted")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(false),
                                     encryption_method: metadata_json
-                                        .get("encryption_method")
+                                        .get("encryptionMethod")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
                                     key_fingerprint: metadata_json
-                                        .get("key_fingerprint")
+                                        .get("keyFingerprint")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
                                     parent_hash: metadata_json
-                                        .get("parent_hash")
+                                        .get("parentHash")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
                                     cids: metadata_json.get("cids").and_then(|v| {
@@ -4519,7 +4522,7 @@ async fn handle_kademlia_event(
                                             .unwrap_or(None)
                                         }),
                                     info_hash: metadata_json
-                                        .get("info_hash")
+                                        .get("infoHash")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
                                     trackers: metadata_json.get("trackers").and_then(|v| {
@@ -4534,14 +4537,20 @@ async fn handle_kademlia_event(
                                         .get("price")
                                         .and_then(|v| v.as_f64())
                                         .unwrap_or(0.0),
-                                    http_sources: metadata_json.get("http_sources").and_then(|v| {
+                                    http_sources: metadata_json.get("httpSources").and_then(|v| {
                                         serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(
                                             v.clone(),
                                         )
                                         .unwrap_or(None)
                                     }),
-                                    ed2k_sources: metadata_json.get("ed2k_sources").and_then(|v| {
+                                    ed2k_sources: metadata_json.get("ed2kSources").and_then(|v| {
                                         serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(
+                                            v.clone(),
+                                        )
+                                        .unwrap_or(None)
+                                    }),
+                                    ftp_sources: metadata_json.get("ftpSources").and_then(|v| {
+                                        serde_json::from_value::<Option<Vec<FtpSourceInfo>>>(
                                             v.clone(),
                                         )
                                         .unwrap_or(None)
@@ -4847,16 +4856,16 @@ async fn handle_kademlia_event(
                                                 Some(created_at),
                                             ) = (
                                                 metadata_json
-                                                    .get("merkle_root")
+                                                    .get("merkleRoot")
                                                     .and_then(|v| v.as_str()),
                                                 metadata_json
-                                                    .get("file_name")
+                                                    .get("fileName")
                                                     .and_then(|v| v.as_str()),
                                                 metadata_json
-                                                    .get("file_size")
+                                                    .get("fileSize")
                                                     .and_then(|v| v.as_u64()),
                                                 metadata_json
-                                                    .get("created_at")
+                                                    .get("createdAt")
                                                     .and_then(|v| v.as_u64()),
                                             ) {
                                                 let metadata = FileMetadata {
@@ -4866,19 +4875,21 @@ async fn handle_kademlia_event(
                                                     file_data: Vec::new(),
                                                     seeders: provider_strings,
                                                     created_at,
-                                                    mime_type: metadata_json.get("mime_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                    is_encrypted: metadata_json.get("is_encrypted").and_then(|v| v.as_bool()).unwrap_or(false),
-                                                    encryption_method: metadata_json.get("encryption_method").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                    key_fingerprint: metadata_json.get("key_fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                    parent_hash: metadata_json.get("parent_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                    mime_type: metadata_json.get("mimeType").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                    is_encrypted: metadata_json.get("isEncrypted").and_then(|v| v.as_bool()).unwrap_or(false),
+                                                    encryption_method: metadata_json.get("encryptionMethod").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                    key_fingerprint: metadata_json.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                    parent_hash: metadata_json.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     cids: metadata_json.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
                                                     encrypted_key_bundle: metadata_json.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
-                                                    info_hash: metadata_json.get("info_hash").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                    info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     trackers: metadata_json.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                     is_root: metadata_json.get("is_root").and_then(|v| v.as_bool()).unwrap_or(true),
                                                     price: metadata_json.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
                                                     uploader_address: metadata_json.get("uploader_address").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                    http_sources: metadata_json.get("http_sources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                    http_sources: metadata_json.get("httpSources").and_then(|v| {serde_json::from_value::<Option<Vec<HttpSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                    ed2k_sources: metadata_json.get("ed2kSources").and_then(|v| {serde_json::from_value::<Option<Vec<Ed2kSourceInfo>>>(v.clone()).unwrap_or(None)}),
+                                                    ftp_sources: metadata_json.get("ftpSources").and_then(|v| {serde_json::from_value::<Option<Vec<FtpSourceInfo>>>(v.clone()).unwrap_or(None)}),
                                                     ..Default::default()
                                                 };
                                             }

@@ -563,10 +563,13 @@
         });
         pushMessage('HTTP download started', 'success');
       } else if (protocolId === 'ftp' && metadata.ftpSources && metadata.ftpSources.length > 0) {
-        await invoke('download_ftp', { url: metadata.ftpSources[0] });
+        await invoke('download_ftp', { url: metadata.ftpSources[0].url });
         pushMessage('FTP download started', 'success');
       } else if (protocolId === 'ed2k' && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
-        await invoke('download_ed2k', { link: metadata.ed2kSources[0] });
+        // Construct ED2K file link from source info: ed2k://|file|name|size|hash|/
+        const ed2kSource = metadata.ed2kSources[0];
+        const ed2kLink = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`;
+        await invoke('download_ed2k', { link: ed2kLink });
         pushMessage('ED2K download started', 'success');
       } else {
         pushMessage(`No ${protocolId.toUpperCase()} sources available`, 'warning');

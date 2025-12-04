@@ -404,6 +404,9 @@ struct AppState {
 
     // Download restart service for pause/resume functionality
     download_restart: Mutex<Option<Arc<download_restart::DownloadRestartService>>>,
+
+    // FTP server for serving uploaded files
+    ftp_server: Arc<chiral_network::ftp_server::FtpServer>,
 }
 
 /// Tauri command to create a new Chiral account
@@ -3769,87 +3772,84 @@ async fn upload_file_to_network(
                 }
             }
             "FTP" => {
-                // Use FTP protocol handler (though FTP seeding is more complex)
+                // FTP upload uses the built-in FTP server
+                println!("📡 FTP upload: Using built-in FTP server");
 
-                let file_path_buf = PathBuf::from(&file_path);
+                // Ensure FTP server is running
+                if !state.ftp_server.is_running().await {
+                    state.ftp_server.start().await
+                        .map_err(|e| format!("Failed to start FTP server: {}", e))?;
+                }
 
-                // Create FTP protocol handler
-                let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
+                // Read the file data
+                let file_data = tokio::fs::read(&file_path)
+                    .await
+                    .map_err(|e| format!("Failed to read file: {}", e))?;
+                let file_size = file_data.len() as u64;
 
-                // Seed the file using the protocol handler
-                let seed_options = protocols::traits::SeedOptions {
-                    announce_dht: false, // FTP doesn't use DHT
-                    enable_encryption: false,
-                    upload_slots: None,
-                };
+                // Use file hash as the filename to ensure uniqueness
+                let ftp_file_name = format!("{}_{}", file_hash, original_file_name);
 
-                match ftp_handler.seed(file_path_buf.clone(), seed_options).await {
-                    Ok(seeding_info) => {
-                        let file_size = match tokio::fs::metadata(&file_path).await {
-                            Ok(metadata) => metadata.len(),
-                            Err(_) => 0,
-                        };
+                // Add file to FTP server
+                let ftp_url = state.ftp_server.add_file_data(&file_data, &ftp_file_name).await
+                    .map_err(|e| format!("Failed to add file to FTP server: {}", e))?;
 
-                        let metadata = FileMetadata {
-                            merkle_root: file_hash.clone(), // Use content hash for consistency
-                            is_root: true,
-                            file_name: original_file_name.clone(),
-                            file_size,
-                            file_data: vec![],
-                            seeders: vec![],
-                            created_at: std::time::SystemTime::now()
+                println!("✅ File added to FTP server: {}", ftp_url);
+
+                let metadata = FileMetadata {
+                    merkle_root: file_hash.clone(),
+                    is_root: true,
+                    file_name: original_file_name.clone(),
+                    file_size,
+                    file_data: vec![],
+                    seeders: vec![],
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    mime_type: None,
+                    is_encrypted: false,
+                    encryption_method: None,
+                    key_fingerprint: None,
+                    parent_hash: None,
+                    cids: None,
+                    encrypted_key_bundle: None,
+                    price,
+                    uploader_address: Some(account),
+                    http_sources: None,
+                    ftp_sources: Some(vec![dht::models::FtpSourceInfo {
+                        url: ftp_url.clone(),
+                        username: None,
+                        password: None,
+                        supports_resume: true,
+                        file_size,
+                        last_checked: Some(
+                            std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs(),
-                            mime_type: None,
-                            is_encrypted: false,
-                            encryption_method: None,
-                            key_fingerprint: None,
-                            parent_hash: None,
-                            cids: None,
-                            encrypted_key_bundle: None,
-                            price,
-                            uploader_address: Some(account),
-                            ftp_sources: Some(vec![dht::models::FtpSourceInfo {
-                                url: seeding_info.identifier.clone(),
-                                username: None,
-                                password: None,
-                                supports_resume: true,
-                                file_size,
-                                last_checked: Some(
-                                    std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs(),
-                                ),
-                                is_available: true,
-                            }]),
-                            http_sources: None,
-                            info_hash: None,
-                            trackers: None,
-                            ed2k_sources: None,
-                            download_path: None,
-                        };
+                        ),
+                        is_available: true,
+                    }]),
+                    info_hash: None,
+                    trackers: None,
+                    ed2k_sources: None,
+                    download_path: None,
+                };
 
-                        let dht = {
-                            let dht_guard = state.dht.lock().await;
-                            dht_guard.as_ref().cloned()
-                        };
+                let dht = {
+                    let dht_guard = state.dht.lock().await;
+                    dht_guard.as_ref().cloned()
+                };
 
-                        if let Some(dht) = dht {
-                            if let Err(e) = dht.publish_file(metadata.clone(), None).await {
-                                warn!("Failed to publish FTP file metadata to DHT: {}", e);
-                                // Don't fail the upload, just log the warning
-                            }
-                        }
-
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        println!("❌ FTP seeding failed: {}", e);
-                        return Err(format!("FTP seeding failed: {}", e));
+                if let Some(dht) = dht {
+                    if let Err(e) = dht.publish_file(metadata.clone(), None).await {
+                        warn!("Failed to publish FTP file metadata to DHT: {}", e);
                     }
                 }
+
+                println!("✅ FTP upload complete - file available at: {}", ftp_url);
+                return Ok(());
             }
             "Bitswap" => {
                 // Use streaming upload for Bitswap to handle large files
@@ -6887,22 +6887,225 @@ async fn download_ed2k(link: String, state: State<'_, AppState>) -> Result<(), S
 }
 
 #[tauri::command]
-async fn download_ftp(url: String, state: State<'_, AppState>) -> Result<(), String> {
+async fn download_ftp(
+    url: String,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    use chiral_network::transfer_events::{
+        current_timestamp_ms, SourceInfo, SourceType, TransferPriority,
+        TransferQueuedEvent, TransferStartedEvent, TransferEvent,
+        TransferFailedEvent, TransferCompletedEvent, SourceConnectedEvent,
+        SourceSummary, ErrorCategory,
+    };
+    use chiral_network::ftp_downloader::FtpDownloader;
+    use tauri::Emitter;
+    
     tracing::info!("Starting FTP download: {}", url);
 
-    // Use the protocol manager for FTP downloads
-    use crate::protocols::traits::DownloadOptions;
-    let options = DownloadOptions {
-        output_path: std::path::PathBuf::from("./downloads"),
-        max_peers: Some(1), // FTP typically single connection
-        ..Default::default()
-    };
+    // Validate FTP URL
+    if !url.starts_with("ftp://") {
+        return Err(format!("Invalid FTP URL scheme: {}", url));
+    }
 
-    state
-        .protocol_manager
-        .download(&url, options)
-        .await
-        .map_err(|e| format!("FTP download failed: {}", e))?;
+    // Parse URL to extract file info
+    let parsed_url = url::Url::parse(&url)
+        .map_err(|e| format!("Invalid FTP URL: {}", e))?;
+    
+    let file_name = parsed_url
+        .path_segments()
+        .and_then(|segments| segments.last())
+        .map(|s| urlencoding::decode(s).unwrap_or_else(|_| s.into()).to_string())
+        .unwrap_or_else(|| "unknown_file".to_string());
+    
+    let host = parsed_url.host_str().unwrap_or("unknown").to_string();
+    
+    // Generate transfer ID
+    let transfer_id = format!("ftp-{:x}", {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        url.hash(&mut hasher);
+        hasher.finish()
+    });
+    
+    let started_at = current_timestamp_ms();
+    let source_id = format!("ftp-{}", host);
+    
+    // Determine download directory
+    let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+        .map(|dirs| dirs.data_dir().join("downloads"))
+        .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+    
+    // Ensure download directory exists
+    if let Err(e) = std::fs::create_dir_all(&download_dir) {
+        return Err(format!("Failed to create download directory: {}", e));
+    }
+    
+    let output_path = download_dir.join(&file_name);
+    
+    // Emit queued event via transfer:event channel
+    let queued_event = TransferQueuedEvent {
+        transfer_id: transfer_id.clone(),
+        file_hash: transfer_id.clone(),
+        file_name: file_name.clone(),
+        file_size: 0, // Unknown until connected
+        output_path: output_path.to_string_lossy().to_string(),
+        priority: TransferPriority::Normal,
+        queued_at: started_at,
+        queue_position: 0,
+        estimated_sources: 1,
+    };
+    let _ = app_handle.emit("transfer:event", &TransferEvent::Queued(queued_event));
+    
+    // Create source info for events
+    let source_info = SourceInfo {
+        id: source_id.clone(),
+        source_type: SourceType::Ftp,
+        address: host.clone(),
+        reputation: None,
+        estimated_speed_bps: None,
+        latency_ms: None,
+        location: None,
+    };
+    
+    // Emit started event
+    let started_event = TransferStartedEvent {
+        transfer_id: transfer_id.clone(),
+        file_hash: transfer_id.clone(),
+        file_name: file_name.clone(),
+        file_size: 0,
+        total_chunks: 1,
+        chunk_size: 0,
+        started_at,
+        available_sources: vec![source_info.clone()],
+        selected_sources: vec![source_id.clone()],
+    };
+    let _ = app_handle.emit("transfer:event", &TransferEvent::Started(started_event));
+
+    // Clone values for the spawned task
+    let transfer_id_clone = transfer_id.clone();
+    let file_name_clone = file_name.clone();
+    let source_id_clone = source_id.clone();
+    let source_info_clone = source_info.clone();
+    let parsed_url_clone = parsed_url.clone();
+    // URL-decode the path to handle spaces and special characters
+    let remote_path = urlencoding::decode(parsed_url.path())
+        .unwrap_or_else(|_| parsed_url.path().into())
+        .to_string();
+    
+    // Spawn download in background task so we return immediately
+    tokio::spawn(async move {
+        let downloader = FtpDownloader::new();
+        let download_start = std::time::Instant::now();
+        
+        // Connect to FTP server
+        let mut stream = match downloader.connect_and_login(&parsed_url_clone, None).await {
+            Ok(s) => {
+                // Emit source connected event
+                let connected_event = SourceConnectedEvent {
+                    transfer_id: transfer_id_clone.clone(),
+                    source_id: source_id_clone.clone(),
+                    source_type: SourceType::Ftp,
+                    source_info: source_info_clone.clone(),
+                    connected_at: current_timestamp_ms(),
+                    assigned_chunks: vec![0],
+                };
+                let _ = app_handle.emit("transfer:event", &TransferEvent::SourceConnected(connected_event));
+                s
+            }
+            Err(e) => {
+                let failed_event = TransferFailedEvent {
+                    transfer_id: transfer_id_clone.clone(),
+                    file_hash: transfer_id_clone.clone(),
+                    failed_at: current_timestamp_ms(),
+                    error: format!("FTP connection failed: {}", e),
+                    error_category: ErrorCategory::Network,
+                    downloaded_bytes: 0,
+                    total_bytes: 0,
+                    retry_possible: true,
+                };
+                let _ = app_handle.emit("transfer:event", &TransferEvent::Failed(failed_event));
+                tracing::error!("FTP connection failed: {}", e);
+                return;
+            }
+        };
+        
+        // Get file size
+        let file_size = match downloader.get_file_size(&mut stream, &remote_path).await {
+            Ok(size) => size,
+            Err(e) => {
+                tracing::warn!("Could not get file size: {}", e);
+                0
+            }
+        };
+        
+        // Download the file
+        match downloader.download_full(&mut stream, &remote_path).await {
+            Ok(data) => {
+                let download_duration = download_start.elapsed();
+                let duration_secs = download_duration.as_secs_f64();
+                let speed_bps = if duration_secs > 0.0 {
+                    data.len() as f64 / duration_secs
+                } else {
+                    0.0
+                };
+                
+                // Save to disk
+                if let Err(e) = std::fs::write(&output_path, &data) {
+                    let failed_event = TransferFailedEvent {
+                        transfer_id: transfer_id_clone.clone(),
+                        file_hash: transfer_id_clone.clone(),
+                        failed_at: current_timestamp_ms(),
+                        error: format!("Failed to save file: {}", e),
+                        error_category: ErrorCategory::Filesystem,
+                        downloaded_bytes: data.len() as u64,
+                        total_bytes: file_size,
+                        retry_possible: true,
+                    };
+                    let _ = app_handle.emit("transfer:event", &TransferEvent::Failed(failed_event));
+                    tracing::error!("Failed to save FTP download: {}", e);
+                    return;
+                }
+                
+                // Emit completed event
+                let completed_event = TransferCompletedEvent {
+                    transfer_id: transfer_id_clone.clone(),
+                    file_hash: transfer_id_clone.clone(),
+                    file_name: file_name_clone.clone(),
+                    file_size: data.len() as u64,
+                    output_path: output_path.to_string_lossy().to_string(),
+                    completed_at: current_timestamp_ms(),
+                    duration_seconds: duration_secs as u64,
+                    average_speed_bps: speed_bps,
+                    total_chunks: 1,
+                    sources_used: vec![SourceSummary {
+                        source_id: source_id_clone.clone(),
+                        source_type: SourceType::Ftp,
+                        chunks_provided: 1,
+                        bytes_provided: data.len() as u64,
+                        average_speed_bps: speed_bps,
+                        connection_duration_seconds: duration_secs as u64,
+                    }],
+                };
+                let _ = app_handle.emit("transfer:event", &TransferEvent::Completed(completed_event));
+                tracing::info!("FTP download completed: {} ({} bytes in {:.2}s)", 
+                    file_name_clone, data.len(), duration_secs);
+            }
+            Err(e) => {
+                let failed_event = TransferFailedEvent {
+                    transfer_id: transfer_id_clone.clone(),
+                    file_hash: transfer_id_clone.clone(),
+                    failed_at: current_timestamp_ms(),
+                    error: format!("FTP download failed: {}", e),
+                    error_category: ErrorCategory::Network,
+                    downloaded_bytes: 0,
+                    total_bytes: file_size,
+                    retry_possible: true,
+                };
+                let _ = app_handle.emit("transfer:event", &TransferEvent::Failed(failed_event));
+                tracing::error!("FTP download failed: {}", e);
+            }
+        }
+    });
 
     Ok(())
 }
@@ -7282,6 +7485,14 @@ fn main() {
 
             // Download restart service (will be initialized in setup)
             download_restart: Mutex::new(None),
+
+            // FTP server for serving uploaded files
+            ftp_server: Arc::new(chiral_network::ftp_server::FtpServer::new(
+                directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                    .map(|dirs| dirs.data_dir().join("ftp_files"))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("ftp_files")),
+                2121, // FTP port
+            )),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
