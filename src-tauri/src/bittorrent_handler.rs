@@ -210,7 +210,6 @@ pub struct PersistentTorrent {
 
     /// The last known status of the torrent (e.g., downloading or seeding).
     pub status: PersistentTorrentStatus,
-
     /// Timestamp (Unix epoch seconds) when the torrent was added.
     pub added_at: u64,
 
