@@ -324,6 +324,10 @@ pub enum DhtCommand {
         file_hash: String,
         sender: oneshot::Sender<Result<Vec<String>, String>>,
     },
+    GetPeerAddresses {
+        peer_ids: Vec<PeerId>,
+        sender: oneshot::Sender<HashMap<PeerId, Vec<Multiaddr>>>,
+    },
     SendWebRTCOffer {
         peer: PeerId,
         offer_request: WebRTCOfferRequest,
@@ -2672,13 +2676,38 @@ async fn run_dht_node(
                                     recovery_triggered,
                                 });
                             }
+                            Some(DhtCommand::GetPeerAddresses { peer_ids, sender }) => {
+                                let mut addresses_map = HashMap::new();
+                                
+                                // First, collect all k-bucket entries to avoid lifetime issues
+                                let all_entries: Vec<_> = swarm
+                                    .behaviour_mut()
+                                    .kademlia
+                                    .kbuckets()
+                                    .flat_map(|bucket| {
+                                        bucket.iter().map(|entry| {
+                                            (*entry.node.key.preimage(), entry.node.value.iter().cloned().collect::<Vec<_>>())
+                                        }).collect::<Vec<_>>()
+                                    })
+                                    .collect();
+                                
+                                // Now find addresses for requested peer IDs
+                                for peer_id in peer_ids {
+                                    if let Some((_, addrs)) = all_entries.iter().find(|(id, _)| id == &peer_id) {
+                                        if !addrs.is_empty() {
+                                            addresses_map.insert(peer_id, addrs.clone());
+                                        }
+                                    }
+                                }
+                                
+                                let _ = sender.send(addresses_map);
+                            }
                             None => {
                                 info!("DHT command channel closed; shutting down node task");
                                 break 'outer;
                             }
-                        }
+                        }    
                     }
-
                     event = swarm.next() => if let Some(event) = event {
                         match event {
                             SwarmEvent::Behaviour(DhtBehaviourEvent::Kademlia(kad_event)) => {
@@ -6183,15 +6212,15 @@ impl DhtService {
         // QUIC also bound to the same port (udp), seems to destablize peer connect/download, disabled for now until solution
         // let quic_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", port).parse()?;
         // swarm.listen_on(quic_addr)?;
-        // Clean up any unreachable addresses from Kademlia's routing table at startup
-        // This removes stale localhost/private addresses that may have been persisted
         {
-            let kademlia = swarm.behaviour_mut().kademlia.kbuckets();
             let mut addrs_to_remove: Vec<(PeerId, Multiaddr)> = Vec::new();
 
-            for bucket in kademlia {
+            // kbuckets() already returns an iterator, use it directly
+            for bucket in swarm.behaviour_mut().kademlia.kbuckets() {
                 for entry in bucket.iter() {
                     let peer_id = entry.node.key.preimage();
+                    // entry.node.value is of type Addresses, which implements IntoIterator
+                    // We need to iterate over it and clone each address
                     for addr in entry.node.value.iter() {
                         if !ma_plausibly_reachable(addr) {
                             addrs_to_remove.push((*peer_id, addr.clone()));
@@ -6766,6 +6795,36 @@ impl DhtService {
 
     pub async fn get_peer_id(&self) -> String {
         self.peer_id.clone()
+    }
+
+    pub async fn get_peer_addresses(
+        &self,
+        peer_ids: Vec<String>,
+    ) -> Result<HashMap<String, Vec<String>>, String> {
+        let parsed_ids: Vec<PeerId> = peer_ids.into_iter().filter_map(|id| id.parse().ok()).collect();
+
+        if parsed_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::GetPeerAddresses {
+                peer_ids: parsed_ids,
+                sender: tx,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let result_map = rx.await.map_err(|e| e.to_string())?;
+
+        // Convert back to String keys and values for the caller
+        let final_map = result_map
+            .into_iter()
+            .map(|(peer_id, addrs)| (peer_id.to_string(), addrs.into_iter().map(|a| a.to_string()).collect()))
+            .collect();
+
+        Ok(final_map)
     }
 
     /// Get multiaddresses for this node (including the peer ID)
