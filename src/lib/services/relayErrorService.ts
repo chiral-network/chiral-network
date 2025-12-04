@@ -94,6 +94,7 @@ export interface RelayErrorConfig {
   initialRetryDelay: number;        // Initial retry delay in ms
   maxRetryDelay: number;            // Maximum retry delay in ms
   backoffMultiplier: number;        // Exponential backoff multiplier
+  overloadedCooldownMs: number;     // Cooldown applied when relay reports resource limits
   reservationRenewalThreshold: number; // Renew when X seconds remain
   healthScoreDecay: number;         // Health score reduction per failure
   errorHistoryLimit: number;        // Max errors to track per relay
@@ -107,6 +108,7 @@ const DEFAULT_CONFIG: RelayErrorConfig = {
   initialRetryDelay: 1000,
   maxRetryDelay: 30000,
   backoffMultiplier: 2,
+  overloadedCooldownMs: 60000,
   reservationRenewalThreshold: 300, // 5 minutes
   healthScoreDecay: 15,
   errorHistoryLimit: 10,
@@ -127,12 +129,13 @@ class RelayErrorService {
   public relayPool = writable<Map<string, RelayNode>>(new Map());
   public activeRelay = writable<RelayNode | null>(null);
   public errorLog = writable<RelayError[]>([]);
+  private relayCooldowns = new Map<string, number>(); // relayId -> cooldown until epoch ms
   private persistedErrorsKey = 'relayErrorLog';
 
   // Derived stores
   public healthyRelays = derived(this.relayPool, $pool =>
     Array.from($pool.values())
-      .filter(relay => relay.healthScore >= this.config.minHealthScore)
+      .filter(relay => relay.healthScore >= this.config.minHealthScore && !this.isInCooldown(relay.id))
       .sort((a, b) => b.healthScore - a.healthScore)
   );
 
@@ -251,6 +254,19 @@ class RelayErrorService {
       };
       this.logError(error);
       return { success: false, relayId: relayId || 'unknown', error };
+    }
+
+    // Skip relays currently in cooldown after resource-limit errors
+    if (relay && this.isInCooldown(relay.id)) {
+      const error: RelayError = {
+        type: RelayErrorType.RELAY_OVERLOADED,
+        message: 'Relay in cooldown after resource-limit rejection',
+        timestamp: Date.now(),
+        relayId: relay.id,
+        retryCount: 0
+      };
+      this.logError(error);
+      return { success: false, relayId: relay.id, error };
     }
 
     // If this relay has an unsupported/invalid multiaddr, drop it without attempting a connection
@@ -427,6 +443,11 @@ class RelayErrorService {
       errors: [...relay.errors, error].slice(-this.config.errorHistoryLimit)
     });
 
+    // If relay reports resource limit / overload, apply cooldown to avoid hammering it
+    if (error.type === RelayErrorType.RELAY_OVERLOADED || this.isResourceLimit(error.message)) {
+      this.relayCooldowns.set(relay.id, Date.now() + this.config.overloadedCooldownMs);
+    }
+
     // If the relay multiaddr is unsupported/invalid, drop it from the pool so we stop repinging it
     if (this.isUnsupportedMultiaddr(error)) {
       this.relayPool.update(pool => {
@@ -447,6 +468,21 @@ class RelayErrorService {
   private isUnsupportedMultiaddr(error: RelayError): boolean {
     const message = error.message.toLowerCase();
     return message.includes('multiaddr') && (message.includes('unsupported') || message.includes('not supported') || message.includes('invalid'));
+  }
+
+  private isResourceLimit(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes('resource limit') || lower.includes('too many connections') || lower.includes('limit exceeded');
+  }
+
+  private isInCooldown(relayId: string): boolean {
+    const until = this.relayCooldowns.get(relayId);
+    if (!until) return false;
+    if (Date.now() >= until) {
+      this.relayCooldowns.delete(relayId);
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -571,7 +607,7 @@ class RelayErrorService {
       return RelayErrorType.CONNECTION_TIMEOUT;
     } else if (message.includes('reservation')) {
       return RelayErrorType.RESERVATION_FAILED;
-    } else if (message.includes('overload') || message.includes('capacity')) {
+    } else if (message.includes('overload') || message.includes('capacity') || this.isResourceLimit(message)) {
       return RelayErrorType.RELAY_OVERLOADED;
     } else if (message.includes('unreachable') || message.includes('not found')) {
       return RelayErrorType.RELAY_UNREACHABLE;
@@ -650,7 +686,7 @@ class RelayErrorService {
 
     return {
       relayCount: relays.length,
-      healthyCount: relays.filter(r => r.healthScore >= this.config.minHealthScore).length,
+      healthyCount: relays.filter(r => r.healthScore >= this.config.minHealthScore && !this.isInCooldown(r.id)).length,
       connectedCount: relays.filter(r =>
         r.state === RelayConnectionState.CONNECTED ||
         r.state === RelayConnectionState.RESERVED
