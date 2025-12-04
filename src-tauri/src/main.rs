@@ -3341,11 +3341,6 @@ async fn start_file_transfer_service(
     };
 
     if let Some(dht_service) = dht_arc.clone() {
-        // Set the local peer ID on WebRTC service for HMAC key exchange
-        let local_peer_id = dht_service.get_peer_id().await;
-        webrtc_arc.set_local_peer_id(local_peer_id.clone()).await;
-        info!("Set local peer ID on WebRTC service: {}", local_peer_id);
-        
         // Create transfer event bus for unified event emission
         let transfer_event_bus = Arc::new(TransferEventBus::new(app.app_handle().clone()));
         // Get chunk manager from AppState
