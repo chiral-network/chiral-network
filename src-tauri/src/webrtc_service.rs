@@ -1118,16 +1118,40 @@ impl WebRTCService {
         // Serialize chunk and send over data channel
         match serde_json::to_string(chunk) {
             Ok(chunk_json) => {
+                let chunk_len = chunk_json.len();
                 // Log for first 100 chunks
                 if chunk.chunk_index < 100 {
-                    debug!("📤 SEND_TEXT_START: chunk {} ({} bytes) for peer {}", chunk.chunk_index, chunk_json.len(), peer_id);
+                    info!("📤 SEND_TEXT_START: chunk {} ({} bytes) for peer {}", chunk.chunk_index, chunk_len, peer_id);
                 }
+                
+                // Check buffer before sending - wait if buffer is too full
+                // This prevents overwhelming the data channel's internal buffer
+                let max_buffered: usize = 256 * 1024; // 256KB max buffer
+                let start_wait = Instant::now();
+                loop {
+                    let buffered = dc.buffered_amount().await;
+                    if buffered < max_buffered {
+                        break;
+                    }
+                    if start_wait.elapsed() > Duration::from_secs(10) {
+                        error!("❌ Timeout waiting for data channel buffer to drain (buffered: {} bytes)", buffered);
+                        return Err("Data channel buffer timeout".to_string());
+                    }
+                    if chunk.chunk_index < 100 {
+                        info!("⏳ Waiting for buffer to drain: {} bytes buffered for chunk {}", buffered, chunk.chunk_index);
+                    }
+                    sleep(Duration::from_millis(10)).await;
+                }
+                
                 if let Err(e) = dc.send_text(chunk_json).await {
                     error!("Failed to send chunk over data channel: {}", e);
                     return Err(format!("Failed to send chunk: {}", e));
                 }
+                
+                // Log buffer state after send
                 if chunk.chunk_index < 100 {
-                    debug!("📤 SEND_TEXT_DONE: chunk {} for peer {}", chunk.chunk_index, peer_id);
+                    let buffered_after = dc.buffered_amount().await;
+                    info!("📤 SEND_TEXT_DONE: chunk {} for peer {}, buffer now: {} bytes", chunk.chunk_index, peer_id, buffered_after);
                 }
                 Ok(())
             }
@@ -1599,8 +1623,14 @@ impl WebRTCService {
             let (final_chunk_data, encrypted_key_bundle) =
                 if let Some(ref recipient_key) = request.recipient_public_key {
                     // Encrypted transfer - no HMAC authentication needed (AES-256-GCM provides AEAD)
+                    if chunk_index < 100 {
+                        info!("🔐 Encrypting chunk {} for peer {}", chunk_index, peer_id);
+                    }
                     match Self::encrypt_chunk_for_peer(&chunk_data, recipient_key, keystore).await {
                         Ok((encrypted_data, key_bundle)) => {
+                            if chunk_index < 100 {
+                                info!("🔐 Encryption done for chunk {}", chunk_index);
+                            }
                             (encrypted_data, Some(key_bundle))
                         }
                         Err(e) => {
@@ -1634,7 +1664,9 @@ impl WebRTCService {
             };
 
             // Send chunk via WebRTC data channel - abort transfer if send fails
-            debug!("🔄 Chunk {}: About to call handle_send_chunk", chunk_index);
+            if chunk_index < 100 {
+                info!("🔄 Chunk {}: About to call handle_send_chunk", chunk_index);
+            }
             if let Err(e) = Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await {
                 error!("Failed to send chunk {}/{} to peer {}: {}", chunk_index, total_chunks, peer_id, e);
                 let _ = event_tx
@@ -1646,7 +1678,9 @@ impl WebRTCService {
                     .await;
                 return Err(format!("Transfer aborted: {}", e));
             }
-            debug!("🔄 Chunk {}: handle_send_chunk completed successfully", chunk_index);
+            if chunk_index < 100 {
+                info!("🔄 Chunk {}: handle_send_chunk completed successfully", chunk_index);
+            }
 
             // Increment pending ACK count (only if send succeeded)
             {
