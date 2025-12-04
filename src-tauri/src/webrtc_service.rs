@@ -1118,9 +1118,16 @@ impl WebRTCService {
         // Serialize chunk and send over data channel
         match serde_json::to_string(chunk) {
             Ok(chunk_json) => {
+                // Log for first 100 chunks
+                if chunk.chunk_index < 100 {
+                    debug!("📤 SEND_TEXT_START: chunk {} ({} bytes) for peer {}", chunk.chunk_index, chunk_json.len(), peer_id);
+                }
                 if let Err(e) = dc.send_text(chunk_json).await {
                     error!("Failed to send chunk over data channel: {}", e);
                     return Err(format!("Failed to send chunk: {}", e));
+                }
+                if chunk.chunk_index < 100 {
+                    debug!("📤 SEND_TEXT_DONE: chunk {} for peer {}", chunk.chunk_index, peer_id);
                 }
                 Ok(())
             }
@@ -1494,6 +1501,11 @@ impl WebRTCService {
 
         // Send file chunks over WebRTC data channel with flow control
         for chunk_index in 0..total_chunks {
+            // Log EVERY chunk for first 100 to debug stall
+            if chunk_index < 100 {
+                info!("🔁 LOOP: Starting chunk {} for peer {}", chunk_index, peer_id);
+            }
+            
             // Log first few chunks, last chunk, and every 50th chunk
             if chunk_index < 10 || chunk_index == total_chunks - 1 || chunk_index % 50 == 0 {
                 info!("📤 Processing chunk {}/{} for peer {}", chunk_index + 1, total_chunks, peer_id);
@@ -1573,6 +1585,11 @@ impl WebRTCService {
 
                 // Wait a bit before checking again
                 sleep(Duration::from_millis(50)).await;
+            }
+            
+            // Log after flow control (for first 100 chunks)
+            if chunk_index < 100 {
+                info!("🔓 FLOW_CONTROL_PASSED: chunk {} for peer {}", chunk_index, peer_id);
             }
 
             let start = (chunk_index as usize) * CHUNK_SIZE;
@@ -1678,6 +1695,11 @@ impl WebRTCService {
                 sleep(Duration::from_millis(50)).await;
             } else {
                 sleep(Duration::from_millis(5)).await;
+            }
+            
+            // Log end of loop iteration for first 100 chunks
+            if chunk_index < 100 {
+                info!("🔁 LOOP_END: Finished chunk {} for peer {}, going to next", chunk_index, peer_id);
             }
         }
 
