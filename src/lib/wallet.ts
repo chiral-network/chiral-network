@@ -352,11 +352,14 @@ export class WalletService {
       }
 
       // Update total count AND rewards together to keep them consistent
-      // During active mining, don't override with potentially inconsistent scan data
+      // During active mining, don't override - the backend counter is the source of truth
+      // The backend counter is initialized from accurateTotals and incremented when new blocks are mined
       const reward = get(blockReward);
       const currentMiningState = get(miningState);
 
       if (!currentMiningState.isMining) {
+        // Use the backend counter (totalBlockCount from get_blocks_mined) as the source of truth
+        // This counter is initialized from accurateTotals and incremented during mining
         miningState.update((state) => ({
           ...state,
           blocksFound: totalBlockCount,
@@ -1323,6 +1326,26 @@ export class WalletService {
         totalReceived: result.total_received,
         totalSent: result.total_sent,
       });
+
+      // Initialize the backend session counter with the accurate blockchain count
+      // This ensures "mined rewards" display matches the actual blockchain data
+      try {
+        await invoke("initialize_mined_blocks_count", {
+          address: accountAddress,
+          count: result.blocks_mined,
+        });
+        console.log(`[Accurate Totals] Initialized backend blocks count to: ${result.blocks_mined}`);
+        
+        // Also update the mining state store to reflect accurate totals
+        const reward = get(blockReward);
+        miningState.update((state) => ({
+          ...state,
+          blocksFound: result.blocks_mined,
+          totalRewards: result.blocks_mined * reward,
+        }));
+      } catch (initError) {
+        console.warn("[Accurate Totals] Failed to initialize backend counter:", initError);
+      }
 
       console.log(`[Accurate Totals] Complete!`, result);
     } catch (error) {

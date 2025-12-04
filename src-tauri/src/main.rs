@@ -1323,18 +1323,34 @@ lazy_static! {
 }
 
 async fn increment_mined_blocks(miner_address: String) {
+    // Normalize address to lowercase for consistent HashMap keys
+    let normalized_address = miner_address.to_lowercase();
     let mut counts = TOTAL_MINED_BLOCKS.lock().await;
-    let count = counts.entry(miner_address.clone()).or_insert(0);
+    let count = counts.entry(normalized_address.clone()).or_insert(0);
     *count += 1;
     println!(
         "🎉 Block mined by {}! Total blocks mined by this address: {}",
-        miner_address, *count
+        normalized_address, *count
     );
 }
 
 async fn get_total_mined_blocks(miner_address: &str) -> u64 {
+    // Normalize address to lowercase for consistent HashMap keys
+    let normalized_address = miner_address.to_lowercase();
     let counts = TOTAL_MINED_BLOCKS.lock().await;
-    *counts.get(miner_address).unwrap_or(&0)
+    *counts.get(&normalized_address).unwrap_or(&0)
+}
+
+/// Set the mined blocks count for an address (used to initialize from blockchain data)
+pub async fn set_mined_blocks_count(miner_address: &str, count: u64) {
+    // Normalize address to lowercase for consistent HashMap keys
+    let normalized_address = miner_address.to_lowercase();
+    let mut counts = TOTAL_MINED_BLOCKS.lock().await;
+    counts.insert(normalized_address.clone(), count);
+    println!(
+        "📊 Initialized mined blocks count for {}: {}",
+        normalized_address, count
+    );
 }
 
 #[tauri::command]
@@ -1344,6 +1360,14 @@ async fn clear_blocks_cache() {
 
     // Don't reset incremental scanning - let it continue from where it left off
     // This ensures we maintain our scanning progress and don't lose discovered blocks
+}
+
+/// Initialize the mined blocks count for an address from blockchain data
+/// This should be called when an account is loaded to sync session counter with blockchain
+#[tauri::command]
+async fn initialize_mined_blocks_count(address: String, count: u64) -> Result<(), String> {
+    set_mined_blocks_count(&address, count).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -7324,6 +7348,7 @@ fn main() {
             start_mining_monitor,
             clear_blocks_cache,
             get_blocks_mined,
+            initialize_mined_blocks_count,
             get_recent_mined_blocks_pub,
             get_mined_blocks_range,
             get_total_mining_rewards,

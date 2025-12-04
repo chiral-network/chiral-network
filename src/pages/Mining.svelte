@@ -5,7 +5,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { blockReward, miningState, type MiningHistoryPoint, wallet } from '$lib/stores';
+  import { blockReward, miningState, type MiningHistoryPoint, wallet, accurateTotals, isCalculatingAccurateTotals } from '$lib/stores';
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
 
@@ -103,6 +103,39 @@
   // $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model (unused)
   $: profitMargin = dailyRevenue > 0 ? ((dailyProfit / dailyRevenue) * 100) : 0
   $: isProfitable = dailyProfit > 0
+
+  // Track if we've synced with accurate totals to avoid repeated fetches
+  let hasSyncedWithAccurateTotals = false;
+
+  // Reset sync flag when accurateTotals is cleared (account change/logout)
+  $: if (!$accurateTotals) {
+    hasSyncedWithAccurateTotals = false;
+  }
+
+  // Re-fetch blocks count from backend when accurateTotals is calculated
+  // This ensures the Mining page picks up the initialized backend counter
+  $: if ($accurateTotals && !hasSyncedWithAccurateTotals && !$miningState.isMining && isTauri) {
+    hasSyncedWithAccurateTotals = true;
+    // Re-fetch from backend to get the initialized count
+    (async () => {
+      try {
+        const currentWallet = get(wallet);
+        if (currentWallet?.address) {
+          const blocksCount = await invoke<number>('get_blocks_mined', {
+            address: currentWallet.address
+          });
+          const reward = get(blockReward) || 2;
+          miningState.update((state) => ({
+            ...state,
+            blocksFound: blocksCount,
+            totalRewards: blocksCount * reward,
+          }));
+        }
+      } catch (error) {
+        console.error('[Mining Page] Failed to sync blocks count after accurate totals:', error);
+      }
+    })();
+  }
 
   function calculateDailyBlocks(hashRate: number, networkDiff: number): number {
     if (hashRate === 0 || networkDiff === 0) return 0
@@ -434,6 +467,14 @@
       await invoke('clear_blocks_cache');
       await walletService.refreshTransactions()
       await walletService.refreshBalance()
+
+      // Trigger accurate totals calculation if not already available or calculating
+      // This ensures "mined rewards" shows accurate blockchain data, not just session data
+      if (!$accurateTotals && !$isCalculatingAccurateTotals) {
+        walletService.calculateAccurateTotals().catch((error) => {
+          console.warn('[Mining Page] Failed to calculate accurate totals:', error);
+        });
+      }
 
       // Start power sensor detection
       await updatePowerConsumption()

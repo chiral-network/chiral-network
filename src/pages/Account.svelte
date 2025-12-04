@@ -133,10 +133,6 @@
   let sortDescending: boolean = true;
   let searchQuery: string = '';
   
-  // Fee preset (UI stub only)
-  let feePreset: 'low' | 'market' | 'fast' = 'market'
-  let estimatedFeeDisplay: string = '—'
-  let estimatedFeeNumeric: number = 0
   
   // Confirmation for sending transaction
   let isConfirming = false
@@ -274,15 +270,6 @@
         validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(4) } });
         isAmountValid = false;
         sendAmount = 0;
-      } else if (inputValue + estimatedFeeNumeric > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficientWithFee', {
-          values: {
-            total: (inputValue + estimatedFeeNumeric).toFixed(4),
-            balance: $wallet.balance.toFixed(4)
-          }
-        });
-        isAmountValid = false;
-        sendAmount = 0;
       } else {
         // Valid amount
         validationWarning = '';
@@ -331,9 +318,6 @@
     }
   }
 
-  // Mock estimated fee calculation (UI-only) - separate from validation
-  $: estimatedFeeNumeric = rawAmountInput && parseFloat(rawAmountInput) > 0 ? parseFloat((parseFloat(rawAmountInput) * { low: 0.0025, market: 0.005, fast: 0.01 }[feePreset]).toFixed(4)) : 0
-  $: estimatedFeeDisplay = rawAmountInput && parseFloat(rawAmountInput) > 0 ? `${estimatedFeeNumeric.toFixed(4)} Chiral` : '—'
 
   // Blacklist address validation (same as Send Coins validation)
   $: {
@@ -1714,12 +1698,8 @@
         
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
           <div class="min-w-0">
-            <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
-            {#if $accurateTotals}
-              <p class="text-sm font-medium text-green-600 break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
-            {:else}
-              <p class="text-sm font-medium text-green-600 opacity-60 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
-            {/if}
+            <p class="text-xs text-muted-foreground truncate">Blocks Mined</p>
+            <p class="text-sm font-medium text-green-600 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
           </div>
           <div class="min-w-0">
             <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
@@ -1949,15 +1929,6 @@
             {/if}
           </div>
           
-          <!-- Fee selector (UI stub) -->
-          <div class="mt-3">
-            <div class="inline-flex rounded-md border overflow-hidden">
-              <button type="button" class="px-3 py-1 text-xs {feePreset === 'low' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'low'}>{$t('transfer.fees.low')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'market' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'market'}>{$t('transfer.fees.market')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'fast' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'fast'}>{$t('transfer.fees.fast')}</button>
-            </div>
-            <p class="text-xs text-muted-foreground mt-2">{$t('transfer.fees.estimated')}: {estimatedFeeDisplay}</p>
-          </div>
         
         </div>
 
