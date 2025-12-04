@@ -107,7 +107,7 @@
     enableWalletAutoLock: false,
     customBootstrapNodes: [],
     autoStartDHT: true, // Auto-start DHT by default
-    autoStartGeth: false, // Don't auto-start Geth by default
+    autoStartGeth: true, // Auto-start Geth by default
 
     // Notifications
     enableNotifications: true,

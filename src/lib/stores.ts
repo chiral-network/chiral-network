@@ -722,7 +722,7 @@ export const settings = writable<AppSettings>({
   shareAnalytics: true,
   enableWalletAutoLock: false,
   autoStartDHT: true, // Auto-start DHT by default
-  autoStartGeth: false, // Don't auto-start Geth by default (requires download)
+  autoStartGeth: true, // Auto-start Geth by default
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,

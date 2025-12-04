@@ -592,6 +592,37 @@ function handleFirstRunComplete() {
             if (isGethRunning) {
               console.log("✅ Geth blockchain node already running (detected on startup)");
             } else {
+              // Check if Geth is installed
+              const isGethInstalled = await invoke<boolean>('check_geth_binary').catch(() => false);
+              
+              if (!isGethInstalled) {
+                console.log("📦 Geth not installed. Downloading Geth...");
+                showToast("Downloading Geth blockchain node...", "info");
+                
+                // Listen for download progress
+                const unlisten = await listen('geth-download-progress', (event: any) => {
+                  const progress = event.payload;
+                  if (progress.percentage >= 100) {
+                    console.log("✅ Geth download complete");
+                  } else {
+                    console.log(`⬇️ Downloading Geth: ${progress.percentage.toFixed(1)}%`);
+                  }
+                });
+                
+                try {
+                  await invoke('download_geth_binary');
+                  unlisten();
+                  console.log("✅ Geth downloaded successfully");
+                  showToast("Geth downloaded successfully", "success");
+                } catch (downloadError) {
+                  unlisten();
+                  const downloadErrorMsg = downloadError instanceof Error ? downloadError.message : String(downloadError);
+                  console.error("❌ Failed to download Geth:", downloadErrorMsg);
+                  showToast(`Failed to download Geth: ${downloadErrorMsg}`, "error");
+                  throw downloadError; // Don't try to start if download failed
+                }
+              }
+              
               console.log("🚀 Auto-starting Geth blockchain node...");
               
               try {
