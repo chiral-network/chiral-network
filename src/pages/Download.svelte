@@ -28,7 +28,9 @@
   // Import transfer events store for centralized transfer state management
   import {
     transferStore,
-    activeTransfers as storeActiveTransfers
+    activeTransfers as storeActiveTransfers,
+    subscribeToTransferEvents,
+    unsubscribeFromTransferEvents
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir, join } from '@tauri-apps/api/path'
@@ -43,6 +45,11 @@
     paymentService.initialize();
 
     initDownloadTelemetry()
+
+    // Subscribe to transfer events from backend (FTP, HTTP, etc.)
+    subscribeToTransferEvents().catch(err => {
+      console.error('Failed to subscribe to transfer events:', err);
+    });
 
     // Listen for multi-source download events
     const setupEventListeners = async () => {
@@ -503,6 +510,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   onDestroy(() => {
     disposeDownloadTelemetry()
+    // Unsubscribe from transfer events
+    unsubscribeFromTransferEvents()
   })
 
   // Load saved download page settings
