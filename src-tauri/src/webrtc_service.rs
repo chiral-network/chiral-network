@@ -1067,7 +1067,9 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         bandwidth: &Arc<BandwidthController>,
     ) -> Result<(), String> {
+        debug!("📤 handle_send_chunk: chunk {} for peer {}, acquiring bandwidth", chunk.chunk_index, peer_id);
         bandwidth.acquire_upload(chunk.data.len()).await;
+        debug!("📤 handle_send_chunk: bandwidth acquired for chunk {}", chunk.chunk_index);
 
         // Wait for data channel to open (with timeout)
         use webrtc::data_channel::data_channel_state::RTCDataChannelState;
@@ -1493,20 +1495,31 @@ impl WebRTCService {
         // Send file chunks over WebRTC data channel with flow control
         for chunk_index in 0..total_chunks {
             // Log first few chunks and then periodically
-            if chunk_index < 5 || chunk_index == total_chunks - 1 || chunk_index % 100 == 0 {
+            if chunk_index < 10 || chunk_index == total_chunks - 1 || chunk_index % 50 == 0 {
                 info!("📤 Processing chunk {}/{} for peer {}", chunk_index + 1, total_chunks, peer_id);
             }
             
             // Flow control: wait if too many pending ACKs
             let wait_start = Instant::now();
             let mut timeout_count = 0;
+            debug!("🔄 Chunk {}: Entering flow control check", chunk_index);
             loop {
                 let pending_count = {
                     let conns = connections.lock().await;
-                    conns.get(peer_id)
+                    let count = conns.get(peer_id)
                         .and_then(|c| c.pending_acks.get(&request.file_hash).copied())
-                        .unwrap_or(0)
+                        .unwrap_or(0);
+                    // Log if peer not found or file_hash not in pending_acks
+                    if conns.get(peer_id).is_none() {
+                        error!("⚠️ Chunk {}: Peer {} NOT FOUND in connections during flow control!", chunk_index, peer_id);
+                    }
+                    count
                 };
+                
+                // Log pending count for first 10 chunks
+                if chunk_index < 10 {
+                    info!("🔄 Chunk {}: pending_count={}, MAX_PENDING_ACKS={}", chunk_index, pending_count, MAX_PENDING_ACKS);
+                }
 
                 if pending_count < MAX_PENDING_ACKS {
                     break;
@@ -1591,6 +1604,7 @@ impl WebRTCService {
             };
 
             // Send chunk via WebRTC data channel - abort transfer if send fails
+            debug!("🔄 Chunk {}: About to call handle_send_chunk", chunk_index);
             if let Err(e) = Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await {
                 error!("Failed to send chunk {}/{} to peer {}: {}", chunk_index, total_chunks, peer_id, e);
                 let _ = event_tx
@@ -1602,6 +1616,7 @@ impl WebRTCService {
                     .await;
                 return Err(format!("Transfer aborted: {}", e));
             }
+            debug!("🔄 Chunk {}: handle_send_chunk completed successfully", chunk_index);
 
             // Increment pending ACK count (only if send succeeded)
             {
