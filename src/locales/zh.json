@@ -259,6 +259,10 @@
     "enableUpnp": "启用UPnP",
     "enableNat": "启用NAT端口映射",
     "enableDht": "启用DHT",
+    "autoStartNode": "启动时自动启动 DHT 节点",
+    "autoStartNodeDescription": "应用程序启动时自动启动 DHT 文件共享节点",
+    "autoStartGeth": "启动时自动启动区块链节点",
+    "autoStartGethDescription": "应用程序启动时自动启动 Geth 区块链节点（启用钱包和挖矿）",
     "geoDistribution": {
       "title": "地理分布",
       "subtitle": "正在映射 {peers} 个已观测的节点",

@@ -266,6 +266,10 @@
     "enableUpnp": "UPnP सक्षम करें",
     "enableNat": "NAT पोर्ट मैपिंग सक्षम करें",
     "enableDht": "DHT सक्षम करें",
+    "autoStartNode": "लॉन्च पर DHT नोड ऑटो-स्टार्ट करें",
+    "autoStartNodeDescription": "एप्लिकेशन लॉन्च होने पर DHT फ़ाइल-शेयरिंग नोड को स्वचालित रूप से प्रारंभ करें",
+    "autoStartGeth": "लॉन्च पर ब्लॉकचेन नोड ऑटो-स्टार्ट करें",
+    "autoStartGethDescription": "एप्लिकेशन लॉन्च होने पर Geth ब्लॉकचेन नोड को स्वचालित रूप से प्रारंभ करें (वॉलेट और माइनिंग सक्षम करता है)",
     "geoDistribution": {
       "title": "भौगोलिक वितरण",
       "subtitle": "{peers} अवलोकित पियर मैप कर रहा है",

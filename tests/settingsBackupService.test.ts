@@ -58,7 +58,7 @@ describe("SettingsBackupService", () => {
   const createMockSettings = (
     overrides?: Partial<AppSettings>
   ): AppSettings => ({
-    storagePath: "~/Chiral-Network-Storage",
+    storagePath: "", // No hardcoded default - determined by backend
     maxStorageSize: 100,
     autoCleanup: true,
     cleanupThreshold: 90,

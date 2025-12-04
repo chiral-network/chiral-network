@@ -5,7 +5,7 @@ use crate::transfer_events::{
 };
 use async_trait::async_trait;
 use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions, create_torrent, CreateTorrentOptions, AddTorrentOptions};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -357,6 +357,43 @@ impl BitTorrentError {
     }
 }
 
+/// Represents the source of a torrent, which can be a magnet link or a .torrent file.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PersistentTorrentSource {
+    Magnet(String),
+    File(PathBuf),
+}
+
+/// Represents the status of a persistent torrent.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PersistentTorrentStatus {
+    Downloading,
+    Seeding,
+}
+
+/// A struct representing the state of a single torrent to be persisted to disk.
+/// This allows the application to resume downloads and seeds across restarts.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistentTorrent {
+    /// The unique info hash of the torrent, as a hex string. This will be our primary key.
+    pub info_hash: String,
+
+    /// The source of the torrent (magnet link or file path) needed to re-add it.
+    pub source: PersistentTorrentSource,
+
+    /// The directory where the torrent's content is stored.
+    pub output_path: PathBuf,
+
+    /// The last known status of the torrent (e.g., downloading or seeding).
+    pub status: PersistentTorrentStatus,
+
+    /// Timestamp (Unix epoch seconds) when the torrent was added.
+    pub added_at: u64,
+}
+
 /// Events sent by the BitTorrent download monitor
 #[derive(Debug)]
 pub enum BitTorrentEvent {
@@ -366,6 +403,68 @@ pub enum BitTorrentEvent {
     Completed,
     /// Download has failed
     Failed(BitTorrentError),
+}
+
+/// Manages the persistence of torrent states to a JSON file.
+#[derive(Debug)]
+pub struct TorrentStateManager {
+    state_file_path: PathBuf,
+    torrents: BTreeMap<String, PersistentTorrent>, // Keyed by info_hash, sorted for consistent output
+}
+
+impl TorrentStateManager {
+    /// Creates a new TorrentStateManager and loads the state from the given file path.
+    pub fn new(state_file_path: PathBuf) -> Self {
+        let mut manager = Self {
+            state_file_path,
+            torrents: BTreeMap::new(),
+        };
+        if let Err(e) = manager.load() {
+            warn!(
+                "Could not load torrent state file: {}. A new one will be created.",
+                e
+            );
+        }
+        manager
+    }
+
+    /// Loads the torrent state from the JSON file.
+    fn load(&mut self) -> Result<(), std::io::Error> {
+        if !self.state_file_path.exists() {
+            return Ok(());
+        }
+        let file = std::fs::File::open(&self.state_file_path)?;
+        let reader = std::io::BufReader::new(file);
+        let loaded_torrents: Vec<PersistentTorrent> = serde_json::from_reader(reader)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        self.torrents = loaded_torrents
+            .into_iter()
+            .map(|t| (t.info_hash.clone(), t))
+            .collect();
+        info!("Loaded {} torrents from state file.", self.torrents.len());
+        Ok(())
+    }
+
+    /// Saves the current torrent state to the JSON file.
+    pub fn save(&self) -> Result<(), std::io::Error> {
+        // Ensure parent directory exists
+        if let Some(parent) = self.state_file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let file = std::fs::File::create(&self.state_file_path)?;
+        let writer = std::io::BufWriter::new(file);
+        // Collect values to serialize them as a JSON array
+        let values: Vec<&PersistentTorrent> = self.torrents.values().collect();
+        serde_json::to_writer_pretty(writer, &values)?;
+        Ok(())
+    }
+
+    /// Returns a vector of the torrents currently managed.
+    pub fn get_all(&self) -> Vec<PersistentTorrent> {
+        self.torrents.values().cloned().collect()
+    }
 }
 
 /// Convert BitTorrentError to String for compatibility with ProtocolHandler trait
@@ -478,7 +577,8 @@ impl BitTorrentHandler {
             download_directory, listen_port_range, state_file_path
         );
 
-        let state_files = ["session.json", "dht.json", "dht.db", "session.db"];
+        // Clean up any stale DHT or session state files that might be locked
+        let state_files = ["session.json", "dht.json", "dht.db", "session.db", "dht.dat"];
         for file in &state_files {
             let state_path = download_directory.join(file);
             if state_path.exists() {
@@ -492,10 +592,13 @@ impl BitTorrentHandler {
 
         let mut opts = SessionOptions::default();
 
-        if let Some(range) = listen_port_range {
+        // Set port range if provided
+        if let Some(range) = listen_port_range.clone() {
             opts.listen_port_range = Some(range);
         }
 
+        // Enable persistence for session and DHT state
+        // This allows torrents to resume after app restart
         opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
             folder: Some(download_directory.clone()),
         });
@@ -730,15 +833,17 @@ impl BitTorrentHandler {
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
-        let info_hash: Option<String>;
-
         let add_torrent = if identifier.starts_with("magnet:") {
-            Self::validate_magnet_link(identifier)?;
-            info_hash = Some(Self::extract_info_hash(identifier).ok_or(BitTorrentError::InvalidMagnetLink { url: identifier.to_string() })?);
+            Self::validate_magnet_link(identifier).map_err(|e| {
+                error!("Magnet link validation failed: {}", e);
+                e
+            })?;
             AddTorrent::from_url(identifier)
         } else {
-            Self::validate_torrent_file(identifier)?;
-            info_hash = None;
+            Self::validate_torrent_file(identifier).map_err(|e| {
+                error!("Torrent file validation failed: {}", e);
+                e
+            })?;
             AddTorrent::from_local_filename(identifier).map_err(|e| {
                 BitTorrentError::TorrentFileError {
                     message: format!("Cannot read torrent file {}: {}", identifier, e),
@@ -822,6 +927,49 @@ impl BitTorrentHandler {
                 size: None,
             }
         };
+        // Now get the info_hash from the handle (works for both magnets and .torrent files)
+        let torrent_info_hash = handle.info_hash();
+        let hash_hex = hex::encode(torrent_info_hash.0);
+
+        info!("Searching for Chiral peers for info_hash: {}", hash_hex);
+        match self.dht_service.search_peers_by_infohash(hash_hex.clone()).await {
+            Ok(chiral_peer_ids) => {
+                if !chiral_peer_ids.is_empty() {
+                    info!("Found {} Chiral peers. Using reputation system to prioritize them.", chiral_peer_ids.len());
+
+                    // Use the PeerSelectionService (via DhtService) to rank the discovered peers.
+                    // We'll use a balanced strategy for general-purpose downloads.
+                    let recommended_peers = self.dht_service.select_peers_with_strategy(
+                        &chiral_peer_ids,
+                        chiral_peer_ids.len(), // Get all peers, but ranked
+                        crate::peer_selection::SelectionStrategy::Balanced,
+                        false, // Encryption not required for public torrents
+                    ).await;
+
+                    info!("Prioritized peer list ({} peers): {:?}", recommended_peers.len(), recommended_peers);
+
+                    // Attempt to connect to the prioritized peers.
+                    for peer_id_str in recommended_peers {
+                        // Trigger the DHT to find and connect to the peer.
+                        // This will add the peer to the swarm, and librqbit will discover it.
+                        match self.dht_service.connect_to_peer_by_id(peer_id_str.clone()).await {
+                            Ok(_) => {
+                                info!("Initiated connection attempt to Chiral peer: {}", peer_id_str);
+                            }
+                            Err(e) => warn!("Failed to initiate connection to Chiral peer {}: {}", peer_id_str, e),
+                        }
+                    }
+                } else {
+                    info!("No additional Chiral peers found for this torrent.");
+                }
+            }
+            Err(e) => {
+                warn!("Failed to search for Chiral peers: {}", e);
+            }
+        }
+
+        Ok(handle)
+    }
 
         self.save_torrent_to_state(&torrent_info_hash, persistent_torrent).await?;
 
@@ -1336,6 +1484,60 @@ mod tests {
         assert!(BitTorrentHandler::validate_torrent_file(txt_path.to_str().unwrap()).is_err());
     }
 
+    #[test]
+    fn test_persistent_torrent_serialization_round_trip() {
+        // Test with a Magnet link source
+        let original_magnet = PersistentTorrent {
+            info_hash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string(),
+            source: PersistentTorrentSource::Magnet("magnet:?xt=urn:btih:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string()),
+            output_path: PathBuf::from("/downloads/test_magnet"),
+            status: PersistentTorrentStatus::Downloading,
+            added_at: 1678886400,
+        };
+
+        let serialized_magnet = serde_json::to_string_pretty(&original_magnet).unwrap();
+        println!("Serialized Magnet Torrent:\n{}", serialized_magnet);
+
+        let deserialized_magnet: PersistentTorrent = serde_json::from_str(&serialized_magnet).unwrap();
+
+        assert_eq!(original_magnet.info_hash, deserialized_magnet.info_hash);
+        assert_eq!(original_magnet.source, deserialized_magnet.source);
+        assert_eq!(original_magnet.output_path, deserialized_magnet.output_path);
+        assert_eq!(original_magnet.status, deserialized_magnet.status);
+        assert_eq!(original_magnet.added_at, deserialized_magnet.added_at);
+        // Full struct comparison
+        assert_eq!(
+            serde_json::to_string(&original_magnet).unwrap(),
+            serde_json::to_string(&deserialized_magnet).unwrap()
+        );
+
+        // Test with a File source
+        let original_file = PersistentTorrent {
+            info_hash: "f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2".to_string(),
+            source: PersistentTorrentSource::File(PathBuf::from("/torrents/test.torrent")),
+            output_path: PathBuf::from("/downloads/test_file"),
+            status: PersistentTorrentStatus::Seeding,
+            added_at: 1678887400,
+        };
+
+        let serialized_file = serde_json::to_string_pretty(&original_file).unwrap();
+        println!("Serialized File Torrent:\n{}", serialized_file);
+
+        let deserialized_file: PersistentTorrent = serde_json::from_str(&serialized_file).unwrap();
+
+        assert_eq!(original_file.info_hash, deserialized_file.info_hash);
+        assert_eq!(original_file.source, deserialized_file.source);
+        assert_eq!(original_file.output_path, deserialized_file.output_path);
+        assert_eq!(original_file.status, deserialized_file.status);
+        assert_eq!(original_file.added_at, deserialized_file.added_at);
+        // Full struct comparison
+        assert_eq!(
+            serde_json::to_string(&original_file).unwrap(),
+            serde_json::to_string(&deserialized_file).unwrap()
+        );
+    }
+
+
     #[tokio::test]
     #[ignore] // Ignored by default as it performs a real network download
     async fn test_integration_download_public_torrent() {
@@ -1591,4 +1793,100 @@ mod tests {
         let multiaddr_empty: Multiaddr = "".parse().unwrap();
         assert!(multiaddr_to_socket_addr(&multiaddr_empty).is_err());
     }
+}
+
+#[cfg(test)]
+mod torrent_state_manager_tests {
+    use super::*;
+    use tempfile::tempdir;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_torrent_state_manager_new_and_load_empty_file() {
+        let temp_dir = tempdir().unwrap();
+        let state_file_path = temp_dir.path().join("torrent_state.json");
+
+        // Manager should initialize with an empty list if file doesn't exist
+        let manager = TorrentStateManager::new(state_file_path.clone());
+        assert!(manager.torrents.is_empty());
+        assert!(!state_file_path.exists()); // File should not be created on new if empty
+    }
+
+    #[test]
+    fn test_torrent_state_manager_save_and_load() {
+        let temp_dir = tempdir().unwrap();
+        let state_file_path = temp_dir.path().join("torrent_state.json");
+
+        let mut manager = TorrentStateManager::new(state_file_path.clone());
+
+        let torrent1 = PersistentTorrent {
+            info_hash: "hash1".to_string(),
+            source: PersistentTorrentSource::Magnet("magnet1".to_string()),
+            output_path: PathBuf::from("/downloads/torrent1"),
+            status: PersistentTorrentStatus::Downloading,
+            added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        };
+        let torrent2 = PersistentTorrent {
+            info_hash: "hash2".to_string(),
+            source: PersistentTorrentSource::File(PathBuf::from("/path/to/file2.torrent")),
+            output_path: PathBuf::from("/downloads/torrent2"),
+            status: PersistentTorrentStatus::Seeding,
+            added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 100,
+        };
+
+        manager.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
+        manager.torrents.insert(torrent2.info_hash.clone(), torrent2.clone());
+
+        // Save the state
+        manager.save().unwrap();
+        assert!(state_file_path.exists());
+
+        // Verify content of the saved file
+        let saved_content = fs::read_to_string(&state_file_path).unwrap();
+        let loaded_from_file: Vec<PersistentTorrent> = serde_json::from_str(&saved_content).unwrap();
+        assert_eq!(loaded_from_file.len(), 2);
+        assert!(loaded_from_file.contains(&torrent1));
+        assert!(loaded_from_file.contains(&torrent2));
+
+        // Create a new manager and load the state
+        let loaded_manager = TorrentStateManager::new(state_file_path.clone());
+        assert_eq!(loaded_manager.torrents.len(), 2);
+        assert_eq!(loaded_manager.torrents.get("hash1").unwrap(), &torrent1);
+        assert_eq!(loaded_manager.torrents.get("hash2").unwrap(), &torrent2);
+    }
+
+    #[test]
+    fn test_torrent_state_manager_get_all() {
+        let temp_dir = tempdir().unwrap();
+        let state_file_path = temp_dir.path().join("torrent_state.json");
+
+        let mut manager = TorrentStateManager::new(state_file_path.clone());
+
+        let torrent1 = PersistentTorrent {
+            info_hash: "hash1".to_string(),
+            source: PersistentTorrentSource::Magnet("magnet1".to_string()),
+            output_path: PathBuf::from("/downloads/torrent1"),
+            status: PersistentTorrentStatus::Downloading,
+            added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        };
+        let torrent2 = PersistentTorrent {
+            info_hash: "hash2".to_string(),
+            source: PersistentTorrentSource::File(PathBuf::from("/path/to/file2.torrent")),
+            output_path: PathBuf::from("/downloads/torrent2"),
+            status: PersistentTorrentStatus::Seeding,
+            added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 100,
+        };
+
+        manager.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
+        manager.torrents.insert(torrent2.info_hash.clone(), torrent2.clone());
+
+        let all_torrents = manager.get_all();
+        assert_eq!(all_torrents.len(), 2);
+        assert!(all_torrents.contains(&torrent1));
+        assert!(all_torrents.contains(&torrent2));
+    }
+
+    // Test for malformed JSON file (should load empty or return error, depending on desired behavior)
+    // Current implementation logs a warning and returns empty, which is good.
 }
