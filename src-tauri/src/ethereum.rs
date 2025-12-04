@@ -375,8 +375,6 @@ impl GethProcess {
             .arg("*")
             .arg("--syncmode")
             .arg("full")
-            .arg("--gcmode")
-            .arg("archive")
             .arg("--maxpeers")
             .arg("50")
             // P2P discovery settings
@@ -2565,41 +2563,38 @@ pub async fn send_transaction(
         tracing::warn!("   ⚠️ There are {} pending transactions for this address!", nonce - confirmed_nonce);
     }
 
-    // For EIP-1559 transactions, we need to cover at least the base fee
-    // Query the current base fee from the latest block and add a buffer
+    // Get the actual gas price to be used in the transaction
+
     let base_fee = match provider.get_block(BlockNumber::Latest).await {
         Ok(Some(block)) => block.base_fee_per_gas.unwrap_or(U256::from(1)),
         _ => U256::from(1), // Fallback to minimal fee
     };
-    
+
     // Set max fee to 2x base fee to handle fee fluctuations, priority fee to 1 wei
     let max_fee = base_fee * 2;
     let priority_fee = U256::from(1u64);
     let gas_limit = U256::from(21000u64);
-    let max_gas_cost = max_fee * gas_limit;
-    let total_cost = amount_wei + max_gas_cost;
     
-    // Check sender's balance
-    let sender_balance = provider.get_balance(from_addr, None).await
-        .map_err(|e| format!("Failed to get sender balance: {}", e))?;
-    
-    tracing::info!("   Sender balance: {} wei", sender_balance);
-    tracing::info!("   Amount to send: {} wei, Max gas cost: {} wei, Total needed: {} wei", 
-        amount_wei, max_gas_cost, total_cost);
-    
-    if sender_balance < total_cost {
-        return Err(format!(
-            "Insufficient balance. Have: {} wei, Need: {} wei (amount: {} + max gas: {})",
-            sender_balance, total_cost, amount_wei, max_gas_cost
-        ));
-    }
-    
-    tracing::info!("   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei", base_fee, max_fee, priority_fee);
-
     let gas_price = provider
         .get_gas_price()
         .await
         .map_err(|e| format!("Failed to get gas price: {}", e))?;
+    let gas_cost = gas_price * gas_limit;
+    let total_cost = amount_wei + gas_cost;
+
+    // Check sender's balance
+
+    let sender_balance = provider.get_balance(from_addr, None).await.map_err(|e| format!("Failed to get sender balance: {}", e))?;
+    tracing::info!("   Sender balance: {} wei", sender_balance);
+    tracing::info!("   Amount to send: {} wei, Gas cost: {} wei, Total needed: {} wei", amount_wei, gas_cost, total_cost);
+
+    if sender_balance < total_cost {
+        return Err(format!(
+            "Insufficient balance. Have: {} wei, Need: {} wei (amount: {} + gas: {})",
+            sender_balance, total_cost, amount_wei, gas_cost
+        ));
+    }
+    tracing::info!("   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei, Gas price: {} wei", base_fee, max_fee, priority_fee, gas_price);
 
     let tx = TransactionRequest::new()
         .to(to)
@@ -2617,8 +2612,8 @@ pub async fn send_transaction(
 
     tracing::info!("✅ Transaction sent: {} from {} to {} amount {} CHIRAL", 
         tx_hash, from_address, to_address, amount_chiral);
-    tracing::info!("   Nonce: {}, Max Fee: {} wei, Priority Fee: {} wei, Gas Limit: 21000, Chain ID: {}", 
-        nonce, max_fee, priority_fee, NETWORK_CONFIG.chain_id);
+    tracing::info!("   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000, Chain ID: {}", 
+        nonce, gas_price, NETWORK_CONFIG.chain_id);
     
     // Verify the transaction was added to the local txpool
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
