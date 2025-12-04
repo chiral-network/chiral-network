@@ -6930,10 +6930,15 @@ async fn download_ftp(
     let started_at = current_timestamp_ms();
     let source_id = format!("ftp-{}", host);
     
-    // Determine download directory
-    let download_dir = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-        .map(|dirs| dirs.data_dir().join("downloads"))
-        .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"));
+    // Use the same download directory as specified in settings
+    let download_dir = get_download_directory(app_handle.clone())
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            // Fallback to default if settings can't be loaded
+            directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .map(|dirs| dirs.data_dir().join("downloads"))
+                .unwrap_or_else(|| std::env::current_dir().unwrap().join("downloads"))
+        });
     
     // Ensure download directory exists
     if let Err(e) = std::fs::create_dir_all(&download_dir) {
