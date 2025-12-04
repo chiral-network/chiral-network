@@ -44,7 +44,7 @@
 
 
   // Helper function to determine available protocols for a file
-  // Files can only be downloaded via the protocol they were uploaded with
+  // Files can be downloaded via multiple protocols if they were uploaded with multiple protocols
   $: availableProtocols = (() => {
     const protocols = [];
     
@@ -56,11 +56,15 @@
     const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
     const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
     
-    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs or other protocol indicators)
-    const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
+    // WebRTC is available if there are seeders (peers who can serve the file)
+    // This works for both WebRTC-only uploads and multi-protocol uploads
+    const isWebRTCAvailable = hasSeeders;
 
-    // Check for Bitswap (has CIDs) - files uploaded via Bitswap
-    if (hasCids && hasSeeders) {
+    // Bitswap is available if there are CIDs (content identifiers for IPFS blocks)
+    const isBitswapAvailable = hasCids;
+
+    // Check for Bitswap (has CIDs)
+    if (isBitswapAvailable) {
       protocols.push({
         id: 'bitswap',
         name: 'Bitswap',
@@ -69,8 +73,8 @@
       });
     }
 
-    // Check for WebRTC - only if uploaded via WebRTC (no CIDs, no other protocol sources)
-    if (isWebRTCUpload) {
+    // Check for WebRTC (has seeders)
+    if (isWebRTCAvailable) {
       protocols.push({
         id: 'webrtc',
         name: 'WebRTC',

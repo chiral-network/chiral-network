@@ -56,6 +56,7 @@ export interface FileItem {
   isDownload?: boolean;
   isSeedingDownload?: boolean;
   protocol?: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
+  uploaderAddress?: string; // Wallet address of the uploader for payment
 }
 
 export interface ProtocolEntry {

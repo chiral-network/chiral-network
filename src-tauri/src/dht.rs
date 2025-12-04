@@ -663,7 +663,15 @@ fn construct_file_metadata_from_json_simple(
         file_name: file_name.to_string(),
         file_size,
         file_data: Vec::new(), // Will be populated during download
-        seeders: Vec::new(), // Will be populated from heartbeat cache during download
+        seeders: metadata_json
+            .get("seeders")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
         created_at,
         mime_type: metadata_json
             .get("mime_type")
@@ -1661,32 +1669,45 @@ async fn run_dht_node(
                                 metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
                                 info!("🔍 DEBUG DHT PUBLISH: metadata.seeders after heartbeat = {:?}", metadata.seeders);
 
-                                // Store minimal metadata in DHT
-                                let dht_metadata = serde_json::json!({
-                                    "file_hash":metadata.merkle_root,
-                                    "merkle_root": metadata.merkle_root,
-                                    "file_name": metadata.file_name,
-                                    "file_size": metadata.file_size,
-                                    "created_at": metadata.created_at,
-                                    "mime_type": metadata.mime_type,
-                                    "is_encrypted": metadata.is_encrypted,
-                                    "encryption_method": metadata.encryption_method,
-                                    "key_fingerprint": metadata.key_fingerprint,
+                                // Merge with existing metadata from cache to preserve multi-protocol fields
+                                // This ensures that uploading via WebRTC doesn't lose CIDs from a previous Bitswap upload
+                                let merged_metadata = {
+                                    let cache = file_metadata_cache.lock().await;
+                                    if let Some(existing) = cache.get(&metadata.merkle_root) {
+                                        info!("🔍 DEBUG DHT PUBLISH: Found existing metadata, merging. Existing CIDs: {:?}", existing.cids);
+                                        merge_file_metadata(existing.clone(), metadata.clone())
+                                    } else {
+                                        metadata.clone()
+                                    }
+                                };
+                                info!("🔍 DEBUG DHT PUBLISH: Merged CIDs: {:?}", merged_metadata.cids);
 
-                                    "parent_hash": metadata.parent_hash,
-                                    "cids": metadata.cids, // The root CID for Bitswap
-                                    "encrypted_key_bundle": metadata.encrypted_key_bundle,
-                                    "info_hash": metadata.info_hash,
-                                    "trackers": metadata.trackers,
-                                    "seeders": metadata.seeders,
+                                // Store minimal metadata in DHT (using merged metadata)
+                                let dht_metadata = serde_json::json!({
+                                    "file_hash": merged_metadata.merkle_root,
+                                    "merkle_root": merged_metadata.merkle_root,
+                                    "file_name": merged_metadata.file_name,
+                                    "file_size": merged_metadata.file_size,
+                                    "created_at": merged_metadata.created_at,
+                                    "mime_type": merged_metadata.mime_type,
+                                    "is_encrypted": merged_metadata.is_encrypted,
+                                    "encryption_method": merged_metadata.encryption_method,
+                                    "key_fingerprint": merged_metadata.key_fingerprint,
+
+                                    "parent_hash": merged_metadata.parent_hash,
+                                    "cids": merged_metadata.cids, // The root CID for Bitswap (preserved from previous uploads)
+                                    "encrypted_key_bundle": merged_metadata.encrypted_key_bundle,
+                                    "info_hash": merged_metadata.info_hash,
+                                    "trackers": merged_metadata.trackers,
+                                    "seeders": merged_metadata.seeders,
                                     "seederHeartbeats": active_heartbeats,
-                                    "price": metadata.price,
-                                    "uploader_address": metadata.uploader_address,
-                                    "http_sources": metadata.http_sources,
-                                    "ed2k_sources": metadata.ed2k_sources,
+                                    "price": merged_metadata.price,
+                                    "uploader_address": merged_metadata.uploader_address,
+                                    "http_sources": merged_metadata.http_sources,
+                                    "ed2k_sources": merged_metadata.ed2k_sources,
                                 });
 
-                                let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                let record_key = kad::RecordKey::new(&merged_metadata.merkle_root.as_bytes());
 
                                 // Update the heartbeat cache with new metadata (no merging needed)
                                 {
@@ -1742,48 +1763,42 @@ async fn run_dht_node(
                                     Ok(query_id) => {
                                     }
                                     Err(e) => {
-                                        error!("failed to start providing file {}: {}", metadata.merkle_root, e);
+                                        error!("failed to start providing file {}: {}", merged_metadata.merkle_root, e);
                                         let _ = event_tx.send(DhtEvent::Error(format!("failed to start providing: {}", e))).await;
                                     }
                                 }
 
                                 // Register this peer as a provider for the file
-                                let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                let provider_key = kad::RecordKey::new(&merged_metadata.merkle_root.as_bytes());
                                 match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
                                     Ok(query_id) => {
                                     }
                                     Err(e) => {
-                                        error!("failed to register as provider for file {}: {}", metadata.merkle_root, e);
+                                        error!("failed to register as provider for file {}: {}", merged_metadata.merkle_root, e);
                                         let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
                                     }
                                 }
                                 // Cache the published file locally so it can be found in searches
-                                // This ensures nodes can discover their own published files
-                                // Merge with existing metadata if it exists (for multi-protocol support)
+                                // Already merged above, just insert
                                 {
                                     let mut cache = file_metadata_cache.lock().await;
-                                    let merged_metadata = if let Some(existing) = cache.get(&metadata.merkle_root) {
-                                        merge_file_metadata(existing.clone(), metadata.clone())
-                                    } else {
-                                        metadata.clone()
-                                    };
-                                    cache.insert(metadata.merkle_root.clone(), merged_metadata);
+                                    cache.insert(merged_metadata.merkle_root.clone(), merged_metadata.clone());
                                 }
 
                                 // notify frontend
                                 info!("🔍 DEBUG DHT: About to send PublishedFile event");
-                                info!("🔍 DEBUG DHT: metadata.seeders before sending event = {:?}", metadata.seeders);
-                                let _ = event_tx.send(DhtEvent::PublishedFile(metadata.clone())).await;
+                                info!("🔍 DEBUG DHT: merged_metadata.seeders before sending event = {:?}", merged_metadata.seeders);
+                                let _ = event_tx.send(DhtEvent::PublishedFile(merged_metadata.clone())).await;
                                 // store in file_uploaded_cache
 
                                 // If there's an info_hash, create the secondary index record
-                                if let Some(info_hash) = &metadata.info_hash {
+                                if let Some(info_hash) = &merged_metadata.info_hash {
                                     let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
-                                    let index_record = Record::new(index_key.as_bytes().to_vec(), metadata.merkle_root.as_bytes().to_vec());
+                                    let index_record = Record::new(index_key.as_bytes().to_vec(), merged_metadata.merkle_root.as_bytes().to_vec());
                                     swarm.behaviour_mut().kademlia.put_record(index_record, kad::Quorum::One).ok();
                                     info!("Published info_hash index for {}", info_hash);
                                 }
-                                let _ = response_tx.send(metadata.clone());
+                                let _ = response_tx.send(merged_metadata.clone());
                             }
                             Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
                                 // 1. Store all encrypted data blocks in bitswap
@@ -3492,6 +3507,59 @@ async fn run_dht_node(
                                     m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
                                 }
                                 if let Some(pid) = peer_id {
+                                    let is_bootstrap = bootstrap_peer_ids.contains(&pid);
+                                    let error_str = error.to_string();
+                                    
+                                    // Check if this is a NAT/connection refused error that could benefit from relay
+                                    let should_try_relay = !is_bootstrap && 
+                                        (error_str.contains("Connection refused") || 
+                                         error_str.contains("Timeout") ||
+                                         error_str.contains("unreachable"));
+                                    
+                                    // Try relay connection as fallback for NAT traversal
+                                    if should_try_relay {
+                                        let relay_peers_guard = relay_capable_peers.lock().await;
+                                        if !relay_peers_guard.is_empty() {
+                                            // Get the first available relay
+                                            if let Some((relay_peer_id, addrs)) = relay_peers_guard.iter().next() {
+                                                if let Some(relay_addr) = addrs.first() {
+                                                    let relay_id = *relay_peer_id;
+                                                    let relay_address = relay_addr.clone();
+                                                    drop(relay_peers_guard);
+                                                    
+                                                    info!("📡 Direct connection to {} failed, attempting relay via {}", pid, relay_id);
+                                                    
+                                                    // Build circuit relay address
+                                                    let mut circuit_addr = relay_address;
+                                                    if !circuit_addr.iter().any(|p| matches!(p, Protocol::P2p(_))) {
+                                                        circuit_addr.push(Protocol::P2p(relay_id));
+                                                    }
+                                                    circuit_addr.push(Protocol::P2pCircuit);
+                                                    circuit_addr.push(Protocol::P2p(pid));
+                                                    
+                                                    match swarm.dial(circuit_addr.clone()) {
+                                                        Ok(_) => {
+                                                            info!("✅ Relay connection initiated to {} via {}", pid, relay_id);
+                                                            let _ = event_tx.send(DhtEvent::Info(format!(
+                                                                "Trying relay connection to {} via {}", pid, relay_id
+                                                            ))).await;
+                                                        }
+                                                        Err(e) => {
+                                                            warn!("❌ Relay connection also failed: {}", e);
+                                                        }
+                                                    }
+                                                } else {
+                                                    drop(relay_peers_guard);
+                                                }
+                                            } else {
+                                                drop(relay_peers_guard);
+                                            }
+                                        } else {
+                                            drop(relay_peers_guard);
+                                            info!("⚠️ No relay peers available for NAT traversal to {}", pid);
+                                        }
+                                    }
+                                    
                                     swarm.behaviour_mut().kademlia.remove_peer(&pid);
                                     // Only log error for addresses that should be reachable
                                         // Rate limit connection errors to once every 30 seconds
@@ -3505,22 +3573,21 @@ async fn run_dht_node(
                                             error!("❌ Outgoing connection error to {}: {}", pid, error);
                                         }
 
-                                        let is_bootstrap = bootstrap_peer_ids.contains(&pid);
-                                        if error.to_string().contains("rsa") {
+                                        if error_str.contains("rsa") {
                                             error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
-                                        } else if error.to_string().contains("Timeout") {
+                                        } else if error_str.contains("Timeout") {
                                             if is_bootstrap {
                                                 warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
                                             } else {
                                                 warn!("   ℹ Hint: Peer may be unreachable (timeout).");
                                             }
-                                        } else if error.to_string().contains("Connection refused") {
+                                        } else if error_str.contains("Connection refused") {
                                             if is_bootstrap {
                                                 warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
                                             } else {
                                                 warn!("   ℹ Hint: Peer is not accepting connections.");
                                             }
-                                        } else if error.to_string().contains("Transport") {
+                                        } else if error_str.contains("Transport") {
                                             warn!("   ℹ Hint: Transport protocol negotiation failed.");
                                         }
                                 } else {
@@ -4235,12 +4302,29 @@ async fn handle_kademlia_event(
                                             created_at,
                                         );
 
-                                        // Include providers if they were found
+                                        // Merge providers with existing seeders from metadata
                                         if let Some(providers) = &pending_search.found_providers {
-                                            metadata.seeders = providers.clone();
-                                            info!("✅ Found searched file: {} ({}) with {} providers", file_name, file_hash, providers.len());
+                                            // Add providers that aren't already in seeders
+                                            for provider in providers {
+                                                if !metadata.seeders.contains(provider) {
+                                                    metadata.seeders.push(provider.clone());
+                                                }
+                                            }
+                                            info!("✅ Found searched file: {} ({}) with {} seeders (merged from metadata + providers)", file_name, file_hash, metadata.seeders.len());
                                         } else {
-                                            info!("✅ Found searched file: {} ({})", file_name, file_hash);
+                                            info!("✅ Found searched file: {} ({}) with {} seeders from metadata", file_name, file_hash, metadata.seeders.len());
+                                        }
+
+                                        // Merge with local cache to preserve multi-protocol metadata
+                                        // This ensures that if we uploaded via both WebRTC and Bitswap locally,
+                                        // the search result will include CIDs from local cache even if DHT
+                                        // record only has one protocol's data
+                                        {
+                                            let cache = file_metadata_cache.lock().await;
+                                            if let Some(cached) = cache.get(&metadata.merkle_root) {
+                                                info!("🔍 Merging search result with local cache for {}", metadata.merkle_root);
+                                                metadata = merge_file_metadata(cached.clone(), metadata);
+                                            }
                                         }
 
                                         // Send event to frontend for search results
@@ -4799,6 +4883,20 @@ async fn handle_kademlia_event(
                         let provider_strings: Vec<String> =
                             providers.iter().map(|p| p.to_string()).collect();
 
+                        // Update pending search queries with found providers (for SearchFile queries)
+                        // This is needed because SearchFile runs both GetRecord and GetProviders in parallel
+                        {
+                            let mut search_queries = pending_search_queries.lock().await;
+                            // Find the pending search query by file_hash and update its found_providers
+                            for (_query_id, pending_search) in search_queries.iter_mut() {
+                                if pending_search.file_hash == file_hash {
+                                    pending_search.found_providers = Some(provider_strings.clone());
+                                    info!("✅ Updated pending search for {} with {} providers", file_hash, provider_strings.len());
+                                    break;
+                                }
+                            }
+                        }
+
                         // Provider results - check for direct queries first
                             // Check for direct provider queries (not from SearchFile)
                             let mut pending_queries = pending_provider_queries.lock().await;
@@ -4983,8 +5081,13 @@ async fn handle_identify_event(
                 swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
             } else {
                 for addr in info.listen_addrs.clone() {
-                    if not_loopback(&addr) {
+                    // Filter out loopback and private addresses (like Docker 172.17.x.x IPs)
+                    // Only add addresses that are plausibly reachable from the internet
+                    // or are relay circuit addresses
+                    if ma_plausibly_reachable(&addr) {
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    } else {
+                        debug!("Skipping unreachable address from peer {}: {}", peer_id, addr);
                     }
                 }
             }
@@ -6154,12 +6257,17 @@ impl DhtService {
             // .with_quic() seems to destablize peer connect/download, disabled for now until solution
             .with_relay_client(noise::Config::new, yamux::Config::default)?
             .with_behaviour(move |_, relay_client_behaviour: relay::client::Behaviour| {
+                // Configure ping with more aggressive keep-alive to prevent connection drops
+                let ping_config = ping::Config::new()
+                    .with_interval(Duration::from_secs(15)) // Ping every 15 seconds (default is 15s)
+                    .with_timeout(Duration::from_secs(20)); // Timeout after 20 seconds (default is 20s)
+                
                 DhtBehaviour {
                     kademlia,
                     identify,
                     mdns: mdns_toggle,
                     bitswap,
-                    ping: Ping::new(ping::Config::new()),
+                    ping: Ping::new(ping_config),
                     proxy_rr,
                     webrtc_signaling_rr,
                     key_request,
@@ -6522,11 +6630,15 @@ impl DhtService {
             metadata.ftp_sources = Some(sources.into_iter().map(|s| s.for_dht_storage()).collect());
         }
 
-        // Cache the full metadata immediately before any DHT operations
-        // This ensures local files have complete metadata even if DHT discovery happens first
-        let mut cache = self.file_metadata_cache.lock().await;
-        cache.insert(metadata.merkle_root.clone(), metadata.clone());
-        drop(cache);
+        // Merge with existing cached metadata to preserve multi-protocol fields
+        // This ensures uploading via a second protocol doesn't lose data from the first
+        {
+            let mut cache = self.file_metadata_cache.lock().await;
+            if let Some(existing) = cache.get(&metadata.merkle_root) {
+                metadata = merge_file_metadata(existing.clone(), metadata);
+            }
+            cache.insert(metadata.merkle_root.clone(), metadata.clone());
+        }
 
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -7207,39 +7319,79 @@ impl DhtService {
         );
 
         let mut available_peers = Vec::new();
-        let connected_peers = self.connected_peers.lock().await;
+        let mut pending_connections = Vec::new();
 
-        // Check which seeders from metadata are currently connected
-        for seeder_id in &metadata.seeders {
-            if let Ok(peer_id) = seeder_id.parse::<libp2p::PeerId>() {
-                if connected_peers.contains(&peer_id) {
-                    info!("Seeder {} is currently connected", seeder_id);
-                    available_peers.push(seeder_id.clone());
-                } else {
-                    info!("Seeder {} is not currently connected", seeder_id);
-                    // Try to connect to this peer by sending a ConnectToPeerById command
-                    // This will query the DHT for the peer's addresses and attempt connection
-                    if let Err(e) = self
-                        .cmd_tx
-                        .send(DhtCommand::ConnectToPeerById(peer_id))
-                        .await
-                    {
-                        warn!(
-                            "Failed to send ConnectToPeerById command for {}: {}",
-                            seeder_id, e
-                        );
+        // First pass: check which seeders are connected, queue connection attempts for others
+        {
+            let connected_peers = self.connected_peers.lock().await;
+
+            for seeder_id in &metadata.seeders {
+                if let Ok(peer_id) = seeder_id.parse::<libp2p::PeerId>() {
+                    if connected_peers.contains(&peer_id) {
+                        info!("Seeder {} is currently connected", seeder_id);
+                        available_peers.push(seeder_id.clone());
                     } else {
-                        info!("Attempting to connect to seeder {}", seeder_id);
+                        info!("Seeder {} is not currently connected, will attempt connection", seeder_id);
+                        pending_connections.push((seeder_id.clone(), peer_id));
                     }
+                } else {
+                    warn!("Invalid peer ID in seeders list: {}", seeder_id);
                 }
-            } else {
-                warn!("Invalid peer ID in seeders list: {}", seeder_id);
             }
         }
 
-        // If no seeders are connected, the file is not available for download
+        // If we already have connected peers, return them
+        if !available_peers.is_empty() {
+            info!(
+                "Found {} already connected seeders",
+                available_peers.len()
+            );
+            return Ok(available_peers);
+        }
+
+        // Initiate connection attempts for pending peers
+        for (seeder_id, peer_id) in &pending_connections {
+            if let Err(e) = self
+                .cmd_tx
+                .send(DhtCommand::ConnectToPeerById(*peer_id))
+                .await
+            {
+                warn!(
+                    "Failed to send ConnectToPeerById command for {}: {}",
+                    seeder_id, e
+                );
+            } else {
+                info!("Initiated connection attempt to seeder {}", seeder_id);
+            }
+        }
+
+        // Wait for connections to establish with polling
+        // Check every 500ms for up to 5 seconds total
+        let max_wait_iterations = 10;
+        for i in 0..max_wait_iterations {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            
+            let connected_peers = self.connected_peers.lock().await;
+            for (seeder_id, peer_id) in &pending_connections {
+                if connected_peers.contains(peer_id) && !available_peers.contains(seeder_id) {
+                    info!("Seeder {} connected after {} ms", seeder_id, (i + 1) * 500);
+                    available_peers.push(seeder_id.clone());
+                }
+            }
+            drop(connected_peers);
+            
+            // If all pending connections succeeded or we found at least one peer, we can stop
+            if !available_peers.is_empty() {
+                break;
+            }
+            
+            if i == max_wait_iterations / 2 {
+                info!("Still waiting for seeder connections... ({}/{})", i + 1, max_wait_iterations);
+            }
+        }
+
         if available_peers.is_empty() {
-            info!("No seeders are currently connected - file not available for download");
+            info!("No seeders could be reached after connection attempts - file not available for download");
         }
 
         info!(

@@ -455,22 +455,25 @@
     const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
     const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
     
-    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs)
-    // If CIDs exist, file was uploaded via BitSwap and must be downloaded via BitSwap
-    const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
+// WebRTC is available if there are seeders (peers who can serve the file)
+    // This works for both WebRTC-only uploads and multi-protocol uploads
+    const isWebRTCAvailable = hasSeeders;
+    
+    // Bitswap is available if there are CIDs (content identifiers for IPFS blocks)
+    const isBitswapAvailable = hasCids;
     
     return [
       {
         id: 'bitswap',
         name: 'Bitswap',
         description: 'IPFS Bitswap protocol',
-        available: hasCids && hasSeeders
+        available: isBitswapAvailable
       },
       {
         id: 'webrtc',
         name: 'WebRTC',
         description: 'Peer-to-peer via WebRTC',
-        available: isWebRTCUpload
+        available: isWebRTCAvailable
       },
       {
         id: 'http',
@@ -765,12 +768,36 @@
     // Route download based on selected protocol
     if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap' || selectedProtocol === 'bittorrent') {
       // P2P download flow (WebRTC, Bitswap, BitTorrent)
+      
+      // For WebRTC: Check if the user is the seeder (will use local copy)
+      let isLocalSeeder = false;
+      if (selectedProtocol === 'webrtc' && selectedPeers.length > 0) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const localPeerId = await invoke<string>('get_dht_peer_id');
+          
+          // Check if we're in the seeders list
+          isLocalSeeder = selectedPeers.includes(localPeerId);
+          
+          // Filter out self from selected peers for actual WebRTC transfer
+          const remotePeers = selectedPeers.filter(peerId => peerId !== localPeerId);
+          
+          if (remotePeers.length === 0 && isLocalSeeder) {
+            // We're the only seeder - will use local copy
+            console.log('We are the only seeder - will use local copy for WebRTC download');
+          }
+        } catch (err) {
+          console.warn('Could not check local peer ID:', err);
+          // Continue anyway - backend will handle it
+        }
+      }
 
-      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {
+      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string; isLocalSeeder?: boolean } = {
         ...selectedFile,
         seeders: selectedPeers,  // Override with selected peers
         peerAllocation,
-        selectedProtocol: selectedProtocol  // Pass the user's protocol selection
+        selectedProtocol: selectedProtocol,  // Pass the user's protocol selection
+        isLocalSeeder  // Flag to indicate we should use local copy
       };
 
       // Dispatch to parent (Download.svelte)

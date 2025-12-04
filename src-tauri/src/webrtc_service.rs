@@ -21,6 +21,8 @@ use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
+use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
+use webrtc::ice_transport::ice_credential_type::RTCIceCredentialType;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
@@ -38,11 +40,14 @@ const INITIAL_RETRY_DELAY_MS: u64 = 1000;
 /// Maximum delay between connection retries (milliseconds)
 const MAX_RETRY_DELAY_MS: u64 = 15000;
 
-/// Creates a WebRTC configuration with public STUN servers for NAT traversal.
+/// Creates a WebRTC configuration with STUN and TURN servers for NAT traversal.
 /// Without ICE servers, WebRTC connections will fail for users behind NAT (majority of users).
+/// 
+/// TURN servers are required for symmetric NAT (common in universities/corporate networks).
 fn create_rtc_configuration() -> RTCConfiguration {
     RTCConfiguration {
         ice_servers: vec![
+            // Google STUN servers (reliable, no auth needed)
             RTCIceServer {
                 urls: vec![
                     "stun:stun.l.google.com:19302".to_string(),
@@ -52,12 +57,16 @@ fn create_rtc_configuration() -> RTCConfiguration {
                 ],
                 ..Default::default()
             },
-            // Additional fallback STUN servers for reliability
+            // Evan Brass experimental TURN server (free, public)
             RTCIceServer {
                 urls: vec![
-                    "stun:stun.stunprotocol.org:3478".to_string(),
+                    "turn:stun.evan-brass.net".to_string(),
+                    "turn:stun.evan-brass.net?transport=tcp".to_string(),
+                    "stun:stun.evan-brass.net".to_string(),
                 ],
-                ..Default::default()
+                username: "guest".to_string(),
+                credential: "password".to_string(),
+                credential_type: RTCIceCredentialType::Password,
             },
         ],
         ..Default::default()
@@ -277,6 +286,8 @@ pub struct WebRTCService {
     bandwidth: Arc<BandwidthController>,
     /// Connection manager for retry logic
     connection_manager: Arc<ConnectionManager>,
+    /// Local peer ID for HMAC key exchange
+    local_peer_id: Arc<Mutex<Option<String>>>,
 }
 
 impl WebRTCService {
@@ -322,6 +333,7 @@ impl WebRTCService {
             stream_auth,
             bandwidth,
             connection_manager,
+            local_peer_id: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -329,6 +341,18 @@ impl WebRTCService {
     pub async fn set_active_private_key(&self, private_key: Option<String>) {
         let mut key_guard = self.active_private_key.lock().await;
         *key_guard = private_key;
+    }
+    
+    /// Set the local peer ID (should be called after DHT service is initialized)
+    pub async fn set_local_peer_id(&self, peer_id: String) {
+        let mut id_guard = self.local_peer_id.lock().await;
+        *id_guard = Some(peer_id);
+    }
+    
+    /// Get the local peer ID
+    pub async fn get_local_peer_id(&self) -> Option<String> {
+        let id_guard = self.local_peer_id.lock().await;
+        id_guard.clone()
     }
     
     /// Get connection statistics
@@ -720,6 +744,10 @@ impl WebRTCService {
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
+                    // Log the candidate type for debugging NAT traversal
+                    let candidate_type = candidate.typ.to_string();
+                    info!("ICE candidate generated for {}: type={}", peer_id, candidate_type);
+                    
                     if let Ok(candidate_str) =
                         serde_json::to_string(&candidate.to_json().unwrap_or_default())
                     {
@@ -730,6 +758,8 @@ impl WebRTCService {
                             })
                             .await;
                     }
+                } else {
+                    info!("ICE gathering complete (null candidate received)");
                 }
             })
         }));
@@ -753,7 +783,42 @@ impl WebRTCService {
                         RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
-                        _ => {}
+                        _ => {
+                            info!("WebRTC peer connection state: {:?} for peer: {}", state, peer_id);
+                        }
+                    }
+                })
+            },
+        ));
+
+        // Add ICE connection state handler for debugging NAT traversal issues
+        let peer_id_for_ice_state = peer_id.to_string();
+        peer_connection.on_ice_connection_state_change(Box::new(
+            move |state: RTCIceConnectionState| {
+                let peer_id = peer_id_for_ice_state.clone();
+                Box::pin(async move {
+                    match state {
+                        RTCIceConnectionState::Checking => {
+                            info!("ICE: Checking connectivity for peer: {}", peer_id);
+                        }
+                        RTCIceConnectionState::Connected => {
+                            info!("ICE: Connected to peer: {} - NAT traversal successful!", peer_id);
+                        }
+                        RTCIceConnectionState::Completed => {
+                            info!("ICE: Completed for peer: {} - All candidates checked", peer_id);
+                        }
+                        RTCIceConnectionState::Failed => {
+                            error!("ICE: Failed for peer: {} - NAT traversal failed, TURN may not be working", peer_id);
+                        }
+                        RTCIceConnectionState::Disconnected => {
+                            warn!("ICE: Disconnected from peer: {}", peer_id);
+                        }
+                        RTCIceConnectionState::Closed => {
+                            info!("ICE: Closed for peer: {}", peer_id);
+                        }
+                        _ => {
+                            debug!("ICE: State {:?} for peer: {}", state, peer_id);
+                        }
                     }
                 })
             },
@@ -1831,7 +1896,7 @@ impl WebRTCService {
             info!("🔄 Re-processing queued chunk {} for peer {}", chunk.chunk_index, peer_id);
 
             // Skip authentication for queued chunks and go directly to processing
-            // 2. Decrypt chunk data if it was encrypted
+            // 1. Decrypt chunk data if it was encrypted
             let final_chunk_data = if let Some(ref encrypted_key_bundle) = chunk.encrypted_key_bundle {
                 // Get the active private key for decryption
                 let private_key_opt = {
@@ -1857,18 +1922,92 @@ impl WebRTCService {
                 chunk.data.clone()
             };
 
-            // 3. Verify chunk integrity (checksum)
-            let checksum = Self::calculate_chunk_checksum(&final_chunk_data);
-            if chunk.checksum != checksum {
+            // 2. Verify chunk integrity (checksum)
+            let chunk_len = final_chunk_data.len();
+            let calculated_checksum = Self::calculate_chunk_checksum(&final_chunk_data);
+            if calculated_checksum != chunk.checksum {
                 warn!(
                     "Queued chunk {} checksum mismatch from peer {}: expected {}, got {}",
-                    chunk.chunk_index, peer_id, chunk.checksum, checksum
+                    chunk.chunk_index, peer_id, chunk.checksum, calculated_checksum
                 );
-                // Continue processing anyway for now
+                // Skip this chunk if checksum fails
+                continue;
             }
 
-            // Note: Chunk storage is now handled by MultiSourceDownloadService
-            // The chunk will be stored when processed through the download pipeline
+            // 3. Apply bandwidth control
+            bandwidth.acquire_download(chunk_len).await;
+
+            // 4. Get data channel reference for sending ACK
+            let dc_for_ack = {
+                let conns = connections.lock().await;
+                conns.get(peer_id)
+                    .and_then(|c| c.data_channel.clone())
+            };
+
+            // 5. Store chunk and check for completion
+            {
+                let mut conns = connections.lock().await;
+                if let Some(connection) = conns.get_mut(peer_id) {
+                    // Store chunk
+                    let chunks = connection
+                        .received_chunks
+                        .entry(chunk.file_hash.clone())
+                        .or_insert_with(HashMap::new);
+                    chunks.insert(chunk.chunk_index, chunk.clone());
+
+                    // Emit progress to frontend
+                    if let Some(total_chunks) = chunks.values().next().map(|c| c.total_chunks) {
+                        let progress_percentage = (chunks.len() as f32 / total_chunks as f32) * 100.0;
+                        let bytes_received = chunks.len() as u64 * CHUNK_SIZE as u64;
+                        let estimated_total_size = total_chunks as u64 * CHUNK_SIZE as u64;
+
+                        if let Err(e) = app_handle.emit("webrtc_download_progress", serde_json::json!({
+                            "fileHash": chunk.file_hash,
+                            "progress": progress_percentage,
+                            "chunksReceived": chunks.len(),
+                            "totalChunks": total_chunks,
+                            "bytesReceived": bytes_received,
+                            "totalBytes": estimated_total_size,
+                        })) {
+                            warn!("Failed to emit progress event: {}", e);
+                        }
+
+                        if chunks.len() == total_chunks as usize {
+                            // Assemble file
+                            Self::assemble_file_from_chunks(
+                                &chunk.file_hash,
+                                chunks,
+                                file_transfer_service,
+                                event_tx,
+                                peer_id,
+                                app_handle,
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+
+            // 6. Send ACK to peer
+            if let Some(dc) = dc_for_ack {
+                let ack = ChunkAck {
+                    file_hash: chunk.file_hash.clone(),
+                    chunk_index: chunk.chunk_index,
+                    ready_for_more: true,
+                };
+                let ack_message = WebRTCMessage::ChunkAck(ack);
+                if let Ok(ack_json) = serde_json::to_string(&ack_message) {
+                    let _ = dc.send_text(ack_json).await;
+                }
+            }
+
+            // 7. Emit chunk received event
+            let _ = event_tx
+                .send(WebRTCEvent::FileChunkReceived {
+                    peer_id: peer_id.to_string(),
+                    chunk: chunk.clone(),
+                })
+                .await;
         }
 
         info!("✅ Finished processing queued chunks for peer {}", peer_id);
@@ -1904,15 +2043,26 @@ impl WebRTCService {
                 // Check if we have an active session or key exchange in progress
                 if auth_service.get_session_info(&session_id).is_none() {
                     // No active session - initiate key exchange
+                    // Get the local peer ID for the key exchange
+                    let local_peer_id = if let Some(webrtc_service) = get_webrtc_service().await {
+                        webrtc_service.get_local_peer_id().await.unwrap_or_else(|| {
+                            warn!("Local peer ID not set, using 'local' as fallback");
+                            "local".to_string()
+                        })
+                    } else {
+                        warn!("WebRTC service not available, using 'local' as fallback");
+                        "local".to_string()
+                    };
+                    
                     match auth_service.initiate_key_exchange(
-                        peer_id.to_string(),
-                        peer_id.to_string(), // For now, assume peer_id is used for both initiator and target
+                        local_peer_id.clone(),  // initiator is the local peer (downloader)
+                        peer_id.to_string(),    // target is the remote peer (seeder)
                         session_id.clone(),
                     ) {
                         Ok(exchange_request) => {
                             info!(
-                                "Initiated HMAC key exchange for session {} with peer {}",
-                                session_id, peer_id
+                                "Initiated HMAC key exchange for session {} (local: {}, remote: {})",
+                                session_id, local_peer_id, peer_id
                             );
 
                             // Send the key exchange request to the peer
@@ -2064,7 +2214,7 @@ impl WebRTCService {
     async fn assemble_file_from_chunks(
     file_hash: &str,
     chunks: &HashMap<u32, FileChunk>,
-    file_transfer_service: &Arc<FileTransferService>,
+    _file_transfer_service: &Arc<FileTransferService>,
     event_tx: &mpsc::Sender<WebRTCEvent>,
     peer_id: &str,
     app_handle: &tauri::AppHandle, // Add this parameter
@@ -2087,12 +2237,12 @@ impl WebRTCService {
 
     let file_size = file_data.len();
 
-    // Store the assembled file internally
-    file_transfer_service
-        .store_file_data(file_hash.to_string(), file_name.clone(), file_data.clone())
-        .await;
+    // NOTE: We do NOT call store_file_data here because:
+    // 1. That function is for uploading/seeding files, not downloads
+    // 2. It creates hash-named files + .meta files in storage
+    // 3. The frontend handles saving the file with proper name via webrtc_download_complete event
 
-    // NEW: Emit event to frontend with complete file data
+    // Emit event to frontend with complete file data - frontend will save the file
     if let Err(e) = app_handle.emit("webrtc_download_complete", serde_json::json!({
         "fileHash": file_hash,
         "fileName": file_name,
@@ -2237,7 +2387,42 @@ impl WebRTCService {
                         RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
-                        _ => {}
+                        _ => {
+                            info!("WebRTC peer connection state: {:?} for peer: {}", state, peer_id);
+                        }
+                    }
+                })
+            },
+        ));
+
+        // Add ICE connection state handler for debugging NAT traversal issues
+        let peer_id_for_ice_state = peer_id.to_string();
+        peer_connection.on_ice_connection_state_change(Box::new(
+            move |state: RTCIceConnectionState| {
+                let peer_id = peer_id_for_ice_state.clone();
+                Box::pin(async move {
+                    match state {
+                        RTCIceConnectionState::Checking => {
+                            info!("ICE: Checking connectivity for peer: {}", peer_id);
+                        }
+                        RTCIceConnectionState::Connected => {
+                            info!("ICE: Connected to peer: {} - NAT traversal successful!", peer_id);
+                        }
+                        RTCIceConnectionState::Completed => {
+                            info!("ICE: Completed for peer: {} - All candidates checked", peer_id);
+                        }
+                        RTCIceConnectionState::Failed => {
+                            error!("ICE: Failed for peer: {} - NAT traversal failed, TURN may not be working", peer_id);
+                        }
+                        RTCIceConnectionState::Disconnected => {
+                            warn!("ICE: Disconnected from peer: {}", peer_id);
+                        }
+                        RTCIceConnectionState::Closed => {
+                            info!("ICE: Closed for peer: {}", peer_id);
+                        }
+                        _ => {
+                            debug!("ICE: State {:?} for peer: {}", state, peer_id);
+                        }
                     }
                 })
             },
@@ -2470,7 +2655,42 @@ impl WebRTCService {
                         RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
-                        _ => {}
+                        _ => {
+                            info!("WebRTC peer connection state: {:?} for peer: {}", state, peer_id);
+                        }
+                    }
+                })
+            },
+        ));
+
+        // Add ICE connection state handler for debugging NAT traversal issues
+        let peer_id_for_ice_state = peer_id.to_string();
+        peer_connection.on_ice_connection_state_change(Box::new(
+            move |state: RTCIceConnectionState| {
+                let peer_id = peer_id_for_ice_state.clone();
+                Box::pin(async move {
+                    match state {
+                        RTCIceConnectionState::Checking => {
+                            info!("ICE: Checking connectivity for peer: {}", peer_id);
+                        }
+                        RTCIceConnectionState::Connected => {
+                            info!("ICE: Connected to peer: {} - NAT traversal successful!", peer_id);
+                        }
+                        RTCIceConnectionState::Completed => {
+                            info!("ICE: Completed for peer: {} - All candidates checked", peer_id);
+                        }
+                        RTCIceConnectionState::Failed => {
+                            error!("ICE: Failed for peer: {} - NAT traversal failed, TURN may not be working", peer_id);
+                        }
+                        RTCIceConnectionState::Disconnected => {
+                            warn!("ICE: Disconnected from peer: {}", peer_id);
+                        }
+                        RTCIceConnectionState::Closed => {
+                            info!("ICE: Closed for peer: {}", peer_id);
+                        }
+                        _ => {
+                            debug!("ICE: State {:?} for peer: {}", state, peer_id);
+                        }
                     }
                 })
             },
@@ -2752,6 +2972,13 @@ use lazy_static::lazy_static;
 
 lazy_static! {
     static ref WEBRTC_SERVICE: Mutex<Option<Arc<WebRTCService>>> = Mutex::new(None);
+}
+
+/// Set the global WebRTC service to an existing instance.
+/// This should be called after creating the WebRTCService to share the same instance globally.
+pub async fn set_webrtc_service(service: Arc<WebRTCService>) {
+    let mut global_service = WEBRTC_SERVICE.lock().await;
+    *global_service = Some(service);
 }
 
 pub async fn init_webrtc_service(
