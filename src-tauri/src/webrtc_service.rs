@@ -954,12 +954,14 @@ impl WebRTCService {
                         error!("Data channel is closed or closing for peer {}", peer_id);
                         return;
                     }
-                    if start.elapsed() > timeout {
+                }
+                // Data channel not yet available or not open - check timeout
+                if start.elapsed() > timeout {
+                    if connection.data_channel.is_none() {
+                        error!("Timeout waiting for data channel to be assigned for peer {}", peer_id);
+                    } else {
                         error!("Timeout waiting for data channel to open for peer {}", peer_id);
-                        return;
                     }
-                } else {
-                    error!("No data channel found for peer {}", peer_id);
                     return;
                 }
             } else {
@@ -1021,7 +1023,8 @@ impl WebRTCService {
             let bandwidth = bandwidth.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = Self::start_file_transfer(
+                info!("🚀 Spawned file transfer task for {} to peer {}", request.file_hash, peer_id);
+                match Self::start_file_transfer(
                     &peer_id,
                     &request,
                     &event_tx,
@@ -1032,13 +1035,19 @@ impl WebRTCService {
                 )
                 .await
                 {
-                    let _ = event_tx
-                        .send(WebRTCEvent::TransferFailed {
-                            peer_id: peer_id.clone(),
-                            file_hash: request.file_hash.clone(),
-                            error: format!("Failed to start file transfer: {}", e),
-                        })
-                        .await;
+                    Ok(_) => {
+                        info!("✅ File transfer completed successfully for {} to peer {}", request.file_hash, peer_id);
+                    }
+                    Err(e) => {
+                        error!("❌ File transfer failed for {} to peer {}: {}", request.file_hash, peer_id, e);
+                        let _ = event_tx
+                            .send(WebRTCEvent::TransferFailed {
+                                peer_id: peer_id.clone(),
+                                file_hash: request.file_hash.clone(),
+                                error: format!("Failed to start file transfer: {}", e),
+                            })
+                            .await;
+                    }
                 }
             });
         } else {
@@ -1071,19 +1080,30 @@ impl WebRTCService {
                 if let Some(dc) = &connection.data_channel {
                     let state = dc.ready_state();
                     if state == RTCDataChannelState::Open {
+                        if start.elapsed().as_millis() > 100 {
+                            info!("📡 Data channel ready after {}ms for peer {}", start.elapsed().as_millis(), peer_id);
+                        }
                         break dc.clone();
                     }
                     if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing {
                         error!("Data channel is closed or closing for peer {}", peer_id);
                         return Err(format!("Data channel closed for peer {}", peer_id));
                     }
-                    if start.elapsed() > timeout {
+                } else {
+                    // Log waiting for data channel (but only occasionally)
+                    if start.elapsed().as_millis() % 1000 < 100 && start.elapsed().as_millis() > 100 {
+                        debug!("⏳ Waiting for data channel to be assigned for peer {} ({}ms elapsed)", peer_id, start.elapsed().as_millis());
+                    }
+                }
+                // Data channel not yet available or not open - check timeout
+                if start.elapsed() > timeout {
+                    if connection.data_channel.is_none() {
+                        error!("Timeout waiting for data channel to be assigned for peer {}", peer_id);
+                        return Err(format!("Data channel never assigned for peer {}", peer_id));
+                    } else {
                         error!("Timeout waiting for data channel to open for peer {}", peer_id);
                         return Err(format!("Data channel timeout for peer {}", peer_id));
                     }
-                } else {
-                    error!("No data channel found for peer {}", peer_id);
-                    return Err(format!("No data channel for peer {}", peer_id));
                 }
             } else {
                 error!("Peer {} not found in connections", peer_id);
@@ -1397,15 +1417,16 @@ impl WebRTCService {
             }
         };
 
-        info!(
-            "Starting real file transfer of {} ({} bytes) to peer {}",
-            request.file_name,
-            file_data.len(),
-            peer_id
-        );
-
         // Calculate total chunks
         let total_chunks = ((file_data.len() as f64) / CHUNK_SIZE as f64).ceil() as u32;
+
+        info!(
+            "Starting real file transfer of {} ({} bytes, {} chunks) to peer {}",
+            request.file_name,
+            file_data.len(),
+            total_chunks,
+            peer_id
+        );
 
         // NOTE: HMAC authentication is disabled for WebRTC transfers.
         // WebRTC already provides transport-level security via DTLS.
@@ -1415,7 +1436,10 @@ impl WebRTCService {
         // Initialize transfer tracking in connections
         {
             let mut conns = connections.lock().await;
+            info!("🔒 Acquired connections lock for transfer tracking, peer: {}", peer_id);
             if let Some(connection) = conns.get_mut(peer_id) {
+                info!("📝 Initializing transfer tracking for peer {}, data_channel present: {}", 
+                      peer_id, connection.data_channel.is_some());
                 let transfer = ActiveTransfer {
                     file_hash: request.file_hash.clone(),
                     file_name: request.file_name.clone(),
@@ -1439,14 +1463,40 @@ impl WebRTCService {
         // Initialize pending ACK counter
         {
             let mut conns = connections.lock().await;
+            info!("🔒 Acquired connections lock for pending_acks init, peer: {}", peer_id);
             if let Some(connection) = conns.get_mut(peer_id) {
+                info!("✅ Found peer {} in connections, initializing pending_acks", peer_id);
                 connection.pending_acks.insert(request.file_hash.clone(), 0);
                 connection.acked_chunks.insert(request.file_hash.clone(), std::collections::HashSet::new());
+            } else {
+                error!("❌ Peer {} not found in connections when initializing pending_acks", peer_id);
+                return Err(format!("Peer {} not found in connections", peer_id));
+            }
+        }
+
+        info!("📦 Starting chunk loop for {} chunks to peer {}", total_chunks, peer_id);
+
+        // Debug: log data channel state before starting loop
+        {
+            let conns = connections.lock().await;
+            if let Some(connection) = conns.get(peer_id) {
+                if let Some(dc) = &connection.data_channel {
+                    info!("📡 Data channel state before loop: {:?} for peer {}", dc.ready_state(), peer_id);
+                } else {
+                    error!("⚠️ No data channel found for peer {} before starting loop!", peer_id);
+                }
+            } else {
+                error!("⚠️ Peer {} not in connections before starting loop!", peer_id);
             }
         }
 
         // Send file chunks over WebRTC data channel with flow control
         for chunk_index in 0..total_chunks {
+            // Log first few chunks and then periodically
+            if chunk_index < 5 || chunk_index == total_chunks - 1 || chunk_index % 100 == 0 {
+                info!("📤 Processing chunk {}/{} for peer {}", chunk_index + 1, total_chunks, peer_id);
+            }
+            
             // Flow control: wait if too many pending ACKs
             let wait_start = Instant::now();
             let mut timeout_count = 0;
@@ -2063,10 +2113,10 @@ impl WebRTCService {
 
             let event_tx = event_tx_for_dc.clone();
             let peer_id = peer_id_for_dc.clone();
-            let file_transfer_service = Arc::new(file_transfer_service_for_dc.clone());
-            let connections = Arc::new(connections_for_dc.clone());
-            let keystore = Arc::new(keystore_for_dc.clone());
-            let active_private_key = Arc::new(active_private_key_for_dc.clone());
+            let file_transfer_service = file_transfer_service_for_dc.clone();
+            let connections = connections_for_dc.clone();
+            let keystore = keystore_for_dc.clone();
+            let active_private_key = active_private_key_for_dc.clone();
             let bandwidth = bandwidth_for_dc.clone();
             let app_handle = app_handle_for_dc.clone();
 
@@ -2098,7 +2148,7 @@ impl WebRTCService {
             }));
 
             // Store data channel in connections
-            let connections_clone = Arc::new(connections_for_dc.clone());
+            let connections_clone = connections_for_dc.clone();
             let peer_id_clone = peer_id_for_dc.clone();
             let data_channel_clone = data_channel.clone();
 
