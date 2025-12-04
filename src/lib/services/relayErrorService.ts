@@ -127,6 +127,7 @@ class RelayErrorService {
   public relayPool = writable<Map<string, RelayNode>>(new Map());
   public activeRelay = writable<RelayNode | null>(null);
   public errorLog = writable<RelayError[]>([]);
+  private persistedErrorsKey = 'relayErrorLog';
 
   // Derived stores
   public healthyRelays = derived(this.relayPool, $pool =>
@@ -145,6 +146,26 @@ class RelayErrorService {
 
   private constructor(config?: Partial<RelayErrorConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    // Load persisted error log (for UI visibility even when not on the relay page)
+    try {
+      const raw = localStorage.getItem(this.persistedErrorsKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.errorLog.set(parsed);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load persisted relay error log', e);
+    }
+    // Persist on change
+    this.errorLog.subscribe(errors => {
+      try {
+        localStorage.setItem(this.persistedErrorsKey, JSON.stringify(errors.slice(0, 100)));
+      } catch (e) {
+        console.warn('Failed to persist relay error log', e);
+      }
+    });
   }
 
   static getInstance(config?: Partial<RelayErrorConfig>): RelayErrorService {
@@ -230,6 +251,23 @@ class RelayErrorService {
       };
       this.logError(error);
       return { success: false, relayId: relayId || 'unknown', error };
+    }
+
+    // If this relay has an unsupported/invalid multiaddr, drop it without attempting a connection
+    if (this.isUnsupportedMultiaddr({ message: relay.multiaddr } as RelayError)) {
+      this.relayPool.update(pool => {
+        pool.delete(relay.id);
+        return pool;
+      });
+      const error: RelayError = {
+        type: RelayErrorType.PROTOCOL_ERROR,
+        message: 'Unsupported relay multiaddr',
+        timestamp: Date.now(),
+        relayId: relay.id,
+        retryCount: 0
+      };
+      this.logError(error);
+      return { success: false, relayId: relay.id, error };
     }
 
     // Attempt connection with retries
@@ -625,6 +663,11 @@ class RelayErrorService {
    */
   clearErrorLog(): void {
     this.errorLog.set([]);
+    try {
+      localStorage.removeItem(this.persistedErrorsKey);
+    } catch (e) {
+      console.warn('Failed to clear persisted relay error log', e);
+    }
   }
 
   /**
