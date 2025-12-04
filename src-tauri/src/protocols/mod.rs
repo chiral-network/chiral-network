@@ -20,8 +20,8 @@
 //! let mut manager = ProtocolManager::new();
 //!
 //! // Register handlers
-//! manager.register(Box::new(HttpProtocolHandler::new()?));
-//! manager.register(Box::new(BitTorrentProtocolHandler::with_download_directory(dir).await?));
+//! manager.register(Arc::new(HttpProtocolHandler::new()?));
+//! manager.register(Arc::new(BitTorrentProtocolHandler::with_download_directory(dir).await?));
 //!
 //! // Download a file
 //! let handle = manager.download(

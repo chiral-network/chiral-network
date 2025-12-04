@@ -7100,14 +7100,14 @@ fn main() {
         // Wrap the simple handler in the enhanced protocol handler
         let bittorrent_protocol_handler =
             BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
-        manager.register(Box::new(bittorrent_protocol_handler));
+        manager.register(Arc::new(bittorrent_protocol_handler));
 
         // Register ED2K and FTP handlers
         let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
-        manager.register(Box::new(ed2k_handler));
+        manager.register(Arc::new(ed2k_handler));
 
         let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
-        manager.register(Box::new(ftp_handler));
+        manager.register(Arc::new(ftp_handler));
 
         (bittorrent_handler_arc, Arc::new(manager))
     });
