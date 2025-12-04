@@ -1008,26 +1008,37 @@ impl WebRTCService {
             .any(|(hash, _)| hash == &request.file_hash);
 
         if has_file {
-            // Start sending file chunks
-            if let Err(e) = Self::start_file_transfer(
-                peer_id,
-                request,
-                event_tx,
-                file_transfer_service,
-                connections,
-                keystore,
-                bandwidth,
-            )
-            .await
-            {
-                let _ = event_tx
-                    .send(WebRTCEvent::TransferFailed {
-                        peer_id: peer_id.to_string(),
-                        file_hash: request.file_hash.clone(),
-                        error: format!("Failed to start file transfer: {}", e),
-                    })
-                    .await;
-            }
+            // Spawn file transfer as a separate task so the message handler
+            // can continue processing incoming ACKs concurrently
+            let peer_id = peer_id.to_string();
+            let request = request.clone();
+            let event_tx = event_tx.clone();
+            let file_transfer_service = file_transfer_service.clone();
+            let connections = connections.clone();
+            let keystore = keystore.clone();
+            let bandwidth = bandwidth.clone();
+
+            tokio::spawn(async move {
+                if let Err(e) = Self::start_file_transfer(
+                    &peer_id,
+                    &request,
+                    &event_tx,
+                    &file_transfer_service,
+                    &connections,
+                    &keystore,
+                    &bandwidth,
+                )
+                .await
+                {
+                    let _ = event_tx
+                        .send(WebRTCEvent::TransferFailed {
+                            peer_id: peer_id.clone(),
+                            file_hash: request.file_hash.clone(),
+                            error: format!("Failed to start file transfer: {}", e),
+                        })
+                        .await;
+                }
+            });
         } else {
             let _ = event_tx
                 .send(WebRTCEvent::TransferFailed {
