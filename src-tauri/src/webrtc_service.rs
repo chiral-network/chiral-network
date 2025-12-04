@@ -281,7 +281,7 @@ impl WebRTCService {
         bandwidth: Arc<BandwidthController>,
     ) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
-        let (event_tx, event_rx) = mpsc::channel(100);
+        let (event_tx, event_rx) = mpsc::channel(1000); // Increased capacity for high-throughput transfers
         let connections = Arc::new(Mutex::new(HashMap::new()));
         let active_private_key = Arc::new(Mutex::new(None));
         
@@ -663,7 +663,9 @@ impl WebRTCService {
             let bandwidth = bandwidth_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
-            Box::pin(async move {
+            // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
+            // If we await here, the data channel can't receive more messages until this completes
+            tokio::spawn(async move {
                 Self::handle_data_channel_message(
                     &peer_id,
                     &msg,
@@ -676,7 +678,8 @@ impl WebRTCService {
                     bandwidth,
                 )
                 .await;
-            })
+            });
+            Box::pin(async {})
         }));
 
         // Set up peer connection event handlers
@@ -1716,18 +1719,26 @@ impl WebRTCService {
             };
             
             // Send progress event OUTSIDE the lock to avoid deadlock
+            // Use try_send to avoid blocking if channel is full - progress events are not critical
             if let Some(progress) = progress_to_send {
                 if chunk_index < 100 {
                     info!("📊 Sending progress event for chunk {}", chunk_index);
                 }
-                let _ = event_tx
-                    .send(WebRTCEvent::TransferProgress {
-                        peer_id: peer_id.to_string(),
-                        progress,
-                    })
-                    .await;
-                if chunk_index < 100 {
-                    info!("📊 Progress event sent for chunk {}", chunk_index);
+                match event_tx.try_send(WebRTCEvent::TransferProgress {
+                    peer_id: peer_id.to_string(),
+                    progress,
+                }) {
+                    Ok(_) => {
+                        if chunk_index < 100 {
+                            info!("📊 Progress event sent for chunk {}", chunk_index);
+                        }
+                    }
+                    Err(e) => {
+                        // Channel full - skip this progress event, not critical
+                        if chunk_index < 100 || chunk_index % 100 == 0 {
+                            warn!("📊 Progress event skipped for chunk {} (channel full): {}", chunk_index, e);
+                        }
+                    }
                 }
             }
             
@@ -2008,7 +2019,8 @@ impl WebRTCService {
             let bandwidth = bandwidth_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
-            Box::pin(async move {
+            // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
+            tokio::spawn(async move {
                 Self::handle_data_channel_message(
                     &peer_id,
                     &msg,
@@ -2021,7 +2033,8 @@ impl WebRTCService {
                     bandwidth,
                 )
                 .await;
-            })
+            });
+            Box::pin(async {})
         }));
 
         // Set up peer connection event handlers
@@ -2258,6 +2271,7 @@ impl WebRTCService {
             let app_handle = app_handle_for_dc.clone();
 
             // Set up message handler for received data channel
+            // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
             data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
                 let event_tx = event_tx.clone();
                 let peer_id = peer_id.clone();
@@ -2268,7 +2282,7 @@ impl WebRTCService {
                 let bandwidth = bandwidth.clone();
                 let app_handle_for_task = app_handle.clone();
 
-                Box::pin(async move {
+                tokio::spawn(async move {
                     Self::handle_data_channel_message(
                         &peer_id,
                         &msg,
@@ -2281,7 +2295,8 @@ impl WebRTCService {
                         bandwidth,
                     )
                     .await;
-                })
+                });
+                Box::pin(async {})
             }));
 
             // Store data channel in connections
