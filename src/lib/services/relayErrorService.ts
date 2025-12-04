@@ -389,8 +389,26 @@ class RelayErrorService {
       errors: [...relay.errors, error].slice(-this.config.errorHistoryLimit)
     });
 
+    // If the relay multiaddr is unsupported/invalid, drop it from the pool so we stop repinging it
+    if (this.isUnsupportedMultiaddr(error)) {
+      this.relayPool.update(pool => {
+        pool.delete(relay.id);
+        return pool;
+      });
+      const active = get(this.activeRelay);
+      if (active?.id === relay.id) {
+        this.activeRelay.set(null);
+      }
+      return;
+    }
+
     // Attempt fallback to another relay
     this.attemptFallback(relay.id);
+  }
+
+  private isUnsupportedMultiaddr(error: RelayError): boolean {
+    const message = error.message.toLowerCase();
+    return message.includes('multiaddr') && (message.includes('unsupported') || message.includes('not supported') || message.includes('invalid'));
   }
 
   /**
@@ -522,6 +540,9 @@ class RelayErrorService {
     } else if (message.includes('auth')) {
       return RelayErrorType.AUTHENTICATION_FAILED;
     } else if (message.includes('protocol')) {
+      return RelayErrorType.PROTOCOL_ERROR;
+    } else if (message.includes('multiaddr') && (message.includes('unsupported') || message.includes('not supported') || message.includes('invalid'))) {
+      // Unsupported/invalid relay address - treat as protocol error so we can drop it from the pool
       return RelayErrorType.PROTOCOL_ERROR;
     } else if (message.includes('network')) {
       return RelayErrorType.NETWORK_ERROR;
