@@ -1233,12 +1233,15 @@ impl SimpleProtocolHandler for BitTorrentHandler {
         let magnet_link = format!("magnet:?xt=urn:btih:{}", info_hash_str);
 
         {
-            let mut active_torrents = self.active_torrents.lock().await;
-            active_torrents.insert(info_hash_str.clone(), handle);
+            self.active_torrents
+                .lock().await
+                .insert(info_hash_str.clone(), handle);
         }
 
+        // Construct the persistent state for the seeded torrent.
         let persistent_torrent = PersistentTorrent {
             info_hash: info_hash_str.clone(),
+            // We use the magnet link as the source for simplicity in re-adding.
             source: PersistentTorrentSource::Magnet(magnet_link.clone()),
             output_path: path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
             status: PersistentTorrentStatus::Seeding,
@@ -1247,11 +1250,14 @@ impl SimpleProtocolHandler for BitTorrentHandler {
             size: std::fs::metadata(path).ok().map(|m| m.len()),
         };
         
-        
-        if let Err(e) = self.save_torrent_to_state(&info_hash_str, persistent_torrent).await {
+        // Save the state to torrent_state.json
+        if let Err(e) = self
+            .save_torrent_to_state(&info_hash_str, persistent_torrent)
+            .await
+        {
             warn!("Failed to save seeding torrent to state: {}", e);
         }
-
+        info!("Started seeding {} and saved to state.", file_path);
         Ok(magnet_link)
     }
 }
