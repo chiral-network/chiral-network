@@ -58,6 +58,7 @@
   let privateKeyVisible = false
   let showPending = false
   let importPrivateKey = ''
+  let importedSnapshot: any = null
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning: boolean;
@@ -132,10 +133,6 @@
   let sortDescending: boolean = true;
   let searchQuery: string = '';
   
-  // Fee preset (UI stub only)
-  let feePreset: 'low' | 'market' | 'fast' = 'market'
-  let estimatedFeeDisplay: string = '—'
-  let estimatedFeeNumeric: number = 0
   
   // Confirmation for sending transaction
   let isConfirming = false
@@ -189,9 +186,9 @@
         .filter(tx => {
           if (!tx) return false;
 
-          // 'transactions' shows sent + received (excludes mining)
+          // Default view now shows all types (sent/received/mining)
           const matchesType = filterType === 'transactions'
-            ? (tx.type === 'sent' || tx.type === 'received')
+            ? (tx.type === 'sent' || tx.type === 'received' || tx.type === 'mining')
             : tx.type === filterType;
 
           let txDate: Date;
@@ -270,16 +267,7 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(2) } });
-        isAmountValid = false;
-        sendAmount = 0;
-      } else if (inputValue + estimatedFeeNumeric > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficientWithFee', {
-          values: {
-            total: (inputValue + estimatedFeeNumeric).toFixed(2),
-            balance: $wallet.balance.toFixed(2)
-          }
-        });
+        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(4) } });
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -330,9 +318,6 @@
     }
   }
 
-  // Mock estimated fee calculation (UI-only) - separate from validation
-  $: estimatedFeeNumeric = rawAmountInput && parseFloat(rawAmountInput) > 0 ? parseFloat((parseFloat(rawAmountInput) * { low: 0.0025, market: 0.005, fast: 0.01 }[feePreset]).toFixed(4)) : 0
-  $: estimatedFeeDisplay = rawAmountInput && parseFloat(rawAmountInput) > 0 ? `${estimatedFeeNumeric.toFixed(4)} Chiral` : '—'
 
   // Blacklist address validation (same as Send Coins validation)
   $: {
@@ -748,6 +733,18 @@
     isImportingAccount = true
     try {
       const account = await walletService.importAccount(importPrivateKey)
+      if (importedSnapshot) {
+        if (typeof importedSnapshot.balance === 'number') {
+          wallet.update(w => ({ ...w, balance: importedSnapshot.balance, actualBalance: importedSnapshot.balance }))
+        }
+        if (Array.isArray(importedSnapshot.transactions)) {
+          const hydrated = importedSnapshot.transactions.map((tx: any) => ({
+            ...tx,
+            date: tx.date ? new Date(tx.date) : new Date()
+          }))
+          transactions.set(hydrated)
+        }
+      }
       wallet.update(w => ({
         ...w,
         address: account.address,
@@ -755,13 +752,17 @@
         pendingTransactions: 0
       }))
       importPrivateKey = ''
+      importedSnapshot = null
 
 
       // showToast('Account imported successfully!', 'success')
       showToast(tr('toasts.account.import.success'), 'success')
 
+      // Match keystore load behavior: hydrate transactions and balance right away
       if (isGethRunning) {
-        await walletService.refreshBalance()
+        await walletService.refreshTransactions();
+        await walletService.refreshBalance();
+        walletService.startProgressiveLoading();
       }
     } catch (error) {
       console.error('Failed to import Chiral account:', error)
@@ -781,6 +782,11 @@
 
   async function loadPrivateKeyFromFile() {
     try {
+      const msg = (key: string, fallback: string) => {
+        const val = $t(key);
+        return val === key ? fallback : val;
+      };
+
       // Create a file input element
       const fileInput = document.createElement('input');
       fileInput.type = 'file';
@@ -797,22 +803,34 @@
           const accountData = JSON.parse(fileContent);
           
           // Validate the JSON structure
-          if (!accountData.privateKey) {
-            // showToast('Invalid file format: privateKey field not found', 'error');
-            showToast(tr('toasts.account.import.fileInvalid'), 'error');
+          if (!accountData.privateKey && !accountData.private_key) {
+            showToast(msg('toasts.account.import.fileInvalid', 'Invalid wallet file (missing private key)'), 'error');
             return;
           }
           
           // Extract and set the private key
-          importPrivateKey = accountData.privateKey;
-          // showToast('Private key loaded from file successfully!', 'success');
-          showToast(tr('toasts.account.import.fileSuccess'), 'success');
+          importPrivateKey = accountData.privateKey ?? accountData.private_key;
+          importedSnapshot = accountData;
+
+          // Hydrate balance/transactions immediately if present
+          if (typeof accountData.balance === 'number') {
+            wallet.update(w => ({ ...w, balance: accountData.balance, actualBalance: accountData.balance }));
+          }
+          if (Array.isArray(accountData.transactions)) {
+            const hydrated = accountData.transactions.map((tx: any) => ({
+              ...tx,
+              date: tx.date ? new Date(tx.date) : new Date()
+            }));
+            transactions.set(hydrated);
+          }
+
+          showToast(msg('toasts.account.import.fileSuccess', 'Wallet file loaded. Ready to import.'), 'success');
           
         } catch (error) {
           console.error('Error reading file:', error);
           // showToast('Error reading file: ' + String(error), 'error');
           showToast(
-            tr('toasts.account.import.fileReadError', { values: { error: String(error) } }),
+            msg('toasts.account.import.fileReadError', `Error reading wallet file: ${String(error) }`),
             'error'
           );
         }
@@ -825,9 +843,13 @@
       
     } catch (error) {
       console.error('Error loading file:', error);
+      const msg = (key: string, fallback: string) => {
+        const val = $t(key);
+        return val === key ? fallback : val;
+      };
       // showToast('Error loading file: ' + String(error), 'error');
       showToast(
-        tr('toasts.account.import.fileLoadError', { values: { error: String(error) } }),
+        msg('toasts.account.import.fileLoadError', `Error loading wallet file: ${String(error) }`),
         'error'
       );
     }
@@ -937,6 +959,8 @@
 
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
 
+            // The wallet service already sets etcAccount and clears transactions;
+            // ensure the UI store mirrors the loaded address.
             wallet.update(w => ({
                 ...w,
                 address: account.address
@@ -945,8 +969,11 @@
             // Clear sensitive data
             loadKeystorePassword = '';
 
+            // After loading the keystore, fetch the full state so balances and history populate.
             if (isGethRunning) {
+                await walletService.refreshTransactions();
                 await walletService.refreshBalance();
+                walletService.startProgressiveLoading();
             }
 
             keystoreLoadMessage = tr('keystore.load.success');
@@ -1327,7 +1354,7 @@
 
   // Helper function to set max amount
   function setMaxAmount() {
-    rawAmountInput = $wallet.balance.toFixed(2);
+    rawAmountInput = $wallet.balance.toFixed(4);
   }
 
   // async function handleLogout() {
@@ -1679,32 +1706,28 @@
         {:else}
         <div>
           <p class="text-sm text-muted-foreground">{$t('wallet.balance')}</p>
-          <p class="text-2xl font-bold">{$wallet.balance.toFixed(8)} Chiral</p>
+          <p class="text-2xl font-bold">{$wallet.balance.toFixed(4)} Chiral</p>
         </div>
         
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
           <div class="min-w-0">
-            <p class="text-xs text-muted-foreground truncate">Blocks Mined {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
-            {#if $accurateTotals}
-              <p class="text-sm font-medium text-green-600 break-words">{$accurateTotals.blocksMined.toLocaleString()} blocks</p>
-            {:else}
-              <p class="text-sm font-medium text-green-600 opacity-60 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
-            {/if}
+            <p class="text-xs text-muted-foreground truncate">Blocks Mined</p>
+            <p class="text-sm font-medium text-green-600 break-words">{$miningState.blocksFound.toLocaleString()} blocks</p>
           </div>
           <div class="min-w-0">
             <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
             {#if $accurateTotals}
-              <p class="text-sm font-medium text-blue-600 break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
+              <p class="text-sm font-medium text-blue-600 break-words">+{$accurateTotals.totalReceived.toFixed(4)}</p>
             {:else}
-              <p class="text-sm font-medium text-blue-600 opacity-60 break-words">+{$totalReceived.toFixed(8)}</p>
+              <p class="text-sm font-medium text-blue-600 opacity-60 break-words">+{$totalReceived.toFixed(4)}</p>
             {/if}
           </div>
           <div class="min-w-0">
             <p class="text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-xs opacity-60">(est.)</span>{/if}</p>
             {#if $accurateTotals}
-              <p class="text-sm font-medium text-red-600 break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
+              <p class="text-sm font-medium text-red-600 break-words">-{$accurateTotals.totalSent.toFixed(4)}</p>
             {:else}
-              <p class="text-sm font-medium text-red-600 opacity-60 break-words">-{$totalSpent.toFixed(8)}</p>
+              <p class="text-sm font-medium text-red-600 opacity-60 break-words">-{$totalSpent.toFixed(4)}</p>
             {/if}
           </div>
         </div>
@@ -1912,22 +1935,13 @@
           </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
-              {$t('transfer.available', { values: { amount: $wallet.balance.toFixed(2) } })}
+              {$t('transfer.available', { values: { amount: $wallet.balance.toFixed(4) } })}
             </p>
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
             {/if}
           </div>
           
-          <!-- Fee selector (UI stub) -->
-          <div class="mt-3">
-            <div class="inline-flex rounded-md border overflow-hidden">
-              <button type="button" class="px-3 py-1 text-xs {feePreset === 'low' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'low'}>{$t('transfer.fees.low')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'market' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'market'}>{$t('transfer.fees.market')}</button>
-              <button type="button" class="px-3 py-1 text-xs border-l {feePreset === 'fast' ? 'bg-foreground text-background' : 'bg-background'}" on:click={() => feePreset = 'fast'}>{$t('transfer.fees.fast')}</button>
-            </div>
-            <p class="text-xs text-muted-foreground mt-2">{$t('transfer.fees.estimated')}: {estimatedFeeDisplay}</p>
-          </div>
         
         </div>
 

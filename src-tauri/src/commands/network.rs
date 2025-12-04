@@ -1,8 +1,7 @@
-use tracing::info;
 use serde::Serialize;
 use crate::ethereum::{
     get_network_hashrate,
-    get_network_difficulty,
+    get_network_difficulty_as_u64,
     get_peer_count,
 };
 use crate::get_power_consumption;
@@ -25,22 +24,19 @@ pub async fn get_full_network_stats(app: tauri::AppHandle, address: Option<Strin
     let power_usage = get_power_consumption().await.unwrap_or(0.0) as f64;
     let (hashrate_res, difficulty_res, peers_res) = join!(
         get_network_hashrate(),
-        get_network_difficulty(),
+        get_network_difficulty_as_u64(),
         get_peer_count(),
     );
 
     let hashrate_str = hashrate_res
     .map_err(|e| format!("Failed to get hashrate: {}", e))?;
-    info!("📊 BACKEND: Network hashrate (string): {}", hashrate_str);
 
     // Convert string to numeric value
     let hashrate = parse_hashrate(&hashrate_str).unwrap_or(0.0);
-    info!("📊 BACKEND: Network hashrate (number): {}", hashrate);
-    
+
     let difficulty = difficulty_res
         .map_err(|e| format!("Failed to get difficulty: {}", e))?
-        .parse::<f64>()
-        .unwrap_or_default();
+        as f64;
 
     let active_miners = peers_res.unwrap_or(1); // prevent division by zero
 

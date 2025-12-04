@@ -39,6 +39,7 @@ export class SignalingService {
   private wsReconnectAttempts = 0;
   private wsReconnectBase = 1000;
   private wsReconnectMax = 30000;
+  private wsMaxReconnectAttempts = 5; // Stop reconnecting after 5 failed attempts
   private wsClosedByUser = false;
 
   // persistent peer tracking (in-memory map with timestamps)
@@ -68,7 +69,9 @@ export class SignalingService {
     // connection timeout for WebSocket connect attempts
     this.wsConnectTimeoutMs =
       opts.wsConnectTimeoutMs ??
-      (typeof process !== "undefined" && (process as any).env && (process as any).env.SIGNALLING_CONNECT_TIMEOUT_MS
+      (typeof process !== "undefined" &&
+      (process as any).env &&
+      (process as any).env.SIGNALLING_CONNECT_TIMEOUT_MS
         ? parseInt((process as any).env.SIGNALLING_CONNECT_TIMEOUT_MS)
         : 5000);
     this.peerTtlMs = opts.peerTtlMs ?? 1000 * 60 * 60 * 24; // 24h
@@ -272,8 +275,8 @@ export class SignalingService {
               typeof this.dhtService.off === "function"
                 ? () => this.dhtService.off("peers", peersHandler)
                 : typeof this.dhtService.removeListener === "function"
-                ? () => this.dhtService.removeListener("peers", peersHandler)
-                : null;
+                  ? () => this.dhtService.removeListener("peers", peersHandler)
+                  : null;
             if (off) this.registerTeardown(off);
           } catch (_) {
             /* ignore */
@@ -307,12 +310,12 @@ export class SignalingService {
               typeof (this.dhtService as any).off === "function"
                 ? () => (this.dhtService as any).off("signal", signalHandler)
                 : typeof (this.dhtService as any).removeListener === "function"
-                ? () =>
-                    (this.dhtService as any).removeListener(
-                      "signal",
-                      signalHandler
-                    )
-                : null;
+                  ? () =>
+                      (this.dhtService as any).removeListener(
+                        "signal",
+                        signalHandler
+                      )
+                  : null;
             if (off) this.registerTeardown(off);
           } catch (_) {
             /* ignore */
@@ -477,6 +480,18 @@ export class SignalingService {
 
   private scheduleWsReconnect() {
     this.wsReconnectAttempts++;
+
+    // Stop reconnecting after max attempts to avoid log spam
+    if (this.wsReconnectAttempts > this.wsMaxReconnectAttempts) {
+      console.warn(
+        `[SignalingService] Max reconnect attempts (${this.wsMaxReconnectAttempts}) reached, giving up`
+      );
+      this.state.set("disconnected");
+      this.connected.set(false);
+      this.backend.set("none");
+      return;
+    }
+
     const delay = Math.min(
       this.wsReconnectBase * 2 ** (this.wsReconnectAttempts - 1),
       this.wsReconnectMax
