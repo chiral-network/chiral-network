@@ -6911,11 +6911,26 @@ async fn download_ftp(
     let parsed_url = url::Url::parse(&url)
         .map_err(|e| format!("Invalid FTP URL: {}", e))?;
     
-    let file_name = parsed_url
+    // Extract filename from URL and strip hash prefix if present
+    // FTP uploads store files as "{hash}_{originalname}" for uniqueness
+    let raw_file_name = parsed_url
         .path_segments()
         .and_then(|segments| segments.last())
         .map(|s| urlencoding::decode(s).unwrap_or_else(|_| s.into()).to_string())
         .unwrap_or_else(|| "unknown_file".to_string());
+    
+    // Strip the hash prefix (format: {64-char-hash}_{original_filename})
+    let file_name = if raw_file_name.len() > 65 && raw_file_name.chars().nth(64) == Some('_') {
+        // Check if first 64 chars look like a hex hash
+        let potential_hash = &raw_file_name[..64];
+        if potential_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            raw_file_name[65..].to_string() // Skip hash and underscore
+        } else {
+            raw_file_name
+        }
+    } else {
+        raw_file_name
+    };
     
     let host = parsed_url.host_str().unwrap_or("unknown").to_string();
     
