@@ -1862,8 +1862,7 @@
               <div class="bg-muted/40 rounded-lg p-3">
                 <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastError')}</p>
                 <div class="mt-1 h-32 overflow-y-auto rounded border border-muted/40 bg-background/40 p-2 text-sm font-medium break-words w-full space-y-1">
-                  {@const errorLines = formatHealthMessage(dhtHealth.lastError).split(/\r?\n+/)}
-                  {#each errorLines as line}
+                  {#each formatHealthMessage(dhtHealth.lastError).split(/\r?\n+/) as line}
                     <p class="whitespace-pre-wrap">{line}</p>
                   {/each}
                 </div>
