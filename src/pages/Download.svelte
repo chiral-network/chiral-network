@@ -6,7 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
-  import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
+  import { files, downloadQueue, activeTransfers, wallet, type FileItem } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
@@ -30,7 +30,8 @@
     transferStore,
     activeTransfers as storeActiveTransfers,
     subscribeToTransferEvents,
-    unsubscribeFromTransferEvents
+    unsubscribeFromTransferEvents,
+    type Transfer
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir, join } from '@tauri-apps/api/path'
@@ -995,9 +996,51 @@ async function loadAndResumeDownloads() {
     }
   }
 
+  // Helper function to convert Transfer (from transferStore) to FileItem format
+  function transferToFileItem(transfer: Transfer): FileItem {
+    // Map transfer status to FileItem status
+    const statusMap: Record<string, FileItem['status']> = {
+      'queued': 'queued',
+      'starting': 'downloading',
+      'downloading': 'downloading',
+      'paused': 'paused',
+      'completed': 'completed',
+      'failed': 'failed',
+      'canceled': 'canceled'
+    }
+
+    return {
+      id: transfer.transferId,
+      name: transfer.fileName,
+      hash: transfer.fileHash,
+      size: transfer.fileSize,
+      status: statusMap[transfer.status] || 'downloading',
+      progress: transfer.progressPercentage,
+      downloadPath: transfer.outputPath,
+      speed: transfer.downloadSpeedBps > 0 
+        ? `${(transfer.downloadSpeedBps / 1024).toFixed(1)} KB/s` 
+        : undefined,
+      eta: transfer.etaSeconds 
+        ? `${Math.round(transfer.etaSeconds)}s` 
+        : undefined,
+      downloadedChunks: Array.from({ length: transfer.completedChunks }, (_, i) => i),
+      totalChunks: transfer.totalChunks,
+      price: 0, // FTP downloads are free
+      protocol: 'FTP' as const
+    }
+  }
+
   // Combine all files and queue into single list with stable sorting
   $: allDownloads = (() => {
-    const combined = [...$files, ...$downloadQueue]
+    // Get transfers from the transferStore and convert to FileItem format
+    const transferFileItems: FileItem[] = Array.from($transferStore.transfers.values())
+      .map(transferToFileItem)
+
+    // Filter out any transfers that already exist in $files or $downloadQueue (by id)
+    const existingIds = new Set([...$files.map(f => f.id), ...$downloadQueue.map(f => f.id)])
+    const uniqueTransfers = transferFileItems.filter(t => !existingIds.has(t.id))
+
+    const combined = [...$files, ...$downloadQueue, ...uniqueTransfers]
 
     // Normal sorting by status
     const statusOrder = {
