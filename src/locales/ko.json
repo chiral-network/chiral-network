@@ -470,6 +470,17 @@
       "market": "시장",
       "fast": "빠름",
       "estimated": "예상 수수료"
+    },
+    "gas": {
+      "label": "트랜잭션 속도",
+      "loading": "예상 중...",
+      "estimateError": "기본값 사용",
+      "slow": "경제적",
+      "standard": "표준",
+      "fast": "우선",
+      "estimatedFee": "예상 수수료",
+      "totalCost": "총 비용",
+      "networkCongestion": "네트워크"
     }
   },
   "transactions": {

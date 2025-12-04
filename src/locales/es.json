@@ -470,6 +470,17 @@
       "market": "Mercado",
       "fast": "Rápida",
       "estimated": "Tarifa estimada"
+    },
+    "gas": {
+      "label": "Velocidad de transacción",
+      "loading": "Estimando...",
+      "estimateError": "Usando valores predeterminados",
+      "slow": "Económico",
+      "standard": "Estándar",
+      "fast": "Prioritario",
+      "estimatedFee": "Tarifa estimada",
+      "totalCost": "Costo total",
+      "networkCongestion": "Red"
     }
   },
   "transactions": {

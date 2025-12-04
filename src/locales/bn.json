@@ -584,6 +584,17 @@
       "market": "বাজার",
       "fast": "দ্রুত",
       "estimated": "আনুমানিক ফি"
+    },
+    "gas": {
+      "label": "লেনদেনের গতি",
+      "loading": "অনুমান করা হচ্ছে...",
+      "estimateError": "ডিফল্ট মান ব্যবহার করা হচ্ছে",
+      "slow": "সাশ্রয়ী",
+      "standard": "স্ট্যান্ডার্ড",
+      "fast": "অগ্রাধিকার",
+      "estimatedFee": "আনুমানিক ফি",
+      "totalCost": "মোট খরচ",
+      "networkCongestion": "নেটওয়ার্ক"
     }
   },
   "transactions": {

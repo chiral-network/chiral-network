@@ -585,6 +585,68 @@ async fn get_transaction_receipt(
 }
 
 #[tauri::command]
+async fn get_gas_prices() -> Result<transaction_services::GasPrices, String> {
+    transaction_services::get_recommended_gas_prices().await
+}
+
+#[tauri::command]
+async fn estimate_transaction_gas(
+    from: String,
+    to: String,
+    value: f64,
+) -> Result<serde_json::Value, String> {
+    // Convert value from Chiral to Wei (1 Chiral = 10^18 Wei)
+    let value_wei = (value * 1_000_000_000_000_000_000.0) as u128;
+    let value_hex = format!("0x{:x}", value_wei);
+    
+    // Estimate gas for the transaction (standard transfer is 21000)
+    let gas_estimate = transaction_services::estimate_gas(&from, &to, &value_hex, None).await?;
+    
+    // Get current gas prices
+    let gas_prices = transaction_services::get_recommended_gas_prices().await?;
+    
+    // Parse gas prices from hex to decimal (Wei)
+    let slow_wei = u128::from_str_radix(&gas_prices.slow[2..], 16)
+        .map_err(|e| format!("Failed to parse slow gas price: {}", e))?;
+    let standard_wei = u128::from_str_radix(&gas_prices.standard[2..], 16)
+        .map_err(|e| format!("Failed to parse standard gas price: {}", e))?;
+    let fast_wei = u128::from_str_radix(&gas_prices.fast[2..], 16)
+        .map_err(|e| format!("Failed to parse fast gas price: {}", e))?;
+    
+    // Calculate fees in Chiral (gas * gas_price / 10^18)
+    let slow_fee = (gas_estimate as u128 * slow_wei) as f64 / 1_000_000_000_000_000_000.0;
+    let standard_fee = (gas_estimate as u128 * standard_wei) as f64 / 1_000_000_000_000_000_000.0;
+    let fast_fee = (gas_estimate as u128 * fast_wei) as f64 / 1_000_000_000_000_000_000.0;
+    
+    // Convert gas prices to Gwei for display (Wei / 10^9)
+    let slow_gwei = slow_wei as f64 / 1_000_000_000.0;
+    let standard_gwei = standard_wei as f64 / 1_000_000_000.0;
+    let fast_gwei = fast_wei as f64 / 1_000_000_000.0;
+    
+    Ok(serde_json::json!({
+        "gasLimit": gas_estimate,
+        "gasPrices": {
+            "slow": {
+                "gwei": slow_gwei,
+                "fee": slow_fee,
+                "time": gas_prices.slow_time
+            },
+            "standard": {
+                "gwei": standard_gwei,
+                "fee": standard_fee,
+                "time": gas_prices.standard_time
+            },
+            "fast": {
+                "gwei": fast_gwei,
+                "fee": fast_fee,
+                "time": gas_prices.fast_time
+            }
+        },
+        "networkCongestion": gas_prices.network_congestion
+    }))
+}
+
+#[tauri::command]
 async fn can_afford_download(state: State<'_, AppState>, price: f64) -> Result<bool, String> {
     let account = get_active_account(&state).await?;
     let balance_str = get_balance(&account).await?;
@@ -7292,6 +7354,8 @@ fn main() {
             get_account_balance,
             get_user_balance,
             get_transaction_receipt,
+            get_gas_prices,
+            estimate_transaction_gas,
             can_afford_download,
             process_download_payment,
             record_download_payment,

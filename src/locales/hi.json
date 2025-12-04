@@ -585,6 +585,17 @@
       "market": "बाजार",
       "fast": "तेज़",
       "estimated": "अनुमानित शुल्क"
+    },
+    "gas": {
+      "label": "लेनदेन की गति",
+      "loading": "अनुमान लगा रहा है...",
+      "estimateError": "डिफ़ॉल्ट मानों का उपयोग",
+      "slow": "किफायती",
+      "standard": "मानक",
+      "fast": "प्राथमिकता",
+      "estimatedFee": "अनुमानित शुल्क",
+      "totalCost": "कुल लागत",
+      "networkCongestion": "नेटवर्क"
     }
   },
   "transactions": {

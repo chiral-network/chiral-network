@@ -139,6 +139,27 @@
   let countdown = 0
   let intervalId: number | null = null
 
+  // Gas options state
+  type GasOption = 'slow' | 'standard' | 'fast';
+  interface GasPriceInfo {
+    gwei: number;
+    fee: number;
+    time: string;
+  }
+  interface GasEstimate {
+    gasLimit: number;
+    gasPrices: {
+      slow: GasPriceInfo;
+      standard: GasPriceInfo;
+      fast: GasPriceInfo;
+    };
+    networkCongestion: string;
+  }
+  let selectedGasOption: GasOption = 'standard';
+  let gasEstimate: GasEstimate | null = null;
+  let isLoadingGas = false;
+  let gasError = '';
+
   // Derive Geth running status from store
   $: isGethRunning = $gethStatus === 'running';
 
@@ -1340,8 +1361,61 @@
   }
 
   // Helper function to set max amount
-  function setMaxAmount() {
-    rawAmountInput = $wallet.balance.toFixed(4);
+  async function setMaxAmount() {
+    // If we don't have a gas estimate yet, fetch it first
+    if (!gasEstimate && isGethRunning) {
+      await fetchGasEstimate();
+    }
+    
+    // Calculate max amount accounting for gas fee
+    const currentGasFee = gasEstimate?.gasPrices[selectedGasOption]?.fee ?? 0;
+    const maxAmount = Math.max(0, $wallet.balance - currentGasFee);
+    rawAmountInput = maxAmount.toFixed(4);
+  }
+
+  // Fetch gas estimate for transaction
+  async function fetchGasEstimate() {
+    if (!isTauri || !$etcAccount || !isGethRunning) {
+      gasError = '';
+      return;
+    }
+    
+    isLoadingGas = true;
+    gasError = '';
+    
+    try {
+      // Use a placeholder address if no recipient yet
+      const toAddress = recipientAddress || '0x0000000000000000000000000000000000000000';
+      const amount = sendAmount > 0 ? sendAmount : 0.001;
+      
+      const result = await invoke<GasEstimate>('estimate_transaction_gas', {
+        from: $etcAccount.address,
+        to: toAddress,
+        value: amount
+      });
+      
+      gasEstimate = result;
+    } catch (error) {
+      console.error('Failed to fetch gas estimate:', error);
+      gasError = String(error);
+      // Set default values if gas estimation fails
+      gasEstimate = {
+        gasLimit: 21000,
+        gasPrices: {
+          slow: { gwei: 1, fee: 0.000021, time: '~2 minutes' },
+          standard: { gwei: 1.25, fee: 0.00002625, time: '~1 minute' },
+          fast: { gwei: 1.5, fee: 0.0000315, time: '~30 seconds' }
+        },
+        networkCongestion: 'unknown'
+      };
+    } finally {
+      isLoadingGas = false;
+    }
+  }
+
+  // Refresh gas estimate when recipient or amount changes
+  $: if (recipientAddress && isAddressValid && isGethRunning) {
+    fetchGasEstimate();
   }
 
   // async function handleLogout() {
@@ -1930,6 +2004,98 @@
           </div>
           
         
+        </div>
+
+        <!-- Gas Options Section -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <Label>{$t('transfer.gas.label')}</Label>
+            {#if isLoadingGas}
+              <span class="text-xs text-muted-foreground flex items-center gap-1">
+                <RefreshCw class="h-3 w-3 animate-spin" />
+                {$t('transfer.gas.loading')}
+              </span>
+            {:else if gasError}
+              <span class="text-xs text-amber-500">{$t('transfer.gas.estimateError')}</span>
+            {/if}
+          </div>
+          
+          <div class="grid grid-cols-3 gap-2">
+            <!-- Slow Option -->
+            <button
+              type="button"
+              class="p-3 rounded-lg border-2 transition-all text-left {selectedGasOption === 'slow' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}"
+              on:click={() => selectedGasOption = 'slow'}
+            >
+              <div class="flex items-center gap-1 mb-1">
+                <span class="text-lg">🐢</span>
+                <span class="text-sm font-medium">{$t('transfer.gas.slow')}</span>
+              </div>
+              {#if gasEstimate}
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.slow.gwei.toFixed(2)} Gwei</p>
+                <p class="text-xs font-medium text-green-600">{gasEstimate.gasPrices.slow.fee.toFixed(6)} CHR</p>
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.slow.time}</p>
+              {:else}
+                <p class="text-xs text-muted-foreground">--</p>
+              {/if}
+            </button>
+
+            <!-- Standard Option -->
+            <button
+              type="button"
+              class="p-3 rounded-lg border-2 transition-all text-left {selectedGasOption === 'standard' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}"
+              on:click={() => selectedGasOption = 'standard'}
+            >
+              <div class="flex items-center gap-1 mb-1">
+                <span class="text-lg">⚡</span>
+                <span class="text-sm font-medium">{$t('transfer.gas.standard')}</span>
+              </div>
+              {#if gasEstimate}
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.standard.gwei.toFixed(2)} Gwei</p>
+                <p class="text-xs font-medium text-blue-600">{gasEstimate.gasPrices.standard.fee.toFixed(6)} CHR</p>
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.standard.time}</p>
+              {:else}
+                <p class="text-xs text-muted-foreground">--</p>
+              {/if}
+            </button>
+
+            <!-- Fast Option -->
+            <button
+              type="button"
+              class="p-3 rounded-lg border-2 transition-all text-left {selectedGasOption === 'fast' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}"
+              on:click={() => selectedGasOption = 'fast'}
+            >
+              <div class="flex items-center gap-1 mb-1">
+                <span class="text-lg">🚀</span>
+                <span class="text-sm font-medium">{$t('transfer.gas.fast')}</span>
+              </div>
+              {#if gasEstimate}
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.fast.gwei.toFixed(2)} Gwei</p>
+                <p class="text-xs font-medium text-orange-600">{gasEstimate.gasPrices.fast.fee.toFixed(6)} CHR</p>
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.fast.time}</p>
+              {:else}
+                <p class="text-xs text-muted-foreground">--</p>
+              {/if}
+            </button>
+          </div>
+
+          <!-- Estimated Fee Summary -->
+          {#if gasEstimate}
+            <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <span class="text-sm text-muted-foreground">{$t('transfer.gas.estimatedFee')}</span>
+              <span class="text-sm font-medium">
+                {gasEstimate.gasPrices[selectedGasOption].fee.toFixed(6)} CHR
+              </span>
+            </div>
+            {#if sendAmount > 0}
+              <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <span class="text-sm text-muted-foreground">{$t('transfer.gas.totalCost')}</span>
+                <span class="text-sm font-bold">
+                  {(sendAmount + gasEstimate.gasPrices[selectedGasOption].fee).toFixed(6)} CHR
+                </span>
+              </div>
+            {/if}
+          {/if}
         </div>
 
         <Button

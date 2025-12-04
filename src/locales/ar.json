@@ -619,6 +619,17 @@
       "market": "سوق",
       "fast": "سريع",
       "estimated": "الرسوم المقدرة"
+    },
+    "gas": {
+      "label": "سرعة المعاملة",
+      "loading": "جارٍ التقدير...",
+      "estimateError": "استخدام القيم الافتراضية",
+      "slow": "اقتصادي",
+      "standard": "قياسي",
+      "fast": "أولوية",
+      "estimatedFee": "الرسوم المقدرة",
+      "totalCost": "التكلفة الإجمالية",
+      "networkCongestion": "الشبكة"
     }
   },
   "transactions": {

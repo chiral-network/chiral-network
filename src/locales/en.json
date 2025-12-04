@@ -609,6 +609,17 @@
       "market": "Market",
       "fast": "Fast",
       "estimated": "Estimated fee"
+    },
+    "gas": {
+      "label": "Transaction Speed",
+      "loading": "Estimating...",
+      "estimateError": "Using defaults",
+      "slow": "Economy",
+      "standard": "Standard",
+      "fast": "Priority",
+      "estimatedFee": "Estimated Fee",
+      "totalCost": "Total Cost",
+      "networkCongestion": "Network"
     }
   },
   "transactions": {
