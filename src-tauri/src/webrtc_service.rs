@@ -1494,9 +1494,17 @@ impl WebRTCService {
 
         // Send file chunks over WebRTC data channel with flow control
         for chunk_index in 0..total_chunks {
-            // Log first few chunks and then periodically
+            // Log first few chunks, last chunk, and every 50th chunk
             if chunk_index < 10 || chunk_index == total_chunks - 1 || chunk_index % 50 == 0 {
                 info!("📤 Processing chunk {}/{} for peer {}", chunk_index + 1, total_chunks, peer_id);
+            }
+            
+            // Log every 20 chunks to track progress
+            if chunk_index % 20 == 0 {
+                info!("📊 Transfer progress: chunk {}/{} ({}%) to peer {}", 
+                    chunk_index, total_chunks, 
+                    (chunk_index as f32 / total_chunks as f32 * 100.0) as u32,
+                    peer_id);
             }
             
             // Flow control: wait if too many pending ACKs
@@ -1517,12 +1525,17 @@ impl WebRTCService {
                 };
                 
                 // Log pending count for first 10 chunks
-                if chunk_index < 10 {
+                if chunk_index < 10 || chunk_index % 100 == 0 {
                     info!("🔄 Chunk {}: pending_count={}, MAX_PENDING_ACKS={}", chunk_index, pending_count, MAX_PENDING_ACKS);
                 }
 
                 if pending_count < MAX_PENDING_ACKS {
                     break;
+                }
+                
+                // Log when we're actually waiting for ACKs
+                if chunk_index % 20 == 0 || pending_count >= MAX_PENDING_ACKS - 2 {
+                    warn!("⏳ Chunk {}: Waiting for ACKs (pending={}, max={})", chunk_index, pending_count, MAX_PENDING_ACKS);
                 }
 
                 // Timeout check
@@ -1648,7 +1661,15 @@ impl WebRTCService {
                             })
                             .await;
                     }
+                } else {
+                    // This should never happen - peer not in connections after successful send
+                    error!("❌ CRITICAL: Peer {} disappeared from connections after sending chunk {}!", peer_id, chunk_index);
                 }
+            }
+            
+            // Log completion of chunk processing (every 100 chunks to avoid spam)
+            if chunk_index % 100 == 0 && chunk_index > 0 {
+                info!("✅ Chunk {} sent and tracked successfully for peer {}", chunk_index, peer_id);
             }
 
             // Small delay between chunks in a batch
