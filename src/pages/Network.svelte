@@ -1861,7 +1861,12 @@
               </div>
               <div class="bg-muted/40 rounded-lg p-3">
                 <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastError')}</p>
-                <p class="text-sm font-medium mt-1 break-words w-full">{formatHealthMessage(dhtHealth.lastError)}</p>
+                <div class="mt-1 h-32 overflow-y-auto rounded border border-muted/40 bg-background/40 p-2 text-sm font-medium break-words w-full space-y-1">
+                  {@const errorLines = formatHealthMessage(dhtHealth.lastError).split(/\r?\n+/)}
+                  {#each errorLines as line}
+                    <p class="whitespace-pre-wrap">{line}</p>
+                  {/each}
+                </div>
                 {#if dhtHealth.lastErrorAt}
                   <p class="text-xs text-muted-foreground mt-1">{formatHealthTimestamp(dhtHealth.lastErrorAt)}</p>
                 {/if}
