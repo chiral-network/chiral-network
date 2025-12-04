@@ -1016,23 +1016,14 @@ pub async fn get_sync_status() -> Result<SyncStatus, String> {
         .map_err(|e| format!("Invalid startingBlock: {}", e))?;
 
     let blocks_remaining = highest_block.saturating_sub(current_block);
-    let total_blocks = highest_block.saturating_sub(starting_block);
 
-    // Validate block relationships to prevent extreme percentages
-    // starting_block should <= current_block <= highest_block
-    let valid_relationships = starting_block <= current_block && current_block <= highest_block;
-
-    let progress_percent = if valid_relationships && total_blocks > 0 {
-        // Normal case: calculate progress and clamp to 0-100
-        let raw_progress = ((current_block - starting_block) as f64 / total_blocks as f64) * 100.0;
+    // Calculate progress as percentage of total blockchain synced (current / highest)
+    // This gives a more intuitive progress indicator than (current - starting) / (highest - starting)
+    let progress_percent = if highest_block > 0 {
+        let raw_progress = (current_block as f64 / highest_block as f64) * 100.0;
         raw_progress.min(100.0).max(0.0)
-    } else if !valid_relationships {
-        // Invalid block relationships - log warning and use fallback
-        eprintln!("⚠️  Invalid sync block relationships - starting: {}, current: {}, highest: {}", starting_block, current_block, highest_block);
-        // If current >= highest, we're likely fully synced
-        if current_block >= highest_block { 100.0 } else { 0.0 }
     } else {
-        // total_blocks == 0, meaning we're fully synced
+        // No blocks yet, consider fully synced
         100.0
     };
 
@@ -1043,8 +1034,11 @@ pub async fn get_sync_status() -> Result<SyncStatus, String> {
         Some(0)
     };
 
+    // Consider synced if progress is 100% or no blocks remaining
+    let is_still_syncing = blocks_remaining > 0 && progress_percent < 100.0;
+
     Ok(SyncStatus {
-        syncing: true,
+        syncing: is_still_syncing,
         current_block,
         highest_block,
         starting_block,

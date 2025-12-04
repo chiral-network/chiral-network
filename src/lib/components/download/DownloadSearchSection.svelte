@@ -445,43 +445,56 @@
   }
 
   // Helper function to determine available protocols for a file
+  // Files can only be downloaded via the protocol they were uploaded with
   function getAvailableProtocols(metadata: FileMetadata): Array<{id: string, name: string, description: string, available: boolean}> {
+    // Determine which protocol was used for upload based on metadata
+    const hasCids = !!(metadata.cids && metadata.cids.length > 0);
+    const hasInfoHash = !!metadata.infoHash;
+    const hasHttpSources = !!(metadata.httpSources && metadata.httpSources.length > 0);
+    const hasFtpSources = !!(metadata.ftpSources && metadata.ftpSources.length > 0);
+    const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
+    const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
+    
+    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs)
+    // If CIDs exist, file was uploaded via BitSwap and must be downloaded via BitSwap
+    const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
+    
     return [
       {
         id: 'bitswap',
         name: 'Bitswap',
         description: 'IPFS Bitswap protocol',
-        available: !!(metadata.cids && metadata.cids.length > 0)
+        available: hasCids && hasSeeders
       },
       {
         id: 'webrtc',
         name: 'WebRTC',
         description: 'Peer-to-peer via WebRTC',
-        available: !!(metadata.seeders && metadata.seeders.length > 0)
+        available: isWebRTCUpload
       },
       {
         id: 'http',
         name: 'HTTP',
-        description: 'Direct HTTP/FTP download',
-        available: !!(metadata.httpSources && metadata.httpSources.length > 0) || !!(metadata.ftpSources && metadata.ftpSources.length > 0)
+        description: 'Direct HTTP download',
+        available: hasHttpSources
       },
       {
         id: 'bittorrent',
         name: 'BitTorrent',
         description: 'BitTorrent protocol',
-        available: !!metadata.infoHash
+        available: hasInfoHash
       },
       {
         id: 'ed2k',
         name: 'ED2K',
         description: 'ED2K protocol',
-        available: !!(metadata.ed2kSources && metadata.ed2kSources.length > 0)
+        available: hasEd2kSources
       },
       {
         id: 'ftp',
         name: 'FTP',
         description: 'FTP protocol',
-        available: !!(metadata.ftpSources && metadata.ftpSources.length > 0)
+        available: hasFtpSources
       }
     ];
   }
@@ -845,6 +858,13 @@
               }
               class="pr-20 h-10"
               on:focus={toggleHistoryDropdown}
+              on:keydown={(e: CustomEvent<KeyboardEvent>) => {
+                const event = e.detail;
+                if (event.key === 'Enter' && searchHash.trim() && !isSearching) {
+                  event.preventDefault();
+                  searchForFile();
+                }
+              }}
             />
             {#if searchHash}
               <button
@@ -980,6 +1000,7 @@
   bind:mode={peerSelectionMode}
   bind:protocol={selectedProtocol}
   isTorrent={pendingTorrentType !== null}
+  {availableProtocols}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}
 />

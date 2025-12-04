@@ -6,12 +6,12 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
-import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
-import { dhtService } from '$lib/dht'
-import { paymentService } from '$lib/services/paymentService'
-import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
-import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte'
-import type { FileMetadata } from '$lib/dht'
+  import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
+  import { dhtService } from '$lib/dht'
+  import { paymentService } from '$lib/services/paymentService'
+  import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
+  import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte'
+  import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
@@ -36,7 +36,7 @@ import type { FileMetadata } from '$lib/dht'
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
  // Auto-detect protocol based on file metadata
-  let detectedProtocol: 'WebRTC' | 'Bitswap' | null = null
+  let detectedProtocol: 'WebRTC' | 'Bitswap' | undefined = undefined
   let torrentDownloads = new Map<string, any>();
   onMount(() => {
     // Initialize payment service to load persisted wallet and transactions
@@ -856,8 +856,13 @@ async function loadAndResumeDownloads() {
       detectedProtocol = metadata.selectedProtocol === 'webrtc' ? 'WebRTC' : 'Bitswap';
     } else {
       // Auto-detect protocol based on file metadata
+      // BitSwap files have CIDs, WebRTC files have seeders but NO CIDs
       const hasCids = metadata.cids && metadata.cids.length > 0
-      detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
+      const hasSeeders = metadata.seeders && metadata.seeders.length > 0
+      // WebRTC is only valid if uploaded via WebRTC (seeders exist but no CIDs)
+      const isWebRTCUpload = hasSeeders && !hasCids && !metadata.infoHash && 
+                            !metadata.httpSources?.length && !metadata.ftpSources?.length && !metadata.ed2kSources?.length
+      detectedProtocol = isWebRTCUpload ? 'WebRTC' : (hasCids ? 'Bitswap' : undefined)
     }
 
     // Check both download queue and files store for duplicates
@@ -900,6 +905,14 @@ async function loadAndResumeDownloads() {
       if (existingFile.status !== 'failed' && existingFile.status !== 'canceled' && existingFile.status !== 'seeding') {
         return
       }
+    }
+
+    // If no valid P2P protocol detected, check for other protocols (HTTP, FTP, etc.)
+    // handled by DownloadSearchSection, but for direct queue additions we need to check
+    if (!detectedProtocol && !metadata.httpSources?.length && !metadata.ftpSources?.length && 
+        !metadata.ed2kSources?.length && !metadata.infoHash) {
+      showToast(`Cannot download "${metadata.fileName}": No valid download protocol available for this file.`, 'error');
+      return;
     }
 
     const newFile = {
@@ -1132,6 +1145,21 @@ async function loadAndResumeDownloads() {
     // Use the protocol stored with the file, or fall back to global detectedProtocol
     const fileProtocol = downloadingFile.protocol || detectedProtocol;
 
+    // Validate protocol before attempting P2P download
+    if (!fileProtocol) {
+      errorLogger.fileOperationError('Download', 'No valid P2P protocol for this file');
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      showToast(
+        `Cannot download "${downloadingFile.name}": No valid download protocol. File may have been uploaded via a different protocol.`,
+        'error'
+      );
+      return;
+    }
+
     if (fileProtocol === "Bitswap") {
 
   // CRITICAL: Bitswap requires CIDs to download
@@ -1143,7 +1171,7 @@ async function loadAndResumeDownloads() {
         : file
     ))
     showToast(
-      `Cannot download "${downloadingFile.name}": This file was not uploaded via Bitswap and has no CIDs. Please use WebRTC protocol instead.`,
+      `Cannot download "${downloadingFile.name}": File metadata is missing CIDs required for Bitswap download.`,
       'error'
     )
     return
@@ -1262,7 +1290,7 @@ async function loadAndResumeDownloads() {
     );
     return;
   }
-} else {
+} else if (fileProtocol === "WebRTC") {
     // WebRTC download path - Use backend Rust WebRTC (works in Tauri)
       try {
         const { invoke } = await import('@tauri-apps/api/core');

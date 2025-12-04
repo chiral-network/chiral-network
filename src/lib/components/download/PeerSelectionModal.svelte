@@ -16,7 +16,7 @@
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
-  import { Server, Zap, TrendingUp, DollarSign, Clock, X, Download, Globe, Wifi } from 'lucide-svelte';
+  import { Server, Zap, TrendingUp, Clock, X, Download, Globe, Wifi } from 'lucide-svelte';
   import { toHumanReadableSize } from '$lib/utils';
 
   export let show = false;
@@ -26,6 +26,10 @@
   export let mode: 'auto' | 'manual' = 'auto';
   export let protocol: 'http' | 'webrtc' | 'bitswap' | 'bittorrent' | 'ed2k' | 'ftp' = 'http'; 
   export let isTorrent = false; // Flag to indicate torrent download (no peer selection needed)
+  export let availableProtocols: Array<{id: string, name: string, description: string, available: boolean}> = [];
+
+  // Filter to only available protocols for display
+  $: validProtocols = availableProtocols.filter(p => p.available);
 
   const dispatch = createEventDispatcher<{
     confirm: void;
@@ -134,41 +138,35 @@
         <!-- Protocol Selection -->
         <div class="space-y-2">
           <div class="text-sm font-semibold text-foreground/90">Transfer Protocol</div>
-          <div class="flex gap-2">
-            <Button
-              variant={protocol === 'http' ? 'default' : 'outline'}
-              size="sm"
-              on:click={() => protocol = 'http'}
-            >
-              <Globe class="h-4 w-4 mr-2" />
-              HTTP
-            </Button>
-            <Button
-              variant={protocol === 'webrtc' ? 'default' : 'outline'}
-              size="sm"
-              on:click={() => protocol = 'webrtc'}
-            >
-              <Wifi class="h-4 w-4 mr-2" />
-              WebRTC
-            </Button>
-            <Button
-              variant={protocol === 'bitswap' ? 'default' : 'outline'}
-              size="sm"
-              on:click={() => protocol = 'bitswap'}
-            >
-              <Zap class="h-4 w-4 mr-2" />
-              Bitswap
-            </Button>
+          <div class="flex gap-2 flex-wrap">
+            {#each validProtocols as proto}
+              <Button
+                variant={protocol === proto.id ? 'default' : 'outline'}
+                size="sm"
+                on:click={() => protocol = proto.id as any}
+              >
+                {#if proto.id === 'http'}
+                  <Globe class="h-4 w-4 mr-2" />
+                {:else if proto.id === 'webrtc'}
+                  <Wifi class="h-4 w-4 mr-2" />
+                {:else if proto.id === 'bitswap'}
+                  <Zap class="h-4 w-4 mr-2" />
+                {:else if proto.id === 'bittorrent'}
+                  <Server class="h-4 w-4 mr-2" />
+                {:else}
+                  <Server class="h-4 w-4 mr-2" />
+                {/if}
+                {proto.name}
+              </Button>
+            {/each}
           </div>
-          <p class="text-xs text-muted-foreground">
-            {#if protocol === 'http'}
-              HTTP: Simple and fast for nodes with public IP addresses
-            {:else if protocol === 'webrtc'}
-              WebRTC: Peer-to-peer with NAT traversal (works behind firewalls)
-            {:else if protocol === 'bitswap'}
-              Bitswap: A peer-to-peer data exchange protocol for content-addressed data.
-            {/if}
-          </p>
+          {#if validProtocols.length === 0}
+            <p class="text-xs text-destructive">No download protocols available for this file.</p>
+          {:else}
+            <p class="text-xs text-muted-foreground">
+              {validProtocols.find(p => p.id === protocol)?.description || ''}
+            </p>
+          {/if}
         </div>
 
         <!-- Peer Selection Mode -->

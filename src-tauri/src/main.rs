@@ -5935,7 +5935,7 @@ async fn get_geth_status(
         installed,
         running,
         binary_path,
-        data_dir: data_dir_value,
+        data_dir: data_path.to_string_lossy().into_owned(),
         data_dir_exists,
         log_path: log_path_string,
         log_available,
@@ -7000,11 +7000,22 @@ fn main() {
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
+    // --- Single Instance Check ---
+    // Prevent multiple instances from running by checking if the DHT port is already in use
+    let single_instance_port = 4001;
+    if std::net::TcpListener::bind(format!("127.0.0.1:{}", single_instance_port)).is_err() {
+        eprintln!("Error: Another instance of Chiral Network is already running.");
+        eprintln!("Please close the existing instance before starting a new one.");
+        std::process::exit(1);
+    }
+
     // --- Initialize DHT Service at startup ---
-    let dht_service_arc = runtime.block_on(async {
+    let instance_suffix = String::new();
+    let instance_suffix_clone = instance_suffix.clone();
+    let dht_service_arc = runtime.block_on(async move {
         // These settings can be moved to a config file later
         let bootstrap_nodes = get_bootstrap_nodes();
-        let port = 4001; // Default port, can be configured
+        let port = 4001; // Default DHT port
         let is_bootstrap = false;
         let enable_autonat = true;
         let enable_autorelay = true;
@@ -7046,18 +7057,7 @@ fn main() {
     let dht_service_for_bt = dht_service_arc.clone();
 
     let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
-        // Allow multiple instances by using CHIRAL_INSTANCE_ID environment variable
-        let instance_id = std::env::var("CHIRAL_INSTANCE_ID")
-            .ok()
-            .and_then(|id| id.parse::<u16>().ok())
-            .unwrap_or(1);
-
-        let instance_suffix = if instance_id == 1 {
-            String::new()
-        } else {
-            format!("-{}", instance_id)
-        };
-
+        // Use the instance_id and instance_suffix from above for BitTorrent paths
         let download_dir =
             directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
                 .map(|dirs| {
@@ -7074,11 +7074,8 @@ fn main() {
             eprintln!("Failed to create download directory: {}", e);
         }
 
-        // Calculate port range based on instance ID to avoid conflicts
-        // Instance 1: 6881-6891, Instance 2: 6892-6902, etc.
-
-        let base_port = 6881 + ((instance_id - 1) * 11);
-        let port_range = base_port..(base_port + 10);
+        // Use default BitTorrent port range
+        let port_range = 6881..6891;
 
         println!(
             "Using BitTorrent port range: {}-{}",

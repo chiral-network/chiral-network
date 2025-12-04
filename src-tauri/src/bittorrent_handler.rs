@@ -353,7 +353,7 @@ impl BitTorrentHandler {
         );
 
         // Clean up any stale DHT or session state files that might be locked
-        let state_files = ["session.json", "dht.json", "dht.db", "session.db"];
+        let state_files = ["session.json", "dht.json", "dht.db", "session.db", "dht.dat"];
         for file in &state_files {
             let state_path = download_directory.join(file);
             if state_path.exists() {
@@ -367,13 +367,13 @@ impl BitTorrentHandler {
 
         let mut opts = SessionOptions::default();
 
-        // Set port range if provided (helps run multiple instances)
-        if let Some(range) = listen_port_range {
+        // Set port range if provided
+        if let Some(range) = listen_port_range.clone() {
             opts.listen_port_range = Some(range);
         }
 
-        // Use instance-specific DHT config if available (for multiple instances)
-        // The DHT state file will be stored in the download directory
+        // Enable persistence for session and DHT state
+        // This allows torrents to resume after app restart
         opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
             folder: Some(download_directory.clone()),
         });
