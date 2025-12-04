@@ -1857,6 +1857,22 @@ impl WebRTCService {
     pub async fn create_offer(&self, peer_id: String) -> Result<String, String> {
         info!("Creating WebRTC offer for peer: {}", peer_id);
 
+        // Close any existing connection to this peer first
+        {
+            let mut conns = self.connections.lock().await;
+            if let Some(old_conn) = conns.remove(&peer_id) {
+                info!("🔄 Closing existing WebRTC connection to peer {} before creating new offer", peer_id);
+                if let Some(old_pc) = old_conn.peer_connection {
+                    if let Err(e) = old_pc.close().await {
+                        warn!("Error closing old peer connection: {}", e);
+                    }
+                }
+                // Give some time for the old connection to fully close
+                drop(conns);
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
+
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
@@ -2030,7 +2046,7 @@ impl WebRTCService {
 
         // Wait for ICE gathering to complete (with timeout)
         info!("⏳ Waiting for ICE gathering to complete for peer {}...", peer_id);
-        let ice_timeout = tokio::time::Duration::from_secs(5);
+        let ice_timeout = tokio::time::Duration::from_secs(10);
         match tokio::time::timeout(ice_timeout, ice_complete_rx.recv()).await {
             Ok(Some(())) => {
                 info!("✅ ICE gathering completed successfully for peer {}", peer_id);
@@ -2097,6 +2113,22 @@ impl WebRTCService {
         peer_id: String,
         offer: String,
     ) -> Result<String, String> {
+        // Close any existing connection to this peer first
+        {
+            let mut conns = self.connections.lock().await;
+            if let Some(old_conn) = conns.remove(&peer_id) {
+                info!("🔄 Closing existing WebRTC connection to peer {} before establishing new one", peer_id);
+                if let Some(old_pc) = old_conn.peer_connection {
+                    if let Err(e) = old_pc.close().await {
+                        warn!("Error closing old peer connection: {}", e);
+                    }
+                }
+                // Give some time for the old connection to fully close
+                drop(conns);
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
+
         // Create WebRTC API
         let api = APIBuilder::new().build();
 
@@ -2331,7 +2363,7 @@ impl WebRTCService {
 
         // Wait for ICE gathering to complete (with timeout)
         info!("⏳ Waiting for ICE gathering to complete for peer {}...", peer_id);
-        let ice_timeout = tokio::time::Duration::from_secs(5);
+        let ice_timeout = tokio::time::Duration::from_secs(10);
         match tokio::time::timeout(ice_timeout, ice_complete_rx.recv()).await {
             Ok(Some(())) => {
                 info!("✅ ICE gathering completed successfully for peer {}", peer_id);
@@ -2424,6 +2456,19 @@ impl WebRTCService {
             .send(WebRTCCommand::CloseConnection { peer_id })
             .await
             .map_err(|e| e.to_string())
+    }
+
+    /// Check if there's an existing open WebRTC connection with data channel to a peer
+    pub async fn has_open_connection(&self, peer_id: &str) -> bool {
+        use webrtc::data_channel::data_channel_state::RTCDataChannelState;
+        
+        let conns = self.connections.lock().await;
+        if let Some(conn) = conns.get(peer_id) {
+            if let Some(dc) = &conn.data_channel {
+                return dc.ready_state() == RTCDataChannelState::Open;
+            }
+        }
+        false
     }
 
     pub async fn drain_events(&self, max: usize) -> Vec<WebRTCEvent> {

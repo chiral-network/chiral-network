@@ -4578,6 +4578,35 @@ async fn download_file_from_network(
                                 }
                             }
 
+                            // Check if we already have an open WebRTC connection to this peer
+                            if webrtc_service.has_open_connection(&selected_peer).await {
+                                info!("♻️ Reusing existing WebRTC connection to peer {}", selected_peer);
+                                
+                                // Just send the file request directly
+                                let file_request = webrtc_service::WebRTCFileRequest {
+                                    file_hash: metadata.merkle_root.clone(),
+                                    file_name: metadata.file_name.clone(),
+                                    file_size: metadata.file_size,
+                                    requester_peer_id: dht_service.get_peer_id().await,
+                                    recipient_public_key: None,
+                                };
+
+                                match webrtc_service.send_file_request(selected_peer.clone(), file_request).await {
+                                    Ok(_) => {
+                                        info!("Sent file request for {} to peer {} (reused connection)", metadata.file_name, selected_peer);
+                                        state.analytics.increment_active_downloads().await;
+                                        return Ok(format!(
+                                            "WebRTC download initiated: {} ({} bytes) from peer {} (reused connection)",
+                                            metadata.file_name, metadata.file_size, selected_peer
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to send file request on existing connection: {}, will create new connection", e);
+                                        // Fall through to create new connection
+                                    }
+                                }
+                            }
+
                             // Create WebRTC offer
                             match webrtc_service.create_offer(selected_peer.clone()).await {
                                 Ok(offer) => {
