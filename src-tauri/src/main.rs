@@ -69,8 +69,13 @@ use ethereum::{
     get_network_hashrate,
     get_node_info,
     get_peer_count,
+    get_peer_info,
     get_peers,
     get_recent_mined_blocks,
+    get_transaction_by_hash,
+    get_txpool_status,
+    get_txpool_content,
+    debug_network_tx,
     reconnect_to_bootstrap_if_needed,
     start_mining,
     stop_mining,
@@ -720,6 +725,11 @@ async fn check_payment_notifications(
 #[tauri::command]
 async fn get_network_peer_count() -> Result<u32, String> {
     get_peer_count().await
+}
+
+#[tauri::command]
+async fn get_network_chain_id() -> Result<u64, String> {
+    Ok(get_chain_id())
 }
 
 #[tauri::command]
@@ -7298,6 +7308,7 @@ fn main() {
             record_seeder_payment,
             check_payment_notifications,
             get_network_peer_count,
+            get_network_chain_id,
             start_geth_node,
             stop_geth_node,
             save_account_to_keystore,
@@ -7314,6 +7325,11 @@ fn main() {
             send_chiral_transaction,
             queue_transaction,
             get_transaction_queue_status,
+            get_transaction_by_hash,
+            get_txpool_status,
+            get_txpool_content,
+            get_peer_info,
+            debug_network_tx,
             get_cpu_temperature,
             get_power_consumption,
             download,

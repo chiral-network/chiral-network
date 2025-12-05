@@ -291,6 +291,9 @@ export class WalletService {
       // Get current block number to track pagination
       const currentBlock = await invoke<number>("get_current_block");
 
+      // Check pending transactions and update their status
+      await this.updatePendingTransactions();
+
       // Get data in parallel: mining blocks AND transaction history
       const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
@@ -509,8 +512,51 @@ export class WalletService {
     }
   }
 
+  async updatePendingTransactions(): Promise<void> {
+    const currentTransactions = get(transactions);
+    const pendingTransactions = currentTransactions.filter(tx => tx.status === 'pending' && tx.txHash);
+
+    if (pendingTransactions.length === 0) {
+      return;
+    }
+
+    // Check each pending transaction
+    for (const tx of pendingTransactions) {
+      try {
+        const receipt = await invoke<any>("get_transaction_receipt", {
+          txHash: tx.txHash
+        });
+
+        // If receipt exists and is not null, transaction has been mined
+        if (receipt) {
+          const success = receipt.status === "0x1" || receipt.status === 1;
+          
+          transactions.update(txs => 
+            txs.map(t => 
+              t.txHash === tx.txHash
+                ? { ...t, status: success ? "success" as const : "failed" as const }
+                : t
+            )
+          );
+
+          // Update pending count
+          if (tx.type === "sent") {
+            wallet.update(w => ({
+              ...w,
+              pendingTransactions: Math.max(0, (w.pendingTransactions ?? 0) - 1)
+            }));
+          }
+        }
+      } catch (error) {
+        // Transaction receipt not available yet or RPC error
+        console.log(`Could not get receipt for ${tx.txHash}:`, error);
+      }
+    }
+  }
+
   async refreshBalance(): Promise<void> {
     if (!this.isTauri) {
+      console.log("[refreshBalance] Not in Tauri, skipping");
       return;
     }
 
@@ -523,9 +569,11 @@ export class WalletService {
     try {
       const isRunning = await invoke<boolean>("is_geth_running");
       if (!isRunning) {
+        console.log("[refreshBalance] Geth not running, skipping");
         return; // Silently skip if Geth is not running
       }
     } catch (error) {
+      console.log("[refreshBalance] Could not check Geth status:", error);
       return; // Can't check Geth status, skip
     }
 
@@ -533,8 +581,9 @@ export class WalletService {
     let accountAddress: string;
     try {
       accountAddress = await invoke<string>("get_active_account_address");
+      console.log("[refreshBalance] Got account address:", accountAddress);
     } catch (error) {
-      // No active account
+      console.log("[refreshBalance] No active account:", error);
       return;
     }
 
@@ -546,8 +595,9 @@ export class WalletService {
           address: accountAddress,
         })) as string;
         realBalance = parseFloat(balanceStr);
+        console.log(`[refreshBalance] Got balance from geth: ${realBalance} CHIRAL`);
       } catch (e) {
-        // Expected when Geth is not running
+        console.log("[refreshBalance] Could not get balance from geth:", e);
       }
 
       const prevWallet = get(wallet);

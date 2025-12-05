@@ -517,6 +517,17 @@
       // showToast('Transaction submitted!', 'success')
       showToast(tr('toasts.account.transaction.submitted'), 'success')
       
+      // Refresh balance after a delay to allow transaction to be mined
+      // Poll every 2 seconds for 30 seconds to catch the confirmation
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        await fetchBalance();
+        if (pollCount >= 15) {
+          clearInterval(pollInterval);
+        }
+      }, 2000);
+      
     } catch (error) {
       console.error('Transaction failed:', error)
       // showToast('Transaction failed: ' + String(error), 'error')
@@ -551,6 +562,8 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
+  let balanceRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  
   onMount(() => {
     // Initialize wallet service asynchronously
     walletService.initialize().then(async () => {
