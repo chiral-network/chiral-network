@@ -16,7 +16,7 @@ type FlyAndScaleParams = {
 
 export const flyAndScale = (
   node: Element,
-  params: FlyAndScaleParams = {},
+  params: FlyAndScaleParams = {}
 ): TransitionConfig => {
   const style = getComputedStyle(node);
   const transform = style.transform === "none" ? "" : style.transform;
@@ -24,7 +24,7 @@ export const flyAndScale = (
   const scaleConversion = (
     valueA: number,
     scaleA: [number, number],
-    scaleB: [number, number],
+    scaleB: [number, number]
   ) => {
     const [minA, maxA] = scaleA;
     const [minB, maxB] = scaleB;
@@ -36,7 +36,7 @@ export const flyAndScale = (
   };
 
   const styleToString = (
-    style: Record<string, number | string | undefined>,
+    style: Record<string, number | string | undefined>
   ): string => {
     return Object.keys(style).reduce((str, key) => {
       if (style[key] === undefined) return str;
@@ -116,7 +116,8 @@ export function formatRelativeTime(input: Date | number): string {
   // If diff is absurdly large (e.g. unit confusion), try the alternate scale once
   const hundredYearsMs = 100 * YEAR;
   if (Math.abs(diffMs) > hundredYearsMs) {
-    const alt = timestampMs < 1e12 ? timestampMs * 1000 : Math.floor(timestampMs / 1000);
+    const alt =
+      timestampMs < 1e12 ? timestampMs * 1000 : Math.floor(timestampMs / 1000);
     if (Number.isFinite(alt) && Math.abs(alt - now) < Math.abs(diffMs)) {
       diffMs = alt - now;
     }
@@ -156,4 +157,17 @@ export function formatRelativeTime(input: Date | number): string {
 
   const value = Math.round(diffMs / YEAR);
   return RELATIVE_FORMATTER.format(value, "year");
+}
+
+/**
+ * Format Chiral amounts with consistent decimal places for display
+ * @param amount - The Chiral amount to format
+ * @param decimals - Number of decimal places (default: 4)
+ * @returns Formatted Chiral amount string
+ */
+export function formatChiral(amount: number, decimals: number = 4): string {
+  if (!Number.isFinite(amount)) {
+    return "0.0000";
+  }
+  return amount.toFixed(decimals);
 }

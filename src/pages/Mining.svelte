@@ -5,7 +5,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { blockReward, miningState, type MiningHistoryPoint, wallet } from '$lib/stores';
+  import { blockReward, miningState, type MiningHistoryPoint, wallet, accurateTotals, isCalculatingAccurateTotals } from '$lib/stores';
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
 
@@ -41,7 +41,7 @@
   let error = ''
 
   // Blockchain sync status - updated from gethSyncStatus store
-  $: isSyncing = $gethSyncStatus?.syncing ?? true
+  $: isSyncing = $gethSyncStatus?.syncing ?? false
   $: syncProgress = $gethSyncStatus?.progress_percent ?? 0
   $: syncCurrentBlock = $gethSyncStatus?.current_block ?? 0
   $: syncHighestBlock = $gethSyncStatus?.highest_block ?? 0
@@ -103,6 +103,39 @@
   // $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model (unused)
   $: profitMargin = dailyRevenue > 0 ? ((dailyProfit / dailyRevenue) * 100) : 0
   $: isProfitable = dailyProfit > 0
+
+  // Track if we've synced with accurate totals to avoid repeated fetches
+  let hasSyncedWithAccurateTotals = false;
+
+  // Reset sync flag when accurateTotals is cleared (account change/logout)
+  $: if (!$accurateTotals) {
+    hasSyncedWithAccurateTotals = false;
+  }
+
+  // Re-fetch blocks count from backend when accurateTotals is calculated
+  // This ensures the Mining page picks up the initialized backend counter
+  $: if ($accurateTotals && !hasSyncedWithAccurateTotals && !$miningState.isMining && isTauri) {
+    hasSyncedWithAccurateTotals = true;
+    // Re-fetch from backend to get the initialized count
+    (async () => {
+      try {
+        const currentWallet = get(wallet);
+        if (currentWallet?.address) {
+          const blocksCount = await invoke<number>('get_blocks_mined', {
+            address: currentWallet.address
+          });
+          const reward = get(blockReward) || 2;
+          miningState.update((state) => ({
+            ...state,
+            blocksFound: blocksCount,
+            totalRewards: blocksCount * reward,
+          }));
+        }
+      } catch (error) {
+        console.error('[Mining Page] Failed to sync blocks count after accurate totals:', error);
+      }
+    })();
+  }
 
   function calculateDailyBlocks(hashRate: number, networkDiff: number): number {
     if (hashRate === 0 || networkDiff === 0) return 0
@@ -435,6 +468,14 @@
       await walletService.refreshTransactions()
       await walletService.refreshBalance()
 
+      // Trigger accurate totals calculation if not already available or calculating
+      // This ensures "mined rewards" shows accurate blockchain data, not just session data
+      if (!$accurateTotals && !$isCalculatingAccurateTotals) {
+        walletService.calculateAccurateTotals().catch((error) => {
+          console.warn('[Mining Page] Failed to calculate accurate totals:', error);
+        });
+      }
+
       // Start power sensor detection
       await updatePowerConsumption()
 
@@ -461,10 +502,12 @@
             console.error('[Mining Page] Failed to update blocks count:', error);
           }
 
-          // Wait minimal time for block propagation, then refresh mining stats
+          // Wait minimal time for block propagation, then refresh mining stats and balance
           setTimeout(async () => {
             try {
               await walletService.refreshTransactions();
+              // Refresh balance to update wallet.balance with new mining rewards
+              await walletService.refreshBalance();
             } catch (error) {
               console.error('[Mining Page] Backend refresh failed:', error);
             }
@@ -754,8 +797,8 @@
       return
     }
 
-    // Check if blockchain is still syncing
-    if (isSyncing) {
+    // Check if blockchain is still syncing (only when Geth is running)
+    if (isGethRunning && isSyncing) {
       error = `Cannot start mining while blockchain is syncing (${syncProgress.toFixed(1)}% complete). Please wait for sync to finish.`
       return
     }
@@ -1293,7 +1336,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.totalRewards')}</p>
-          <p class="text-2xl font-bold">{($miningState.totalRewards || 0).toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($miningState.totalRewards || 0).toFixed(4)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$miningState.blocksFound} {$t('mining.blocksFound')}
@@ -1449,7 +1492,7 @@
                 </div>
                 <div>
                   <p class="text-muted-foreground">{$t('mining.poolDetails.est24hPayout')}</p>
-                  <p class="font-semibold">{currentPool.stats.estimated_payout_24h.toFixed(3)} Chiral</p>
+                  <p class="font-semibold">{currentPool.stats.estimated_payout_24h.toFixed(4)} Chiral</p>
                 </div>
                 <div>
                   <p class="text-muted-foreground">{$t('mining.poolDetails.shares')}</p>
@@ -1605,7 +1648,7 @@
       {/if}
 
       <!-- Blockchain Sync Status -->
-      {#if isSyncing}
+      {#if isGethRunning && isSyncing}
         <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 mt-2">
           <div class="space-y-3">
             <div class="flex items-center justify-between">
@@ -1947,7 +1990,7 @@
               </div>
               <div class="text-right">
                 <Badge variant="outline" class="text-green-600">
-                  +{block.reward.toFixed(2)} Chiral
+                  +{block.reward.toFixed(4)} Chiral
                 </Badge>
                 <p class="text-xs text-muted-foreground mt-1">
                   {block.timestamp.toLocaleTimeString()}

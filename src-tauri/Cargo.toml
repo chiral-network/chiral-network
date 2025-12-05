@@ -42,7 +42,7 @@ aes = "0.8"
 ctr = "0.9"
 hmac = "0.12"
 directories = "5.0"
-reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 url = "2.5"
 urlencoding = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -71,7 +71,7 @@ tokio-socks = "0.5"
 
 # FTP client for FTP download support (sync API)
 # Using 5.3 for compatibility with connect_secure_implicit() method
-suppaftp = { version = "5.3", features = ["native-tls", "secure", "deprecated"] }
+suppaftp = { version = "5.4", features = ["native-tls", "secure", "deprecated"] }
 native-tls = "0.2"
 
 # Bitswap and related dependencies
@@ -101,7 +101,7 @@ librqbit = "8.1.1"
 # HTTP server dependencies
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.5"
-tower-http = { version = "0.5", features = ["cors"] }
+tower-http = { version = "0.5.2", features = ["cors"] }
 
 
 [dev-dependencies]

@@ -51,6 +51,9 @@
   let notificationsSectionOpen = false;
   let diagnosticsSectionOpen = false;
 
+  // Dynamic placeholder for storage path
+  let storagePathPlaceholder = "Select download directory";
+
   const ACCORDION_STORAGE_KEY = "settingsAccordionState";
 
   type AccordionState = {
@@ -70,7 +73,7 @@
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
-    storagePath: "~/Chiral-Network-Storage",
+    storagePath: "", // Will be set to platform-specific default at runtime
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
@@ -103,7 +106,8 @@
     shareAnalytics: true,
     enableWalletAutoLock: false,
     customBootstrapNodes: [],
-    autoStartDHT: false,
+    autoStartDHT: true, // Auto-start DHT by default
+    autoStartGeth: true, // Auto-start Geth by default
 
     // Notifications
     enableNotifications: true,
@@ -885,14 +889,17 @@
   }
 
     onMount(async () => {
-    // Get platform-specific default storage path from Tauri
+    // Get the canonical download directory from backend (single source of truth)
     try {
-      const platformDefaultPath = await invoke<string>("get_default_storage_path");
-      defaultSettings.storagePath = platformDefaultPath;
+      // Pass null/undefined to get the default when no frontend settings exist
+      const defaultPath = await invoke<string>("get_download_directory");
+      defaultSettings.storagePath = defaultPath;
+      storagePathPlaceholder = defaultPath; // Update placeholder to show actual default
     } catch (e) {
-      errorLogger.fileOperationError('Get default storage path', e instanceof Error ? e.message : String(e));
-      // Fallback to the hardcoded default if the command fails
-      defaultSettings.storagePath = "~/ChiralNetwork/Storage";
+      errorLogger.fileOperationError('Get download directory', e instanceof Error ? e.message : String(e));
+      // Fallback if backend fails
+      defaultSettings.storagePath = "~/Downloads/Chiral";
+      storagePathPlaceholder = "~/Downloads/Chiral";
     }
 
     // Load settings from local storage
@@ -900,6 +907,10 @@
     if (stored) {
   try {
     const loadedSettings: AppSettings = JSON.parse(stored);
+    // Ensure storagePath is set to default if missing or empty
+    if (!loadedSettings.storagePath || loadedSettings.storagePath.trim() === "") {
+      loadedSettings.storagePath = defaultSettings.storagePath;
+    }
     // Set the store, which ensures it is available globally
     settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading
@@ -1230,7 +1241,7 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="storage-path"
               bind:value={localSettings.storagePath}
-              placeholder="~/Chiral-Network-Storage"
+              placeholder={storagePathPlaceholder}
               class="flex-1"
             />
             <Button
@@ -1465,15 +1476,36 @@ function sectionMatches(section: string, query: string) {
             </Label>
           </div>
 
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="auto-start-dht"
-              bind:checked={localSettings.autoStartDHT}
-            />
-            <Label for="auto-start-dht" class="cursor-pointer">
-              Auto-start DHT on launch
-            </Label>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-start-dht"
+                bind:checked={localSettings.autoStartDHT}
+              />
+              <Label for="auto-start-dht" class="cursor-pointer">
+                {$t("network.autoStartNode")}
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              {$t("network.autoStartNodeDescription")}
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-start-geth"
+                bind:checked={localSettings.autoStartGeth}
+              />
+              <Label for="auto-start-geth" class="cursor-pointer">
+                {$t("network.autoStartGeth")}
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              {$t("network.autoStartGethDescription")}
+            </p>
           </div>
 
         </div>

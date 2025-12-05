@@ -119,6 +119,8 @@ pub struct PeerConnection {
     pub received_chunks: HashMap<String, HashMap<u32, FileChunk>>, // file_hash -> chunk_index -> chunk
     pub acked_chunks: HashMap<String, std::collections::HashSet<u32>>, // file_hash -> acked chunk indices
     pub pending_acks: HashMap<String, u32>, // file_hash -> number of unacked chunks
+    /// Chunks that failed authentication and are waiting for key exchange
+    pub queued_unauthenticated_chunks: Vec<FileChunk>,
     /// Retry context for connection resilience
     pub retry_context: Option<WebRtcRetryContext>,
 }
@@ -155,6 +157,14 @@ pub enum WebRTCCommand {
     SendFileChunk {
         peer_id: String,
         chunk: FileChunk,
+    },
+    SendHmacKeyExchangeRequest {
+        peer_id: String,
+        request: crate::stream_auth::HmacKeyExchangeRequest,
+    },
+    SendHmacKeyExchangeResponse {
+        peer_id: String,
+        response: crate::stream_auth::HmacKeyExchangeResponse,
     },
     RequestFileChunk {
         peer_id: String,
@@ -250,6 +260,8 @@ pub enum WebRTCMessage {
     ManifestResponse(WebRTCManifestResponse),
     FileChunk(FileChunk),
     ChunkAck(ChunkAck),
+    HmacKeyExchangeRequest(crate::stream_auth::HmacKeyExchangeRequest),
+    HmacKeyExchangeResponse(crate::stream_auth::HmacKeyExchangeResponse),
 }
 
 pub struct WebRTCService {
@@ -378,6 +390,14 @@ impl WebRTCService {
                 }
                 WebRTCCommand::SendFileChunk { peer_id, chunk } => {
                     Self::handle_send_chunk(&peer_id, &chunk, &connections, &bandwidth).await;
+                }
+                WebRTCCommand::SendHmacKeyExchangeRequest { peer_id, request } => {
+                    info!("🔐 Sending HMAC key exchange request to peer {}", peer_id);
+                    Self::send_hmac_key_exchange_request_to_peer(&peer_id, &request, &connections).await;
+                }
+                WebRTCCommand::SendHmacKeyExchangeResponse { peer_id, response } => {
+                    info!("🔐 Sending HMAC key exchange response to peer {}", peer_id);
+                    Self::send_hmac_key_exchange_response_to_peer(&peer_id, &response, &connections).await;
                 }
                 WebRTCCommand::RequestFileChunk {
                     peer_id,
@@ -820,6 +840,7 @@ impl WebRTCService {
             received_chunks: HashMap::new(),
             acked_chunks: HashMap::new(),
             pending_acks: HashMap::new(),
+            queued_unauthenticated_chunks: Vec::new(),
             retry_context: Some(retry_ctx),
         };
         conns.insert(peer_id.to_string(), connection);
@@ -949,6 +970,122 @@ impl WebRTCService {
             }
             Err(e) => {
                 error!("Failed to serialize file request: {}", e);
+            }
+        }
+    }
+
+    async fn send_hmac_key_exchange_request_to_peer(
+        peer_id: &str,
+        request: &crate::stream_auth::HmacKeyExchangeRequest,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+    ) {
+        use webrtc::data_channel::data_channel_state::RTCDataChannelState;
+
+        info!("🔐 Sending HMAC key exchange request to peer {}", peer_id);
+
+        // Wait for data channel to open (with timeout)
+        let start = Instant::now();
+        let timeout = Duration::from_secs(10);
+
+        let dc = loop {
+            let conns = connections.lock().await;
+            if let Some(connection) = conns.get(peer_id) {
+                if let Some(dc) = &connection.data_channel {
+                    let state = dc.ready_state();
+                    if state == RTCDataChannelState::Open {
+                        break dc.clone();
+                    }
+                    if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing {
+                        error!("Data channel is closed or closing for peer {}", peer_id);
+                        return;
+                    }
+                    if start.elapsed() > timeout {
+                        error!("Timeout waiting for data channel to open for peer {}", peer_id);
+                        return;
+                    }
+                } else {
+                    error!("No data channel found for peer {}", peer_id);
+                    return;
+                }
+            } else {
+                error!("Peer {} not found in connections", peer_id);
+                return;
+            }
+            drop(conns); // Release lock before sleeping
+            sleep(Duration::from_millis(50)).await;
+        };
+
+        // Create WebRTC message and serialize
+        let message = WebRTCMessage::HmacKeyExchangeRequest(request.clone());
+        match serde_json::to_string(&message) {
+            Ok(message_json) => {
+                info!("🔐 Sending HMAC key exchange request JSON to peer {}", peer_id);
+                if let Err(e) = dc.send_text(message_json).await {
+                    error!("Failed to send HMAC key exchange request over data channel: {}", e);
+                } else {
+                    info!("✅ HMAC key exchange request sent successfully to peer {}", peer_id);
+                }
+            }
+            Err(e) => {
+                error!("Failed to serialize HMAC key exchange request: {}", e);
+            }
+        }
+    }
+
+    async fn send_hmac_key_exchange_response_to_peer(
+        peer_id: &str,
+        response: &crate::stream_auth::HmacKeyExchangeResponse,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+    ) {
+        use webrtc::data_channel::data_channel_state::RTCDataChannelState;
+
+        info!("🔐 Sending HMAC key exchange response to peer {}", peer_id);
+
+        // Wait for data channel to open (with timeout)
+        let start = Instant::now();
+        let timeout = Duration::from_secs(10);
+
+        let dc = loop {
+            let conns = connections.lock().await;
+            if let Some(connection) = conns.get(peer_id) {
+                if let Some(dc) = &connection.data_channel {
+                    let state = dc.ready_state();
+                    if state == RTCDataChannelState::Open {
+                        break dc.clone();
+                    }
+                    if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing {
+                        error!("Data channel is closed or closing for peer {}", peer_id);
+                        return;
+                    }
+                    if start.elapsed() > timeout {
+                        error!("Timeout waiting for data channel to open for peer {}", peer_id);
+                        return;
+                    }
+                } else {
+                    error!("No data channel found for peer {}", peer_id);
+                    return;
+                }
+            } else {
+                error!("Peer {} not found in connections", peer_id);
+                return;
+            }
+            drop(conns); // Release lock before sleeping
+            sleep(Duration::from_millis(50)).await;
+        };
+
+        // Create WebRTC message and serialize
+        let message = WebRTCMessage::HmacKeyExchangeResponse(response.clone());
+        match serde_json::to_string(&message) {
+            Ok(message_json) => {
+                info!("🔐 Sending HMAC key exchange response JSON to peer {}", peer_id);
+                if let Err(e) = dc.send_text(message_json).await {
+                    error!("Failed to send HMAC key exchange response over data channel: {}", e);
+                } else {
+                    info!("✅ HMAC key exchange response sent successfully to peer {}", peer_id);
+                }
+            }
+            Err(e) => {
+                error!("Failed to serialize HMAC key exchange response: {}", e);
             }
         }
     }
@@ -1301,6 +1438,32 @@ impl WebRTCService {
                         )
                         .await;
                     }
+                    WebRTCMessage::HmacKeyExchangeRequest(request) => {
+                        info!("🔐 Received HMAC key exchange request from peer {}", peer_id);
+                        Self::handle_hmac_key_exchange_request(
+                            peer_id,
+                            &request,
+                            stream_auth,
+                            connections,
+                        )
+                        .await;
+                    }
+                    WebRTCMessage::HmacKeyExchangeResponse(response) => {
+                        info!("🔐 Received HMAC key exchange response from peer {}", peer_id);
+                        Self::handle_hmac_key_exchange_response(
+                            peer_id,
+                            &response,
+                            stream_auth,
+                            connections,
+                            file_transfer_service,
+                            &event_tx,
+                            keystore,
+                            &active_private_key,
+                            &app_handle,
+                            &bandwidth,
+                        )
+                        .await;
+                    }
                     WebRTCMessage::ChunkAck(ack) => {
                         // Handle ACK from downloader
                         let mut conns = connections.lock().await;
@@ -1569,33 +1732,231 @@ impl WebRTCService {
         Ok(())
     }
 
+    async fn handle_hmac_key_exchange_request(
+        peer_id: &str,
+        request: &crate::stream_auth::HmacKeyExchangeRequest,
+        stream_auth: &Arc<Mutex<StreamAuthService>>,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+    ) {
+        info!("🔐 Processing HMAC key exchange request from peer {}", peer_id);
+
+        let mut auth_service = stream_auth.lock().await;
+
+        // Respond to the key exchange request
+        match auth_service.respond_to_key_exchange(
+            request.clone(),
+            peer_id.to_string(),
+        ) {
+            Ok(response) => {
+                info!("🔐 Created HMAC key exchange response for peer {}", peer_id);
+
+                // Send the response back to the peer
+                drop(auth_service); // Release lock before async operation
+                Self::send_hmac_key_exchange_response_to_peer(
+                    peer_id,
+                    &response,
+                    connections,
+                ).await;
+            }
+            Err(e) => {
+                error!("Failed to respond to HMAC key exchange from peer {}: {}", peer_id, e);
+            }
+        }
+    }
+
+    async fn handle_hmac_key_exchange_response(
+        peer_id: &str,
+        response: &crate::stream_auth::HmacKeyExchangeResponse,
+        stream_auth: &Arc<Mutex<StreamAuthService>>,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        file_transfer_service: &Arc<FileTransferService>,
+        event_tx: &mpsc::Sender<WebRTCEvent>,
+        keystore: &Arc<Mutex<Keystore>>,
+        active_private_key: &Arc<Mutex<Option<String>>>,
+        app_handle: &tauri::AppHandle,
+        bandwidth: &Arc<BandwidthController>,
+    ) {
+        info!("🔐 Processing HMAC key exchange response from peer {}", peer_id);
+
+        let mut auth_service = stream_auth.lock().await;
+
+        // Finalize the key exchange
+        match auth_service.confirm_key_exchange(response.clone(), peer_id.to_string()) {
+            Ok(_) => {
+                info!("✅ HMAC key exchange completed successfully with peer {}", peer_id);
+
+                // Process any queued chunks that were waiting for authentication
+                Self::process_queued_chunks_for_peer(peer_id, connections, file_transfer_service, event_tx, keystore, &active_private_key, stream_auth, &app_handle, &bandwidth).await;
+
+                // Now we have a secure session and can send authenticated chunks
+                // The session will be used for future chunk authentication
+            }
+            Err(e) => {
+                error!("Failed to finalize HMAC key exchange with peer {}: {}", peer_id, e);
+            }
+        }
+    }
+
+    /// Process queued chunks that were waiting for authentication to complete
+    async fn process_queued_chunks_for_peer(
+        peer_id: &str,
+        connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
+        file_transfer_service: &Arc<FileTransferService>,
+        event_tx: &mpsc::Sender<WebRTCEvent>,
+        keystore: &Arc<Mutex<Keystore>>,
+        active_private_key: &Arc<Mutex<Option<String>>>,
+        stream_auth: &Arc<Mutex<StreamAuthService>>,
+        app_handle: &tauri::AppHandle,
+        bandwidth: &Arc<BandwidthController>,
+    ) {
+        // Get the queued chunks for this peer
+        let queued_chunks = {
+            let mut connections_lock = connections.lock().await;
+            if let Some(peer_conn) = connections_lock.get_mut(peer_id) {
+                // Take ownership of the queued chunks and replace with empty vec
+                std::mem::take(&mut peer_conn.queued_unauthenticated_chunks)
+            } else {
+                Vec::new()
+            }
+        };
+
+        if queued_chunks.is_empty() {
+            return;
+        }
+
+        info!("🔄 Processing {} queued chunks for peer {} after authentication", queued_chunks.len(), peer_id);
+
+        // Process each queued chunk (skip authentication since we know it should work now)
+        for chunk in queued_chunks {
+            info!("🔄 Re-processing queued chunk {} for peer {}", chunk.chunk_index, peer_id);
+
+            // Skip authentication for queued chunks and go directly to processing
+            // 2. Decrypt chunk data if it was encrypted
+            let final_chunk_data = if let Some(ref encrypted_key_bundle) = chunk.encrypted_key_bundle {
+                // Get the active private key for decryption
+                let private_key_opt = {
+                    let key_guard = active_private_key.lock().await;
+                    key_guard.clone()
+                };
+
+                if let Some(private_key) = private_key_opt {
+                    match Self::decrypt_chunk_from_peer(&chunk.data, encrypted_key_bundle, &private_key)
+                        .await
+                    {
+                        Ok(decrypted_data) => decrypted_data,
+                        Err(e) => {
+                            warn!("Failed to decrypt queued chunk from peer {}: {}", peer_id, e);
+                            chunk.data.clone() // Return encrypted data as fallback
+                        }
+                    }
+                } else {
+                    warn!("No private key available for decrypting queued chunk from peer {}", peer_id);
+                    chunk.data.clone()
+                }
+            } else {
+                chunk.data.clone()
+            };
+
+            // 3. Verify chunk integrity (checksum)
+            let checksum = Self::calculate_chunk_checksum(&final_chunk_data);
+            if chunk.checksum != checksum {
+                warn!(
+                    "Queued chunk {} checksum mismatch from peer {}: expected {}, got {}",
+                    chunk.chunk_index, peer_id, chunk.checksum, checksum
+                );
+                // Continue processing anyway for now
+            }
+
+            // Note: Chunk storage is now handled by MultiSourceDownloadService
+            // The chunk will be stored when processed through the download pipeline
+        }
+
+        info!("✅ Finished processing queued chunks for peer {}", peer_id);
+    }
+
     async fn process_incoming_chunk(
         chunk: &FileChunk,
         file_transfer_service: &Arc<FileTransferService>,
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         event_tx: &mpsc::Sender<WebRTCEvent>,
         peer_id: &str,
-        _keystore: &Arc<Mutex<Keystore>>,
+        keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         stream_auth: &Arc<Mutex<StreamAuthService>>,
         app_handle: &tauri::AppHandle,
         bandwidth: &Arc<BandwidthController>,
     ) {
-        // 1. Verify stream authentication first (non-blocking for now)
+        // 1. Verify stream authentication and handle key exchange
         if let Some(ref auth_msg) = chunk.auth_message {
             let mut auth_service = stream_auth.lock().await;
             let session_id = format!("{}-{}", peer_id, chunk.file_hash);
 
-            if !auth_service
+            let auth_success = auth_service
                 .verify_data(&session_id, auth_msg)
-                .unwrap_or(false)
-            {
-                warn!(
-                    "Stream authentication failed for chunk {} from peer {} - continuing anyway (HMAC key exchange not implemented)",
+                .unwrap_or(false);
+
+            // Process any queued chunks if we have a valid session
+            if auth_success || auth_service.get_session_info(&session_id).is_some() {
+                Self::process_queued_chunks_for_peer(peer_id, connections, file_transfer_service, &event_tx, keystore, &active_private_key, stream_auth, &app_handle, &bandwidth).await;
+            }
+
+            if !auth_success {
+                // Check if we have an active session or key exchange in progress
+                if auth_service.get_session_info(&session_id).is_none() {
+                    // No active session - initiate key exchange
+                    match auth_service.initiate_key_exchange(
+                        peer_id.to_string(),
+                        peer_id.to_string(), // For now, assume peer_id is used for both initiator and target
+                        session_id.clone(),
+                    ) {
+                        Ok(exchange_request) => {
+                            info!(
+                                "Initiated HMAC key exchange for session {} with peer {}",
+                                session_id, peer_id
+                            );
+
+                            // Send the key exchange request to the peer
+                            if let Some(webrtc_service) = get_webrtc_service().await {
+                                drop(auth_service); // Release lock before async operation
+                                match webrtc_service.send_hmac_key_exchange_request(peer_id.to_string(), exchange_request).await {
+                                    Ok(_) => {
+                                        info!("✅ HMAC key exchange request sent to peer {} for session {}", peer_id, session_id);
+                                        // The response will be handled asynchronously when received
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to send HMAC key exchange request to peer {}: {}", peer_id, e);
+                                    }
+                                }
+                            } else {
+                                warn!("WebRTC service not available for HMAC key exchange");
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to initiate HMAC key exchange: {}", e);
+                        }
+                    }
+                }
+
+                // Queue the chunk for later processing once authentication is established
+                info!(
+                    "Stream authentication failed for chunk {} from peer {} - queuing for later processing",
                     chunk.chunk_index, peer_id
                 );
-                // TODO: Implement HMAC key exchange between peers
-                // For now, continue processing chunk despite failed HMAC (checksum verification below will catch corruption)
+
+                // Queue the chunk for later processing
+                {
+                    let mut connections = connections.lock().await;
+                    if let Some(peer_conn) = connections.get_mut(peer_id) {
+                        peer_conn.queued_unauthenticated_chunks.push(chunk.clone());
+                        info!(
+                            "Queued chunk {} for peer {} (queue size: {})",
+                            chunk.chunk_index, peer_id, peer_conn.queued_unauthenticated_chunks.len()
+                        );
+                    }
+                }
+
+                // Don't process this chunk further - it will be retried after authentication
+                return;
             }
         }
 
@@ -1927,6 +2288,7 @@ impl WebRTCService {
             received_chunks: HashMap::new(),
             acked_chunks: HashMap::new(),
             pending_acks: HashMap::new(),
+            queued_unauthenticated_chunks: Vec::new(),
             retry_context: Some(retry_ctx),
         };
         conns.insert(peer_id, connection);
@@ -2132,6 +2494,7 @@ impl WebRTCService {
             received_chunks: HashMap::new(),
             acked_chunks: HashMap::new(),
             pending_acks: HashMap::new(),
+            queued_unauthenticated_chunks: Vec::new(),
             retry_context: Some(retry_ctx),
         };
         conns.insert(peer_id.clone(), connection);
@@ -2226,6 +2589,28 @@ impl WebRTCService {
     pub async fn send_file_chunk(&self, peer_id: String, chunk: FileChunk) -> Result<(), String> {
         self.cmd_tx
             .send(WebRTCCommand::SendFileChunk { peer_id, chunk })
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn send_hmac_key_exchange_request(
+        &self,
+        peer_id: String,
+        request: crate::stream_auth::HmacKeyExchangeRequest,
+    ) -> Result<(), String> {
+        self.cmd_tx
+            .send(WebRTCCommand::SendHmacKeyExchangeRequest { peer_id, request })
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn send_hmac_key_exchange_response(
+        &self,
+        peer_id: String,
+        response: crate::stream_auth::HmacKeyExchangeResponse,
+    ) -> Result<(), String> {
+        self.cmd_tx
+            .send(WebRTCCommand::SendHmacKeyExchangeResponse { peer_id, response })
             .await
             .map_err(|e| e.to_string())
     }

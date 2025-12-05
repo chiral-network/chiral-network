@@ -58,6 +58,7 @@
   let privateKeyVisible = false
   let showPending = false
   let importPrivateKey = ''
+  let importedSnapshot: any = null
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning: boolean;
@@ -132,10 +133,6 @@
   let sortDescending: boolean = true;
   let searchQuery: string = '';
   
-  // Fee preset (UI stub only)
-  let feePreset: 'low' | 'market' | 'fast' = 'market'
-  let estimatedFeeDisplay: string = '—'
-  let estimatedFeeNumeric: number = 0
   
   // Confirmation for sending transaction
   let isConfirming = false
@@ -189,9 +186,9 @@
         .filter(tx => {
           if (!tx) return false;
 
-          // 'transactions' shows sent + received (excludes mining)
+          // Default view now shows all types (sent/received/mining)
           const matchesType = filterType === 'transactions'
-            ? (tx.type === 'sent' || tx.type === 'received')
+            ? (tx.type === 'sent' || tx.type === 'received' || tx.type === 'mining')
             : tx.type === filterType;
 
           let txDate: Date;
@@ -270,16 +267,7 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (inputValue > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(2) } });
-        isAmountValid = false;
-        sendAmount = 0;
-      } else if (inputValue + estimatedFeeNumeric > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficientWithFee', {
-          values: {
-            total: (inputValue + estimatedFeeNumeric).toFixed(2),
-            balance: $wallet.balance.toFixed(2)
-          }
-        });
+        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(4) } });
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -330,9 +318,6 @@
     }
   }
 
-  // Mock estimated fee calculation (UI-only) - separate from validation
-  $: estimatedFeeNumeric = rawAmountInput && parseFloat(rawAmountInput) > 0 ? parseFloat((parseFloat(rawAmountInput) * { low: 0.0025, market: 0.005, fast: 0.01 }[feePreset]).toFixed(4)) : 0
-  $: estimatedFeeDisplay = rawAmountInput && parseFloat(rawAmountInput) > 0 ? `${estimatedFeeNumeric.toFixed(4)} Chiral` : '—'
 
   // Blacklist address validation (same as Send Coins validation)
   $: {
@@ -735,6 +720,18 @@
     isImportingAccount = true
     try {
       const account = await walletService.importAccount(importPrivateKey)
+      if (importedSnapshot) {
+        if (typeof importedSnapshot.balance === 'number') {
+          wallet.update(w => ({ ...w, balance: importedSnapshot.balance, actualBalance: importedSnapshot.balance }))
+        }
+        if (Array.isArray(importedSnapshot.transactions)) {
+          const hydrated = importedSnapshot.transactions.map((tx: any) => ({
+            ...tx,
+            date: tx.date ? new Date(tx.date) : new Date()
+          }))
+          transactions.set(hydrated)
+        }
+      }
       wallet.update(w => ({
         ...w,
         address: account.address,
@@ -742,13 +739,17 @@
         pendingTransactions: 0
       }))
       importPrivateKey = ''
+      importedSnapshot = null
 
 
       // showToast('Account imported successfully!', 'success')
       showToast(tr('toasts.account.import.success'), 'success')
 
+      // Match keystore load behavior: hydrate transactions and balance right away
       if (isGethRunning) {
-        await walletService.refreshBalance()
+        await walletService.refreshTransactions();
+        await walletService.refreshBalance();
+        walletService.startProgressiveLoading();
       }
     } catch (error) {
       console.error('Failed to import Chiral account:', error)
@@ -768,6 +769,11 @@
 
   async function loadPrivateKeyFromFile() {
     try {
+      const msg = (key: string, fallback: string) => {
+        const val = $t(key);
+        return val === key ? fallback : val;
+      };
+
       // Create a file input element
       const fileInput = document.createElement('input');
       fileInput.type = 'file';
@@ -784,22 +790,34 @@
           const accountData = JSON.parse(fileContent);
           
           // Validate the JSON structure
-          if (!accountData.privateKey) {
-            // showToast('Invalid file format: privateKey field not found', 'error');
-            showToast(tr('toasts.account.import.fileInvalid'), 'error');
+          if (!accountData.privateKey && !accountData.private_key) {
+            showToast(msg('toasts.account.import.fileInvalid', 'Invalid wallet file (missing private key)'), 'error');
             return;
           }
           
           // Extract and set the private key
-          importPrivateKey = accountData.privateKey;
-          // showToast('Private key loaded from file successfully!', 'success');
-          showToast(tr('toasts.account.import.fileSuccess'), 'success');
+          importPrivateKey = accountData.privateKey ?? accountData.private_key;
+          importedSnapshot = accountData;
+
+          // Hydrate balance/transactions immediately if present
+          if (typeof accountData.balance === 'number') {
+            wallet.update(w => ({ ...w, balance: accountData.balance, actualBalance: accountData.balance }));
+          }
+          if (Array.isArray(accountData.transactions)) {
+            const hydrated = accountData.transactions.map((tx: any) => ({
+              ...tx,
+              date: tx.date ? new Date(tx.date) : new Date()
+            }));
+            transactions.set(hydrated);
+          }
+
+          showToast(msg('toasts.account.import.fileSuccess', 'Wallet file loaded. Ready to import.'), 'success');
           
         } catch (error) {
           console.error('Error reading file:', error);
           // showToast('Error reading file: ' + String(error), 'error');
           showToast(
-            tr('toasts.account.import.fileReadError', { values: { error: String(error) } }),
+            msg('toasts.account.import.fileReadError', `Error reading wallet file: ${String(error) }`),
             'error'
           );
         }
@@ -812,9 +830,13 @@
       
     } catch (error) {
       console.error('Error loading file:', error);
+      const msg = (key: string, fallback: string) => {
+        const val = $t(key);
+        return val === key ? fallback : val;
+      };
       // showToast('Error loading file: ' + String(error), 'error');
       showToast(
-        tr('toasts.account.import.fileLoadError', { values: { error: String(error) } }),
+        msg('toasts.account.import.fileLoadError', `Error loading wallet file: ${String(error) }`),
         'error'
       );
     }
@@ -924,6 +946,8 @@
 
             saveOrClearPassword(selectedKeystoreAccount, loadKeystorePassword);
 
+            // The wallet service already sets etcAccount and clears transactions;
+            // ensure the UI store mirrors the loaded address.
             wallet.update(w => ({
                 ...w,
                 address: account.address
@@ -932,8 +956,11 @@
             // Clear sensitive data
             loadKeystorePassword = '';
 
+            // After loading the keystore, fetch the full state so balances and history populate.
             if (isGethRunning) {
+                await walletService.refreshTransactions();
                 await walletService.refreshBalance();
+                walletService.startProgressiveLoading();
             }
 
             keystoreLoadMessage = tr('keystore.load.success');
@@ -1314,7 +1341,7 @@
 
   // Helper function to set max amount
   function setMaxAmount() {
-    rawAmountInput = $wallet.balance.toFixed(2);
+    rawAmountInput = $wallet.balance.toFixed(4);
   }
 
   // async function handleLogout() {
@@ -1972,7 +1999,7 @@
           </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
-              {$t('transfer.available', { values: { amount: $wallet.balance.toFixed(2) } })}
+              {$t('transfer.available', { values: { amount: $wallet.balance.toFixed(4) } })}
             </p>
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>

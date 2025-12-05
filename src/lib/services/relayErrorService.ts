@@ -13,7 +13,7 @@
  */
 
 import { writable, derived, get } from 'svelte/store';
-import { dhtService } from '$lib/dht';
+import { dhtService, type DhtHealth } from '$lib/dht';
 
 /**
  * Relay error categories for diagnosis
@@ -618,6 +618,57 @@ class RelayErrorService {
       }
       return pool;
     });
+  }
+
+  /**
+   * Sync relay pool from backend DHT health snapshot so UI reflects active relay even without preferred relays.
+   */
+  syncFromHealthSnapshot(health: DhtHealth): void {
+    const peerId = health.activeRelayPeerId?.trim();
+
+    if (!peerId) {
+      this.activeRelay.set(null);
+      return;
+    }
+
+    const now = Date.now();
+    const healthScore = typeof health.relayHealthScore === 'number'
+      ? Math.round(health.relayHealthScore * 100)
+      : 75;
+    const state = health.relayReservationStatus ? RelayConnectionState.RESERVED : RelayConnectionState.CONNECTED;
+
+    this.relayPool.update(pool => {
+      const existing = pool.get(peerId);
+      if (existing) {
+        existing.state = state;
+        existing.lastAttempt = now;
+        existing.lastSuccess = now;
+        existing.healthScore = healthScore;
+        existing.reservationExpiry = health.lastReservationRenewal ? health.lastReservationRenewal * 1000 : null;
+        existing.totalAttempts = Math.max(existing.totalAttempts, 1);
+        existing.totalSuccesses = Math.max(existing.totalSuccesses, 1);
+      } else {
+        pool.set(peerId, {
+          id: peerId,
+          multiaddr: `/p2p/${peerId}`,
+          state,
+          healthScore,
+          lastAttempt: now,
+          lastSuccess: now,
+          consecutiveFailures: 0,
+          totalAttempts: 1,
+          totalSuccesses: 1,
+          avgLatency: 0,
+          reservationExpiry: health.lastReservationRenewal ? health.lastReservationRenewal * 1000 : null,
+          isPrimary: false,
+          errors: []
+        });
+      }
+      return pool;
+    });
+
+    const pool = get(this.relayPool);
+    this.activeRelay.set(pool.get(peerId) ?? null);
   }
 }
 
