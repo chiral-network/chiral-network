@@ -1662,30 +1662,47 @@ async fn run_dht_node(
                                 metadata.seeders = heartbeats_to_peer_list(&active_heartbeats);
                                 info!("🔍 DEBUG DHT PUBLISH: metadata.seeders after heartbeat = {:?}", metadata.seeders);
 
-                                // Store minimal metadata in DHT (use camelCase keys to match serde renames)
-                                let dht_metadata = serde_json::json!({
-                                    "fileHash": metadata.merkle_root,
-                                    "merkleRoot": metadata.merkle_root,
-                                    "fileName": metadata.file_name,
-                                    "fileSize": metadata.file_size,
-                                    "createdAt": metadata.created_at,
-                                    "mimeType": metadata.mime_type,
-                                    "isEncrypted": metadata.is_encrypted,
-                                    "encryptionMethod": metadata.encryption_method,
-                                    "keyFingerprint": metadata.key_fingerprint,
+                                // Merge with existing metadata from cache to preserve multi-protocol fields
+                                // This ensures that uploading via WebRTC doesn't lose CIDs from a previous Bitswap upload
+                                let merged_metadata = {
+                                    let cache = file_metadata_cache.lock().await;
+                                    if let Some(existing) = cache.get(&metadata.merkle_root) {
+                                        info!("🔍 DEBUG DHT PUBLISH: Found existing metadata, merging. Existing CIDs: {:?}", existing.cids);
+                                        merge_file_metadata(existing.clone(), metadata.clone())
+                                    } else {
+                                        metadata.clone()
+                                    }
+                                };
+                                info!("🔍 DEBUG DHT PUBLISH: Merged CIDs: {:?}", merged_metadata.cids);
 
-                                    "parentHash": metadata.parent_hash,
-                                    "cids": metadata.cids, // The root CID for Bitswap
-                                    "encryptedKeyBundle": metadata.encrypted_key_bundle,
-                                    "infoHash": metadata.info_hash,
-                                    "trackers": metadata.trackers,
-                                    "seeders": metadata.seeders,
+                                // Store minimal metadata in DHT (using merged metadata)
+                                let dht_metadata = serde_json::json!({
+                                    "file_hash": merged_metadata.merkle_root,
+                                    "merkle_root": merged_metadata.merkle_root,
+                                    "file_name": merged_metadata.file_name,
+                                    "file_size": merged_metadata.file_size,
+                                    "created_at": merged_metadata.created_at,
+                                    "mime_type": merged_metadata.mime_type,
+                                    "is_encrypted": merged_metadata.is_encrypted,
+                                    "encryption_method": merged_metadata.encryption_method,
+                                    "key_fingerprint": merged_metadata.key_fingerprint,
+
+                                    "parent_hash": merged_metadata.parent_hash,
+                                    "cids": merged_metadata.cids, // The root CID for Bitswap (preserved from previous uploads)
+                                    "encrypted_key_bundle": merged_metadata.encrypted_key_bundle,
+                                    "info_hash": merged_metadata.info_hash,
+                                    "trackers": merged_metadata.trackers,
+                                    "seeders": merged_metadata.seeders,
                                     "seederHeartbeats": active_heartbeats,
                                     "price": metadata.price,
                                     "uploader_address": metadata.uploader_address,
                                     "httpSources": metadata.http_sources,
                                     "ed2kSources": metadata.ed2k_sources,
                                     "ftpSources": metadata.ftp_sources,
+                                    "price": merged_metadata.price,
+                                    "uploader_address": merged_metadata.uploader_address,
+                                    "http_sources": merged_metadata.http_sources,
+                                    "ed2k_sources": merged_metadata.ed2k_sources,
                                 });
 
                                 let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
