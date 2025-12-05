@@ -20,8 +20,8 @@
 //! let mut manager = ProtocolManager::new();
 //!
 //! // Register handlers
-//! manager.register(Box::new(HttpProtocolHandler::new()?));
-//! manager.register(Box::new(BitTorrentProtocolHandler::with_download_directory(dir).await?));
+//! manager.register(Arc::new(HttpProtocolHandler::new()?));
+//! manager.register(Arc::new(BitTorrentProtocolHandler::with_download_directory(dir).await?));
 //!
 //! // Download a file
 //! let handle = manager.download(
@@ -37,6 +37,7 @@ pub mod ftp;
 pub mod ed2k;
 pub mod seeding;
 pub mod detection;
+pub mod multi_source;
 pub mod options;
 pub mod api;
 
@@ -68,14 +69,17 @@ pub use options::{
 
 pub use api::ActiveTransfer;
 
+// Re-export multi-source types
+pub use multi_source::{MultiSourceCoordinator, SourceInfo, ChunkAssignment};
+
 use crate::protocols::seeding::{SeedingEntry, SeedingRegistry};
+use detection::ProtocolDetector;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
-use detection::ProtocolDetector;
+use tracing::{debug, info, warn};
 
 // Re-export legacy trait with the old name for backward compatibility
 // This allows existing code like bittorrent_handler.rs to continue working
@@ -92,10 +96,11 @@ pub use ed2k::Ed2kProtocolHandler;
 ///
 /// Routes downloads and seeds to the appropriate handler based on the identifier.
 pub struct ProtocolManager {
-    handlers: Vec<Box<dyn ProtocolHandler>>,
-    simple_handlers: Vec<std::sync::Arc<dyn SimpleProtocolHandler>>,
+    handlers: Vec<Arc<dyn ProtocolHandler>>,
+    simple_handlers: Vec<Arc<dyn SimpleProtocolHandler>>,
     seeding_registry: SeedingRegistry,
     detector: ProtocolDetector,
+    multi_source: MultiSourceCoordinator,
     /// Active file transfers (downloads and uploads)
     /// Maps transfer_id -> ActiveTransfer
     pub(crate) active_transfers: Arc<RwLock<HashMap<String, ActiveTransfer>>>,
@@ -109,14 +114,30 @@ impl ProtocolManager {
             simple_handlers: Vec::new(),
             seeding_registry: SeedingRegistry::new(),
             detector: ProtocolDetector::new(),
+            multi_source: MultiSourceCoordinator::new(HashMap::new()),
             active_transfers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Registers an enhanced protocol handler
-    pub fn register(&mut self, handler: Box<dyn ProtocolHandler>) {
-        info!("Registering protocol handler: {}", handler.name()); // <-- Added logging
+    pub fn register(&mut self, handler: Arc<dyn ProtocolHandler>) {
+        let name = handler.name().to_string();
+        info!("Registering protocol handler: {}", name);
         self.handlers.push(handler);
+
+        // Rebuild multi-source coordinator with updated handlers
+        self.rebuild_multi_source();
+    }
+
+    /// Rebuild multi-source coordinator with current handlers
+    fn rebuild_multi_source(&mut self) {
+        let mut handlers_map: HashMap<String, Arc<dyn ProtocolHandler>> = HashMap::new();
+
+        for handler in &self.handlers {
+            handlers_map.insert(handler.name().to_string(), handler.clone());
+        }
+
+        self.multi_source = MultiSourceCoordinator::new(handlers_map);
     }
 
     /// Finds a handler that supports the given identifier
@@ -135,19 +156,90 @@ impl ProtocolManager {
             .map(|h| h.as_ref())
     }
 
-    /// Initiates a download using the appropriate handler
+    /// Initiates a download with automatic multi-source detection
+    ///
+    /// This method automatically detects available sources and uses multi-source
+    /// download when beneficial (multiple sources and max_peers > 1).
     pub async fn download(
         &self,
         identifier: &str,
         options: DownloadOptions,
     ) -> Result<DownloadHandle, ProtocolError> {
-        let handler = self
-            .find_handler(identifier)
-            .ok_or_else(|| ProtocolError::InvalidIdentifier(
-                format!("No handler found for: {}", identifier)
-            ))?;
+        info!("Starting download for identifier: {}", identifier);
 
-        handler.download(identifier, options).await
+        // Discover all available sources for this identifier
+        let sources = self.discover_sources(identifier).await?;
+        info!("Found {} source(s) for download", sources.len());
+
+        // Check if multi-source download is beneficial
+        let use_multi_source = sources.len() > 1
+            && options.max_peers.unwrap_or(1) > 1
+            && options.chunk_size.is_some();
+
+        if use_multi_source {
+            info!("Using multi-source download with {} sources", sources.len());
+
+            // Estimate total size (TODO: improve this by querying metadata)
+            let total_size = 10 * 1024 * 1024; // Default 10MB if unknown
+            let chunk_size = options.chunk_size.unwrap_or(256 * 1024);
+
+            self.multi_source.download_multi_source(
+                sources,
+                options.output_path,
+                total_size,
+                chunk_size,
+            ).await
+        } else {
+            info!("Using single-source download");
+
+            // Single-source download - use traditional method
+            let handler = self
+                .find_handler(identifier)
+                .ok_or_else(|| ProtocolError::InvalidIdentifier(
+                    format!("No handler found for: {}", identifier)
+                ))?;
+
+            handler.download(identifier, options).await
+        }
+    }
+
+    /// Discover all available sources for a file identifier
+    ///
+    /// Checks each registered protocol to see if it supports the identifier,
+    /// and returns a list of potential download sources.
+    async fn discover_sources(
+        &self,
+        identifier: &str,
+    ) -> Result<Vec<SourceInfo>, ProtocolError> {
+        let mut sources = Vec::new();
+
+        // Check each protocol to see if it supports this identifier
+        for handler in &self.handlers {
+            if handler.supports(identifier) {
+                let source = SourceInfo {
+                    protocol: handler.name().to_string(),
+                    identifier: identifier.to_string(),
+                    available_chunks: Vec::new(), // TODO: Query actual chunk availability
+                    latency_ms: None,            // TODO: Measure latency
+                    reputation: None,             // TODO: Get reputation from reputation system
+                };
+
+                debug!("Found source: {} for identifier", handler.name());
+                sources.push(source);
+            }
+        }
+
+        // TODO: Query DHT for additional sources
+        // TODO: Parse protocol-specific sources (e.g., trackers in magnet links)
+        // TODO: Check seeding registry for local peers
+
+        if sources.is_empty() {
+            return Err(ProtocolError::InvalidIdentifier(
+                format!("No sources found for: {}", identifier)
+            ));
+        }
+
+        Ok(sources)
     }
 
     /// Starts seeding using the specified protocol
@@ -176,9 +268,92 @@ impl ProtocolManager {
             .collect()
     }
 
+    /// Get capabilities for a specific protocol
+    ///
+    /// Returns the capabilities of the specified protocol handler,
+    /// or None if the protocol is not registered.
+    pub fn get_capabilities(&self, protocol: &str) -> Option<ProtocolCapabilities> {
+        self.handlers
+            .iter()
+            .find(|h| h.name() == protocol)
+            .map(|h| h.capabilities())
+    }
+
+    /// Get best protocol handler for an identifier
+    ///
+    /// Uses priority ordering to select the best handler that supports
+    /// the given identifier. Priority: BitTorrent > ED2K > HTTP > FTP
+    pub fn get_best_handler(
+        &self,
+        identifier: &str,
+    ) -> Result<Arc<dyn ProtocolHandler>, ProtocolError> {
+        // Priority order
+        let priority = ["bittorrent", "ed2k", "http", "ftp"];
+
+        for protocol in &priority {
+            if let Some(handler) = self.handlers.iter().find(|h| h.name() == *protocol) {
+                if handler.supports(identifier) {
+                    return Ok(handler.clone());
+                }
+            }
+        }
+
+        Err(ProtocolError::InvalidIdentifier(
+            format!("No handler supports: {}", identifier)
+        ))
+    }
+
+    /// Upload/seed file on specified protocols
+    ///
+    /// Seeds a file on multiple protocols simultaneously.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_path` - Path to the file to seed
+    /// * `protocols` - List of protocol names to seed on (e.g., ["bittorrent", "ed2k"])
+    /// * `options` - Seeding options
+    ///
+    /// # Returns
+    ///
+    /// A map of protocol name to seeding information for successful seeds
+    pub async fn upload(
+        &self,
+        file_path: PathBuf,
+        protocols: Vec<String>,
+        options: SeedOptions,
+    ) -> Result<HashMap<String, SeedingInfo>, ProtocolError> {
+        let mut results = HashMap::new();
+
+        info!("Seeding file on {} protocol(s)", protocols.len());
+
+        for protocol_name in protocols {
+            if let Some(handler) = self.handlers.iter().find(|h| h.name() == protocol_name) {
+                match handler.seed(file_path.clone(), options.clone()).await {
+                    Ok(info) => {
+                        debug!("Successfully seeded on {}", protocol_name);
+                        results.insert(protocol_name, info);
+                    }
+                    Err(e) => {
+                        warn!("Failed to seed on {}: {}", protocol_name, e);
+                    }
+                }
+            } else {
+                warn!("No handler found for protocol: {}", protocol_name);
+            }
+        }
+
+        if results.is_empty() {
+            Err(ProtocolError::Internal(
+                "Failed to seed on any protocol".to_string()
+            ))
+        } else {
+            Ok(results)
+        }
+    }
+
     // =========================================================================
     // Legacy Methods (for backward compatibility)
-    // =========================================================================
+    // ==========================================================================
 
     /// Initiates a download using the appropriate handler (legacy API)
     /// This is a backward-compatible wrapper that tries both enhanced and simple handlers.
