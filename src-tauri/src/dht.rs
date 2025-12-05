@@ -3081,6 +3081,9 @@ async fn run_dht_node(
                                                         active_download.total_chunks,
                                                         file_hash);
 
+                                                    info!("📤 Emitting BitswapChunkDownloaded event: file_hash={}, chunk={}/{}", 
+                                                        file_hash, chunk_index, active_download.total_chunks);
+                                                    
                                                     let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
                                                         file_hash: file_hash.clone(),
                                                         chunk_index,

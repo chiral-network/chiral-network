@@ -176,8 +176,24 @@
                 chunkSize: number;
             };
 
+            console.log('📦 Bitswap chunk received:', {
+                fileHash: progress.fileHash,
+                chunkIndex: progress.chunkIndex,
+                totalChunks: progress.totalChunks,
+                chunkSize: progress.chunkSize
+            });
+
             // Only update files that are actively downloading, not seeding files with the same hash
-            files.update(f => f.map(file => {
+            files.update(f => {
+                // Log all downloading files to help debug hash matching
+                const downloadingFiles = f.filter(file => file.status === 'downloading');
+                console.log('📦 Currently downloading files:', downloadingFiles.map(file => ({
+                    name: file.name,
+                    hash: file.hash,
+                    hashMatch: file.hash === progress.fileHash
+                })));
+                
+                return f.map(file => {
                 if (file.hash === progress.fileHash && file.status === 'downloading') {
                     const downloadedChunks = new Set(file.downloadedChunks || []);
                     
@@ -240,7 +256,8 @@
                     };
                 }
                 return file;
-            }));
+            });
+            });
         });
 
         const unlistenDownloadCompleted = await listen('file_content', async (event) => {
@@ -1277,6 +1294,14 @@ async function loadAndResumeDownloads() {
       downloadPath: fullPath,  // Pass the full path
       price: downloadingFile.price ?? 0  // Add price field
     }
+
+    console.log('📦 Bitswap download starting:', {
+      fileHash: metadata.fileHash,
+      fileName: metadata.fileName,
+      fileSize: metadata.fileSize,
+      cidsCount: metadata.cids?.length,
+      seedersCount: metadata.seeders?.length
+    });
 
     // Start the download asynchronously
     dhtService.downloadFile(metadata)

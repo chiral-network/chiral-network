@@ -56,14 +56,14 @@
     const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
     const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
     
-    // WebRTC is available if there are seeders (peers who can serve the file)
-    // This works for both WebRTC-only uploads and multi-protocol uploads
-    const isWebRTCAvailable = hasSeeders;
+    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs or other protocol indicators)
+    // Files uploaded via Bitswap have CIDs and must be downloaded via Bitswap, not WebRTC
+    const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
 
-    // Bitswap is available if there are CIDs (content identifiers for IPFS blocks)
-    const isBitswapAvailable = hasCids;
+    // Bitswap is available if there are CIDs (content identifiers for IPFS blocks) AND seeders
+    const isBitswapAvailable = hasCids && hasSeeders;
 
-    // Check for Bitswap (has CIDs)
+    // Check for Bitswap (has CIDs and seeders)
     if (isBitswapAvailable) {
       protocols.push({
         id: 'bitswap',
@@ -73,8 +73,8 @@
       });
     }
 
-    // Check for WebRTC (has seeders)
-    if (isWebRTCAvailable) {
+    // Check for WebRTC (uploaded via WebRTC - has seeders but no other protocol indicators)
+    if (isWebRTCUpload) {
       protocols.push({
         id: 'webrtc',
         name: 'WebRTC',
