@@ -19,7 +19,7 @@
     RefreshCw,
     Lock,
     Key,
-    Copy,
+     Copy,
      Share2,
     Globe,
     Blocks,
