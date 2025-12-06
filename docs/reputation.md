@@ -75,9 +75,181 @@ The DHT stores recent reputation updates for quick access:
 - Useful for real-time peer selection
 - Must be verified against on-chain data when accuracy matters
 
-### Reputation Calculation Flow
+### Transaction & Payment Lifecycle
+
+The transaction flow is designed to minimize blockchain interaction during the file transfer while still providing cryptographic proof for dispute resolution. The key innovation is the use of **signed transaction messages** that serve as off-chain payment promises.
+
+#### Visual Overview
 
 ```
+┌─────────────┐                                    ┌─────────────┐
+│ Downloader  │                                    │   Seeder    │
+│     (A)     │                                    │     (B)     │
+└──────┬──────┘                                    └──────┬──────┘
+       │                                                  │
+       │  1. Check B's reputation & find via DHT         │
+       │─────────────────────────────────────────────────>
+       │                                                  │
+       │  2. Send SIGNED TRANSACTION MESSAGE (off-chain)  │
+       │     {from: A, to: B, amount: X, sig: ...}       │
+       │─────────────────────────────────────────────────>
+       │                                                  │
+       │   3. B validates signature, then checks A's      │
+       │      reputation & on-chain balance (in that order)
+       │                                                  │
+       │  4. File chunks                                  │
+       │<═════════════════════════════════════════════════│
+       │                                                  │
+       │  5. Submit payment to BLOCKCHAIN                 │
+       │──────────────┐                                   │
+       │              │                                   │
+       │              ▼                                   │
+       │     ┌──────────────┐                            │
+       │     │  Blockchain  │                            │
+       │     │ (tx recorded)│                            │
+       │     └──────┬───────┘                            │
+       │            │                                     │
+       │  6. Payment confirmed after N blocks             │
+       │<───────────┘                                     │
+       │                                                  │
+       │  7. Both publish 'good' verdicts to DHT          │
+       │<─────────────────────────────────────────────────>
+       │              (reputation increases)              │
+       └──────────────────────────────────────────────────┘
+```
+
+NON-PAYMENT CASE:
+If A doesn't submit payment (step 5), B still has the signed message from step 2 as cryptographic proof to file a complaint in DHT.
+
+#### Standard Transaction Flow (Successful Case)
+
+The handshake ordering is intentionally strict: the downloader must produce the signed payment message first; the seeder validates the signature, then performs reputation and balance checks. This prevents the seeder from making on-chain/balance checks before cryptographic commitment exists, reduces race conditions, and ensures evidence availability in case of non-payment.
+
+1. Discovery & Reputation Check
+   ├─ Downloader (A) finds Seeder (B) via DHT
+   └─ A queries B's reputation score and transaction history
+
+2. Handshake with Signed Payment Promise
+   ├─ A creates signed transaction message:
+   │  - From: A's address
+   │  - To: B's address
+   │  - Amount: File price
+   │  - File hash: Target file identifier
+   │  - Nonce: Prevents replay attacks
+   │  - Deadline: Maximum time for transfer completion
+   │  - Signature: Cryptographic proof from A
+   ├─ A sends signed message to B (OFF-CHAIN, P2P only)
+
+3. Seeder Validation
+   ├─ B validates the signed message signature (authenticity)
+   ├─ B then checks A's reputation score and on-chain balance
+   └─ If signature, reputation, and balance pass, B proceeds to file transfer
+
+4. File Transfer (Pure P2P, No Blockchain)
+   ├─ B begins sending file chunks
+   ├─ A receives and verifies chunks
+   └─ Transfer completes when all chunks validated
+
+5. Payment Settlement (On-Chain)
+   ├─ A submits the signed transaction to blockchain
+   ├─ Transaction propagates through network
+   ├─ After confirmation_threshold blocks (default: 12)
+   └─ Payment is finalized on-chain
+
+6. Reputation Update (Both Parties)
+   ├─ A publishes 'good' verdict for B (successful seeder)
+   ├─ B publishes 'good' verdict for A (successful payer)
+   └─ Both verdicts reference the same tx_hash
+
+#### Non-Payment Scenario (Downloader is Malicious)
+
+**Problem:** Downloader receives file but never submits payment to blockchain.
+
+**Solution:** Seeder retains the signed transaction message as cryptographic proof of payment obligation, and can publish a complaint with evidence.
+
+1-3. [Same as above: Discovery, Handshake, Seeder Validation]
+
+4. Payment Deadline Expires
+   ├─ Deadline passes without on-chain transaction
+   ├─ B waits for confirmation_threshold + grace period
+   └─ Still no transaction appears on blockchain
+
+5. Seeder Files Complaint
+   ├─ B publishes 'bad' verdict to DHT with evidence:
+   │  - signed_transaction_message: A's signed payment promise
+   │  - delivery_proof: Chunk manifest and completion logs
+   │  - tx_hash: NULL (no blockchain record)
+   └─ B can optionally submit on-chain complaint (costs gas)
+
+6. Reputation Impact
+   ├─ A's reputation immediately drops (gossip penalty)
+   ├─ Other seeders see the signed message proof in DHT
+   ├─ A becomes blacklisted by reputation-aware peers
+   └─ A cannot dispute without proving blockchain payment
+
+**Why This Works:**
+- The signed transaction message is cryptographically unforgeable
+- Other peers can verify A's signature independently
+- A cannot claim "I never agreed to pay" because signature proves intent
+- Even without blockchain record, the signed message serves as strong evidence
+- Multiple complaints with signed messages from different seeders compound the penalty
+
+#### Malicious Seeder Scenario (Seeder Doesn't Deliver)
+
+**Problem:** Seeder accepts handshake but doesn't send file (or sends corrupted data).
+
+**Design Decision:** The downloader becomes the victim in this case.
+
+**Rationale:**
+- Harder to prove "non-delivery" cryptographically than "non-payment"
+- Downloader can abort transfer and find another seeder (low cost)
+- Seeder loses potential payment (self-punishing behavior)
+- Reputation system prioritizes protecting seeders (they provide value)
+- Can be mitigated through seeder reputation checks before handshake
+
+1-2. [Same: Discovery, Handshake with signed payment]
+
+3. File Transfer Fails
+   ├─ B never sends chunks, OR
+   ├─ B sends corrupted/incomplete chunks
+   └─ A detects failure and aborts
+
+4. Downloader Response
+   ├─ A does NOT submit payment to blockchain
+   ├─ A can file 'disputed' verdict in DHT (optional)
+   ├─ A looks for different seeder with better reputation
+   └─ No financial loss (payment never sent)
+
+5. Seeder Consequence
+   ├─ B loses potential payment
+   ├─ If A files complaint, B's reputation may drop
+   ├─ Repeated failures will lower B's trust level
+   └─ Eventually B becomes untrusted and ignored by downloaders
+
+**Why Downloader is Acceptable Victim:**
+- No financial loss (payment conditional on delivery)
+- Can retry with different seeder immediately
+- Seeder loses more (reputation + payment) for malicious behavior
+- Initial reputation check filters out most malicious seeders
+
+#### Uptime & Reliability Bonus
+
+```
+Seeder Reputation Factors:
+├─ Transaction success rate (primary)
+├─ Uptime duration (secondary bonus)
+│  - Longer continuous uptime = higher trust
+│  - Consistently online seeders less likely to be malicious
+│  - Measured by peer observations and relay connectivity
+└─ Total data served (volume bonus)
+```
+
+**The longer a seeder is online and serving files successfully, the better their reputation.**
+
+This creates an incentive for long-term, reliable seeders and makes it costly for attackers to build trusted identities.
+
+### Reputation Calculation Flow
+
 1. Query DHT for recent activity (last N transactions)
    ├─ If cache hit → Use cached score with timestamp
    └─ If cache miss or stale → Continue to step 2
@@ -95,7 +267,6 @@ The DHT stores recent reputation updates for quick access:
    └─ Store with TTL (default: 10 minutes)
 
 5. Return final reputation score
-```
 
 ## Reputation Metrics
 
@@ -106,16 +277,16 @@ All transaction reputation is derived from the `TransactionVerdict` payload. Eac
 | Field | Description |
 |-------|-------------|
 | `target_id` | Peer ID whose reputation is updated. |
-| `tx_hash` | Canonical chain reference (block + tx index or transaction hash). |
+| `tx_hash` | Canonical chain reference (block + tx index or transaction hash). Can be NULL for non-payment complaints where payment never reached blockchain. |
 | `outcome` | `good`, `bad`, or `disputed`. |
 | `details` | Optional plain-text metadata (kept ≤ 1 KB). |
 | `metric` | Optional label; defaults to `transaction`. Reserved for future metrics. |
 | `issued_at` | Unix timestamp in seconds when the verdict was produced. |
 | `issuer_id` | Peer ID of the issuer. |
 | `issuer_seq_no` | Monotonic counter per issuer to block duplicate verdicts. |
-| `issuer_sig` | Signature over all previous fields using the issuer’s transaction key. |
+| `issuer_sig` | Signature over all previous fields using the issuer's transaction key. |
 | `tx_receipt` | Optional pointer or embedded proof (e.g., payment-channel close receipt) that links the verdict to an on-chain transaction outcome. |
-| `evidence_blobs` | Optional array of detached, signed payloads (handshake promises, challenge transcripts) that support advisory complaints. |
+| `evidence_blobs` | Optional array of detached, signed payloads. **Critical for non-payment complaints:** includes `signed_transaction_message` (the downloader's signed payment promise), `delivery_proof` (chunk manifest), and protocol logs that prove file delivery without payment. |
 
 Validation rules:
 - Reject any verdict where `issuer_id == target_id`.
@@ -163,42 +334,248 @@ At minimum, publish a bad TransactionVerdict to the DHT with the signed promise 
 
 ### Non-payment Complaint Lifecycle
 
-1. **Handshake** – Before transfer, the downloader (A) sends a signed payment message (off-chain transaction template) to the seeder (B). B verifies the signature and checks A’s reputation and balance. This signed message is stored as an `evidence_blob`.
-2. **Transfer** – Seeder delivers data P2P; there is still no on-chain footprint at this point.
-3. **Payment Broadcast** - On success, the downloader broadcasts the payment transaction to the blockchain, and the seeder observes it.
-4. **Settlement success** – If the downloader closes the channel and payment finalizes on-chain before the deadline, the seeder publishes a `good` verdict pointing at the settlement `tx_hash`.
-5. **Settlement failure** – When the deadline passes without closure, the seeder initiates their own channel close on-chain. The resulting `tx_receipt` demonstrates that funds were reclaimed because the downloader did not settle.
-6. **Reliable verdict** – Seeder publishes a `bad` verdict referencing the close receipt in `tx_receipt` and attaching the original handshake in `evidence_blobs`.
-7. **Verification** – Verify the payer’s signature on the off-chain payment promise, confirm that no matching payment exists on-chain within the promised window, Treat this as a strong negative signal for the downloader’s reputation.
+This is the most critical reputation scenario: a downloader receives a file but never pays. The solution leverages **signed transaction messages** as cryptographic proof of payment obligation.
+
+#### Detailed Flow
+
+1. **Handshake Phase**
+   - Downloader creates a `SignedTransactionMessage`:
+     ```typescript
+     {
+       from: downloader_address,
+       to: seeder_address,
+       amount: file_price,
+       file_hash: target_file_hash,
+       nonce: unique_identifier,
+       deadline: unix_timestamp,        // e.g., 1 hour from now
+       downloader_signature: sig        // Secp256k1 signature
+     }
+     ```
+   - Downloader sends this message to seeder **OFF-CHAIN** via P2P connection
+   - Seeder validates:
+     - Signature authenticity (proves message from downloader's private key)
+     - Then checks downloader's on-chain balance (has sufficient funds)
+     - Deadline is reasonable (not already expired)
+   - Seeder stores the signed message as `evidence_blob`
+
+2. **File Transfer Phase**
+   - Seeder delivers file chunks
+   - Seeder logs delivery proof:
+     - Chunk manifest (all chunks sent)
+     - Transfer completion timestamp
+     - Connection logs
+   - Downloader receives and validates chunks
+
+3. **Expected Settlement (Honest Case)**
+   - Downloader submits the signed transaction to blockchain
+   - Transaction propagates and gets mined
+   - After `confirmation_threshold` blocks (default: 12), payment is final
+   - Seeder monitors blockchain and detects payment
+   - Seeder publishes `good` verdict with `tx_hash` referencing the blockchain transaction
+
+4. **Non-payment Scenario (Malicious Downloader)**
+   - Transfer completes but downloader never submits payment
+   - Seeder waits until `deadline + confirmation_threshold blocks + grace_period`
+   - Still no transaction appears on blockchain
+   - **Seeder now has cryptographic proof of non-payment**
+
+5. **Filing the Complaint**
+   - Seeder publishes `bad` verdict to DHT:
+     ```typescript
+     {
+       target_id: downloader_peer_id,
+       tx_hash: null,                    // No blockchain record
+       outcome: "bad",
+       details: "Non-payment after file delivery",
+       evidence_blobs: [
+         signed_transaction_message,      // Downloader's signed promise
+         delivery_proof_manifest,         // Proves chunks were sent
+         transfer_completion_log          // Timestamps and signatures
+       ],
+       issuer_id: seeder_peer_id,
+       issuer_sig: seeder_signature
+     }
+     ```
+   - This verdict immediately appears in DHT (fast gossip propagation)
+   - Seeder optionally submits on-chain complaint (costs gas, more permanent)
+
+6. **Verification by Other Peers**
+   - Any peer can retrieve the verdict from DHT
+   - Peers validate:
+     - `signed_transaction_message` signature (proves downloader's intent)
+     - `delivery_proof` completeness
+     - No matching `tx_hash` exists on blockchain (confirms non-payment)
+   - **Downloader cannot dispute** without providing blockchain payment proof
+   - Multiple failed payments to different seeders compound the penalty
+
+7. **Reputation Impact**
+   - Immediate: DHT gossip penalty reduces downloader's score
+   - Short-term: Reputation-aware seeders refuse to serve this downloader
+   - Long-term: If on-chain complaint filed, permanent reputation damage
+   - Recovery: Downloader must complete many successful transactions to rebuild trust
+
+**Optional reliable penalty path:** If the payment model uses a channel that allows the seeder to reclaim funds on timeout, the seeder’s close transaction (the reclaim receipt) can be attached as `tx_receipt` for a stronger, chain-anchored `bad` verdict. This augments—not replaces—the signed transaction message evidence.
+
+#### Why Signed Messages Solve the Problem
+
+**The Challenge:**
+- File transfer happens P2P (no blockchain involvement)
+- If downloader doesn't pay, there's nothing on-chain to prove it
+- Seeder needs cryptographic proof for complaints
+
+**The Solution:**
+- Signed transaction message = **unforgeable payment promise**
+- Signature proves downloader agreed to pay (can't deny intent)
+- Other peers can independently verify the signature
+- Acts as "evidence" even without blockchain record
+- Multiple signed messages from different seeders = strong pattern of non-payment
+
+**Key Properties:**
+- ✅ Can't be forged (requires downloader's private key)
+- ✅ Can't be repudiated (signature proves authenticity)
+- ✅ Can't be reused (nonce + file_hash make each unique)
+- ✅ Can be verified by anyone (public key cryptography)
+- ✅ Doesn't require blockchain (works off-chain)
+
+#### Seeder Protection Strategy
+
+The design accepts that **malicious seeders** are harder to prove, so we protect seeders as the value providers:
+
+**Downloader as Acceptable Victim:**
+- No financial loss (payment only sent after delivery)
+- Can abort and retry with different seeder
+- Initial reputation check filters bad seeders
+- Seeder malicious behavior is self-punishing (loses payment)
+
+**Seeder as Protected Party:**
+- Has cryptographic proof if downloader doesn't pay
+- Can publish complaint with signed transaction message
+- Delivers value first, so deserves protection
+- Uptime bonus rewards long-term reliable seeders
+
+**The longer a seeder is online successfully serving files, the higher their reputation, making malicious seeder identity costly to build.**
+
+#### False Complaint Defense (Malicious Seeder Files False Non-Payment Claim)
+
+**Problem:** Downloader pays honestly, but malicious seeder falsely claims non-payment to damage downloader's reputation.
+
+**Solution:** Blockchain proof overrides DHT gossip. Honest downloader can prove payment exists on-chain.
+
+1. Scenario Setup
+   ├─ Downloader (A) receives file from Seeder (B)
+   ├─ A submits payment to blockchain (honest behavior)
+   └─ B files false 'bad' verdict claiming non-payment (malicious)
+
+2. Seeder Files False Complaint
+   ├─ B publishes 'bad' verdict to DHT with signed message
+   └─ Complaint spreads via gossip
+
+3. Downloader Defense
+   ├─ A monitors DHT for complaints about themselves
+   ├─ A detects false complaint from B
+   └─ A submits dispute with blockchain proof:
+       - tx_hash: Points to confirmed payment transaction
+       - tx_receipt: Full blockchain transaction receipt
+       - block_number: Where payment was mined
+       - confirmations: Proof transaction is finalized
+
+4. Network Verification
+   ├─ Any peer can query blockchain for tx_hash
+   ├─ Transaction matches signed message parameters:
+   │   - from: A's address ✓
+   │   - to: B's address ✓
+   │   - amount: File price ✓
+   │   - timing: Within deadline ✓
+   └─ Conclusion: Payment exists, complaint is false
+
+5. Consequences for Malicious Seeder
+   ├─ False complaint dismissed immediately
+   ├─ B receives severe reputation penalty (-0.5 or more)
+   ├─ "False complaint" flag added to B's permanent record
+   ├─ Repeated false complaints trigger auto-blacklist
+   └─ Other downloaders avoid B (trust destroyed)
+
+6. Downloader Reputation Restored
+   ├─ A's reputation returns to pre-complaint level
+   ├─ A publishes counter-verdict: 'disputed_resolved'
+   └─ Network sees A as honest, B as malicious
+
+**Why Blockchain Makes False Complaints Unprofitable:**
+
+- **Unforgeable Proof:** Blockchain transactions cannot be faked or hidden
+- **Permanent Record:** Payment proof exists forever on-chain
+- **High Penalty Cost:** False complaints damage seeder reputation severely (more than successful complaints help)
+- **Verifiable by Anyone:** Any peer can independently check blockchain
+- **Cumulative Damage:** Multiple false complaints = permanent blacklist
+- **Economic Loss:** Malicious seeders lose all future business
+
+**Trust Hierarchy:**
+```
+1. Blockchain (ABSOLUTE TRUTH)
+   └─ Confirmed transactions override all other evidence
+
+2. Cryptographic Signatures (STRONG EVIDENCE)
+   └─ Signed messages prove intent but not completion
+
+3. DHT Gossip (ADVISORY)
+   └─ Fast propagation but requires verification
+
+4. Peer Claims (WEAK)
+   └─ Must be backed by evidence
+```
+
+**Automatic Defense Mechanism:**
+
+```typescript
+// Downloader publishes pre-emptive verdict immediately after payment
+// This creates a defense before seeder can file false complaint
+await reputationService.publishVerdict(seederId, {
+    outcome: 'good',
+    tx_hash: paymentTxHash,
+    role: 'downloader',
+    confirmations: 12,
+    details: 'Payment confirmed on blockchain'
+});
+
+// If seeder later files false complaint, network sees:
+// - Downloader's verdict: "I paid" (with blockchain proof)
+// - Seeder's complaint: "They didn't pay" (contradicts blockchain)
+// Result: Seeder's complaint automatically dismissed
+```
+
+**Pattern Detection for Malicious Seeders:**
+
+The system tracks false complaint patterns:
+- First false complaint: Warning + small penalty
+- Second false complaint: Large penalty + trust level drop
+- Third false complaint: Automatic blacklist + permanent untrusted status
+
+This makes it extremely costly for seeders to file false complaints, protecting honest downloaders.
 
 ### Pre-Transfer Admission Control (Seeder-side)
+
 Before a seeder commits to serving a downloader, it performs an admission check:
 
-1. Identity: Downloader includes peer_id and wallet address in the handshake.
-2. Reputation lookup: Seeder calls reputationService.getPeerScore(peer_id) and checks:
+1. Identity: Downloader includes `peer_id` and wallet address in the handshake.
+2. Reputation lookup: Seeder calls `reputationService.getPeerScore(peer_id)` and checks:
    - Score ≥ configured threshold (e.g., 0.4 or 0.6).
    - No automatic blacklist entry.
 3. Balance check: Seeder queries the chain (or a wallet service) to ensure:
    - Downloader’s balance ≥ expected maximum payment.
 4. Signed payment message: Seeder verifies the off-chain signed transaction described above.
 
-If any of these steps fail, the seeder may:
-- Refuse the transfer,
-- Reduce the amount of data it is willing to send, or
-- Require smaller, incremental payments.
+If any of these steps fail, the seeder may refuse the transfer, reduce the amount of data it is willing to send, or require smaller, incremental payments.
 
 ### Design Tradeoff: Asymmetric Protection (Downloader as Potential Victim)
+
 We explicitly prioritize protecting seeders from non-paying downloaders:
 
-1. If a downloader receives a file but never pays, we can use:
-   - The signed off-chain payment message, and
-   - The absence of an on-chain payment within the agreed window to build strong negative evidence and penalize the downloader.
-
+1. If a downloader receives a file but never pays, we can use the signed off-chain payment message plus the absence of an on-chain payment within the agreed window (or a seeder-side timeout receipt, if channels are used) as strong negative evidence and penalize the downloader.
 2. If a seeder is malicious and never sends the file after the downloader signs a payment message, the downloader is harder to protect:
    - The downloader can choose not to broadcast the payment, so there may be no on-chain footprint.
    - Without privacy-invasive logging or complex cryptographic proofs of data transfer, it is difficult to prove seeder misbehavior beyond “they never replied.”
 
-Therefore this chooses the downloader as the potential victim in the tricky seeder-misbehaves scenario. The system focuses on reliable penalties for non-paying downloaders, while seeder misbehavior is (for now) handled via weaker, gossip-style complaints and manual user judgments.
+Therefore the design chooses the downloader as the potential victim in the tricky seeder-misbehaves scenario. The system focuses on reliable penalties for non-paying downloaders, while seeder misbehavior is handled via weaker, gossip-style complaints and manual user judgments.
 
 ### Gossip-backed Penalty Signals
 
@@ -212,13 +589,11 @@ Not every misbehaviour is provable on-chain in real time. A seeder may still lod
 
 Clients aggregate retrieved verdicts using the following weighted average:
 
-```text
 score = Σ(weight(event) × value(event)) / Σ(weight(event))
 
 value(good) = 1.0
 value(disputed) = 0.5
 value(bad) = 0.0
-```
 
 `weight(event)` defaults to `1.0`. Clients may optionally enable exponential time decay by configuring a `decay_window` half-life.
 
@@ -242,9 +617,9 @@ Trust-level promotion requires both a high weighted score **and** sufficient suc
    - Payload: serialized `TransactionVerdict`.
 4. **Receiving DHT peer**:
    - Validates the signature and ensures `issuer_seq_no` is greater than any stored value from that issuer.
-  - Checks the chain through its bundled Geth node to confirm `tx_hash` exists and meets the configured confirmation depth.
-  - Stores the verdict once confirmed; otherwise caches it pending until confirmation or timeout.
-  - Indexes any `tx_receipt` or `evidence_blobs` so queriers can quickly inspect the supporting material.
+   - Checks the chain through its bundled Geth node to confirm `tx_hash` exists and meets the configured confirmation depth.
+   - Stores the verdict once confirmed; otherwise caches it pending until confirmation or timeout.
+   - Indexes any `tx_receipt` or `evidence_blobs` so queriers can quickly inspect the supporting material.
 5. **Replication** follows the overlay’s normal rules (e.g., Kademlia `k` closest peers).
 
 ### Retrieval & Scoring (DHT `GET`)
@@ -312,7 +687,8 @@ A simple, user-facing settings panel lets you control how blacklisting behaves. 
 
 - Blacklist mode
   - `manual` — Only block peers you explicitly add.
-  - `automatic` — Allow the system to add peers that meet configured thresholds.
+  -
+ `automatic` — Allow the system to add peers that meet configured thresholds.
   - `hybrid` — Both manual and automatic blocking enabled (default).
 - Auto-blacklist toggle
   - Enable or disable automatic blacklisting without affecting any manually added entries.
@@ -352,7 +728,7 @@ These settings are exposed in the Settings page under "Reputation" and via the A
 - Cached reputation scores
 - Peer activity timestamps
 
-### What's NOT Tracked
+### What's NOT TRACKED
 
 - File content or names
 - Real-world identities
@@ -412,6 +788,11 @@ Library consumers should build higher-level helpers that:
 | `blacklist_score_threshold` | Score below which a peer becomes eligible for automatic blacklisting (0.0–1.0). | 0.2 |
 | `blacklist_bad_verdicts_threshold` | Distinct `bad` verdicts from different issuers required to auto-blacklist a peer. | 3 |
 | `blacklist_retention` | How long automatic blacklist entries are retained before re-evaluation or auto-unban. | 30 days |
+| `payment_deadline_default` | Default deadline for signed transaction messages (seconds from handshake). | 3600 (1 hour) |
+| `payment_grace_period` | Additional wait time after deadline before filing non-payment complaint (seconds). | 1800 (30 min) |
+| `signed_message_nonce_ttl` | How long to track used nonces to prevent replay attacks (seconds). | 86400 (24 hours) |
+| `min_balance_multiplier` | Required balance as multiple of file price (e.g., 1.5 = 150% of price). | 1.2 |
+| `signature_algorithm` | Cryptographic signature scheme for signed transaction messages. | `secp256k1` |
 
 ## Using Reputation Data
 
@@ -422,9 +803,9 @@ Library consumers should build higher-level helpers that:
 3. **Monitor transfers** and issue a `bad` verdict if they fail.
 4. **Escalate disputes** by publishing `disputed` verdicts and including relevant metadata.
 
-**Example workflow:**
+Example workflow (client-side pseudocode):
 
-```typescript
+```text
 import { reputationService } from '$lib/services/reputationService';
 
 // Get available seeders
@@ -447,7 +828,7 @@ showPeerSelectionModal(ranked.slice(0, 10));
 
 ### For Uploads
 
-```typescript
+```text
 import { getTransactionScore } from '$lib/services/reputation';
 
 const score = await getTransactionScore(targetPeerId, {
@@ -468,31 +849,105 @@ const score = await getTransactionScore(targetPeerId, {
 
 ### Filing Complaints
 
-**Example: Non-payment complaint**
+**Example: Non-payment complaint with signed transaction message**
 
-```typescript
-// Downloader didn't pay after receiving file
-const evidence = {
-    signed_handshake: downloadHandshake, // Their signed payment promise
-    delivery_proof: chunkManifest,       // Proof we sent all chunks
-    protocol_logs: transferLogs,         // Connection and transfer logs
+```text
+// We have the downloader's signed transaction message from handshake
+const signedTransactionMessage = {
+    from: downloaderId,
+    to: myPeerId,
+    amount: filePrice,
+    file_hash: fileHash,
+    nonce: transferNonce,
+    deadline: transferDeadline,
+    downloader_signature: downloaderSig  // Cryptographic proof
 };
 
-// File on-chain complaint (more severe, requires gas)
+const evidence = {
+    signed_transaction_message: signedTransactionMessage, // Unforgeable payment promise
+    delivery_proof: chunkManifest,                       // Proof we sent all chunks
+    transfer_completion_log: completionTimestamp,        // When transfer finished
+    protocol_logs: transferLogs,                         // Connection logs
+};
+
+// File gossip complaint first (fast, no gas cost)
 await reputationService.fileComplaint(
     downloaderId,
     'non-payment',
     evidence,
-    true // reliable = on-chain
+    false // DHT gossip - immediate warning to network
 );
 
-// Or file gossip complaint (lighter, faster)
+// Then optionally file on-chain complaint (permanent, costs gas)
+// Recommended after multiple failed payments
 await reputationService.fileComplaint(
     downloaderId,
     'non-payment',
     evidence,
-    false // unreliable = DHT gossip
+    true // On-chain - permanent record
 );
+```
+
+**Verification snippet (pseudocode):**
+
+```text
+const isValid = await crypto.verifySignature(
+    signedTransactionMessage,
+    downloaderPublicKey
+);
+
+const txExists = await blockchain.findTransaction(
+    signedTransactionMessage.from,
+    signedTransactionMessage.to,
+    signedTransactionMessage.amount,
+    signedTransactionMessage.file_hash
+);
+
+if (isValid && !txExists) {
+    // Confirmed non-payment: apply penalty
+    await reputationService.applyPenalty(downloaderId, 'non_payment_confirmed');
+}
+```
+
+**Example: Pre-transfer validation flow for the seeder**
+
+This example illustrates the expected ordering: signature validation first, then reputation and balance checks.
+
+```text
+async function validateDownloaderHandshake(
+    signedMessage: SignedTransactionMessage
+): Promise<boolean> {
+    // 1. Verify signature (must be present before any balance/reputation checks)
+    const sigValid = await crypto.verifySignature(
+        signedMessage,
+        signedMessage.from
+    );
+    if (!sigValid) return false;
+
+    // 2. Check downloader's reputation
+    const reputation = await reputationService.getPeerScore(
+        signedMessage.from
+    );
+    if (reputation < MINIMUM_REPUTATION_THRESHOLD) {
+        console.log('Downloader reputation too low, rejecting');
+        return false;
+    }
+
+    // 3. Check downloader's balance on blockchain
+    const balance = await blockchain.getBalance(signedMessage.from);
+    if (balance < signedMessage.amount) {
+        console.log('Insufficient balance, rejecting');
+        return false;
+    }
+
+    // 4. Check deadline is reasonable
+    if (signedMessage.deadline < Date.now() + MIN_TRANSFER_TIME) {
+        console.log('Deadline too soon, rejecting');
+        return false;
+    }
+
+    return true; // Safe to proceed with transfer
+}
 ```
 
 ## Troubleshooting
@@ -553,7 +1008,159 @@ await reputationService.fileComplaint(
 
 ## Future Extensions
 
-- Introduce additional `metric` labels (e.g., `uptime`, `relay`) backed by third-party probes.
-- Support encrypted or hashed `details` for privacy-sensitive metadata.
-- Provide streaming updates (pub/sub) for near-real-time score changes.
-- Experiment with reviewer credibility weighting once multiple metrics exist.
+### Transaction & Payment Enhancements
+- **Payment channels**: Replace single signed messages with bi-directional payment channels for frequent traders, reducing blockchain transactions
+- **Escrow smart contracts**: Optional on-chain escrow that automatically releases payment upon cryptographic proof of delivery
+- **Multi-signature settlements**: Support multi-party transactions for bundle deals or group purchases
+- **Automatic retry with penalty escalation**: If downloader fails to pay, automatically escalate complaint severity with each subsequent non-payment to different seeders
+
+### Reputation Metric Expansions
+- **Uptime tracking**: Introduce `uptime` metric label backed by periodic peer probes and relay observations
+  - Track continuous online duration (longer = more trustworthy)
+  - Weight recent uptime more heavily than historical
+  - Penalize frequent disconnections or unstable peers
+- **Relay reputation**: Add `relay` metric for Circuit Relay v2 operators
+  - Track relay reliability, bandwidth, and availability
+  - Reward relay operators with reputation bonuses
+  - Display relay leaderboard based on service quality
+- **Storage proof metrics**: Implement verifiable storage challenges to prove seeders still have advertised files
+- **Bandwidth metrics**: Track actual upload/download speeds vs. advertised capabilities
+
+### Evidence & Proof Improvements
+- **Merkle proofs for chunk delivery**: Replace simple manifests with Merkle tree proofs for efficient chunk verification
+- **Zero-knowledge proofs**: Allow seeders to prove file delivery without revealing file content or transfer details
+- **Multi-witness complaints**: Require multiple independent witnesses before applying severe penalties
+- **Encrypted evidence**: Support encrypted or hashed `details` for privacy-sensitive metadata
+- **Evidence expiration**: Automatically prune old evidence blobs after reputation impact has decayed
+
+### Real-Time & Performance
+- **Streaming reputation updates**: Provide pub/sub for near-real-time score changes
+- **Reputation prediction**: Machine learning models to predict peer reliability based on behavioral patterns
+- **Cached reputation snapshots**: Periodic blockchain snapshots of high-reputation peers for faster bootstrapping
+- **DHT replication strategy**: Optimize DHT storage to prioritize high-activity peers
+
+### Advanced Scoring
+- **Reviewer credibility weighting**: Weight complaints by the issuer's own reputation (trusted peers' complaints carry more weight)
+- **Contextual reputation**: Separate scores for different file types or transaction sizes (e.g., great with small files, unreliable with large files)
+- **Time-decay refinements**: Exponential decay for old transactions with configurable half-life per metric type
+- **Geographic reputation**: Track reputation separately by region to account for network conditions
+
+### Dispute Resolution
+- **Multi-stage dispute process**: Allow disputed verdicts to be challenged with counter-evidence before finalizing
+- **Community arbitration**: Opt-in arbitration by high-reputation peers for complex disputes
+- **Appeal mechanism**: Allow peers to appeal automatic blacklisting with evidence of system errors
+- **Reputation recovery programs**: Structured paths for low-reputation peers to rebuild trust through verified good behavior
+- **False complaint tracking**: Maintain permanent records of false complaints to identify repeat offenders
+
+---
+
+## Summary: How It All Works Together
+
+### The Non-Payment Problem & Solution
+
+**The Challenge:** In a P2P file sharing system, file transfers happen off-chain for speed and efficiency. But this creates a problem: if a downloader receives a file and doesn't pay, there's nothing on the blockchain to prove the transaction was supposed to happen.
+
+**The Solution:** **Signed Transaction Messages** — cryptographic payment promises that work off-chain.
+
+### Complete Transaction Flow
+
+1. **Discovery & Vetting**
+   - Downloader finds seeder via DHT
+   - Downloader checks seeder reputation and chooses a candidate
+
+2. **Handshake (Off-Chain)**
+   - Downloader creates signed message: "I promise to pay X coins to seeder Y for file Z by deadline D"
+   - Signature is cryptographic proof (requires downloader's private key)
+   - Seeder validates signature first, then verifies downloader reputation and balance
+   - Seeder stores the message as evidence
+
+3. **File Transfer (Pure P2P)**
+   - No blockchain involvement during transfer
+   - Fast, efficient, direct peer-to-peer
+   - Seeder logs delivery proof (chunk manifest, timestamps)
+
+4. **Payment (On-Chain)**
+   - **Honest case:** Downloader submits payment to blockchain, everyone wins
+   - **Malicious case:** Downloader doesn't pay, but seeder has signed message as proof
+
+5. **Reputation Update**
+   - **If paid:** Both parties publish 'good' verdicts referencing blockchain tx_hash
+   - **If not paid:** Seeder publishes 'bad' verdict with signed message as evidence
+   - Other peers can verify the signature independently
+   - Downloader can't dispute without providing blockchain payment proof
+
+### Why This Works
+
+**Cryptographic Properties:**
+- ✅ **Unforgeable:** Only downloader's private key can create valid signature
+- ✅ **Non-repudiable:** Downloader can't deny agreeing to pay
+- ✅ **Verifiable:** Any peer can independently verify signature authenticity
+- ✅ **Unique:** Nonce + file hash prevent reuse or replay attacks
+- ✅ **Off-chain:** No blockchain delay or cost during file transfer
+
+**Economic Incentives:**
+- Downloader loses reputation if they don't pay (blocked by future seeders)
+- Seeder earns reputation by serving reliably over time
+- Long-term honest behavior is more valuable than one-time cheating
+- Uptime bonus makes malicious seeder identities costly to build
+
+### Handling Edge Cases
+
+**Malicious Downloader (Non-payment):**
+- Seeder has signed message as unforgeable proof
+- Can publish complaint to DHT immediately (gossip penalty)
+- Can file on-chain complaint for permanent record
+- Multiple complaints from different seeders compound the penalty
+- Downloader becomes untrusted and blacklisted
+
+**Malicious Seeder (False Complaint):**
+- Downloader proves payment with blockchain transaction
+- Blockchain proof overrides seeder's DHT complaint
+- Seeder receives severe reputation penalty for false complaint
+- False complaint flag permanently damages seeder's trust
+- Repeated false complaints trigger automatic blacklist
+
+**Malicious Seeder (Non-delivery):**
+- Downloader aborts transfer, doesn't send payment
+- No financial loss (payment only sent after delivery)
+- Can find different seeder with better reputation
+- Seeder loses potential payment (self-punishing)
+- Design accepts downloader as "acceptable victim" in this case
+
+**Why Downloader is Protected (from false complaints):**
+- Blockchain provides unforgeable proof of payment
+- False complaints are automatically dismissed with blockchain evidence
+- Malicious seeders face severe penalties (more than legitimate complaints)
+- System makes false complaints economically irrational
+
+### Key Design Principles
+
+1. **Blockchain as Ground Truth:** All finalized transactions are immutable proof
+2. **DHT as Fast Cache:** Quick lookups without querying blockchain every time
+3. **Cryptographic Evidence:** Signed messages provide proof even without blockchain record
+4. **Seeder Protection Priority:** Seeders provide value, so system protects them first
+5. **Uptime Rewards:** Longer online = higher reputation = more trusted
+6. **Hybrid Verification:** Recent activity via DHT, historical via blockchain
+
+### Implementation Highlights
+
+**For Seeders:**
+- Always validate signed messages before starting transfer
+- Check downloader's reputation and balance (after signature verification)
+- Store signed message as evidence
+- Wait until deadline + grace period before filing complaint
+- Earn reputation by staying online and serving reliably
+
+**For Downloaders:**
+- Check seeder reputation before handshake
+- Create properly signed transaction message
+- Submit payment promptly after receiving file
+- Build reputation through successful transactions
+- Higher reputation = more seeders willing to serve you
+
+**For the Network:**
+- DHT propagates reputation verdicts quickly
+- Anyone can verify signed message authenticity
+- Blockchain provides ultimate source of truth
+- Reputation aggregates over time
+- System converges toward honest behavior

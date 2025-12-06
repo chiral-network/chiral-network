@@ -103,7 +103,7 @@ pub struct FileMetadata {
     pub price: f64,
 
     /// Ethereum address of the uploader (for payment)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "uploaderAddress")]
     pub uploader_address: Option<String>,
 
     /// The SHA-1 info hash for BitTorrent compatibility.
