@@ -2099,7 +2099,7 @@ async function loadAndResumeDownloads() {
   <ProtocolTestPanel />
 
   <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
-  <Card class="overflow-hidden">
+  <Card class="">
     <!-- Chiral DHT Search Section with integrated BitTorrent -->
     <div class="border-b">
       <DownloadSearchSection
