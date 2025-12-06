@@ -3716,20 +3716,24 @@ async fn run_dht_node(
                                         // WebRTC offer request
                                         Message::Request { request, channel, .. } => {
                                             let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id: _requester_peer_id } = request;
-                                            info!("Received WebRTC offer from {} for file {}", peer, file_hash);
+                                            info!("📨 Received WebRTC offer from {} for file {}", peer, file_hash);
+                                            info!("📨 Offer SDP length: {} bytes", offer_sdp.len());
 
                                             // Get WebRTC service to handle the offer
                                             if let Some(webrtc_service) = get_webrtc_service().await {
+                                                info!("✅ WebRTC service is available, creating answer...");
                                                 // Create WebRTC answer using the WebRTC service
                                                 match webrtc_service.establish_connection_with_offer(peer.to_string(), offer_sdp).await {
                                                     Ok(answer_sdp) => {
-                                                        info!("Created WebRTC answer for peer {}", peer);
+                                                        info!("✅ Created WebRTC answer for peer {}, sending response...", peer);
+                                                        info!("📤 Answer SDP length: {} bytes", answer_sdp.len());
                                                         swarm.behaviour_mut().webrtc_signaling_rr
                                                             .send_response(channel, WebRTCAnswerResponse { answer_sdp })
-                                                            .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                                            .unwrap_or_else(|e| error!("❌ send_response failed: {e:?}"));
+                                                        info!("✅ WebRTC answer sent successfully to peer {}", peer);
                                                     }
                                                     Err(e) => {
-                                                        error!("Failed to create WebRTC answer for peer {}: {}", peer, e);
+                                                        error!("❌ Failed to create WebRTC answer for peer {}: {}", peer, e);
                                                         let error_answer = "error:failed-to-create-answer".to_string();
                                                         swarm.behaviour_mut().webrtc_signaling_rr
                                                             .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })
@@ -3737,7 +3741,7 @@ async fn run_dht_node(
                                                     }
                                                 }
                                             } else {
-                                                error!("WebRTC service not available for handling offer from peer {}", peer);
+                                                error!("❌ WebRTC service not available for handling offer from peer {}", peer);
                                                 let error_answer = "error:webrtc-service-unavailable".to_string();
                                                 swarm.behaviour_mut().webrtc_signaling_rr
                                                     .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })

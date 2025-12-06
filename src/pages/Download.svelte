@@ -42,9 +42,12 @@
     paymentService.initialize();
 
     initDownloadTelemetry()
+    
+    console.log('📡 Download page mounted, setting up event listeners...');
 
     // Listen for multi-source download events
     const setupEventListeners = async () => {
+      console.log('📡 Setting up file_content event listener...');
       // Listen for BitTorrent events
       const unlistenTorrentEvent = await listen('torrent_event', (event) => {
         const payload = event.payload as any;
@@ -262,6 +265,11 @@
 
         const unlistenDownloadCompleted = await listen('file_content', async (event) => {
             const metadata = event.payload as any;
+            console.log('🎉 file_content event received:', {
+              merkleRoot: metadata.merkleRoot,
+              fileName: metadata.file_name
+            });
+            
             diagnosticLogger.info('Download', 'Received file_content event', {
                 merkleRoot: metadata.merkleRoot,
                 downloadPath: metadata.downloadPath,
@@ -270,6 +278,20 @@
 
             // Find the file that just completed
             const completedFile = $files.find(f => f.hash === metadata.merkleRoot);
+            
+            console.log('🔍 File download completed:', {
+              merkleRoot: metadata.merkleRoot,
+              completedFile: completedFile ? {
+                name: completedFile.name,
+                hash: completedFile.hash,
+                uploaderAddress: completedFile.uploaderAddress,
+                seederAddresses: completedFile.seederAddresses,
+                size: completedFile.size
+              } : null,
+              alreadyPaid: paidFiles.has(metadata.merkleRoot),
+              filesInStore: $files.length,
+              allFileHashes: $files.map(f => ({ name: f.name, hash: f.hash?.slice(0, 16) }))
+            });
 
             if (completedFile && !paidFiles.has(completedFile.hash)) {
                 // Process payment for Bitswap download (only once per file)
