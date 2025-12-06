@@ -8022,7 +8022,7 @@ fn swarm_has_dialable_addr(swarm: &Swarm<DhtBehaviour>) -> bool {
     // External addresses (with scores) are the authoritative list to advertise
     if swarm
         .external_addresses()
-        .any(|ext| ma_plausibly_reachable(ext.addr()))
+        .any(|ext| ma_plausibly_reachable(ext))
     {
         return true;
     }
