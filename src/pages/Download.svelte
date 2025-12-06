@@ -273,19 +273,35 @@
 
             if (completedFile && !paidFiles.has(completedFile.hash)) {
                 // Process payment for Bitswap download (only once per file)
-                diagnosticLogger.info('Download', 'Bitswap download completed, processing payment', { fileName: completedFile.name });
+                diagnosticLogger.info('Download', 'Bitswap download completed, processing payment', { 
+                  fileName: completedFile.name,
+                  uploaderAddress: completedFile.uploaderAddress,
+                  seederAddresses: completedFile.seederAddresses,
+                  fileHash: completedFile.hash
+                });
                 const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
                 
                 // Payment is always required (minimum 0.0001 Chiral enforced by paymentService)
 
-
+                // Get seeder information from file metadata
                 const seederPeerId = completedFile.seederAddresses?.[0];
-                const seederWalletAddress = paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
-                  ? completedFile.seederAddresses?.[0]!
-                  : null;                if (!seederWalletAddress) {
+                const seederWalletAddress = completedFile.uploaderAddress || 
+                                             (paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
+                                               ? completedFile.seederAddresses?.[0]!
+                                               : null);
+                
+                console.log('💰 Payment Check:', {
+                  uploaderAddress: completedFile.uploaderAddress,
+                  seederAddresses: completedFile.seederAddresses,
+                  seederWalletAddress,
+                  isValid: !!seederWalletAddress
+                });
+                
+                if (!seederWalletAddress) {
                   diagnosticLogger.warn('Download', 'Skipping Bitswap payment due to missing or invalid uploader wallet address', {
                       file: completedFile.name,
-                      seederAddresses: completedFile.seederAddresses
+                      seederAddresses: completedFile.seederAddresses,
+                      uploaderAddress: completedFile.uploaderAddress
                   });
                   showToast('Payment skipped: missing uploader wallet address', 'warning');
               } else {
