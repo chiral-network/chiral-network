@@ -712,6 +712,20 @@ async fn record_download_payment(
         seeder_wallet_address
     );
 
+    // Update peer reputation: record successful payment transaction
+    // This increments transfer_count for blockchain payments (separate from file transfers)
+    {
+        let dht_guard = state.dht.lock().await;
+        if let Some(ref dht) = *dht_guard {
+            // Record successful payment as a transfer success
+            dht.record_transfer_success(&seeder_peer_id, file_size, 0).await;
+            println!(
+                "✅ Updated reputation for seeder peer {} after successful payment of {} Chiral",
+                seeder_peer_id, amount
+            );
+        }
+    }
+
     // Seeder will see the payment when they check the blockchain
     Ok(())
 }
