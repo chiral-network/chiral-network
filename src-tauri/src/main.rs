@@ -1723,6 +1723,7 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_uploads().await;
                     }
                     DhtEvent::FileDiscovered(metadata) => {
+                        info!("📡 Emitting found_file event to frontend for: {}", metadata.file_name);
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("found_file", payload);
                     }
@@ -5762,7 +5763,7 @@ async fn search_file_metadata(
 
     if let Some(dht) = dht {
         let timeout = timeout_ms.unwrap_or(10_000);
-        let result = dht.synchronous_search_metadata(file_hash, timeout.max(55000)).await?;
+        let result = dht.synchronous_search_metadata(file_hash, timeout).await?;
 
         // If we found metadata (including from cache), emit the found_file event
         // This ensures the frontend gets notified even for cache hits

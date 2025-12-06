@@ -4409,6 +4409,7 @@ async fn handle_kademlia_event(
                                         }
 
                                         // Send event to frontend for search results
+                                        info!("📡 Sending DhtEvent::FileDiscovered for file: {}", metadata.file_name);
                                         let _ = event_tx.send(DhtEvent::FileDiscovered(metadata.clone())).await;
                                         let _ = pending_search.sender.send(Ok(Some(metadata)));
                                         return; // Successfully handled the search result
