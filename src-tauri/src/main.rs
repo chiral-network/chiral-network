@@ -1695,11 +1695,17 @@ async fn start_dht_node(
 
                         let file_size = metadata.file_size;
 
-                        // TODO: Implement promote_downloaded_file in DhtService to publish the user as a seeder in the DHT for that file
-                        // if let Err(err) = dht_clone_for_pump.promote_downloaded_file(metadata).await
-                        // {
-                        //     warn!("Failed to promote downloaded file to seeder: {}", err);
-                        // }
+                        // Immediately re-publish the downloaded file so this node becomes a seeder.
+                        let promote_metadata = metadata.clone();
+                        let dht_for_promotion = dht_clone_for_pump.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) = dht_for_promotion
+                                .promote_downloaded_file(promote_metadata)
+                                .await
+                            {
+                                warn!("Failed to promote downloaded file to seeder: {}", err);
+                            }
+                        });
 
                         // Update analytics: record download completion and bandwidth
                         analytics_arc.record_download_completed().await;

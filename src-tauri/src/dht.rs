@@ -6796,6 +6796,32 @@ impl DhtService {
             .await
             .insert(metadata.merkle_root.clone(), metadata.clone());
     }
+
+    /// Promote a freshly downloaded file to a seeder by publishing its metadata back to the DHT
+    /// and registering as a provider. This reuses the standard publish flow so heartbeats and
+    /// provider records stay consistent with uploads.
+    pub async fn promote_downloaded_file(&self, metadata: FileMetadata) -> Result<(), String> {
+        // Avoid storing inline data when re-publishing an already-downloaded file.
+        let ftp_sources = metadata
+            .ftp_sources
+            .clone()
+            .map(|sources| sources.into_iter().map(|s| s.for_dht_storage()).collect());
+
+        let mut sanitized = metadata;
+        sanitized.file_data.clear();
+
+        // Ensure the download timestamp is set for peers that rely on ordering.
+        if sanitized.created_at == 0 {
+            sanitized.created_at = unix_timestamp();
+        }
+
+        // Make sure our own peer ID is represented as a seeder.
+        if !sanitized.seeders.iter().any(|peer| peer == &self.peer_id) {
+            sanitized.seeders.push(self.peer_id.clone());
+        }
+
+        self.publish_file(sanitized, ftp_sources).await
+    }
     /// List all known FileMetadata (from cache, i.e., locally published or discovered)
     pub async fn get_all_file_metadata(&self) -> Result<Vec<FileMetadata>, String> {
         let cache = self.file_metadata_cache.lock().await;
