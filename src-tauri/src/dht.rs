@@ -4373,6 +4373,7 @@ async fn handle_kademlia_event(
                                     metadata_json.get("fileSize").and_then(|v| v.as_u64()),
                                     metadata_json.get("createdAt").and_then(|v| v.as_u64()),
                                 ) {
+                                    info!("🔍 Found metadata record - merkleRoot: {}, searching for: {}", file_hash, pending_search.file_hash);
                                     // Verify this is the file we were searching for
                                     if file_hash == pending_search.file_hash {
                                         info!("🔧 Constructing metadata for found file: {}", file_hash);
@@ -4420,9 +4421,10 @@ async fn handle_kademlia_event(
                                         info!("✅ Search result processing completed successfully");
                                         return; // Successfully handled the search result
                                     } else {
-                                        warn!("❌ Found wrong file: got {} but searching for {}", file_hash, pending_search.file_hash);
-                                        // This is not the file we were looking for, put the search back
-                                        let _ = pending_search_queries.lock().await.insert(id, pending_search);
+                                        info!("❌ Hash mismatch - found metadata for {} but searching for {}", file_hash, pending_search.file_hash);
+                                        // Put the pending search back since this wasn't the right result
+                                        pending_search_queries.lock().await.insert(id, pending_search);
+                                        return; // Don't process this wrong result
                                     }
                                 } else {
                                     debug!("Received incomplete metadata record during search");
