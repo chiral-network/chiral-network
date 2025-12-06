@@ -1534,7 +1534,7 @@
     if(!address) return;
     try{
       qrCodeDataUrl = await QRCode.toDataURL(address, {
-        errorCorrectionLevel: 'H',
+        errorCorrectionLevel: 'high',
         type: 'image/png',
         width: 200,
         margin: 2,
