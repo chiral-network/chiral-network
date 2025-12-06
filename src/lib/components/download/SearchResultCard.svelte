@@ -197,7 +197,13 @@
 
   async function confirmDownload() {
     showDownloadConfirmDialog = false;
-    
+
+    // Skip payment for files the user is seeding (they already paid hosting costs)
+    if (isSeeding) {
+      showDecryptDialog = true;
+      return;
+    }
+
     // All downloads require payment (minimum 0.0001 Chiral)
     // Always show payment confirmation
     showPaymentConfirmDialog = true;
@@ -467,7 +473,9 @@
           <li class="flex items-center justify-between">
             <span class="text-muted-foreground">Price</span>
             <span class="font-semibold text-emerald-600">
-              {#if checkingBalance}
+              {#if isSeeding}
+                Free
+              {:else if checkingBalance}
                 Calculating...
               {:else if currentPrice !== null}
                 {currentPrice.toFixed(4)} Chiral
@@ -538,13 +546,13 @@
     <div class="flex items-center gap-2">
       <Button
         on:click={handleDownload}
-        disabled={isBusy || checkingBalance || (!canAfford && currentPrice && currentPrice > 0)}
-        class={!canAfford && currentPrice && currentPrice > 0 ? 'opacity-50 cursor-not-allowed' : ''}
+        disabled={isBusy || checkingBalance || (!canAfford && currentPrice && currentPrice > 0 && !isSeeding)}
+        class={!canAfford && currentPrice && currentPrice > 0 && !isSeeding ? 'opacity-50 cursor-not-allowed' : ''}
       >
         <Download class="h-4 w-4 mr-2" />
         {#if checkingBalance}
           Checking balance...
-        {:else if !canAfford && currentPrice && currentPrice > 0}
+        {:else if !canAfford && currentPrice && currentPrice > 0 && !isSeeding}
           Insufficient funds
         {:else}
           Download
@@ -609,7 +617,7 @@
 
       <p class="text-sm text-muted-foreground text-center mb-6">
         {isSeeding
-          ? `Do you want to download a local copy for ${(currentPrice ?? 0.0001).toFixed(4)} Chiral?`
+          ? `Download a local copy for free (you're already seeding this file)`
           : `You will be charged ${(currentPrice ?? 0.0001).toFixed(4)} Chiral. Continue?`}
       </p>
 

@@ -6974,10 +6974,19 @@ impl DhtService {
         file_hash: String,
         timeout_ms: u64,
     ) -> Result<Option<FileMetadata>, String> {
-        info!("Starting search for file: {} (timeout: {}ms)", file_hash, timeout_ms);
+        info!("🔍 Starting search for file: {} (timeout: {}ms)", file_hash, timeout_ms);
 
-        // Always query DHT for authoritative results - never skip with cache
-        info!("Querying DHT for file {}...", file_hash);
+        // First check local cache for recently uploaded/published files
+        {
+            let cache = self.file_metadata_cache.lock().await;
+            if let Some(metadata) = cache.get(&file_hash) {
+                info!("✅ Found file in local cache: {} (name: {})", file_hash, metadata.file_name);
+                return Ok(Some(metadata.clone()));
+            }
+        }
+
+        // If not in cache, query DHT for authoritative results
+        info!("File not in local cache, querying DHT for file {}...", file_hash);
 
         if timeout_ms == 0 {
             let (sender, _receiver) = oneshot::channel();
@@ -7025,6 +7034,14 @@ impl DhtService {
             },
             Err(_) => {
                 warn!("⏰ Search timed out for file: {} (after {}ms)", file_hash, timeout_ms);
+                // Check if this might be due to connectivity issues
+                let health = self.check_health(5, false).await;
+                if health.peer_count < 5 {
+                    warn!("⚠️ Low peer count ({} peers, minimum {}) may affect search reliability", health.peer_count, health.min_required);
+                }
+                if health.bootstrap_failures > 0 {
+                    warn!("⚠️ Bootstrap failures detected ({}), network connectivity may be degraded", health.bootstrap_failures);
+                }
                 Ok(None) // Timeout - file not found
             },
         }

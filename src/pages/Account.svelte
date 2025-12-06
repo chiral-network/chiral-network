@@ -1417,8 +1417,12 @@
       
       gasEstimate = result;
     } catch (error) {
-      console.error('Failed to fetch gas estimate:', error);
-      gasError = String(error);
+      const errorMsg = String(error);
+      // Only show error if it's not insufficient funds (which is expected for empty accounts)
+      if (!errorMsg.includes('insufficient funds')) {
+        console.error('Failed to fetch gas estimate:', error);
+      }
+      gasError = errorMsg;
       // Set default values if gas estimation fails
       gasEstimate = {
         gasLimit: 21000,
