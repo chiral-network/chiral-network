@@ -1419,7 +1419,7 @@ mod tests {
         let hash = BitTorrentHandler::extract_info_hash(invalid_magnet);
         assert_eq!(hash, None);
     }
-}
+    #[test]
     fn test_multiaddr_to_socket_addr() {
         // IPv4 test
         let multiaddr_ipv4: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
