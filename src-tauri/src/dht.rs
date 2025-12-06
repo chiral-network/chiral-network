@@ -2460,8 +2460,8 @@ async fn run_dht_node(
                                             }
                                             should_request
                                         };
-
-                                        if should_request {
+                                        // boostraps should be public IPs, so they should not advertise themselves using relay.
+                                        if !is_bootstrap & should_request {
                                             if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
                                                 match swarm.listen_on(relay_addr.clone()) {
                                                     Ok(_) => {
