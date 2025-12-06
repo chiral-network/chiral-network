@@ -243,7 +243,7 @@ use libp2p::{
     identify::{self, Event as IdentifyEvent},
     identity,
     kad::{
-        self, store::MemoryStore, Behaviour as Kademlia, Config as KademliaConfig,
+        self, store::MemoryStore, store::RecordStore, Behaviour as Kademlia, Config as KademliaConfig,
         Event as KademliaEvent, GetRecordOk, Mode, PutRecordOk, QueryResult, Record,
     },
     mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
@@ -1511,10 +1511,13 @@ async fn run_dht_node(
                                         publisher: Some(peer_id.clone()),
                                         expires: None,
                                     };
+                                    // Store locally first
+                                    let _ = swarm.behaviour_mut().kademlia.store_mut().put(record.clone());
+                                    
                                     if let Err(e) =
                                         swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
                                     {
-                                        warn!("Failed to refresh DHT record after disconnect for {}: {}", file_hash, e);
+                                        warn!("Could not replicate DHT record after disconnect for {}: {} (stored locally)", file_hash, e);
                                     } else {
                                         debug!("Refreshed DHT record for {} after peer {} disconnected", file_hash, peer_id);
                                     }
@@ -1770,12 +1773,23 @@ async fn run_dht_node(
                                     kad::Quorum::One
                                 };
 
+                                // CRITICAL: Store record locally FIRST to ensure it's always accessible
+                                // This prevents QuorumFailed errors when no remote peers are available
+                                // The file will still be discoverable locally and replicated when peers connect
+                                if let Err(e) = swarm.behaviour_mut().kademlia.store_mut().put(record.clone()) {
+                                    warn!("Failed to store record locally for {}: {:?}", merged_metadata.merkle_root, e);
+                                } else {
+                                    debug!("✅ Stored record locally for {}", merged_metadata.merkle_root);
+                                }
+
+                                // Now try to replicate to remote peers (may fail if no peers available)
                                 match swarm.behaviour_mut().kademlia.put_record(record, quorum) {
                                     Ok(query_id) => {
+                                        debug!("Started replicating record for {} (query: {:?})", merged_metadata.merkle_root, query_id);
                                     }
                                     Err(e) => {
-                                        error!("failed to start providing file {}: {}", merged_metadata.merkle_root, e);
-                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to start providing: {}", e))).await;
+                                        // This is now just a warning since we stored locally above
+                                        warn!("Could not start remote replication for file {}: {} (file is still accessible locally)", merged_metadata.merkle_root, e);
                                     }
                                 }
 
@@ -1821,6 +1835,8 @@ async fn run_dht_node(
                                 if let Some(info_hash) = &merged_metadata.info_hash {
                                     let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
                                     let index_record = Record::new(index_key.as_bytes().to_vec(), merged_metadata.merkle_root.as_bytes().to_vec());
+                                    // Store locally first
+                                    let _ = swarm.behaviour_mut().kademlia.store_mut().put(index_record.clone());
                                     swarm.behaviour_mut().kademlia.put_record(index_record, kad::Quorum::One).ok();
                                     info!("Published info_hash index for {}", info_hash);
                                 }
@@ -1913,8 +1929,14 @@ async fn run_dht_node(
                                     expires: None,
                                 };
 
+                                // Store locally first to ensure availability
+                                if let Err(e) = swarm.behaviour_mut().kademlia.store_mut().put(record.clone()) {
+                                    warn!("Failed to store encrypted file record locally for {}: {:?}", metadata.merkle_root, e);
+                                }
+
+                                // Try to replicate to remote peers
                                 if let Err(e) = swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
-                                    error!("Failed to put record for encrypted file {}: {}", metadata.merkle_root, e);
+                                    warn!("Could not start remote replication for encrypted file {}: {} (stored locally)", metadata.merkle_root, e);
                                 }
 
                                 // 4. Announce self as provider (only if we have dialable addrs)
@@ -2041,10 +2063,13 @@ async fn run_dht_node(
                                         publisher: Some(peer_id.clone()),
                                         expires: None,
                                     };
+                                    // Store locally first
+                                    let _ = swarm.behaviour_mut().kademlia.store_mut().put(record.clone());
+                                    
                                     if let Err(e) =
                                         swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
                                     {
-                                        warn!("Failed to publish empty record for {}: {}", file_hash, e);
+                                        warn!("Could not replicate empty record for {}: {} (stored locally)", file_hash, e);
                                     } else {
                                         debug!("Published empty seeder record for {}", file_hash);
                                     }
@@ -2125,6 +2150,12 @@ async fn run_dht_node(
                                     kad::Quorum::One
                                 };
 
+                                // Store locally first
+                                if let Err(e) = swarm.behaviour_mut().kademlia.store_mut().put(record.clone()) {
+                                    warn!("Failed to store heartbeat record locally for {}: {:?}", file_hash, e);
+                                }
+
+                                // Try to replicate to remote peers
                                 match swarm
                                     .behaviour_mut()
                                     .kademlia
@@ -2137,8 +2168,9 @@ async fn run_dht_node(
                                         );
                                     }
                                     Err(e) => {
-                                        error!(
-                                            "Failed to update heartbeat record for {}: {}",
+                                        // Downgraded from error to warn since we stored locally
+                                        warn!(
+                                            "Could not replicate heartbeat record for {}: {} (stored locally)",
                                             file_hash, e
                                         );
                                     }
@@ -2185,6 +2217,62 @@ async fn run_dht_node(
                             // This ensures we find the file even if only provider announcements exist
                             let key = kad::RecordKey::new(&file_hash.as_bytes());
 
+                            // FIRST: Check local store - records we've stored locally should be found immediately
+                            if let Some(record) = swarm.behaviour_mut().kademlia.store_mut().get(&key) {
+                                info!("🔍 Found record in local store for {}", file_hash);
+                                if let Ok(metadata_json) = serde_json::from_slice::<serde_json::Value>(&record.value) {
+                                    if let (
+                                        Some(found_hash),
+                                        Some(file_name),
+                                        Some(file_size),
+                                        Some(created_at),
+                                    ) = (
+                                        metadata_json.get("merkleRoot").or_else(|| metadata_json.get("merkle_root")).and_then(|v| v.as_str()),
+                                        metadata_json.get("fileName").or_else(|| metadata_json.get("file_name")).and_then(|v| v.as_str()),
+                                        metadata_json.get("fileSize").or_else(|| metadata_json.get("file_size")).and_then(|v| v.as_u64()),
+                                        metadata_json.get("createdAt").or_else(|| metadata_json.get("created_at")).and_then(|v| v.as_u64()),
+                                    ) {
+                                        if found_hash == file_hash {
+                                            let mut metadata = construct_file_metadata_from_json_simple(
+                                                &metadata_json,
+                                                found_hash,
+                                                file_name,
+                                                file_size,
+                                                created_at,
+                                            );
+                                            
+                                            // Merge with local cache
+                                            {
+                                                let cache = file_metadata_cache.lock().await;
+                                                if let Some(cached) = cache.get(&metadata.merkle_root) {
+                                                    info!("🔍 Merging local store result with cache for {}", metadata.merkle_root);
+                                                    metadata = merge_file_metadata(cached.clone(), metadata);
+                                                }
+                                            }
+                                            
+                                            info!("✅ Found file in local store: {} ({}) with {} seeders", file_name, file_hash, metadata.seeders.len());
+                                            let _ = event_tx.send(DhtEvent::FileDiscovered(metadata.clone())).await;
+                                            let _ = sender.send(Ok(Some(metadata)));
+                                            continue 'outer; // Skip network queries, file found locally
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Also check local metadata cache (files we've uploaded or downloaded)
+                            {
+                                let cache = file_metadata_cache.lock().await;
+                                if let Some(cached_metadata) = cache.get(&file_hash) {
+                                    info!("✅ Found file in local metadata cache: {} ({})", cached_metadata.file_name, file_hash);
+                                    let _ = event_tx.send(DhtEvent::FileDiscovered(cached_metadata.clone())).await;
+                                    let _ = sender.send(Ok(Some(cached_metadata.clone())));
+                                    continue 'outer; // Skip network queries, file found in cache
+                                }
+                            }
+
+                            // Not found locally, query the network
+                            info!("🔍 File not in local store, querying network for {}", file_hash);
+
                             // Create a pending search query to track both lookups
                             let mut pending_query = PendingSearchQuery::new(file_hash.clone(), sender);
 
@@ -2207,6 +2295,59 @@ async fn run_dht_node(
                             Some(DhtCommand::SearchByInfohash { info_hash, sender }) => {
                                 let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
                                 let record_key = kad::RecordKey::new(&index_key.as_bytes());
+                                
+                                // Check local store first for the info_hash index
+                                if let Some(record) = swarm.behaviour_mut().kademlia.store_mut().get(&record_key) {
+                                    if let Ok(merkle_root) = String::from_utf8(record.value.clone()) {
+                                        info!("✅ Found info_hash index in local store: {} -> {}", info_hash, merkle_root);
+                                        
+                                        // Now look up the actual file using the merkle_root
+                                        // First check local cache
+                                        let found_metadata = {
+                                            let cache = file_metadata_cache.lock().await;
+                                            cache.get(&merkle_root).cloned()
+                                        };
+                                        
+                                        if let Some(metadata) = found_metadata {
+                                            info!("✅ Found file metadata in local cache for info_hash {}", info_hash);
+                                            let _ = sender.send(Some(metadata));
+                                            continue 'outer;
+                                        }
+                                        
+                                        // Check local DHT store for the file
+                                        let file_key = kad::RecordKey::new(&merkle_root.as_bytes());
+                                        if let Some(file_record) = swarm.behaviour_mut().kademlia.store_mut().get(&file_key) {
+                                            if let Ok(metadata_json) = serde_json::from_slice::<serde_json::Value>(&file_record.value) {
+                                                if let (
+                                                    Some(found_hash),
+                                                    Some(file_name),
+                                                    Some(file_size),
+                                                    Some(created_at),
+                                                ) = (
+                                                    metadata_json.get("merkleRoot").or_else(|| metadata_json.get("merkle_root")).and_then(|v| v.as_str()),
+                                                    metadata_json.get("fileName").or_else(|| metadata_json.get("file_name")).and_then(|v| v.as_str()),
+                                                    metadata_json.get("fileSize").or_else(|| metadata_json.get("file_size")).and_then(|v| v.as_u64()),
+                                                    metadata_json.get("createdAt").or_else(|| metadata_json.get("created_at")).and_then(|v| v.as_u64()),
+                                                ) {
+                                                    let metadata = construct_file_metadata_from_json_simple(
+                                                        &metadata_json,
+                                                        found_hash,
+                                                        file_name,
+                                                        file_size,
+                                                        created_at,
+                                                    );
+                                                    info!("✅ Found file in local store for info_hash {}", info_hash);
+                                                    let _ = sender.send(Some(metadata));
+                                                    continue 'outer;
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Have the merkle_root but no metadata found - fall through to network query
+                                        info!("Found info_hash index locally but no metadata, will query network for {}", merkle_root);
+                                    }
+                                }
+                                
                                 let query_id = swarm.behaviour_mut().kademlia.get_record(record_key.clone());
                                 info!("Searching for info_hash index: {} (query: {:?})", index_key, query_id);
 
@@ -2635,20 +2776,37 @@ async fn run_dht_node(
                                     expires: None,
                                 };
 
+                                // Store locally first to ensure availability
+                                let local_stored = swarm.behaviour_mut().kademlia.store_mut().put(record.clone()).is_ok();
+
                                 match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
                                     Ok(query_id) => {
                                         info!("✅ DHT put started: key={}, query_id={:?}", key, query_id);
                                         let _ = sender.send(Ok(()));
                                     }
                                     Err(e) => {
-                                        error!("❌ DHT put failed for key {}: {}", key, e);
-                                        let _ = sender.send(Err(format!("Failed to store in DHT: {}", e)));
+                                        if local_stored {
+                                            // Stored locally, remote replication can happen later
+                                            warn!("⚠️ DHT remote replication failed for key {}: {} (stored locally)", key, e);
+                                            let _ = sender.send(Ok(()));
+                                        } else {
+                                            error!("❌ DHT put failed for key {}: {}", key, e);
+                                            let _ = sender.send(Err(format!("Failed to store in DHT: {}", e)));
+                                        }
                                     }
                                 }
                             }
                             Some(DhtCommand::GetDhtValue { key, sender }) => {
                                 info!("🔍 Fetching DHT value with key: {}", key);
                                 let record_key = kad::RecordKey::new(&key);
+                                
+                                // Check local store first
+                                if let Some(record) = swarm.behaviour_mut().kademlia.store_mut().get(&record_key) {
+                                    info!("✅ Found DHT value in local store: key={} ({} bytes)", key, record.value.len());
+                                    let _ = sender.send(Ok(Some(record.value.clone())));
+                                    continue 'outer;
+                                }
+                                
                                 let query_id = swarm.behaviour_mut().kademlia.get_record(record_key);
                                 info!("🔍 DHT get started: key={}, query_id={:?}", key, query_id);
 
@@ -3498,10 +3656,13 @@ async fn run_dht_node(
                                         publisher: Some(peer_id.clone()),
                                         expires: None,
                                     };
+                                    // Store locally first
+                                    let _ = swarm.behaviour_mut().kademlia.store_mut().put(record.clone());
+                                    
                                     if let Err(e) =
                                         swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One)
                                     {
-                                        warn!("Failed to refresh DHT record after disconnect for {}: {}", file_hash, e);
+                                        warn!("Could not replicate DHT record after peer disconnect for {}: {} (stored locally)", file_hash, e);
                                     } else {
                                         debug!("Refreshed DHT record for {} after peer {} disconnected", file_hash, peer_id);
                                     }
@@ -4614,13 +4775,16 @@ async fn handle_kademlia_event(
                                         expires: None,
                                     };
 
+                                    // Store locally first
+                                    let _ = swarm.behaviour_mut().kademlia.store_mut().put(record.clone());
+
                                     if let Err(e) = swarm
                                         .behaviour_mut()
                                         .kademlia
                                         .put_record(record, kad::Quorum::One)
                                     {
-                                        error!(
-                                            "Failed to publish refreshed heartbeat record for {}: {}",
+                                        warn!(
+                                            "Could not replicate refreshed heartbeat record for {}: {} (stored locally)",
                                             file_hash, e
                                         );
                                     }
@@ -4843,11 +5007,16 @@ async fn handle_kademlia_event(
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
                     let key_str = String::from_utf8_lossy(key.as_ref());
+                    debug!("✅ PutRecord replicated successfully: {}", key_str);
                 }
                 QueryResult::PutRecord(Err(err)) => {
-                    error!("❌ PutRecord failed: {:?}", err);
+                    // Downgraded from error to warn since we store records locally first
+                    // QuorumFailed just means remote replication didn't succeed yet,
+                    // but the record is still stored locally and will be replicated when peers connect
+                    warn!("⚠️ PutRecord remote replication incomplete: {:?} (record stored locally)", err);
+                    // Send as warning instead of error
                     let _ = event_tx
-                        .send(DhtEvent::Error(format!("PutRecord failed: {:?}", err)))
+                        .send(DhtEvent::Warning(format!("PutRecord replication pending: {:?}", err)))
                         .await;
                 }
                 QueryResult::GetClosestPeers(Ok(ok)) => match ok {
