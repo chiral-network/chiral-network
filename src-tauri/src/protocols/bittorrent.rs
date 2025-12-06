@@ -8,6 +8,7 @@ use super::traits::{
     ProtocolCapabilities, ProtocolError, ProtocolHandler, SeedOptions, SeedingInfo,
     SimpleProtocolHandler,
 };
+use crate::dht::DhtService;
 use crate::bittorrent_handler::BitTorrentHandler;
 use crate::transfer_events::{
     current_timestamp_ms, DisconnectReason, ErrorCategory, PauseReason,

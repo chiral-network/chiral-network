@@ -626,7 +626,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('analytics.totalEarnings')}</p>
-          <p class="text-2xl font-bold">{($miningState.totalRewards ?? 0).toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($miningState.totalRewards ?? 0).toFixed(4)} Chiral</p>
           <p class="text-xs flex items-center gap-1 mt-1"
             class:text-green-600={percentChange >= 0}
             class:text-red-600={percentChange < 0}>
@@ -1108,8 +1108,8 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
     <div class="flex h-48 gap-2">
       <!-- Y-axis labels -->
       <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
-        <span>{chartMax.toFixed(0)} Chiral</span>
-        <span>{(chartMax / 2).toFixed(0)} Chiral</span>
+        <span>{chartMax.toFixed(4)} Chiral</span>
+        <span>{(chartMax / 2).toFixed(4)} Chiral</span>
         <span>0</span>
       </div>
 
@@ -1130,20 +1130,20 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
                       tabindex="0"
                       class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative group"
                       style="height: {(day.earnings / chartMax) * 100}%"
-                      title="{day.date}: {day.earnings.toFixed(2)} Chiral"
+                      title="{day.date}: {day.earnings.toFixed(4)} Chiral"
                       on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
                       on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
                       on:click={() => selectDay(day, i)}
                       on:keydown={(event) => handleKeySelection(event, day, i)}
                       aria-pressed={selectedIndex === i}
-                      aria-label="{day.date}: {day.earnings.toFixed(2)} Chiral"
+                      aria-label="{day.date}: {day.earnings.toFixed(4)} Chiral"
               >
                 {#if selectedIndex === i && selectedDay}
                   <div
                           class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
                           style="white-space:nowrap;"
                   >
-                    {selectedDay.date}: {selectedDay.earnings.toFixed(2)} Chiral
+                    {selectedDay.date}: {selectedDay.earnings.toFixed(4)} Chiral
                     <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
                   </div>
                 {/if}
@@ -1152,7 +1152,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
                           class="absolute left-1/2 -translate-x-1/2 -top-8 z-20 px-2 py-1 rounded bg-muted-foreground text-background text-xs shadow-lg pointer-events-none"
                           style="white-space:nowrap;"
                   >
-                    {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} Chiral
+                    {hoveredDay.date}: {hoveredDay.earnings.toFixed(4)} Chiral
                     <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-muted-foreground"></span>
                   </div>
                 {/if}
@@ -1219,7 +1219,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
                   white-space: nowrap;
                 "
               >
-                {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} Chiral
+                {hoveredDay.date}: {hoveredDay.earnings.toFixed(4)} Chiral
                 <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-muted-foreground"></span>
               </div>
             {/if}
@@ -1235,7 +1235,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
                   white-space: nowrap;
                 "
               >
-                {selectedDay.date}: {selectedDay.earnings.toFixed(2)} Chiral
+                {selectedDay.date}: {selectedDay.earnings.toFixed(4)} Chiral
                 <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
               </div>
             {/if}

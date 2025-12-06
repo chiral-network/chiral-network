@@ -183,7 +183,7 @@ Server Binding: 0.0.0.0:8080
   - Port 8080 (standard alternative HTTP port)
   - Auto-starts on application launch
 
-Storage Directory: ~/.local/share/chiral-network/files/
+Storage Directory: ~/Downloads/Chiral-Network-Storage
   - Shared with FileTransferService
   - Files stored by merkle root hash
   - No duplication of storage
@@ -464,14 +464,77 @@ async function confirmPeerSelection() {
 }
 ```
 
-### 7.3 Known UI Limitations
+### 7.3 Transfer Event Bus Integration ✅
 
-**Issue #1: Download Progress Not Visible**
+The HTTP protocol handlers are now fully integrated with the Transfer Event Bus, enabling real-time UI updates for all HTTP downloads.
 
-- **Problem:** HTTP downloads complete successfully but don't appear in `Download.svelte` file list
-- **Impact:** No progress bars, no speed indicators, no download history
-- **Root Cause:** Backend doesn't emit Tauri events during HTTP downloads
-- **Planned Fix:** Add event emission in `download_file_http` command, listen in frontend
+**Event-Aware Constructors:**
+
+```rust
+use crate::protocols::http::HttpProtocolHandler;
+
+// Without event bus (existing behavior)
+let handler = HttpProtocolHandler::new();
+
+// With event bus (enables UI updates)
+let handler = HttpProtocolHandler::with_event_bus(app_handle.clone());
+
+// With custom timeout and event bus
+let handler = HttpProtocolHandler::with_timeout_and_event_bus(60, app_handle.clone());
+```
+
+**HTTP Download Client Integration:**
+
+```rust
+use crate::http_download::HttpDownloadClient;
+
+// With event bus
+let client = HttpDownloadClient::new_with_event_bus(app_handle.clone());
+
+// With peer ID for source identification
+let client = HttpDownloadClient::new_with_peer_id_and_event_bus(
+    "peer-123".to_string(),
+    app_handle.clone()
+);
+
+// Download with full event lifecycle
+client.download_file_with_events(&url, &output_path, config).await?;
+
+// Resume download with events
+client.resume_download_with_events(&url, &output_path, offset, config).await?;
+```
+
+**Events Emitted:**
+
+| Method | Events |
+|--------|--------|
+| `download_with_progress()` | TransferStarted → SourceConnected → TransferProgress (every 2s) → TransferCompleted/TransferFailed |
+| `cancel_download()` | TransferCanceled |
+| `download_chunks_with_events()` | ChunkCompleted, ChunkFailed (per chunk) |
+| `resume_download_with_events()` | TransferResumed → SourceConnected → TransferProgress → TransferCompleted/TransferFailed |
+
+**ChunkFailed Event Points:**
+
+The HTTP download client emits `ChunkFailed` events at 4 failure points:
+
+1. **Network request failure** - HTTP request fails to send
+2. **Non-206 HTTP response** - Server doesn't return Partial Content status
+3. **Failed to read response bytes** - Chunk data cannot be read
+4. **Chunk size mismatch** - Downloaded size doesn't match expected
+
+**Error Categorization:**
+
+Failures are categorized for proper UI display:
+- `ErrorCategory::Network` - Connection failures, HTTP errors
+- `ErrorCategory::Filesystem` - File creation/write errors
+
+### 7.4 Known UI Limitations
+
+**Issue #1: Download Progress** ✅ **RESOLVED**
+
+- **Previous Problem:** HTTP downloads didn't appear in UI
+- **Resolution:** Transfer Event Bus integration now emits all lifecycle events
+- **Current State:** HTTP downloads show progress bars, speed, ETA in Download.svelte
 
 **Issue #2: No Server Status Indicator**
 
@@ -530,14 +593,15 @@ async function confirmPeerSelection() {
 
 ## 9. Future Work
 
-### 9.1 UI Progress Tracking
+### 9.1 UI Progress Tracking ✅ **COMPLETED**
 
-- **Goal:** Display HTTP downloads in Download.svelte file list
-- **Tasks:**
-  - Emit Tauri events in `download_file_http` command
-  - Listen to `http_download_progress` events in frontend
-  - Add download entry to file list with progress bar
-  - Show speed, ETA, bytes transferred
+- **Status:** Implemented via Transfer Event Bus integration
+- **What was done:**
+  - Added event-aware constructors to HTTP handlers
+  - Implemented `download_file_with_events()` and `resume_download_with_events()`
+  - Added ChunkFailed event emission at 4 failure points
+  - Integrated progress throttling (2-second intervals)
+  - Connected to frontend via `subscribeToTransferEvents()` in App.svelte
 
 ### 9.2 Multi-Source HTTP Integration
 

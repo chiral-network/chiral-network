@@ -236,7 +236,6 @@ export class WalletService {
 
     // Skip if we're restoring an account
     if (this.isRestoringAccount) {
-      console.log("[refreshTransactions] Skipping - account is being restored");
       return;
     }
 
@@ -292,10 +291,10 @@ export class WalletService {
       // Get current block number to track pagination
       const currentBlock = await invoke<number>("get_current_block");
 
+      // Check pending transactions and update their status
+      await this.updatePendingTransactions();
+
       // Get data in parallel: mining blocks AND transaction history
-      console.log(
-        `[Wallet] Calling get_blocks_mined for address: ${accountAddress}`
-      );
       const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
           address: accountAddress,
@@ -331,12 +330,39 @@ export class WalletService {
         >,
       ]);
 
+      // If backend returns no history but we already have imported history, keep existing
+      const existingTxs = get(transactions);
+      if (
+        txHistory.length === 0 &&
+        blocks.length === 0 &&
+        existingTxs.length > 0
+      ) {
+        transactionPagination.update((state) => ({
+          ...state,
+          accountAddress,
+          oldestBlockScanned: currentBlock,
+          hasMore: true,
+          isLoading: false,
+        }));
+        miningPagination.update((state) => ({
+          ...state,
+          accountAddress,
+          oldestBlockScanned: currentBlock,
+          hasMore: true,
+          isLoading: false,
+        }));
+        return;
+      }
+
       // Update total count AND rewards together to keep them consistent
-      // During active mining, don't override with potentially inconsistent scan data
+      // During active mining, don't override - the backend counter is the source of truth
+      // The backend counter is initialized from accurateTotals and incremented when new blocks are mined
       const reward = get(blockReward);
       const currentMiningState = get(miningState);
 
       if (!currentMiningState.isMining) {
+        // Use the backend counter (totalBlockCount from get_blocks_mined) as the source of truth
+        // This counter is initialized from accurateTotals and incremented during mining
         miningState.update((state) => ({
           ...state,
           blocksFound: totalBlockCount,
@@ -486,14 +512,56 @@ export class WalletService {
     }
   }
 
+  async updatePendingTransactions(): Promise<void> {
+    const currentTransactions = get(transactions);
+    const pendingTransactions = currentTransactions.filter(tx => tx.status === 'pending' && tx.txHash);
+
+    if (pendingTransactions.length === 0) {
+      return;
+    }
+
+    // Check each pending transaction
+    for (const tx of pendingTransactions) {
+      try {
+        const receipt = await invoke<any>("get_transaction_receipt", {
+          txHash: tx.txHash
+        });
+
+        // If receipt exists and is not null, transaction has been mined
+        if (receipt) {
+          const success = receipt.status === "0x1" || receipt.status === 1;
+          
+          transactions.update(txs => 
+            txs.map(t => 
+              t.txHash === tx.txHash
+                ? { ...t, status: success ? "success" as const : "failed" as const }
+                : t
+            )
+          );
+
+          // Update pending count
+          if (tx.type === "sent") {
+            wallet.update(w => ({
+              ...w,
+              pendingTransactions: Math.max(0, (w.pendingTransactions ?? 0) - 1)
+            }));
+          }
+        }
+      } catch (error) {
+        // Transaction receipt not available yet or RPC error
+        console.log(`Could not get receipt for ${tx.txHash}:`, error);
+      }
+    }
+  }
+
   async refreshBalance(): Promise<void> {
     if (!this.isTauri) {
+      console.log("[refreshBalance] Not in Tauri, skipping");
       return;
     }
 
     // Skip if we're restoring an account
     if (this.isRestoringAccount) {
-      console.log("[refreshBalance] Skipping - account is being restored");
       return;
     }
 
@@ -501,9 +569,11 @@ export class WalletService {
     try {
       const isRunning = await invoke<boolean>("is_geth_running");
       if (!isRunning) {
+        console.log("[refreshBalance] Geth not running, skipping");
         return; // Silently skip if Geth is not running
       }
     } catch (error) {
+      console.log("[refreshBalance] Could not check Geth status:", error);
       return; // Can't check Geth status, skip
     }
 
@@ -511,8 +581,9 @@ export class WalletService {
     let accountAddress: string;
     try {
       accountAddress = await invoke<string>("get_active_account_address");
+      console.log("[refreshBalance] Got account address:", accountAddress);
     } catch (error) {
-      // No active account
+      console.log("[refreshBalance] No active account:", error);
       return;
     }
 
@@ -524,16 +595,75 @@ export class WalletService {
           address: accountAddress,
         })) as string;
         realBalance = parseFloat(balanceStr);
+        console.log(`[refreshBalance] Got balance from geth: ${realBalance} CHIRAL`);
       } catch (e) {
-        // Expected when Geth is not running
+        console.log("[refreshBalance] Could not get balance from geth:", e);
       }
 
-      // Calculate pending sent transactions
+      const prevWallet = get(wallet);
+
+      // If geth returns zero but we already have a non-zero balance (e.g., from an imported snapshot),
+      // avoid clobbering it until real data is available.
+      if (realBalance === 0 && prevWallet.balance > 0) {
+        return;
+      }
+
+      // Reconcile any lingering pending/ submitted sent txs by checking their receipts
+      const pendingSentTxs = get(transactions).filter(
+        (tx) =>
+          (tx.status === "pending" || tx.status === "submitted") &&
+          tx.type === "sent" &&
+          (tx.hash || tx.txHash)
+      );
+
+      if (pendingSentTxs.length > 0) {
+        for (const tx of pendingSentTxs) {
+          const hash = tx.hash || tx.txHash;
+          if (!hash) continue;
+
+          try {
+            const receipt = await invoke<any>("get_transaction_receipt", {
+              txHash: hash,
+            });
+
+            if (receipt && receipt.block_number !== null) {
+              const status =
+                receipt.status === "success" ? "success" : "failed";
+              const confirmations = receipt.confirmations || 0;
+
+              transactions.update((txs) =>
+                txs.map((t) =>
+                  t.txHash === hash || t.hash === hash
+                    ? {
+                        ...t,
+                        status: status as "success" | "failed",
+                        confirmations,
+                        block_number: receipt.block_number ?? t.block_number,
+                      }
+                    : t
+                )
+              );
+
+              wallet.update((w) => ({
+                ...w,
+                pendingTransactions: Math.max(
+                  0,
+                  (w.pendingTransactions ?? 0) - 1
+                ),
+              }));
+            }
+          } catch (err) {
+            // Ignore receipt lookup errors; we'll try again on next poll
+          }
+        }
+      }
+
+      // Calculate pending sent transactions (after reconciliation)
       const pendingSent = get(transactions)
         .filter((tx) => tx.status === "pending" && tx.type === "sent")
         .reduce((sum, tx) => sum + tx.amount, 0);
 
-      // Use real balance from Geth (no fallback - if Geth says 0, show 0)
+      // Use real balance from Geth (no fallback - if Geth says 0, show 0 unless guarded above)
       const actualBalance = realBalance;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
       wallet.update((current) => ({
@@ -541,24 +671,6 @@ export class WalletService {
         balance: availableBalance,
         actualBalance,
       }));
-
-      // Update pending transaction status if they've been confirmed
-      // If we have pending sent transactions, check if the balance has decreased
-      // to mark them as completed
-      if (pendingSent > 0 && realBalance > 0) {
-        const expectedBalanceAfterPending = availableBalance;
-        // If real balance is lower than expected (meaning pending txs were processed),
-        // mark pending sent transactions as completed
-        if (realBalance < expectedBalanceAfterPending + pendingSent - 0.01) {
-          transactions.update((txs) =>
-            txs.map((tx) =>
-              tx.status === "pending" && tx.type === "sent"
-                ? { ...tx, status: "success" as const }
-                : tx
-            )
-          );
-        }
-      }
 
       // Note: totalRewards and blocksFound are now both set together in refreshTransactions
       // to ensure they stay consistent (totalRewards = blocksFound * blockReward)
@@ -621,8 +733,8 @@ export class WalletService {
       // Fetch transactions for this range
       const txHistory = (await invoke("get_transaction_history_range", {
         address: accountAddress,
-        fromBlock,
-        toBlock,
+        fromBlock: fromBlock,
+        toBlock: toBlock,
       })) as Array<{
         hash: string;
         from: string;
@@ -770,8 +882,8 @@ export class WalletService {
       // Fetch mining blocks for this range
       const miningBlocks = (await invoke("get_mined_blocks_range", {
         address: accountAddress,
-        fromBlock,
-        toBlock,
+        fromBlock: fromBlock,
+        toBlock: toBlock,
       })) as Array<{
         hash: string;
         timestamp: number;
@@ -889,9 +1001,26 @@ export class WalletService {
       const account = (await invoke("import_chiral_account", {
         privateKey,
       })) as AccountCreationResult;
-      transactions.set([]);
+      transactions.set([]); // clear old account's txs
       this.seenHashes.clear();
       this.setActiveAccount(account);
+
+      // Prime pagination state for the new account so we don't wipe imported tx snapshots
+      transactionPagination.update((state) => ({
+        ...state,
+        accountAddress: account.address,
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+      miningPagination.update((state) => ({
+        ...state,
+        accountAddress: account.address,
+        oldestBlockScanned: null,
+        hasMore: true,
+        isLoading: false,
+      }));
+
       await this.syncFromBackend();
       return account;
     }
@@ -1213,6 +1342,18 @@ export class WalletService {
     isCalculatingAccurateTotals.set(true);
     accurateTotalsProgress.set(null);
 
+    // Capture session counter BEFORE starting the scan
+    // This tells us how many blocks were mined before the scan started
+    // Any blocks in this counter might already be on the blockchain and included in the scan
+    let sessionCounterAtStart = 0;
+    try {
+      sessionCounterAtStart = await invoke<number>("get_blocks_mined", {
+        address: accountAddress,
+      });
+    } catch (e) {
+      // Ignore - assume 0
+    }
+
     // Listen for progress events
     const { listen } = await import("@tauri-apps/api/event");
     const unlisten = await listen<{
@@ -1247,6 +1388,45 @@ export class WalletService {
         totalReceived: result.total_received,
         totalSent: result.total_sent,
       });
+
+      // Initialize the backend counter with accurate count + blocks mined during scan
+      // - sessionCounterAtStart: blocks mined before scan (might be included in scan result)
+      // - sessionCounterAtEnd: blocks mined before + during scan
+      // - blocksDuringCalc = sessionCounterAtEnd - sessionCounterAtStart (blocks mined DURING scan)
+      // - These blocks are NOT in scan result (scan captured current_block at start)
+      // - Total = scan result + blocks mined during scan
+      try {
+        // Get current session counter (after scan completed)
+        const sessionCounterAtEnd = await invoke<number>("get_blocks_mined", {
+          address: accountAddress,
+        });
+        
+        // Blocks mined DURING the scan are not included in the scan result
+        // (because scan only goes up to current_block captured at start)
+        const blocksDuringCalc = sessionCounterAtEnd - sessionCounterAtStart;
+        
+        // Total = historical (from scan) + blocks mined during scan
+        // This avoids double-counting:
+        // - Blocks before scan start might be in scan result (we don't add them again)
+        // - Blocks during scan are definitely NOT in scan result (we add them)
+        const totalCount = result.blocks_mined + blocksDuringCalc;
+        
+        await invoke("initialize_mined_blocks_count", {
+          address: accountAddress,
+          count: totalCount,
+        });
+        console.log(`[Accurate Totals] Initialized backend blocks count to: ${totalCount} (scan: ${result.blocks_mined}, during calc: ${blocksDuringCalc}, session start: ${sessionCounterAtStart}, session end: ${sessionCounterAtEnd})`);
+        
+        // Update the mining state store
+        const reward = get(blockReward);
+        miningState.update((state) => ({
+          ...state,
+          blocksFound: totalCount,
+          totalRewards: totalCount * reward,
+        }));
+      } catch (initError) {
+        console.warn("[Accurate Totals] Failed to initialize backend counter:", initError);
+      }
 
       console.log(`[Accurate Totals] Complete!`, result);
     } catch (error) {

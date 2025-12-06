@@ -195,9 +195,114 @@ The multi-source download engine will be updated to treat the BitTorrent swarm a
 
 For a good user experience, the UI must display real-time download progress.
 
+#### Transfer Event Bus Integration
+
+The BitTorrent handler is fully integrated with the Transfer Event Bus, enabling the frontend UI to receive real-time download lifecycle events.
+
+**Event-Aware Constructors:**
+
+```rust
+use crate::protocols::bittorrent::BitTorrentProtocolHandler;
+
+// Without event bus (existing behavior, no UI updates)
+let handler = BitTorrentProtocolHandler::new(session_handle);
+
+// With event bus (enables UI updates)
+let handler = BitTorrentProtocolHandler::new_with_event_bus(
+    session_handle, 
+    app_handle.clone()
+);
+
+// With download directory and event bus
+let handler = BitTorrentProtocolHandler::with_download_directory_and_event_bus(
+    download_dir, 
+    app_handle.clone()
+);
+```
+
+**Event Emission by Method:**
+
+| Method | Events Emitted |
+|--------|---------------|
+| `download()` | TransferStarted, SourceConnected, TransferFailed (if start fails) |
+| `pause_download()` | TransferPaused (with downloaded bytes and pause reason) |
+| `resume_download()` | TransferResumed (with progress and remaining bytes) |
+| `cancel_download()` | TransferCanceled (with progress at cancellation) |
+| `get_download_progress()` | TransferProgress (throttled), TransferCompleted, TransferFailed |
+
+**Progress Throttling:**
+
+Progress events are throttled to emit every 2 seconds maximum to avoid flooding the frontend:
+
+```rust
+const PROGRESS_THROTTLE_MS: u64 = 2000;
+
+// In DownloadState struct
+pub struct DownloadState {
+    pub name: Option<String>,           // Torrent display name
+    pub last_progress_event: u64,       // For throttling
+    // ... other fields
+}
+
+// Throttled emission
+if now_ms() - state.last_progress_event >= PROGRESS_THROTTLE_MS {
+    event_bus.emit_progress(TransferProgressEvent { ... });
+    state.last_progress_event = now_ms();
+}
+```
+
+**Helper Functions:**
+
+```rust
+/// Extract display name from magnet link (parses dn= parameter)
+fn extract_display_name(identifier: &str) -> Option<String> {
+    if identifier.starts_with("magnet:") {
+        // Parse dn= parameter from magnet URI
+        identifier
+            .split('&')
+            .find(|s| s.starts_with("dn="))
+            .map(|s| s.trim_start_matches("dn=").to_string())
+    } else {
+        None
+    }
+}
+
+/// Get current timestamp in milliseconds
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+```
+
+**Example Event Flow:**
+
+```
+User initiates magnet link download
+    │
+    ▼
+TransferStarted
+    │ (torrent added to session)
+    ▼
+SourceConnected
+    │ (swarm connection established)
+    ▼
+TransferProgress ──────────────────┐
+    │ (every 2 seconds)            │
+    ▼                              │ (loop until complete)
+TransferProgress ◄─────────────────┘
+    │
+    ▼
+SourceDisconnected
+    │ (cleanup)
+    ▼
+TransferCompleted
+```
+
 - **Creating a Monitoring Task:** Spawn a separate asynchronous task for each download that periodically polls the `TorrentHandle` provided by `rqbit` for statistics (e.g., download speed, downloaded bytes, peer count).
-- **Sending Events to the Frontend:** Use Tauri's event system to send progress updates from the monitoring task to the Svelte frontend.
-- **Handling Different Torrent States:** Handle different states of a torrent, such as "downloading", "seeding", "paused", and "error", and communicate these states to the UI.
+- **Sending Events to the Frontend:** Use the TransferEventBus to send progress updates from the monitoring task to the Svelte frontend via Tauri's event system.
+- **Handling Different Torrent States:** Handle different states of a torrent, such as "downloading", "seeding", "paused", and "error", and communicate these states to the UI through appropriate transfer events.
 
 ### Configuration
 

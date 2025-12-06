@@ -7,13 +7,41 @@ use crate::transfer_events::{
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tauri::AppHandle;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Semaphore};
+
+/// Get a unique file path by adding (1), (2), etc. if the file already exists
+fn get_unique_filepath(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let extension = path.extension().and_then(|e| e.to_str());
+    
+    let mut counter = 1;
+    loop {
+        let new_name = match extension {
+            Some(ext) => format!("{} ({}).{}", stem, counter, ext),
+            None => format!("{} ({})", stem, counter),
+        };
+        let new_path = parent.join(&new_name);
+        if !new_path.exists() {
+            return new_path;
+        }
+        counter += 1;
+        // Safety limit to prevent infinite loop
+        if counter > 1000 {
+            return new_path;
+        }
+    }
+}
 
 /// HTTP Download Client for fetching files via HTTP Range requests
 ///
@@ -1047,26 +1075,29 @@ impl HttpDownloadClient {
                 .map_err(|e| format!("Failed to create parent directory: {}", e))?;
         }
 
-        tracing::info!("Creating output file: {}", output_path.display());
+        // Get unique output path to avoid overwriting existing files
+        let unique_output_path = get_unique_filepath(output_path);
 
-        let mut file = File::create(output_path)
+        tracing::info!("Creating output file: {}", unique_output_path.display());
+
+        let mut file = File::create(&unique_output_path)
             .await
-            .map_err(|e| format!("Failed to create output file at {}: {}", output_path.display(), e))?;
+            .map_err(|e| format!("Failed to create output file at {}: {}", unique_output_path.display(), e))?;
 
         tracing::info!("Writing {} chunks to file...", chunks.len());
 
         for (index, chunk) in chunks.iter().enumerate() {
             file.write_all(chunk)
                 .await
-                .map_err(|e| format!("Failed to write chunk {} to {}: {}", index, output_path.display(), e))?;
+                .map_err(|e| format!("Failed to write chunk {} to {}: {}", index, unique_output_path.display(), e))?;
         }
 
         file.flush()
             .await
-            .map_err(|e| format!("Failed to flush file {}: {}", output_path.display(), e))?;
+            .map_err(|e| format!("Failed to flush file {}: {}", unique_output_path.display(), e))?;
 
         tracing::info!("Successfully assembled file: {} ({} chunks, {} bytes)", 
-            output_path.display(), 
+            unique_output_path.display(), 
             chunks.len(),
             chunks.iter().map(|c| c.len()).sum::<usize>()
         );
@@ -1495,10 +1526,4 @@ impl HttpDownloadClient {
         ranges
     }
 
-}
-
-#[cfg(test)]
-mod tests {
-    // Integration tests would go here
-    // For now, these require a running HTTP server
 }

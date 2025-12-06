@@ -151,6 +151,9 @@
         "title": "حالة الترحيل",
         "enabled": "AutoRelay مفعّل",
         "disabled": "AutoRelay معطّل",
+        "timeline": "الجدول الزمني لـ AutoRelay",
+        "enabledAt": "آخر وقت للتفعيل",
+        "disabledAt": "آخر وقت للتعطيل",
         "noPeer": "غير متصل بمرحّل",
         "activePeer": "المرحّل النشط",
         "status": "الحالة",
@@ -159,6 +162,8 @@
         "renewals": "الحجوزات المُجدّدة",
         "evictions": "الحجوزات المُزالة",
         "never": "أبدًا",
+        "neverEnabled": "لم يتم تفعيله من قبل",
+        "neverDisabled": "لم يتم تعطيله من قبل",
         "noEvictions": "لا توجد إزالات",
         "accepted": "تم القبول",
         "pending": "قيد الانتظار",
@@ -275,6 +280,10 @@
     "enableUpnp": "تفعيل UPnP",
     "enableNat": "تفعيل تعيين منافذ NAT",
     "enableDht": "تفعيل DHT",
+    "autoStartNode": "بدء تلقائي لعقدة DHT عند التشغيل",
+    "autoStartNodeDescription": "بدء عقدة DHT لمشاركة الملفات تلقائيًا عند تشغيل التطبيق",
+    "autoStartGeth": "بدء تلقائي لعقدة البلوكشين عند التشغيل",
+    "autoStartGethDescription": "بدء عقدة Geth للبلوكشين تلقائيًا عند تشغيل التطبيق (يفعل المحفظة والتعدين)",
 
     "geoDistribution": {
       "title": "التوزيع الجغرافي",
@@ -610,6 +619,17 @@
       "market": "سوق",
       "fast": "سريع",
       "estimated": "الرسوم المقدرة"
+    },
+    "gas": {
+      "label": "سرعة المعاملة",
+      "loading": "جارٍ التقدير...",
+      "estimateError": "استخدام القيم الافتراضية",
+      "slow": "اقتصادي",
+      "standard": "قياسي",
+      "fast": "أولوية",
+      "estimatedFee": "الرسوم المقدرة",
+      "totalCost": "التكلفة الإجمالية",
+      "networkCongestion": "الشبكة"
     }
   },
   "transactions": {
@@ -811,7 +831,8 @@
       "invalid": "يرجى إدخال مبلغ صالح أكبر من 0.",
       "min": "يجب أن يكون المبلغ على الأقل {min} Chiral.",
       "insufficient": "رصيد غير كافٍ - تحتاج إلى {more} Chiral إضافية.",
-      "insufficientWithFee": "رصيد غير كافٍ. إجمالي {total} Chiral (المبلغ + الرسوم) يتجاوز رصيدك البالغ {balance} Chiral."
+      "insufficientWithFee": "رصيد غير كافٍ. إجمالي {total} Chiral (المبلغ + الرسوم) يتجاوز رصيدك البالغ {balance} Chiral.",
+      "insufficientWithGas": "رصيد غير كافٍ (بما في ذلك الغاز) - تحتاج إلى {more} Chiral إضافية."
     },
     "exportFailed": "فشل التصدير. يرجى المحاولة مرة أخرى.",
     "createAccount": "فشل إنشاء الحساب: {error}"

@@ -27,13 +27,14 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
     import KeyboardShortcutsPanel from './lib/components/KeyboardShortcutsPanel.svelte';
     import CommandPalette from './lib/components/CommandPalette.svelte';
-    import { startNetworkMonitoring } from './lib/services/networkService';
-    import { startGethMonitoring, gethStatus } from './lib/services/gethService';
-    import { fileService } from '$lib/services/fileService';
+import { startNetworkMonitoring } from './lib/services/networkService';
+import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
-    import { paymentService } from '$lib/services/paymentService';
-    import { subscribeToTransferEvents, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+import { paymentService } from '$lib/services/paymentService';
+import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+    import { showToast } from '$lib/toast';
+import { walletService } from '$lib/wallet';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { exit } from '@tauri-apps/plugin-process';
@@ -61,6 +62,8 @@ let lastAppliedBandwidthSignature: string | null = null;
 let showFirstRunWizard = false;
 let showShortcutsPanel = false;
 let showCommandPalette = false;
+let transferStoreUnsubscribe: (() => void) | null = null;
+const notifiedCompletedTransfers = new Set<string>();
 const scrollPositions: Record<string, number> = {};
 
 // Helper to get the main scroll container (if present)
@@ -168,6 +171,7 @@ function handleFirstRunComplete() {
     let unlistenSeederPayment: (() => void) | null = null;
     let unlistenTorrentPayment: (() => void) | null = null;
     let transferEventsUnsubscribe: (() => void) | null = null;
+    let unsubscribeGethStatus: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
     syncBandwidthScheduler(get(settings));
@@ -178,12 +182,54 @@ function handleFirstRunComplete() {
       // Subscribe to transfer events from backend
       try {
         transferEventsUnsubscribe = await subscribeToTransferEvents();
+        transferStoreUnsubscribe = transferStore.subscribe(($store) => {
+
+          if (!$store || !$store.transfers) {
+            return;
+          }
+
+          for (const [transferId, transfer] of $store.transfers.entries()) {
+            if (transfer.status === 'completed') {
+              // First time we see this transfer as completed → fire toast
+              if (!notifiedCompletedTransfers.has(transferId)) {
+                notifiedCompletedTransfers.add(transferId);
+
+                const fileName = transfer.fileName ?? 'file';
+                const message = `Download complete: "${fileName}"`;
+
+                showToast(message, 'success');
+              }
+            } else {
+              // If the transfer goes back to a non-completed status (e.g. retry),
+              // allow a later completion to trigger a new toast
+              notifiedCompletedTransfers.delete(transferId);
+            }
+          }
+        });
       } catch (error) {
         console.warn('Failed to subscribe to transfer events:', error);
       }
 
       // Initialize payment service to load wallet and transactions
       await paymentService.initialize();
+      // Initialize wallet service early so imports/polls populate balance/tx history
+      await walletService.initialize();
+
+      // When geth starts running, immediately sync wallet state (balance + txs)
+      unsubscribeGethStatus = gethStatus.subscribe(async (status) => {
+        if (status === 'running') {
+          try {
+            const hasAccount = await invoke<boolean>('has_active_account');
+            if (hasAccount) {
+              await walletService.refreshTransactions();
+              await walletService.refreshBalance();
+              walletService.startProgressiveLoading();
+            }
+          } catch (err) {
+            console.warn('Failed to sync wallet after geth start:', err);
+          }
+        }
+      });
 
       // Listen for payment notifications from backend
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
@@ -333,6 +379,7 @@ function handleFirstRunComplete() {
                   // Now sync from blockchain
                   await walletService.refreshTransactions();
                   await walletService.refreshBalance();
+                  walletService.startProgressiveLoading();
                 } catch (error) {
                   console.error('Failed to restore account from backend:', error);
                 }
@@ -421,26 +468,188 @@ function handleFirstRunComplete() {
       } catch (error) {
         console.warn("Automatic location detection failed:", error);
       }
-      // Initialize backend services (File Transfer, DHT - conditionally)
+      
+      // Load settings from localStorage before auto-starting services
+      try {
+        const storedSettings = localStorage.getItem("chiralSettings");
+        if (storedSettings) {
+          const parsed = JSON.parse(storedSettings);
+          // Ensure selectedProtocol always has a valid default
+          if (!parsed.selectedProtocol) {
+            parsed.selectedProtocol = "Bitswap";
+          }
+          settings.update(prev => ({ ...prev, ...parsed }));
+        }
+      } catch (error) {
+        console.warn("Failed to load settings from localStorage:", error);
+      }
+      
+      // Initialize backend services (DHT first - it initializes chunk manager, then File Transfer)
       try {
         const currentSettings = get(settings);
+        
+        // Check if DHT is already running first (to avoid duplicate start attempts)
+        let isDhtAlreadyRunning = false;
+        try {
+          isDhtAlreadyRunning = await invoke<boolean>("is_dht_running");
+        } catch (err) {
+          // Command might not be available, assume not running
+          isDhtAlreadyRunning = false;
+        }
+        
+        // Start DHT first if auto-start is enabled (DHT initializes chunk manager needed by file transfer)
         if (currentSettings.autoStartDHT) {
-          await fileService.initializeServices();
-        } else {
-          // Only start file transfer service, not DHT
+          if (isDhtAlreadyRunning) {
+            // Import dhtService and sync the peer ID
+            const { dhtService } = await import("$lib/dht");
+            try {
+              const peerId = await invoke<string | null>("get_dht_peer_id");
+              if (peerId) {
+                dhtService.setPeerId(peerId);
+              }
+            } catch {}
+            
+            // Update network status
+            networkStatus.set('connected');
+          } else {
+            console.log("🚀 Auto-starting DHT node...");
+            
+            try {
+              // Import dhtService to start DHT with full settings
+              const { dhtService } = await import("$lib/dht");
+              
+              // Get bootstrap nodes - use custom ones if specified, otherwise use defaults
+              let bootstrapNodes = currentSettings.customBootstrapNodes || [];
+              if (bootstrapNodes.length === 0) {
+                bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
+              }
+              
+              // Start DHT with all user settings (same as Network page does)
+              const peerId = await dhtService.start({
+                port: currentSettings.port || 4001,
+                bootstrapNodes,
+                enableAutonat: currentSettings.enableAutonat,
+                autonatProbeIntervalSeconds: currentSettings.autonatProbeInterval,
+                autonatServers: currentSettings.autonatServers,
+                proxyAddress: currentSettings.enableProxy ? currentSettings.proxyAddress : undefined,
+                enableAutorelay: currentSettings.enableAutorelay,
+                preferredRelays: currentSettings.preferredRelays || [],
+                enableRelayServer: currentSettings.enableRelayServer,
+                relayServerAlias: currentSettings.relayServerAlias || '',
+                chunkSizeKb: currentSettings.chunkSize,
+                cacheSizeMb: currentSettings.cacheSize,
+                enableUpnp: currentSettings.enableUPnP,
+              });
+              
+              console.log("✅ DHT node auto-started successfully with peer ID:", peerId);
+              
+              // Update network status
+              networkStatus.set('connected');
+            } catch (dhtError) {
+              const dhtErrorMsg = dhtError instanceof Error ? dhtError.message : String(dhtError);
+              if (dhtErrorMsg.includes("already running")) {
+                // Race condition - DHT was started between our check and start attempt
+                console.log("ℹ️ DHT started by another process (race condition)");
+                
+                // Sync the peer ID since DHT is running
+                const { dhtService } = await import("$lib/dht");
+                try {
+                  const peerId = await invoke<string | null>("get_dht_peer_id");
+                  if (peerId) {
+                    dhtService.setPeerId(peerId);
+                    console.log("✅ Synced peer ID after race condition:", peerId);
+                  }
+                } catch {}
+                
+                networkStatus.set('connected');
+              } else {
+                // Real error
+                console.error("❌ Failed to auto-start DHT:", dhtErrorMsg);
+              }
+            }
+          }
+        }
+        
+        // Start file transfer service AFTER DHT (needs chunk manager initialized by DHT)
+        try {
           await invoke("start_file_transfer_service");
+        } catch (ftError) {
+          const ftErrorMsg = ftError instanceof Error ? ftError.message : String(ftError);
+          // Suppress known non-critical warnings
+          if (!ftErrorMsg.includes("already running") && 
+              !ftErrorMsg.includes("already initialized") &&
+              !ftErrorMsg.includes("Chunk manager not initialized")) {
+            console.warn("⚠️ File transfer service start warning:", ftErrorMsg);
+          }
         }
-        console.log("✅ File transfer and WebRTC services started successfully");
+        
+        // Start Geth blockchain node if auto-start is enabled
+        if (currentSettings.autoStartGeth && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+          try {
+            // Check if Geth is already running
+            const isGethRunning = await invoke<boolean>('is_geth_running').catch(() => false);
+            
+            if (isGethRunning) {
+              console.log("✅ Geth blockchain node already running (detected on startup)");
+            } else {
+              // Check if Geth is installed
+              const isGethInstalled = await invoke<boolean>('check_geth_binary').catch(() => false);
+              
+              if (!isGethInstalled) {
+                console.log("📦 Geth not installed. Downloading Geth...");
+                showToast("Downloading Geth blockchain node...", "info");
+                
+                // Listen for download progress
+                const unlisten = await listen('geth-download-progress', (event: any) => {
+                  const progress = event.payload;
+                  if (progress.percentage >= 100) {
+                    console.log("✅ Geth download complete");
+                  } else {
+                    console.log(`⬇️ Downloading Geth: ${progress.percentage.toFixed(1)}%`);
+                  }
+                });
+                
+                try {
+                  await invoke('download_geth_binary');
+                  unlisten();
+                  console.log("✅ Geth downloaded successfully");
+                  showToast("Geth downloaded successfully", "success");
+                } catch (downloadError) {
+                  unlisten();
+                  const downloadErrorMsg = downloadError instanceof Error ? downloadError.message : String(downloadError);
+                  console.error("❌ Failed to download Geth:", downloadErrorMsg);
+                  showToast(`Failed to download Geth: ${downloadErrorMsg}`, "error");
+                  throw downloadError; // Don't try to start if download failed
+                }
+              }
+              
+              console.log("🚀 Auto-starting Geth blockchain node...");
+              
+              try {
+                await invoke('start_geth_node', { dataDir: './bin/geth-data' });
+                console.log("✅ Geth blockchain node auto-started successfully");
+                
+                // Update geth status
+                const { gethStatus } = await import('./lib/services/gethService');
+                gethStatus.set('running');
+              } catch (gethError) {
+                const gethErrorMsg = gethError instanceof Error ? gethError.message : String(gethError);
+                if (gethErrorMsg.includes("already running") || gethErrorMsg.includes("already started")) {
+                  console.log("ℹ️ Geth started by another process");
+                } else if (gethErrorMsg.includes("not found") || gethErrorMsg.includes("No such file")) {
+                  console.log("ℹ️ Geth not downloaded yet. Download it from the Network page.");
+                } else {
+                  console.error("❌ Failed to auto-start Geth:", gethErrorMsg);
+                }
+              }
+            }
+          } catch (error) {
+            console.error("⚠️ Error checking/starting Geth:", error);
+          }
+        }
       } catch (error) {
-        // Only ignore "already running" errors - this is normal during hot reload
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes("already running") || errorMessage.includes("already initialized")) {
-          console.log("ℹ️ Services already running (hot reload)");
-        } else {
-          // Log other errors - these might indicate real problems
-          console.error("⚠️ Failed to start services:", errorMessage);
-          console.error("WebRTC downloads may not work. Error details:", error);
-        }
+        // Unexpected error in the initialization block
+        console.error("⚠️ Unexpected error during service initialization:", error);
       }
 
       // set the currentPage var
@@ -576,6 +785,9 @@ function handleFirstRunComplete() {
       window.removeEventListener("keydown", handleKeyDown);
       stopNetworkMonitoring();
       stopGethMonitoring();
+      if (unsubscribeGethStatus) {
+        unsubscribeGethStatus();
+      }
       if (schedulerRunning) {
         bandwidthScheduler.stop();
         schedulerRunning = false;
@@ -590,6 +802,10 @@ function handleFirstRunComplete() {
       }
       if (transferEventsUnsubscribe) {
         transferEventsUnsubscribe();
+      }
+      if (transferStoreUnsubscribe) {
+        transferStoreUnsubscribe();
+        transferStoreUnsubscribe = null;
       }
       // Also ensure transfer events are fully unsubscribed
       unsubscribeFromTransferEvents();

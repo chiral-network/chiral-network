@@ -93,7 +93,8 @@ class DownloadHistoryService {
       downloadPath: file.downloadPath,
       price: file.price,
       seederAddresses: file.seederAddresses,
-      encrypted: file.encrypted || file.isEncrypted,
+      // Prioritize isEncrypted if both fields exist, otherwise use encrypted, default to false
+      encrypted: file.isEncrypted ?? file.encrypted ?? false,
       description: file.description,
       manifest: file.manifest,
       cids: file.cids,

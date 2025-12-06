@@ -3,7 +3,7 @@
   import Input from '$lib/components/ui/input.svelte';
   import Label from '$lib/components/ui/label.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import { Search, X, History, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-svelte';
+  import { Search, X, History, RotateCcw, AlertCircle, CheckCircle2, Loader } from 'lucide-svelte';
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
@@ -40,8 +40,7 @@
   let activeHistoryId: string | null = null;
   let showHistoryDropdown = false;
 
-  // Protocol selection modal state
-  let showProtocolSelectionModal = false;
+  // Protocol selection state
   let availableProtocols: Array<{id: string, name: string, description: string, available: boolean}> = [];
 
   // Peer selection modal state
@@ -147,6 +146,8 @@
   }
 
   async function searchForFile() {
+    isSearching = true
+
     // Handle BitTorrent downloads - show confirmation instead of immediately downloading
     if (searchMode === 'magnet' || searchMode === 'torrent' || searchMode === 'ed2k' || searchMode === 'ftp') {
       let identifier: string | null = null
@@ -155,19 +156,51 @@
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter a magnet link', 'warning')
+          isSearching = false
           return
         }
+
+        // For magnet links, extract info_hash and search DHT directly
+        const urlParams = new URLSearchParams(identifier.split('?')[1])
+        const infoHash = urlParams.get('xt')?.replace('urn:btih:', '')
+        if (infoHash) {
+          try {
+            // Search DHT using the info_hash as the key (BitTorrent files are stored with info_hash as merkle_root)
+            const metadata = await dhtService.searchFileMetadata(infoHash, SEARCH_TIMEOUT_MS)
+            if (metadata) {
+              // Found the file! Show it instead of the placeholder
+              metadata.fileHash = metadata.merkleRoot || ""
+              latestMetadata = metadata
+              latestStatus = 'found'
+              hasSearched = true
+              pushMessage(`Found file: ${metadata.fileName}`, 'success')
+              isSearching = false
+              return
+            }
+          } catch (error) {
+            console.log('DHT search failed, falling back to magnet download:', error)
+          }
+        }
+
+        // If not found in DHT or no info_hash, proceed with magnet download
       } else if (searchMode === 'torrent') {
         if (!torrentFileName) {
           pushMessage('Please select a .torrent file', 'warning')
+          isSearching = false
           return
         }
         // Use the file input to get the actual file
         const file = torrentFileInput?.files?.[0]
         if (file) {
-          // Read the file and pass it to the backend
-          // For now, we'll just use the filename approach
+          // Try to parse torrent file and search for it first
+          try {
+            // For now, we'll search using a placeholder - ideally we'd parse the torrent
+            // to extract the info hash and search DHT. For simplicity, fall back to placeholder.
           identifier = torrentFileName
+          } catch (error) {
+            console.log('Failed to parse torrent file:', error)
+            identifier = torrentFileName
+          }
         } else {
           pushMessage('Please select a .torrent file', 'warning')
           return
@@ -176,29 +209,54 @@
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter an ED2K link', 'warning')
+          isSearching = false
           return
         }
         // Basic ED2K link validation
         if (!identifier.startsWith('ed2k://')) {
           pushMessage('Please enter a valid ED2K link starting with ed2k://', 'warning')
+          isSearching = false
           return
+        }
+
+        // For ED2K links, extract hash and search DHT first
+        const parts = identifier.split('|')
+        if (parts.length >= 5) {
+          const ed2kHash = parts[4]
+          try {
+            // Search DHT using the ED2K hash as the key
+            const metadata = await dhtService.searchFileMetadata(ed2kHash, SEARCH_TIMEOUT_MS)
+            if (metadata) {
+              // Found the file! Show it instead of the placeholder
+              metadata.fileHash = metadata.merkleRoot || ""
+              latestMetadata = metadata
+              latestStatus = 'found'
+              hasSearched = true
+              pushMessage(`Found file: ${metadata.fileName}`, 'success')
+              isSearching = false
+              return
+            }
+          } catch (error) {
+            console.log('DHT search failed, falling back to ED2K download:', error)
+          }
         }
       } else if (searchMode === 'ftp') {
         identifier = searchHash.trim()
         if (!identifier) {
           pushMessage('Please enter an FTP URL', 'warning')
+          isSearching = false
           return
         }
         // Basic FTP URL validation
         if (!identifier.startsWith('ftp://') && !identifier.startsWith('ftps://')) {
           pushMessage('Please enter a valid FTP URL starting with ftp:// or ftps://', 'warning')
+          isSearching = false
           return
         }
       }
 
       if (identifier) {
         try {
-          isSearching = true
           
           // Store the pending torrent info for confirmation
           if (searchMode === 'torrent') {
@@ -259,10 +317,10 @@
                      searchMode === 'ftp' ? 'Please enter an FTP URL' :
                      'Please enter a search term';
       pushMessage(message, 'warning');
+      isSearching = false; // Reset searching state
       return;
     }
 
-    isSearching = true;
     hasSearched = true;
     latestMetadata = null;
     latestStatus = 'pending';
@@ -275,7 +333,7 @@
       const entry = dhtSearchHistory.addPending(trimmed);
       activeHistoryId = entry.id;
 
-      pushMessage(tr('download.search.status.started'), 'info', 2000);
+      // Removed "Searching the network..." toast
       const metadata = await dhtService.searchFileMetadata(trimmed, SEARCH_TIMEOUT_MS);
       const elapsed = Math.round(performance.now() - startedAt);
       lastSearchDuration = elapsed;
@@ -325,7 +383,6 @@
       // Ensure isSearching is always set to false
       setTimeout(() => {
         isSearching = false;
-        console.log('🔒 Forced isSearching to false');
       }, 100);
     }
   }
@@ -340,12 +397,8 @@
     hasSearched = false;
   }
 
-  function handleCopy(event: CustomEvent<string>) {
-    pushMessage(
-      tr('download.search.notifications.copied', { values: { value: event.detail } }),
-      'info',
-      2000,
-    );
+  function handleCopy(_event: CustomEvent<string>) {
+    // Silently copy without toast notification
   }
 
 
@@ -392,43 +445,59 @@
   }
 
   // Helper function to determine available protocols for a file
+  // Files can only be downloaded via the protocol they were uploaded with
   function getAvailableProtocols(metadata: FileMetadata): Array<{id: string, name: string, description: string, available: boolean}> {
+    // Determine which protocol was used for upload based on metadata
+    const hasCids = !!(metadata.cids && metadata.cids.length > 0);
+    const hasInfoHash = !!metadata.infoHash;
+    const hasHttpSources = !!(metadata.httpSources && metadata.httpSources.length > 0);
+    const hasFtpSources = !!(metadata.ftpSources && metadata.ftpSources.length > 0);
+    const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
+    const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
+    
+    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs or other protocol indicators)
+    // Files uploaded via Bitswap have CIDs and must be downloaded via Bitswap, not WebRTC
+    const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
+    
+    // Bitswap is available if there are CIDs (content identifiers for IPFS blocks) AND seeders
+    const isBitswapAvailable = hasCids && hasSeeders;
+    
     return [
       {
         id: 'bitswap',
         name: 'Bitswap',
         description: 'IPFS Bitswap protocol',
-        available: !!(metadata.cids && metadata.cids.length > 0)
+        available: isBitswapAvailable
       },
       {
         id: 'webrtc',
         name: 'WebRTC',
         description: 'Peer-to-peer via WebRTC',
-        available: !!(metadata.seeders && metadata.seeders.length > 0)
+        available: isWebRTCUpload
       },
       {
         id: 'http',
         name: 'HTTP',
-        description: 'Direct HTTP/FTP download',
-        available: !!(metadata.httpSources && metadata.httpSources.length > 0) || !!(metadata.ftpSources && metadata.ftpSources.length > 0)
+        description: 'Direct HTTP download',
+        available: hasHttpSources
       },
       {
         id: 'bittorrent',
         name: 'BitTorrent',
         description: 'BitTorrent protocol',
-        available: !!metadata.infoHash
+        available: hasInfoHash
       },
       {
         id: 'ed2k',
         name: 'ED2K',
         description: 'ED2K protocol',
-        available: !!(metadata.ed2kSources && metadata.ed2kSources.length > 0)
+        available: hasEd2kSources
       },
       {
         id: 'ftp',
         name: 'FTP',
         description: 'FTP protocol',
-        available: !!(metadata.ftpSources && metadata.ftpSources.length > 0)
+        available: hasFtpSources
       }
     ];
   }
@@ -447,40 +516,60 @@
     availableProtocols = getAvailableProtocols(metadata);
     const availableProtocolList = availableProtocols.filter(p => p.available);
 
-    // If only one protocol available, use it directly
-    if (availableProtocolList.length === 1) {
-      selectedProtocol = availableProtocolList[0].id as any;
-      await proceedWithProtocolSelection(metadata, availableProtocolList[0].id);
+    // If no protocols available
+    if (availableProtocolList.length === 0) {
+      pushMessage('No download protocols available for this file', 'warning');
       return;
     }
 
-    // If multiple protocols available, show selection modal
-    if (availableProtocolList.length > 1) {
-      selectedFile = metadata;
-      showProtocolSelectionModal = true;
-      return;
-    }
-
-    // No protocols available
-    pushMessage('No download protocols available for this file', 'warning');
-  }
-
-  // Handle protocol selection and proceed to download
-  async function selectProtocol(protocolId: string) {
-    if (!selectedFile) return;
-
-    selectedProtocol = protocolId as any;
-    showProtocolSelectionModal = false;
-
-    await proceedWithProtocolSelection(selectedFile, protocolId);
+    // Select the first available protocol as default (user can change in peer selection modal)
+    selectedProtocol = availableProtocolList[0].id as any;
+    
+    // Go directly to peer selection modal (protocol can be changed there)
+    selectedFile = metadata;
+    await proceedWithProtocolSelection(metadata, selectedProtocol);
   }
 
   // Proceed with download using selected protocol
   async function proceedWithProtocolSelection(metadata: FileMetadata, protocolId: string) {
-    // Handle protocols that don't need peer selection (direct downloads)
-    if (protocolId === 'http' || protocolId === 'ftp' || protocolId === 'ed2k') {
-      // For HTTP, FTP, ED2K - proceed directly to download
+    // Handle HTTP and ED2K direct downloads (no peer selection)
+    if (protocolId === 'http' || protocolId === 'ed2k') {
       await startDirectDownload(metadata, protocolId);
+      return;
+    }
+
+    // Handle FTP - show source selection modal
+    if (protocolId === 'ftp') {
+      if (!metadata.ftpSources || metadata.ftpSources.length === 0) {
+        pushMessage('No FTP sources available for this file', 'warning');
+        return;
+      }
+
+      selectedFile = metadata;
+      selectedProtocol = 'ftp';
+      
+      // Create "peers" from FTP sources
+      availablePeers = metadata.ftpSources.map((source, index) => {
+        // Extract host from FTP URL
+        let host = 'FTP Server';
+        try {
+          const url = new URL(source.url);
+          host = url.hostname;
+        } catch {}
+        
+        return {
+          peerId: source.url, // Use URL as the ID
+          location: host,
+          latency_ms: undefined,
+          bandwidth_kbps: undefined,
+          reliability_score: source.isAvailable ? 1.0 : 0.0,
+          price_per_mb: 0, // FTP is free
+          selected: index === 0, // Select first by default
+          percentage: index === 0 ? 100 : 0
+        };
+      });
+
+      showPeerSelectionModal = true;
       return;
     }
 
@@ -511,10 +600,13 @@
         });
         pushMessage('HTTP download started', 'success');
       } else if (protocolId === 'ftp' && metadata.ftpSources && metadata.ftpSources.length > 0) {
-        await invoke('download_ftp', { url: metadata.ftpSources[0] });
+        await invoke('download_ftp', { url: metadata.ftpSources[0].url });
         pushMessage('FTP download started', 'success');
       } else if (protocolId === 'ed2k' && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
-        await invoke('download_ed2k', { link: metadata.ed2kSources[0] });
+        // Construct ED2K file link from source info: ed2k://|file|name|size|hash|/
+        const ed2kSource = metadata.ed2kSources[0];
+        const ed2kLink = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`;
+        await invoke('download_ed2k', { link: ed2kLink });
         pushMessage('ED2K download started', 'success');
       } else {
         pushMessage(`No ${protocolId.toUpperCase()} sources available`, 'warning');
@@ -535,19 +627,13 @@
     try {
       const allMetrics = await PeerSelectionService.getPeerMetrics();
 
-      const sizeInMb = metadata.fileSize > 0 ? metadata.fileSize / (1024 * 1024) : 0;
-      let perMbPrice =
-        metadata.price && sizeInMb > 0
-          ? metadata.price / sizeInMb
-          : 0;
-
-      if (!Number.isFinite(perMbPrice) || perMbPrice <= 0) {
-        try {
-          perMbPrice = await paymentService.getDynamicPricePerMB(1.2);
-        } catch (pricingError) {
-          console.warn('Falling back to static per MB price:', pricingError);
-          perMbPrice = 0.001;
-        }
+      // Always calculate dynamic price per MB for peer selection
+      let perMbPrice = 0;
+      try {
+        perMbPrice = await paymentService.getDynamicPricePerMB(1.2);
+      } catch (pricingError) {
+        console.warn('Failed to get dynamic per MB price, using fallback:', pricingError);
+        perMbPrice = 0.001;
       }
 
       availablePeers = metadata.seeders.map(seederId => {
@@ -645,8 +731,30 @@
   async function confirmPeerSelection() {
     if (!selectedFile) return;
 
-    // Handle direct downloads (HTTP, FTP, ED2K) that skip peer selection
-    if (selectedProtocol === 'http' || selectedProtocol === 'ftp' || selectedProtocol === 'ed2k') {
+    // Handle FTP downloads from peer selection modal
+    if (selectedProtocol === 'ftp') {
+      const selectedSource = availablePeers.find(p => p.selected);
+      if (!selectedSource) {
+        pushMessage('Please select an FTP source', 'warning');
+        return;
+      }
+
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke('download_ftp', { url: selectedSource.peerId }); // peerId is the FTP URL
+        
+        showPeerSelectionModal = false;
+        selectedFile = null;
+        pushMessage('FTP download started', 'success');
+      } catch (error) {
+        console.error('Failed to start FTP download:', error);
+        pushMessage(`Failed to start FTP download: ${String(error)}`, 'error');
+      }
+      return;
+    }
+
+    // Handle direct downloads (HTTP, ED2K) that skip peer selection
+    if (selectedProtocol === 'http' || selectedProtocol === 'ed2k') {
       // This shouldn't happen since direct downloads bypass peer selection
       return;
     }
@@ -719,13 +827,36 @@
     // Route download based on selected protocol
     if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap' || selectedProtocol === 'bittorrent') {
       // P2P download flow (WebRTC, Bitswap, BitTorrent)
-      console.log(`🔍 DEBUG: Initiating ${selectedProtocol} download for file: ${selectedFile.fileName}`);
+      
+      // For WebRTC: Check if the user is the seeder (will use local copy)
+      let isLocalSeeder = false;
+      if (selectedProtocol === 'webrtc' && selectedPeers.length > 0) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const localPeerId = await invoke<string>('get_dht_peer_id');
+          
+          // Check if we're in the seeders list
+          isLocalSeeder = selectedPeers.includes(localPeerId);
+          
+          // Filter out self from selected peers for actual WebRTC transfer
+          const remotePeers = selectedPeers.filter(peerId => peerId !== localPeerId);
+          
+          if (remotePeers.length === 0 && isLocalSeeder) {
+            // We're the only seeder - will use local copy
+            console.log('We are the only seeder - will use local copy for WebRTC download');
+          }
+        } catch (err) {
+          console.warn('Could not check local peer ID:', err);
+          // Continue anyway - backend will handle it
+        }
+      }
 
-      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {
+      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string; isLocalSeeder?: boolean } = {
         ...selectedFile,
         seeders: selectedPeers,  // Override with selected peers
         peerAllocation,
-        selectedProtocol: selectedProtocol  // Pass the user's protocol selection
+        selectedProtocol: selectedProtocol,  // Pass the user's protocol selection
+        isLocalSeeder  // Flag to indicate we should use local copy
       };
 
       // Dispatch to parent (Download.svelte)
@@ -740,7 +871,7 @@
     // Close modal and reset state
     showPeerSelectionModal = false;
     selectedFile = null;
-    pushMessage(`Starting ${selectedProtocol.toUpperCase()} download with ${selectedPeers.length} selected peer${selectedPeers.length === 1 ? '' : 's'}`, 'info', 3000);
+    pushMessage(`Starting ${selectedProtocol.toUpperCase()} download with ${selectedPeers.length} selected peer${selectedPeers.length === 1 ? '' : 's'}`, 'success', 3000);
   }
 
 
@@ -813,6 +944,13 @@
               }
               class="pr-20 h-10"
               on:focus={toggleHistoryDropdown}
+              on:keydown={(e: CustomEvent<KeyboardEvent>) => {
+                const event = e.detail;
+                if (event.key === 'Enter' && searchHash.trim() && !isSearching) {
+                  event.preventDefault();
+                  searchForFile();
+                }
+              }}
             />
             {#if searchHash}
               <button
@@ -888,12 +1026,11 @@
           disabled={(searchMode !== 'torrent' && !searchHash.trim()) || (searchMode === 'torrent' && !torrentFileName) || isSearching}
           class="h-10 px-6"
         >
-          <Search class="h-4 w-4 mr-2" />
           {#if isSearching}
+            <Loader class="h-4 w-4 mr-2 animate-spin" />
             {tr('download.search.status.searching')}
-          {:else if searchMode === 'magnet' || searchMode === 'torrent' || searchMode === 'ed2k' || searchMode === 'ftp'}
-            Download
           {:else}
+            <Search class="h-4 w-4 mr-2" />
             {tr('download.search.button')}
           {/if}
         </Button>
@@ -911,7 +1048,7 @@
               <SearchResultCard
                 metadata={latestMetadata}
                 on:copy={handleCopy}
-                on:download={event => handleFileDownload(event.detail)}
+                on:download={(event: any) => handleFileDownload(event.detail)}
               />
               <p class="text-xs text-muted-foreground">
                 {tr('download.search.status.completedIn', { values: { seconds: (lastSearchDuration / 1000).toFixed(1) } })}
@@ -940,41 +1077,6 @@
   </div>
 </Card>
 
-<!-- Protocol Selection Modal -->
-{#if showProtocolSelectionModal}
-  <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4">
-      <h3 class="text-lg font-semibold mb-4">Choose Download Protocol</h3>
-      <p class="text-sm text-muted-foreground mb-4">
-        Multiple download protocols are available for "{selectedFile?.fileName}". Choose your preferred method:
-      </p>
-
-      <div class="space-y-2">
-        {#each availableProtocols.filter(p => p.available) as protocol}
-          <button
-            class="w-full text-left p-3 rounded-md border border-border hover:bg-muted transition-colors"
-            on:click={() => selectProtocol(protocol.id)}
-          >
-            <div class="flex items-center justify-between">
-              <div>
-                <div class="font-medium">{protocol.name}</div>
-                <div class="text-sm text-muted-foreground">{protocol.description}</div>
-              </div>
-              <div class="text-primary">→</div>
-            </div>
-          </button>
-        {/each}
-      </div>
-
-      <div class="flex justify-end mt-6">
-        <Button variant="outline" on:click={() => { showProtocolSelectionModal = false; selectedFile = null; }}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  </div>
-{/if}
-
 <!-- Peer Selection Modal -->
 <PeerSelectionModal
   show={showPeerSelectionModal}
@@ -983,8 +1085,8 @@
   bind:peers={availablePeers}
   bind:mode={peerSelectionMode}
   bind:protocol={selectedProtocol}
-  autoSelectionInfo={autoSelectionInfo}
   isTorrent={pendingTorrentType !== null}
+  {availableProtocols}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}
 />

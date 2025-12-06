@@ -494,7 +494,4 @@ mod tests {
         let timeout = source_info.timeout_secs.unwrap_or(DEFAULT_FTP_TIMEOUT_SECS);
         assert_eq!(timeout, 60);
     }
-
-    // Integration tests would require a real FTP server
-    // For now, we only test URL parsing and credential handling
 }

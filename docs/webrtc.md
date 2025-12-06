@@ -54,6 +54,90 @@ Chiral Network uses WebRTC (Web Real-Time Communication) for direct peer-to-peer
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## ICE Server Configuration
+
+WebRTC requires ICE (Interactive Connectivity Establishment) servers to enable NAT traversal. Without properly configured ICE servers, WebRTC connections will only work on local networks or between peers with public IP addresses.
+
+### STUN Servers
+
+The Chiral Network configures the following public STUN servers for ICE candidate gathering:
+
+```rust
+// Primary STUN servers (Google)
+"stun:stun.l.google.com:19302"
+"stun:stun1.l.google.com:19302"
+
+// Fallback STUN server
+"stun:stun.stunprotocol.org:3478"
+```
+
+### RTCConfiguration Setup
+
+The `create_rtc_configuration()` helper function in `webrtc_service.rs` creates a properly configured `RTCConfiguration`:
+
+```rust
+fn create_rtc_configuration() -> RTCConfiguration {
+    RTCConfiguration {
+        ice_servers: vec![
+            RTCIceServer {
+                urls: vec![
+                    "stun:stun.l.google.com:19302".to_string(),
+                    "stun:stun1.l.google.com:19302".to_string(),
+                ],
+                ..Default::default()
+            },
+            RTCIceServer {
+                urls: vec!["stun:stun.stunprotocol.org:3478".to_string()],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }
+}
+```
+
+### Where ICE Configuration is Applied
+
+The ICE configuration is applied at three critical points in `webrtc_service.rs`:
+
+1. **`handle_establish_connection()`** - When responding to an incoming connection offer
+2. **`create_offer()`** - When initiating a new outbound connection
+3. **`establish_connection_with_offer()`** - When establishing a connection with a pre-created offer
+
+### ICE Candidate Types
+
+With proper STUN configuration, the ICE agent gathers multiple candidate types:
+
+| Type | Description | NAT Traversal |
+|------|-------------|---------------|
+| `host` | Local IP addresses | LAN only |
+| `srflx` | Server reflexive (via STUN) | Most NATs |
+| `prflx` | Peer reflexive | Discovered during connectivity checks |
+| `relay` | TURN relay (if configured) | All NATs |
+
+### Verifying ICE Configuration
+
+To verify ICE is working correctly:
+
+1. Check that `srflx` (server reflexive) candidates are being gathered
+2. Verify connections work between peers on different networks
+3. Monitor for ICE connection state transitions: `checking` → `connected`
+
+### TURN Servers (Future)
+
+For restrictive NAT environments (symmetric NAT), TURN relay servers may be needed. TURN server configuration would be added to the `ice_servers` array:
+
+```rust
+RTCIceServer {
+    urls: vec!["turn:turn.example.com:3478".to_string()],
+    username: Some("username".to_string()),
+    credential: Some("password".to_string()),
+    ..Default::default()
+}
+```
+
+> **Note**: TURN relay is not currently configured. The current implementation relies on STUN for NAT traversal, which works for most common NAT types.
+
 ## Connection Flow
 
 ### 1. Peer Discovery

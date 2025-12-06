@@ -151,7 +151,7 @@ export class PaymentService {
 
   /**
    * Fetch dynamic network metrics and calculate real-time price per MB
-   * based on current Ethereum conditions
+   * based on current network conditions
    */
   static async getDynamicPricePerMB(normalizationFactor = 1): Promise<number> {
     try {
@@ -162,32 +162,38 @@ export class PaymentService {
         power_usage: number;
       }>("get_full_network_stats");
 
-      const {
-        network_difficulty,
-        network_hashrate,
-        active_miners,
-        power_usage,
-      } = stats;
+      const { network_hashrate, active_miners, power_usage } = stats;
 
-      if (network_hashrate <= 0) {
-        return 0.001;
+      // Base price per MB in Chiral tokens
+      const basePricePerMB = 0.001;
+
+      // Calculate network load factor (more miners = slightly higher price due to demand)
+      // Clamped between 0.5x and 2x the base price
+      const minerFactor = Math.min(Math.max(active_miners / 10, 0.5), 2.0);
+
+      // Calculate efficiency factor based on power usage relative to hashrate
+      // Higher power usage per hash = slightly higher price
+      // Default to 1.0 if we can't calculate
+      let efficiencyFactor = 1.0;
+      if (network_hashrate > 0 && power_usage > 0) {
+        // Normalize: assume 100W per 1MH/s is baseline efficiency
+        const baselineEfficiency = 100 / 1_000_000; // W per H/s
+        const actualEfficiency = power_usage / network_hashrate;
+        // Ratio clamped between 0.8x and 1.5x
+        efficiencyFactor = Math.min(
+          Math.max(actualEfficiency / baselineEfficiency, 0.8),
+          1.5
+        );
       }
 
-      // --- Average hash power per miner ---
-      const avgHashPower =
-        active_miners > 0 ? network_hashrate / active_miners : network_hashrate;
-
-      // unit cost of one hash for this miner, normalized to the average mining power
-      // basically for this miner, how expensive is each hash compared to the network average
-      const baseHashCost = power_usage / Math.max(avgHashPower, 1);
-
-      // --- Price per MB (scaled by difficulty) ---
+      // Final price calculation
       const pricePerMB =
-        (baseHashCost / avgHashPower) *
-        network_difficulty *
-        normalizationFactor;
+        basePricePerMB * minerFactor * efficiencyFactor * normalizationFactor;
 
-      return parseFloat(pricePerMB.toFixed(8));
+      // Ensure price stays within reasonable bounds: 0.0001 to 1.0 Chiral per MB
+      const finalPrice = Math.min(Math.max(pricePerMB, 0.0001), 1.0);
+
+      return parseFloat(finalPrice.toFixed(8));
     } catch (error) {
       // fallback to static price from settings when network pricing unavailable
       return 0.001;
@@ -628,7 +634,7 @@ export class PaymentService {
   }> {
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
     const amount = await this.calculateDownloadCost(fileSizeInBytes);
-    console.log(`Download cost: ${amount.toFixed(8)} Chiral`);
+    console.log(`Download cost: ${amount.toFixed(4)} Chiral`);
 
     let pricePerMb = await this.getDynamicPricePerMB(1.2);
     if (!Number.isFinite(pricePerMb) || pricePerMb <= 0) {
@@ -639,7 +645,7 @@ export class PaymentService {
       amount,
       pricePerMb: Number(pricePerMb.toFixed(8)),
       sizeInMB,
-      formattedAmount: `${amount.toFixed(8)} Chiral`,
+      formattedAmount: `${amount.toFixed(4)} Chiral`,
     };
   }
 

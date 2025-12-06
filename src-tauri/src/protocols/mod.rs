@@ -37,6 +37,8 @@ pub mod ftp;
 pub mod ed2k;
 pub mod seeding;
 pub mod detection;
+pub mod options;
+pub mod api;
 
 // Re-export commonly used types
 pub use traits::{
@@ -55,10 +57,23 @@ pub use traits::{
     SimpleProtocolManager,
 };
 
+// Re-export unified API types
+pub use options::{
+    FileTransferOptions,
+    TransferProgress,
+    TransferResult,
+    TransferStatus,
+    DetectionPreferences,
+};
+
+pub use api::ActiveTransfer;
+
 use crate::protocols::seeding::{SeedingEntry, SeedingRegistry};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 use detection::ProtocolDetector;
 
@@ -79,8 +94,11 @@ pub use ed2k::Ed2kProtocolHandler;
 pub struct ProtocolManager {
     handlers: Vec<Box<dyn ProtocolHandler>>,
     simple_handlers: Vec<std::sync::Arc<dyn SimpleProtocolHandler>>,
-    seeding_registry: SeedingRegistry, // <-- ADDED
-    detector: ProtocolDetector, // <-- ADDED
+    seeding_registry: SeedingRegistry,
+    detector: ProtocolDetector,
+    /// Active file transfers (downloads and uploads)
+    /// Maps transfer_id -> ActiveTransfer
+    pub(crate) active_transfers: Arc<RwLock<HashMap<String, ActiveTransfer>>>,
 }
 
 impl ProtocolManager {
@@ -89,8 +107,9 @@ impl ProtocolManager {
         Self {
             handlers: Vec::new(),
             simple_handlers: Vec::new(),
-            seeding_registry: SeedingRegistry::new(), // <-- INITIALIZED
-            detector: ProtocolDetector::new(),   // <-- ADDED
+            seeding_registry: SeedingRegistry::new(),
+            detector: ProtocolDetector::new(),
+            active_transfers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -338,9 +357,47 @@ impl ProtocolManager {
         for handler in &self.handlers {
             map.insert(handler.name().to_string(), handler.as_ref());
         }
-    
+
         self.detector.detect_best(&file_identifier, &map).await
-    }    
+    }
+
+    /// Returns the best protocol for downloading the file with custom preferences
+    ///
+    /// This method allows filtering protocols based on required capabilities
+    /// such as seeding support, encryption, or pause/resume functionality.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_identifier` - The file identifier (URL, magnet link, ed2k link, etc.)
+    /// * `preferences` - User preferences for filtering protocols
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let prefs = DetectionPreferences {
+    ///     require_encryption: true,
+    ///     ..Default::default()
+    /// };
+    /// let best = manager.detect_best_protocol_with_preferences(
+    ///     "magnet:?xt=urn:btih:...".to_string(),
+    ///     prefs
+    /// ).await;
+    /// ```
+    pub async fn detect_best_protocol_with_preferences(
+        &mut self,
+        file_identifier: String,
+        preferences: DetectionPreferences,
+    ) -> Option<String> {
+        // Update detector preferences
+        self.detector.set_priority(preferences);
+
+        let mut map: HashMap<String, &dyn ProtocolHandler> = HashMap::new();
+        for handler in &self.handlers {
+            map.insert(handler.name().to_string(), handler.as_ref());
+        }
+
+        self.detector.detect_best(&file_identifier, &map).await
+    }
 }
 
 

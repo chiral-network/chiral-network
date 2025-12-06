@@ -145,6 +145,9 @@
         "title": "রিলে অবস্থা",
         "enabled": "AutoRelay সক্রিয়",
         "disabled": "AutoRelay নিষ্ক্রিয়",
+        "timeline": "AutoRelay টাইমলাইন",
+        "enabledAt": "সর্বশেষ সক্রিয়",
+        "disabledAt": "সর্বশেষ নিষ্ক্রিয়",
         "noPeer": "কোনো রিলে-তে সংযুক্ত নয়",
         "activePeer": "সক্রিয় রিলে",
         "status": "অবস্থা",
@@ -153,6 +156,8 @@
         "renewals": "রিজার্ভেশন নবায়ন",
         "evictions": "রিজার্ভেশন অপসারিত",
         "never": "কখনও নয়",
+        "neverEnabled": "কখনও সক্রিয় করা হয়নি",
+        "neverDisabled": "কখনও নিষ্ক্রিয় করা হয়নি",
         "noEvictions": "কোনো অপসারণ নেই",
         "accepted": "রিজার্ভেশন গৃহীত",
         "pending": "অপেক্ষমাণ",
@@ -261,6 +266,10 @@
     "enableUpnp": "UPnP সক্ষম করুন",
     "enableNat": "NAT পোর্ট ম্যাপিং সক্ষম করুন",
     "enableDht": "DHT সক্ষম করুন",
+    "autoStartNode": "লঞ্চে DHT নোড স্বয়ংক্রিয়-সূচনা",
+    "autoStartNodeDescription": "অ্যাপ্লিকেশন চালু হলে DHT ফাইল-শেয়ারিং নোড স্বয়ংক্রিয়ভাবে শুরু করুন",
+    "autoStartGeth": "লঞ্চে ব্লকচেইন নোড স্বয়ংক্রিয়-সূচনা",
+    "autoStartGethDescription": "অ্যাপ্লিকেশন চালু হলে Geth ব্লকচেইন নোড স্বয়ংক্রিয়ভাবে শুরু করুন (ওয়ালেট এবং মাইনিং সক্ষম করে)",
     "geoDistribution": {
       "title": "ভৌগোলিক বিতরণ",
       "subtitle": "পর্যবেক্ষিত {peers} পিয়ার ম্যাপ করা হচ্ছে",
@@ -575,6 +584,17 @@
       "market": "বাজার",
       "fast": "দ্রুত",
       "estimated": "আনুমানিক ফি"
+    },
+    "gas": {
+      "label": "লেনদেনের গতি",
+      "loading": "অনুমান করা হচ্ছে...",
+      "estimateError": "ডিফল্ট মান ব্যবহার করা হচ্ছে",
+      "slow": "সাশ্রয়ী",
+      "standard": "স্ট্যান্ডার্ড",
+      "fast": "অগ্রাধিকার",
+      "estimatedFee": "আনুমানিক ফি",
+      "totalCost": "মোট খরচ",
+      "networkCongestion": "নেটওয়ার্ক"
     }
   },
   "transactions": {
@@ -776,7 +796,8 @@
       "invalid": "অনুগ্রহ করে ০-এর চেয়ে বড় একটি বৈধ পরিমাণ লিখুন।",
       "min": "পরিমাণ কমপক্ষে {min} Chiral হতে হবে।",
       "insufficient": "ব্যালান্স অপর্যাপ্ত - আরও {more} Chiral প্রয়োজন।",
-      "insufficientWithFee": "অপর্যাপ্ত ফান্ড। মোট {total} Chiral (পরিমাণ + ফি) আপনার ব্যালান্স {balance} Chiral এর বেশি।"
+      "insufficientWithFee": "অপর্যাপ্ত ফান্ড। মোট {total} Chiral (পরিমাণ + ফি) আপনার ব্যালান্স {balance} Chiral এর বেশি।",
+      "insufficientWithGas": "অপর্যাপ্ত ব্যালান্স (গ্যাস সহ) - আরও {more} Chiral প্রয়োজন।"
     },
     "exportFailed": "এক্সপোর্ট ব্যর্থ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।",
     "createAccount": "অ্যাকাউন্ট তৈরি করতে ব্যর্থ: {error}"
