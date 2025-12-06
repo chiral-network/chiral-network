@@ -103,7 +103,7 @@ pub struct FileMetadata {
     pub price: f64,
 
     /// Ethereum address of the uploader (for payment)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "uploaderAddress")]
     pub uploader_address: Option<String>,
 
     /// The SHA-1 info hash for BitTorrent compatibility.
@@ -122,9 +122,13 @@ pub struct FtpSourceInfo {
     /// Optional password (stored temporarily, not persisted to DHT for security)
     #[serde(skip_serializing, skip_deserializing)]
     pub password: Option<String>,
+    #[serde(rename = "supportsResume")]
     pub supports_resume: bool,
+    #[serde(rename = "fileSize")]
     pub file_size: u64,
+    #[serde(rename = "lastChecked")]
     pub last_checked: Option<u64>, // Unix timestamp
+    #[serde(rename = "isAvailable")]
     pub is_available: bool,
 }
 

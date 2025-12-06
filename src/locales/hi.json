@@ -585,6 +585,17 @@
       "market": "बाजार",
       "fast": "तेज़",
       "estimated": "अनुमानित शुल्क"
+    },
+    "gas": {
+      "label": "लेनदेन की गति",
+      "loading": "अनुमान लगा रहा है...",
+      "estimateError": "डिफ़ॉल्ट मानों का उपयोग",
+      "slow": "किफायती",
+      "standard": "मानक",
+      "fast": "प्राथमिकता",
+      "estimatedFee": "अनुमानित शुल्क",
+      "totalCost": "कुल लागत",
+      "networkCongestion": "नेटवर्क"
     }
   },
   "transactions": {
@@ -786,7 +797,8 @@
       "invalid": "कृपया 0 से अधिक एक मान्य राशि दर्ज करें।",
       "min": "राशि कम से कम {min} Chiral होनी चाहिए।",
       "insufficient": "अपर्याप्त शेष - {more} Chiral अधिक आवश्यक।",
-      "insufficientWithFee": "अपर्याप्त धन। {total} Chiral (राशि + शुल्क) कुल आपके {balance} Chiral शेष से अधिक है।"
+      "insufficientWithFee": "अपर्याप्त धन। {total} Chiral (राशि + शुल्क) कुल आपके {balance} Chiral शेष से अधिक है।",
+      "insufficientWithGas": "अपर्याप्त शेष (गैस सहित) - {more} Chiral अधिक आवश्यक।"
     },
     "exportFailed": "निर्यात विफल हुआ। कृपया फिर से प्रयास करें।",
     "createAccount": "खाता बनाने में विफल: {error}"

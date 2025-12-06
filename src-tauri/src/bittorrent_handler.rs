@@ -700,6 +700,26 @@ impl BitTorrentHandler {
         &self,
         identifier: &str,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
+        self.start_download_with_options(identifier, AddTorrentOptions::default())
+            .await
+    }
+
+    /// Start a download with a custom output folder.
+    pub async fn start_download_to(
+        &self,
+        identifier: &str,
+        output_folder: PathBuf,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
+        let mut opts = AddTorrentOptions::default();
+        opts.output_folder = Some(output_folder.to_string_lossy().to_string());
+        self.start_download_with_options(identifier, opts).await
+    }
+
+    async fn start_download_with_options(
+        &self,
+        identifier: &str,
+        add_opts: AddTorrentOptions,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
         let add_torrent = if identifier.starts_with("magnet:") {
@@ -722,6 +742,7 @@ impl BitTorrentHandler {
 
         let add_opts = AddTorrentOptions::default();
 
+        // Add the torrent to the session first
         let add_torrent_response = self
             .rqbit_session
             .add_torrent(add_torrent, Some(add_opts))

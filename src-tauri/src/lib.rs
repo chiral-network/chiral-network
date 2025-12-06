@@ -24,6 +24,7 @@ pub mod bittorrent_handler;
 pub mod dht;
 pub mod file_transfer;
 pub mod ftp_downloader;
+pub mod ftp_server;
 pub mod peer_selection;
 pub mod peer_cache;
 pub mod webrtc_service;

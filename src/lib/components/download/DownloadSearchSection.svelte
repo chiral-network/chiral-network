@@ -455,16 +455,19 @@
     const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
     const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
     
-    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs)
-    // If CIDs exist, file was uploaded via BitSwap and must be downloaded via BitSwap
+    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs or other protocol indicators)
+    // Files uploaded via Bitswap have CIDs and must be downloaded via Bitswap, not WebRTC
     const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
+    
+    // Bitswap is available if there are CIDs (content identifiers for IPFS blocks) AND seeders
+    const isBitswapAvailable = hasCids && hasSeeders;
     
     return [
       {
         id: 'bitswap',
         name: 'Bitswap',
         description: 'IPFS Bitswap protocol',
-        available: hasCids && hasSeeders
+        available: isBitswapAvailable
       },
       {
         id: 'webrtc',
@@ -529,10 +532,44 @@
 
   // Proceed with download using selected protocol
   async function proceedWithProtocolSelection(metadata: FileMetadata, protocolId: string) {
-    // Handle protocols that don't need peer selection (direct downloads)
-    if (protocolId === 'http' || protocolId === 'ftp' || protocolId === 'ed2k') {
-      // For HTTP, FTP, ED2K - proceed directly to download
+    // Handle HTTP and ED2K direct downloads (no peer selection)
+    if (protocolId === 'http' || protocolId === 'ed2k') {
       await startDirectDownload(metadata, protocolId);
+      return;
+    }
+
+    // Handle FTP - show source selection modal
+    if (protocolId === 'ftp') {
+      if (!metadata.ftpSources || metadata.ftpSources.length === 0) {
+        pushMessage('No FTP sources available for this file', 'warning');
+        return;
+      }
+
+      selectedFile = metadata;
+      selectedProtocol = 'ftp';
+      
+      // Create "peers" from FTP sources
+      availablePeers = metadata.ftpSources.map((source, index) => {
+        // Extract host from FTP URL
+        let host = 'FTP Server';
+        try {
+          const url = new URL(source.url);
+          host = url.hostname;
+        } catch {}
+        
+        return {
+          peerId: source.url, // Use URL as the ID
+          location: host,
+          latency_ms: undefined,
+          bandwidth_kbps: undefined,
+          reliability_score: source.isAvailable ? 1.0 : 0.0,
+          price_per_mb: 0, // FTP is free
+          selected: index === 0, // Select first by default
+          percentage: index === 0 ? 100 : 0
+        };
+      });
+
+      showPeerSelectionModal = true;
       return;
     }
 
@@ -563,10 +600,13 @@
         });
         pushMessage('HTTP download started', 'success');
       } else if (protocolId === 'ftp' && metadata.ftpSources && metadata.ftpSources.length > 0) {
-        await invoke('download_ftp', { url: metadata.ftpSources[0] });
+        await invoke('download_ftp', { url: metadata.ftpSources[0].url });
         pushMessage('FTP download started', 'success');
       } else if (protocolId === 'ed2k' && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
-        await invoke('download_ed2k', { link: metadata.ed2kSources[0] });
+        // Construct ED2K file link from source info: ed2k://|file|name|size|hash|/
+        const ed2kSource = metadata.ed2kSources[0];
+        const ed2kLink = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`;
+        await invoke('download_ed2k', { link: ed2kLink });
         pushMessage('ED2K download started', 'success');
       } else {
         pushMessage(`No ${protocolId.toUpperCase()} sources available`, 'warning');
@@ -691,8 +731,30 @@
   async function confirmPeerSelection() {
     if (!selectedFile) return;
 
-    // Handle direct downloads (HTTP, FTP, ED2K) that skip peer selection
-    if (selectedProtocol === 'http' || selectedProtocol === 'ftp' || selectedProtocol === 'ed2k') {
+    // Handle FTP downloads from peer selection modal
+    if (selectedProtocol === 'ftp') {
+      const selectedSource = availablePeers.find(p => p.selected);
+      if (!selectedSource) {
+        pushMessage('Please select an FTP source', 'warning');
+        return;
+      }
+
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke('download_ftp', { url: selectedSource.peerId }); // peerId is the FTP URL
+        
+        showPeerSelectionModal = false;
+        selectedFile = null;
+        pushMessage('FTP download started', 'success');
+      } catch (error) {
+        console.error('Failed to start FTP download:', error);
+        pushMessage(`Failed to start FTP download: ${String(error)}`, 'error');
+      }
+      return;
+    }
+
+    // Handle direct downloads (HTTP, ED2K) that skip peer selection
+    if (selectedProtocol === 'http' || selectedProtocol === 'ed2k') {
       // This shouldn't happen since direct downloads bypass peer selection
       return;
     }
@@ -765,12 +827,36 @@
     // Route download based on selected protocol
     if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap' || selectedProtocol === 'bittorrent') {
       // P2P download flow (WebRTC, Bitswap, BitTorrent)
+      
+      // For WebRTC: Check if the user is the seeder (will use local copy)
+      let isLocalSeeder = false;
+      if (selectedProtocol === 'webrtc' && selectedPeers.length > 0) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const localPeerId = await invoke<string>('get_dht_peer_id');
+          
+          // Check if we're in the seeders list
+          isLocalSeeder = selectedPeers.includes(localPeerId);
+          
+          // Filter out self from selected peers for actual WebRTC transfer
+          const remotePeers = selectedPeers.filter(peerId => peerId !== localPeerId);
+          
+          if (remotePeers.length === 0 && isLocalSeeder) {
+            // We're the only seeder - will use local copy
+            console.log('We are the only seeder - will use local copy for WebRTC download');
+          }
+        } catch (err) {
+          console.warn('Could not check local peer ID:', err);
+          // Continue anyway - backend will handle it
+        }
+      }
 
-      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {
+      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string; isLocalSeeder?: boolean } = {
         ...selectedFile,
         seeders: selectedPeers,  // Override with selected peers
         peerAllocation,
-        selectedProtocol: selectedProtocol  // Pass the user's protocol selection
+        selectedProtocol: selectedProtocol,  // Pass the user's protocol selection
+        isLocalSeeder  // Flag to indicate we should use local copy
       };
 
       // Dispatch to parent (Download.svelte)

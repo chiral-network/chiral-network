@@ -1239,6 +1239,7 @@
       clearInterval(peerCountInterval)
     }
     fetchPeerCount()
+    fetchChainId()  // Fetch chain ID when node starts
     peerCountInterval = setInterval(fetchPeerCount, 5000)
   }
 
@@ -1250,6 +1251,22 @@
       await navigator.clipboard.writeText(text)
     } catch (e) {
       errorLogger.networkError(`Copy failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function fetchChainId() {
+    if (!isGethRunning) return
+    if (!isTauri) {
+      // Default chain ID for web mode
+      chainId = 98765
+      return
+    }
+    
+    try {
+      chainId = await invoke('get_network_chain_id') as number
+    } catch (error) {
+      console.error('Failed to fetch chain ID:', error)
+      chainId = null
     }
   }
 

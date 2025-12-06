@@ -47,17 +47,6 @@ pub async fn get_full_network_stats(app: tauri::AppHandle, address: Option<Strin
         None
     };
 
-    // Calculate cost per MB
-    let normalization_factor = 1.0; // adjust as needed
-    let base_hash_cost = power_usage * difficulty; // simple approximation
-    let avg_hash_power = if active_miners > 0 {
-        hashrate / active_miners as f64
-    } else {
-        1.0 // fallback
-    };
-
-    let cost_per_mb = (base_hash_cost / avg_hash_power) * normalization_factor;
-
     Ok(FullNetworkStats {
         network_difficulty: difficulty,
         network_hashrate: hashrate,
