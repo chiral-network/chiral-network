@@ -4375,6 +4375,7 @@ async fn handle_kademlia_event(
                                 ) {
                                     // Verify this is the file we were searching for
                                     if file_hash == pending_search.file_hash {
+                                        info!("🔧 Constructing metadata for found file: {}", file_hash);
                                         let mut metadata = construct_file_metadata_from_json_simple(
                                             &metadata_json,
                                             file_hash,
@@ -4382,8 +4383,10 @@ async fn handle_kademlia_event(
                                             file_size,
                                             created_at,
                                         );
+                                        info!("🔧 Metadata constructed successfully");
 
                                         // Merge providers with existing seeders from metadata
+                                        info!("🔧 Merging providers with metadata seeders");
                                         if let Some(providers) = &pending_search.found_providers {
                                             // Add providers that aren't already in seeders
                                             for provider in providers {
@@ -4400,6 +4403,7 @@ async fn handle_kademlia_event(
                                         // This ensures that if we uploaded via both WebRTC and Bitswap locally,
                                         // the search result will include CIDs from local cache even if DHT
                                         // record only has one protocol's data
+                                        info!("🔧 Merging with local cache");
                                         {
                                             let cache = file_metadata_cache.lock().await;
                                             if let Some(cached) = cache.get(&metadata.merkle_root) {
@@ -4411,7 +4415,9 @@ async fn handle_kademlia_event(
                                         // Send event to frontend for search results
                                         info!("📡 Sending DhtEvent::FileDiscovered for file: {}", metadata.file_name);
                                         let _ = event_tx.send(DhtEvent::FileDiscovered(metadata.clone())).await;
+                                        info!("📡 Sending result through channel for file: {}", metadata.file_name);
                                         let _ = pending_search.sender.send(Ok(Some(metadata)));
+                                        info!("✅ Search result processing completed successfully");
                                         return; // Successfully handled the search result
                                     } else {
                                         warn!("❌ Found wrong file: got {} but searching for {}", file_hash, pending_search.file_hash);
@@ -7011,6 +7017,7 @@ impl DhtService {
         }
 
         // Wait for the validated result
+        info!("⏳ Waiting for search result with {}ms timeout", timeout_ms);
         match tokio::time::timeout(timeout_duration, rx).await {
             Ok(Ok(Ok(Some(metadata)))) => {
                 info!("✅ Search succeeded for file: {}", metadata.merkle_root);
@@ -7035,6 +7042,7 @@ impl DhtService {
             },
             Err(_) => {
                 warn!("⏰ Search timed out for file: {} (after {}ms)", file_hash, timeout_ms);
+                warn!("⏰ Timeout occurred - no result received through channel");
                 // Check if this might be due to connectivity issues
                 let health = self.check_health(5, false).await;
                 if health.peer_count < 5 {
