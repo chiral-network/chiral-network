@@ -1324,6 +1324,7 @@ async fn run_dht_node(
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
     pending_heartbeat_updates: Arc<Mutex<HashSet<String>>>,
+    pending_provider_registrations: Arc<Mutex<HashSet<String>>>,
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     pending_dht_queries: Arc<
         Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
@@ -1772,6 +1773,10 @@ async fn run_dht_node(
                                 // currently have at least one dialable address (public or relay).
                                 if !swarm_has_dialable_addr(&swarm) {
                                     warn!("🛑 Not registering as provider for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", merged_metadata.merkle_root);
+                                    {
+                                        let mut pending = pending_provider_registrations.lock().await;
+                                        pending.insert(merged_metadata.merkle_root.clone());
+                                    }
                                     let _ = event_tx
                                         .send(DhtEvent::Warning(format!(
                                             "Not registering {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
@@ -1905,6 +1910,10 @@ async fn run_dht_node(
                                 // 4. Announce self as provider (only if we have dialable addrs)
                                 if !swarm_has_dialable_addr(&swarm) {
                                     warn!("🛑 Not registering encrypted file {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", metadata.merkle_root);
+                                    {
+                                        let mut pending = pending_provider_registrations.lock().await;
+                                        pending.insert(metadata.merkle_root.clone());
+                                    }
                                     let _ = event_tx
                                         .send(DhtEvent::Warning(format!(
                                             "Not registering {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
@@ -2128,6 +2137,10 @@ async fn run_dht_node(
                                     let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
                                     if !swarm_has_dialable_addr(&swarm) {
                                         warn!("🛑 Skipping provider refresh for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", file_hash);
+                                        {
+                                            let mut pending = pending_provider_registrations.lock().await;
+                                            pending.insert(file_hash.clone());
+                                        }
                                         let _ = event_tx
                                             .send(DhtEvent::Warning(format!(
                                                 "Skipping provider refresh for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
@@ -3333,7 +3346,7 @@ async fn run_dht_node(
                                 handle_upnp_event(upnp_event, &mut swarm, &event_tx).await;
                             }
                             SwarmEvent::ExternalAddrConfirmed { address, .. } if !is_bootstrap => {
-                                handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr)
+                                handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr, &pending_provider_registrations)
                                     .await;
                             }
                             SwarmEvent::ExternalAddrExpired { address, .. } if !is_bootstrap => {
@@ -5570,12 +5583,47 @@ async fn handle_upnp_event(
     }
 }
 
+async fn flush_pending_providers(
+    swarm: &mut Swarm<DhtBehaviour>,
+    pending: &Arc<Mutex<HashSet<String>>>,
+    event_tx: &mpsc::Sender<DhtEvent>,
+) {
+    if !swarm_has_dialable_addr(swarm) {
+        return;
+    }
+    let hashes: Vec<String> = {
+        let mut guard = pending.lock().await;
+        guard.drain().collect()
+    };
+    for file_hash in hashes {
+        let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
+        match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+            Ok(_) => {
+                info!("📢 Re-announced provider record for {}", file_hash);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to re-announce provider record for {}: {}",
+                    file_hash, e
+                );
+                let _ = event_tx
+                    .send(DhtEvent::Warning(format!(
+                        "Failed to re-announce provider for {}: {}",
+                        file_hash, e
+                    )))
+                    .await;
+            }
+        }
+    }
+}
+
 async fn handle_external_addr_confirmed(
     swarm: &mut Swarm<DhtBehaviour>,
     addr: &Multiaddr,
     metrics: &Arc<Mutex<DhtMetrics>>,
     event_tx: &mpsc::Sender<DhtEvent>,
     proxy_mgr: &ProxyMgr,
+    pending_provider_registrations: &Arc<Mutex<HashSet<String>>>,
 ) {
     let mut metrics_guard = metrics.lock().await;
     let nat_enabled = metrics_guard.autonat_enabled;
@@ -5634,6 +5682,9 @@ async fn handle_external_addr_confirmed(
             })
             .await;
     }
+
+    // Now that we have a confirmed reachable address, re-announce any pending providers.
+    flush_pending_providers(swarm, pending_provider_registrations, event_tx).await;
 }
 
 async fn handle_external_addr_expired(
@@ -6526,6 +6577,8 @@ impl DhtService {
         let bootstrap_peer_ids = extract_bootstrap_peer_ids(&bootstrap_nodes);
         let file_metadata_cache_local: Arc<Mutex<HashMap<String, FileMetadata>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let pending_provider_registrations: Arc<Mutex<HashSet<String>>> =
+            Arc::new(Mutex::new(HashSet::new()));
 
         tokio::spawn(run_dht_node(
             swarm,
@@ -6549,6 +6602,7 @@ impl DhtService {
             get_providers_queries_local.clone(),
             seeder_heartbeats_cache.clone(),
             pending_heartbeat_updates.clone(),
+            pending_provider_registrations.clone(),
             file_metadata_cache_local.clone(),
             pending_dht_queries.clone(),
             pending_key_requests.clone(),
