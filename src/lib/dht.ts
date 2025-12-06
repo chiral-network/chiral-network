@@ -333,6 +333,16 @@ export class DhtService {
             fileMetadata.cids.length === 1;
 
       try {
+        console.log(
+          "🔽 DhtService.downloadFile: Invoking download_blocks_from_network with:",
+          {
+            merkleRoot: fileMetadata.merkleRoot,
+            fileHash: fileMetadata.fileHash,
+            fileName: fileMetadata.fileName,
+            cidsCount: fileMetadata.cids?.length,
+          }
+        );
+
         // Trigger the backend download AFTER setting up the listener
         await invoke("download_blocks_from_network", {
           fileMetadata,
