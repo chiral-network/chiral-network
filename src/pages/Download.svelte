@@ -476,7 +476,62 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         : file
     ));
 
-    showToast(`Successfully saved "${data.fileName}"`, 'success');
+    // Process payment for WebRTC download (only once per file)
+    const completedFile = $files.find(f => f.hash === data.fileHash);
+    
+    if (completedFile && !paidFiles.has(completedFile.hash)) {
+      diagnosticLogger.info('Download', 'WebRTC download completed, processing payment', { fileName: completedFile.name });
+      const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
+      
+      // Get seeder information from file metadata
+      const seederPeerId = completedFile.seederAddresses?.[0];
+      const seederWalletAddress = completedFile.uploaderAddress || 
+                                   (paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
+                                     ? completedFile.seederAddresses?.[0]!
+                                     : null);
+      
+      if (!seederWalletAddress) {
+        diagnosticLogger.warn('Download', 'Skipping WebRTC payment due to missing or invalid uploader wallet address', {
+          file: completedFile.name,
+          seederAddresses: completedFile.seederAddresses,
+          uploaderAddress: completedFile.uploaderAddress
+        });
+        showToast('Payment skipped: missing uploader wallet address', 'warning');
+      } else {
+        try {
+          const paymentResult = await paymentService.processDownloadPayment(
+            completedFile.hash,
+            completedFile.name,
+            completedFile.size,
+            seederWalletAddress,
+            seederPeerId
+          );
+
+          if (paymentResult.success) {
+            paidFiles.add(completedFile.hash); // Mark as paid
+            diagnosticLogger.info('Download', 'WebRTC payment processed', { 
+              amount: paymentAmount.toFixed(6), 
+              seederWalletAddress, 
+              seederPeerId 
+            });
+            showToast(
+              `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
+              'success'
+            );
+          } else {
+            errorLogger.fileOperationError('WebRTC payment', paymentResult.error || 'Unknown error');
+            showToast(`Payment failed: ${paymentResult.error}`, 'warning');
+          }
+        } catch (error) {
+          errorLogger.fileOperationError('WebRTC payment processing', error instanceof Error ? error.message : String(error));
+          showToast(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'warning');
+        }
+      }
+    } else if (completedFile) {
+      showToast(`Successfully saved "${data.fileName}"`, 'success');
+    } else {
+      showToast(`Successfully saved "${data.fileName}"`, 'success');
+    }
     
   } catch (error) {
     errorLogger.fileOperationError('Save WebRTC file', error instanceof Error ? error.message : String(error));
