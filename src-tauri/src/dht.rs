@@ -6117,9 +6117,15 @@ impl DhtService {
         let identify = identify::Behaviour::new(identify_config);
 
         // mDNS for local peer discovery
+        // Disable mDNS when running multiple instances to avoid "address already in use" errors
         let disable_mdns_env = std::env::var("CHIRAL_DISABLE_MDNS").ok().as_deref() == Some("1");
+        let multiple_instances = std::env::var("CHIRAL_ALLOW_MULTIPLE_INSTANCES").ok().as_deref() == Some("1");
         let mdns_opt = if disable_mdns_env {
             tracing::info!("mDNS disabled via env CHIRAL_DISABLE_MDNS=1");
+            None
+        } else if multiple_instances {
+            tracing::info!("mDNS disabled for multi-instance mode (CHIRAL_ALLOW_MULTIPLE_INSTANCES=1)");
+            tracing::info!("This prevents 'address already in use' errors when running multiple instances on the same machine");
             None
         } else {
             Some(Mdns::new(Default::default(), local_peer_id)?)
