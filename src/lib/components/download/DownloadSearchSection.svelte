@@ -532,10 +532,44 @@
 
   // Proceed with download using selected protocol
   async function proceedWithProtocolSelection(metadata: FileMetadata, protocolId: string) {
-    // Handle protocols that don't need peer selection (direct downloads)
-    if (protocolId === 'http' || protocolId === 'ftp' || protocolId === 'ed2k') {
-      // For HTTP, FTP, ED2K - proceed directly to download
+    // Handle HTTP and ED2K direct downloads (no peer selection)
+    if (protocolId === 'http' || protocolId === 'ed2k') {
       await startDirectDownload(metadata, protocolId);
+      return;
+    }
+
+    // Handle FTP - show source selection modal
+    if (protocolId === 'ftp') {
+      if (!metadata.ftpSources || metadata.ftpSources.length === 0) {
+        pushMessage('No FTP sources available for this file', 'warning');
+        return;
+      }
+
+      selectedFile = metadata;
+      selectedProtocol = 'ftp';
+      
+      // Create "peers" from FTP sources
+      availablePeers = metadata.ftpSources.map((source, index) => {
+        // Extract host from FTP URL
+        let host = 'FTP Server';
+        try {
+          const url = new URL(source.url);
+          host = url.hostname;
+        } catch {}
+        
+        return {
+          peerId: source.url, // Use URL as the ID
+          location: host,
+          latency_ms: undefined,
+          bandwidth_kbps: undefined,
+          reliability_score: source.isAvailable ? 1.0 : 0.0,
+          price_per_mb: 0, // FTP is free
+          selected: index === 0, // Select first by default
+          percentage: index === 0 ? 100 : 0
+        };
+      });
+
+      showPeerSelectionModal = true;
       return;
     }
 
@@ -566,10 +600,13 @@
         });
         pushMessage('HTTP download started', 'success');
       } else if (protocolId === 'ftp' && metadata.ftpSources && metadata.ftpSources.length > 0) {
-        await invoke('download_ftp', { url: metadata.ftpSources[0] });
+        await invoke('download_ftp', { url: metadata.ftpSources[0].url });
         pushMessage('FTP download started', 'success');
       } else if (protocolId === 'ed2k' && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
-        await invoke('download_ed2k', { link: metadata.ed2kSources[0] });
+        // Construct ED2K file link from source info: ed2k://|file|name|size|hash|/
+        const ed2kSource = metadata.ed2kSources[0];
+        const ed2kLink = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`;
+        await invoke('download_ed2k', { link: ed2kLink });
         pushMessage('ED2K download started', 'success');
       } else {
         pushMessage(`No ${protocolId.toUpperCase()} sources available`, 'warning');
@@ -694,8 +731,30 @@
   async function confirmPeerSelection() {
     if (!selectedFile) return;
 
-    // Handle direct downloads (HTTP, FTP, ED2K) that skip peer selection
-    if (selectedProtocol === 'http' || selectedProtocol === 'ftp' || selectedProtocol === 'ed2k') {
+    // Handle FTP downloads from peer selection modal
+    if (selectedProtocol === 'ftp') {
+      const selectedSource = availablePeers.find(p => p.selected);
+      if (!selectedSource) {
+        pushMessage('Please select an FTP source', 'warning');
+        return;
+      }
+
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke('download_ftp', { url: selectedSource.peerId }); // peerId is the FTP URL
+        
+        showPeerSelectionModal = false;
+        selectedFile = null;
+        pushMessage('FTP download started', 'success');
+      } catch (error) {
+        console.error('Failed to start FTP download:', error);
+        pushMessage(`Failed to start FTP download: ${String(error)}`, 'error');
+      }
+      return;
+    }
+
+    // Handle direct downloads (HTTP, ED2K) that skip peer selection
+    if (selectedProtocol === 'http' || selectedProtocol === 'ed2k') {
       // This shouldn't happen since direct downloads bypass peer selection
       return;
     }
