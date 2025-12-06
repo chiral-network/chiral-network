@@ -597,7 +597,7 @@ export const totalSpent = derived(transactions, ($txs) =>
 
 export const totalReceived = derived(transactions, ($txs) =>
   $txs
-    .filter((tx) => tx.type === "received")
+    .filter((tx) => tx.type === "received" || tx.type === "mining")
     .reduce((sum, tx) => sum + tx.amount, 0)
 );
 

@@ -59,6 +59,9 @@
   let balanceResult: string | null = null;
   let isCheckingBalance = false;
 
+  // Block filtering
+  let showOnlyBlocksWithTransactions = false;
+
   // Stats
   let networkStats = {
     totalBlocks: 0,
@@ -469,9 +472,19 @@
   {#if activeTab === 'blocks'}
     <div transition:fade={{ duration: 200 }}>
       <Card class="p-6">
-        <h2 class="text-xl font-bold mb-4 text-black">
-          {tr('blockchain.blocks.latest')}
-        </h2>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-bold text-black">
+            {tr('blockchain.blocks.latest')}
+          </h2>
+          <Button
+            variant={showOnlyBlocksWithTransactions ? 'default' : 'outline'}
+            size="sm"
+            on:click={() => showOnlyBlocksWithTransactions = !showOnlyBlocksWithTransactions}
+          >
+            <Receipt class="w-4 h-4 mr-2" />
+            {showOnlyBlocksWithTransactions ? 'Show All Blocks' : 'Only With Transactions'}
+          </Button>
+        </div>
 
         {#if isLoadingBlocks}
           <div class="flex items-center justify-center py-8">
@@ -492,8 +505,19 @@
             </ol>
           </div>
         {:else}
-          <div class="space-y-3">
-            {#each latestBlocks as block}
+          {#if showOnlyBlocksWithTransactions && latestBlocks.filter(block => block.transactionCount && block.transactionCount > 0).length === 0}
+            <div class="text-center py-8">
+              <Receipt class="w-12 h-12 text-gray-400 mx-auto mb-3" />
+              <p class="text-gray-700 font-medium">
+                No blocks with transactions found in the latest 10 blocks
+              </p>
+              <p class="text-sm text-gray-600 mt-2">
+                Try disabling the filter to see all blocks
+              </p>
+            </div>
+          {:else}
+            <div class="space-y-3">
+              {#each latestBlocks.filter(block => !showOnlyBlocksWithTransactions || (block.transactionCount && block.transactionCount > 0)) as block}
               <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
                 <div class="flex items-center gap-4 flex-1">
                   <div class="p-2 bg-blue-100 rounded">
@@ -525,6 +549,7 @@
               </div>
             {/each}
           </div>
+          {/if}
         {/if}
       </Card>
     </div>
