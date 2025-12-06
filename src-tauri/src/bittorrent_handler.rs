@@ -588,6 +588,8 @@ impl BitTorrentHandler {
         if let Some(info_hash) = Self::extract_info_hash(identifier) {
             if let Err(e) = self.register_torrent_with_chiral_extension(&info_hash).await {
                 warn!("Failed to register torrent with Chiral extension: {}", e);
+            }
+        }
                 // Continue without Chiral extension rather than failing the download
         // Now get the info_hash from the handle (works for both magnets and .torrent files)
         let torrent_info_hash = handle.info_hash();
