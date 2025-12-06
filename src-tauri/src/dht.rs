@@ -1683,11 +1683,13 @@ async fn run_dht_node(
                                 info!("🔍 DEBUG DHT PUBLISH: Merged CIDs: {:?}", merged_metadata.cids);
 
                                 // Store minimal metadata in DHT (using merged metadata)
+                                // Include file_data for small files (e.g., reputation verdicts < 10KB)
                                 let dht_metadata = serde_json::json!({
                                     "file_hash": merged_metadata.merkle_root,
                                     "merkle_root": merged_metadata.merkle_root,
                                     "file_name": merged_metadata.file_name,
                                     "file_size": merged_metadata.file_size,
+                                    "file_data": merged_metadata.file_data, // Small files kept inline for fast retrieval
                                     "created_at": merged_metadata.created_at,
                                     "mime_type": merged_metadata.mime_type,
                                     "is_encrypted": merged_metadata.is_encrypted,

@@ -1,6 +1,6 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
@@ -466,22 +466,25 @@ export class DhtService {
 
   async searchFileMetadata(
     fileHash: string,
-    timeoutMs = 10_000
+    timeoutMs = 40_000
   ): Promise<FileMetadata | null> {
     const trimmed = fileHash.trim();
     if (!trimmed) {
       throw new Error("File hash is required");
     }
 
+    const cleanup: { fn: UnlistenFn | null } = { fn: null };
+    
     try {
       // Start listening for the search_result event
       const metadataPromise = new Promise<FileMetadata | null>(
-        (resolve, reject) => {
+        async (resolve, reject) => {
           const timeoutId = setTimeout(() => {
             reject(new Error(`Search timeout after ${timeoutMs}ms`));
           }, timeoutMs);
 
-          const unlistenPromise = listen<FileMetadata | null>(
+          // Set up the event listener and store the unlisten function
+          cleanup.fn = await listen<FileMetadata | null>(
             "found_file",
             (event) => {
               clearTimeout(timeoutId);
@@ -508,8 +511,6 @@ export class DhtService {
                     }
                   : null
               );
-              // Unsubscribe once we got the event
-              unlistenPromise.then((unlistenFn) => unlistenFn());
             }
           );
         }
@@ -542,6 +543,9 @@ export class DhtService {
     } catch (error) {
       console.error("Failed to search file metadata:", error);
       throw error;
+    } finally {
+      // Always clean up the event listener, whether we succeed, timeout, or error
+      cleanup.fn?.();
     }
   }
 }
