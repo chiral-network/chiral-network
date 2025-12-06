@@ -1768,14 +1768,25 @@ async fn run_dht_node(
                                     }
                                 }
 
-                                // Register this peer as a provider for the file
-                                let provider_key = kad::RecordKey::new(&merged_metadata.merkle_root.as_bytes());
-                                match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
-                                    Ok(query_id) => {
-                                    }
-                                    Err(e) => {
-                                        error!("failed to register as provider for file {}: {}", merged_metadata.merkle_root, e);
-                                        let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
+                                // Register this peer as a provider for the file, but only if we
+                                // currently have at least one dialable address (public or relay).
+                                if !swarm_has_dialable_addr(&swarm) {
+                                    warn!("🛑 Not registering as provider for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", merged_metadata.merkle_root);
+                                    let _ = event_tx
+                                        .send(DhtEvent::Warning(format!(
+                                            "Not registering {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
+                                            merged_metadata.merkle_root
+                                        )))
+                                        .await;
+                                } else {
+                                    let provider_key = kad::RecordKey::new(&merged_metadata.merkle_root.as_bytes());
+                                    match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                                        Ok(query_id) => {
+                                        }
+                                        Err(e) => {
+                                            error!("failed to register as provider for file {}: {}", merged_metadata.merkle_root, e);
+                                            let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
+                                        }
                                     }
                                 }
                                 // Cache the published file locally so it can be found in searches
@@ -1891,10 +1902,20 @@ async fn run_dht_node(
                                     error!("Failed to put record for encrypted file {}: {}", metadata.merkle_root, e);
                                 }
 
-                                // 4. Announce self as provider
-                                let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                                if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
-                                    error!("Failed to start providing encrypted file {}: {}", metadata.merkle_root, e);
+                                // 4. Announce self as provider (only if we have dialable addrs)
+                                if !swarm_has_dialable_addr(&swarm) {
+                                    warn!("🛑 Not registering encrypted file {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", metadata.merkle_root);
+                                    let _ = event_tx
+                                        .send(DhtEvent::Warning(format!(
+                                            "Not registering {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
+                                            metadata.merkle_root
+                                        )))
+                                        .await;
+                                } else {
+                                    let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                    if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                                        error!("Failed to start providing encrypted file {}: {}", metadata.merkle_root, e);
+                                    }
                                 }
 
                                 // Cache the published encrypted file locally
@@ -2105,7 +2126,15 @@ async fn run_dht_node(
                                     }
 
                                     let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
-                                    if let Err(e) =
+                                    if !swarm_has_dialable_addr(&swarm) {
+                                        warn!("🛑 Skipping provider refresh for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", file_hash);
+                                        let _ = event_tx
+                                            .send(DhtEvent::Warning(format!(
+                                                "Skipping provider refresh for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
+                                                file_hash
+                                            )))
+                                            .await;
+                                    } else if let Err(e) =
                                         swarm.behaviour_mut().kademlia.start_providing(provider_key)
                                     {
                                         debug!(
@@ -5083,14 +5112,36 @@ async fn handle_identify_event(
                 );
                 swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
             } else {
+                let mut added_reachable = false;
                 for addr in info.listen_addrs.clone() {
                     // Filter out loopback and private addresses (like Docker 172.17.x.x IPs)
                     // Only add addresses that are plausibly reachable from the internet
                     // or are relay circuit addresses
                     if ma_plausibly_reachable(&addr) {
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                        added_reachable = true;
                     } else {
                         debug!("Skipping unreachable address from peer {}: {}", peer_id, addr);
+                    }
+                }
+
+                // If nothing was added (no public/relay addrs), keep a single non-loopback
+                // address as a fallback to avoid ending up with an empty address set.
+                if !added_reachable {
+                    if let Some(fallback) = info
+                        .listen_addrs
+                        .iter()
+                        .find(|addr| ma_non_loopback_ipv4(addr))
+                        .cloned()
+                    {
+                        debug!(
+                            "Keeping fallback non-loopback address for peer {}: {}",
+                            peer_id, fallback
+                        );
+                        swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, fallback);
                     }
                 }
             }
@@ -7953,6 +8004,31 @@ fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
         return !v4.is_private();
     }
     false
+}
+
+/// A softer check that accepts any non-loopback IPv4 address (used as a fallback
+/// to avoid publishing with an empty address set). This will allow private LAN
+/// addresses but still reject loopback.
+fn ma_non_loopback_ipv4(ma: &Multiaddr) -> bool {
+    if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
+        return !v4.is_loopback();
+    }
+    false
+}
+
+/// Returns true if the swarm currently has at least one dialable address
+/// (either a public IP or a relay circuit).
+fn swarm_has_dialable_addr(swarm: &Swarm<DhtBehaviour>) -> bool {
+    // External addresses (with scores) are the authoritative list to advertise
+    if swarm
+        .external_addresses()
+        .any(|ext| ma_plausibly_reachable(ext.addr()))
+    {
+        return true;
+    }
+
+    // As a fallback, look at current listeners (may include relay circuit addrs)
+    swarm.listeners().any(|addr| ma_plausibly_reachable(addr))
 }
 
 /// Parsing multiaddr from error string is heuristic and may not be reliable
