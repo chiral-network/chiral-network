@@ -1476,6 +1476,9 @@ async fn start_dht_node(
         guard.clone()
     };
 
+    // Clone bootstrap nodes for health monitor before moving to DhtService::new
+    let bootstrap_nodes_for_monitor = bootstrap_nodes.clone();
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -1764,7 +1767,64 @@ async fn start_dht_node(
     }
 
     // Also attach DHT to HTTP server state for provider-side metrics
-    state.http_server_state.set_dht(dht_arc).await;
+    state.http_server_state.set_dht(dht_arc.clone()).await;
+
+    // Monitor peer health and auto-reconnect to bootstrap when needed
+    let dht_for_monitor = dht_arc.clone();
+    let app_for_monitor = app.clone();
+    
+    tokio::spawn(async move {
+        use std::time::Duration;
+        let mut last_check = std::time::Instant::now();
+        let check_interval = Duration::from_secs(30); // Check every 30 seconds
+        const MINIMUM_PEERS: usize = 5; // Auto-reconnect if below this
+        
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            
+            // Check if DHT is still alive
+            if Arc::strong_count(&dht_for_monitor) <= 1 {
+                tracing::info!("DHT health monitor: DHT service shut down, exiting");
+                break;
+            }
+            
+            if last_check.elapsed() < check_interval {
+                continue;
+            }
+            
+            last_check = std::time::Instant::now();
+            let peer_count = dht_for_monitor.get_peer_count().await;
+            
+            if peer_count < MINIMUM_PEERS {
+                tracing::warn!(
+                    "⚠️ Low peer count: {} (minimum: {}). Attempting to reconnect to bootstrap nodes...",
+                    peer_count,
+                    MINIMUM_PEERS
+                );
+                
+                // Reconnect to bootstrap nodes
+                for bootstrap_node in &bootstrap_nodes_for_monitor {
+                    match dht_for_monitor.connect_peer(bootstrap_node.clone()).await {
+                        Ok(_) => {
+                            tracing::info!("📡 Reconnected to bootstrap node: {}", bootstrap_node);
+                        }
+                        Err(e) => {
+                            tracing::debug!("Failed to reconnect to {}: {}", bootstrap_node, e);
+                        }
+                    }
+                }
+                
+                // Emit warning to UI
+                let _ = app_for_monitor.emit("dht_low_peer_count", serde_json::json!({
+                    "peer_count": peer_count,
+                    "minimum": MINIMUM_PEERS,
+                    "message": format!("DHT has only {} peers. Reconnecting to bootstrap nodes...", peer_count)
+                }));
+            } else {
+                tracing::debug!("✅ DHT peer count healthy: {}", peer_count);
+            }
+        }
+    });
 
     Ok(peer_id)
 }
@@ -6233,6 +6293,18 @@ async fn get_peer_metrics(
 }
 
 #[tauri::command]
+async fn get_connected_peer_metrics(
+    state: State<'_, AppState>,
+) -> Result<Vec<peer_selection::PeerMetrics>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        Ok(dht.get_connected_peer_metrics().await)
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
 async fn report_malicious_peer(
     peer_id: String,
     severity: String,
@@ -7465,6 +7537,7 @@ fn main() {
             record_transfer_success,
             record_transfer_failure,
             get_peer_metrics,
+            get_connected_peer_metrics,
             report_malicious_peer,
             select_peers_with_strategy,
             set_peer_encryption_support,

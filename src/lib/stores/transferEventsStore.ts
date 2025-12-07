@@ -431,6 +431,44 @@ function handleCompletedEvent(transfers: Map<string, Transfer>, event: any) {
   transfer.downloadedBytes = event.fileSize;
   transfer.progressPercentage = 100;
   transfer.sourcesUsed = event.sourcesUsed;
+
+  // Update reputation for all P2P peers that contributed to this transfer (fire-and-forget)
+  updatePeerReputationAfterTransfer(event).catch((error) => {
+    console.error("Failed to update peer reputation after transfer:", error);
+  });
+}
+
+/**
+ * Update reputation scores for all peers that contributed to a completed transfer
+ * This is called asynchronously (fire-and-forget) to avoid blocking the UI
+ */
+async function updatePeerReputationAfterTransfer(event: any): Promise<void> {
+  if (!event.sourcesUsed || !Array.isArray(event.sourcesUsed)) {
+    return;
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const durationMs = (event.durationSeconds || 0) * 1000;
+
+  for (const source of event.sourcesUsed) {
+    // Only record for P2P sources (skip HTTP, FTP, BitTorrent tracker sources)
+    if (source.sourceType === "p2p" && source.sourceId && source.bytesProvided > 0) {
+      try {
+        await invoke("record_transfer_success", {
+          peerId: source.sourceId,
+          bytes: source.bytesProvided,
+          durationMs: source.connectionDurationSeconds
+            ? source.connectionDurationSeconds * 1000
+            : durationMs,
+        });
+        console.log(
+          `✅ Updated reputation for peer ${source.sourceId.substring(0, 20)}... (+${source.bytesProvided} bytes, transfer_count++)`
+        );
+      } catch (error) {
+        console.error(`Failed to update reputation for peer ${source.sourceId}:`, error);
+      }
+    }
+  }
 }
 
 function handleFailedEvent(transfers: Map<string, Transfer>, event: any) {

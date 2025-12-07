@@ -547,6 +547,23 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
           if (paymentResult.success) {
             paidFiles.add(completedFile.hash); // Mark as paid
+            
+            // Update reputation for the seeder peer after successful payment
+            if (seederPeerId) {
+              try {
+                await invoke('record_transfer_success', {
+                  peerId: seederPeerId,
+                  bytes: completedFile.size,
+                  durationMs: 0, // WebRTC doesn't track duration here
+                });
+                // Also update frontend reputation store for immediate UI feedback
+                PeerSelectionService.notePeerSuccess(seederPeerId);
+                console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (+${completedFile.size} bytes)`);
+              } catch (repError) {
+                console.error('Failed to update seeder reputation:', repError);
+              }
+            }
+            
             diagnosticLogger.info('Download', 'WebRTC payment processed', { 
               amount: paymentAmount.toFixed(6), 
               seederWalletAddress, 
@@ -566,6 +583,22 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         }
       }
     } else if (completedFile) {
+      // File already paid for or free - still update reputation for successful transfer
+      const seederPeerId = completedFile.seederAddresses?.[0];
+      if (seederPeerId) {
+        try {
+          await invoke('record_transfer_success', {
+            peerId: seederPeerId,
+            bytes: completedFile.size,
+            durationMs: 0,
+          });
+          // Also update frontend reputation store for immediate UI feedback
+          PeerSelectionService.notePeerSuccess(seederPeerId);
+          console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (already paid)`);
+        } catch (repError) {
+          console.error('Failed to update seeder reputation:', repError);
+        }
+      }
       showToast(`Successfully saved "${data.fileName}"`, 'success');
     } else {
       showToast(`Successfully saved "${data.fileName}"`, 'success');

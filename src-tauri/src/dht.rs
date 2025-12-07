@@ -213,6 +213,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::manager::Sha256Hasher;
 use crate::peer_selection::{PeerMetrics, PeerSelectionService, SelectionStrategy};
 use crate::webrtc_service::{get_webrtc_service, FileChunk};
+use crate::reputation::{TransactionVerdict, VerdictOutcome};
 use std::io::{self};
 use tokio_socks::tcp::Socks5Stream;
 
@@ -5753,6 +5754,7 @@ pub struct DhtService {
     cmd_tx: mpsc::Sender<DhtCommand>,
     event_rx: Arc<Mutex<mpsc::Receiver<DhtEvent>>>,
     peer_id: String,
+    ed25519_secret_key: Arc<[u8; 32]>, // Store ed25519 secret for signing verdicts
     connected_peers: Arc<Mutex<HashSet<PeerId>>>,
     connected_addrs: HashMap<PeerId, Vec<Multiaddr>>,
     metrics: Arc<Mutex<DhtMetrics>>,
@@ -6046,17 +6048,27 @@ impl DhtService {
         // Generate a new keypair for this node
         // If a secret is provided, derive a stable 32-byte seed via SHA-256(secret)
         // Otherwise, generate a fresh random key.
-        let local_key = match secret {
+        let (local_key, ed25519_secret_key) = match secret {
             Some(secret_str) => {
                 let mut hasher = Sha256::new();
                 hasher.update(secret_str.as_bytes());
                 let digest = hasher.finalize();
                 let mut seed = [0u8; 32];
                 seed.copy_from_slice(&digest[..32]);
-                identity::Keypair::ed25519_from_bytes(seed)?
+                let keypair = identity::Keypair::ed25519_from_bytes(seed.clone())?;
+                (keypair, seed)
             }
-            None => identity::Keypair::generate_ed25519(),
+            None => {
+                // For generated keypairs, we need to extract the secret
+                // Generate from a random seed so we can keep the seed
+                use rand::RngCore;
+                let mut seed = [0u8; 32];
+                rand::thread_rng().fill_bytes(&mut seed);
+                let keypair = identity::Keypair::ed25519_from_bytes(seed.clone())?;
+                (keypair, seed)
+            }
         };
+        
         let local_peer_id = PeerId::from(local_key.public());
         let peer_id_str = local_peer_id.to_string();
 
@@ -6517,6 +6529,7 @@ impl DhtService {
             cmd_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             peer_id: peer_id_str,
+            ed25519_secret_key: Arc::new(ed25519_secret_key),
             connected_peers,
             connected_addrs: HashMap::new(),
             metrics,
@@ -7268,14 +7281,104 @@ impl DhtService {
 
     /// Record successful transfer for peer metrics
     pub async fn record_transfer_success(&self, peer_id: &str, bytes: u64, duration_ms: u64) {
+        println!("🔥 DEBUG: record_transfer_success called for peer: {}, bytes: {}", peer_id, bytes);
         let mut peer_selection = self.peer_selection.lock().await;
         peer_selection.record_transfer_success(peer_id, bytes, duration_ms);
+        
+        // Automatically publish a positive reputation verdict after successful transfer
+        drop(peer_selection); // Release lock before async work
+        println!("🔥 DEBUG: About to publish verdict for peer: {}", peer_id);
+        if let Err(e) = self.publish_transfer_verdict(peer_id, VerdictOutcome::Good, bytes).await {
+            tracing::warn!("Failed to publish reputation verdict for {}: {}", peer_id, e);
+            println!("❌ DEBUG: Failed to publish verdict: {}", e);
+        } else {
+            println!("✅ DEBUG: Successfully published verdict for peer: {}", peer_id);
+        }
+    }
+
+    /// Publish a reputation verdict for a peer after a transfer
+    async fn publish_transfer_verdict(&self, peer_id: &str, outcome: VerdictOutcome, bytes: u64) -> Result<(), String> {
+        println!("🔥 DEBUG: publish_transfer_verdict START for peer: {}", peer_id);
+        // Create verdict
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        println!("🔥 DEBUG: Creating verdict struct...");
+        let mut verdict = TransactionVerdict {
+            target_id: peer_id.to_string(),
+            tx_hash: None, // File transfers don't have blockchain transactions
+            outcome: outcome.clone(),
+            details: Some(format!("File transfer: {} bytes in {} outcome", bytes, match &outcome {
+                VerdictOutcome::Good => "successful",
+                VerdictOutcome::Disputed => "disputed",
+                VerdictOutcome::Bad => "failed",
+            })),
+            metric: Some(format!("transfer_bytes:{}", bytes)),
+            issued_at: now,
+            issuer_id: String::new(), // Will be set by sign_with
+            issuer_seq_no: 0, // Simple counter, could be improved
+            issuer_sig: String::new(), // Will be set by sign_with
+            tx_receipt: None,
+            evidence_blobs: None,
+        };
+        
+        println!("🔥 DEBUG: Creating signing key...");
+        // Sign the verdict using the stored ed25519 secret key
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&*self.ed25519_secret_key);
+        
+        println!("🔥 DEBUG: Signing verdict...");
+        // Sign the verdict
+        verdict.sign_with(&signing_key, &self.peer_id, 0)
+            .map_err(|e| format!("Failed to sign verdict: {}", e))?;
+        
+        println!("🔥 DEBUG: Computing DHT key...");
+        // Use target-only key so all verdicts about a peer are stored in one place
+        let dht_key = TransactionVerdict::dht_key_for_target(peer_id);
+        
+        println!("🔥 DEBUG: Serializing verdict...");
+        // Serialize verdict to JSON
+        let verdict_json = serde_json::to_vec(&verdict)
+            .map_err(|e| format!("Failed to serialize verdict: {}", e))?;
+        
+        println!("🔥 DEBUG: Sending DHT command...");
+        // Store in DHT using PutDhtValue command
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.send(DhtCommand::PutDhtValue {
+            key: dht_key.clone(),
+            value: verdict_json,
+            sender: tx,
+        }).await.map_err(|e| format!("Failed to send DHT command: {}", e))?;
+        
+        println!("🔥 DEBUG: Waiting for DHT response...");
+        // Wait for result
+        rx.await.map_err(|e| format!("Failed to receive DHT response: {}", e))??;
+        
+        println!("✅ DEBUG: Verdict published successfully!");
+        tracing::info!("✅ Published {} verdict for peer {} (key: {}...)", 
+            match outcome {
+                VerdictOutcome::Good => "positive",
+                VerdictOutcome::Disputed => "disputed",
+                VerdictOutcome::Bad => "negative",
+            },
+            peer_id,
+            &dht_key[..16]
+        );
+        
+        Ok(())
     }
 
     /// Record failed transfer for peer metrics
     pub async fn record_transfer_failure(&self, peer_id: &str, error: &str) {
         let mut peer_selection = self.peer_selection.lock().await;
         peer_selection.record_transfer_failure(peer_id, error);
+        
+        // Automatically publish a negative reputation verdict after failed transfer
+        drop(peer_selection); // Release lock before async work
+        if let Err(e) = self.publish_transfer_verdict(peer_id, VerdictOutcome::Bad, 0).await {
+            tracing::warn!("Failed to publish negative reputation verdict for {}: {}", peer_id, e);
+        }
     }
 
     /// Update peer encryption support
@@ -7294,6 +7397,34 @@ impl DhtService {
     pub async fn get_peer_metrics(&self) -> Vec<PeerMetrics> {
         let peer_selection = self.peer_selection.lock().await;
         peer_selection.get_all_metrics()
+    }
+
+    /// Get peer metrics for all currently connected DHT peers
+    /// This ensures the reputation system shows all connected peers, even if they don't have transfer history
+    pub async fn get_connected_peer_metrics(&self) -> Vec<PeerMetrics> {
+        let connected_peers = self.get_connected_peers().await;
+        let mut peer_selection = self.peer_selection.lock().await;
+        
+        let mut all_metrics = Vec::new();
+        
+        for peer_id_str in connected_peers {
+            // Try to get existing metrics, or create new default metrics if not found
+            if let Some(metrics) = peer_selection.get_peer_metrics(&peer_id_str) {
+                all_metrics.push(metrics.clone());
+            } else {
+                // Create default metrics for connected peers without metrics history
+                // This can happen when peers are newly connected or haven't had any transfers yet
+                let default_metrics = PeerMetrics::new(
+                    peer_id_str.clone(),
+                    "unknown".to_string(), // Address might not be available
+                );
+                // Update the peer selection cache with the new metrics
+                peer_selection.update_peer_metrics(default_metrics.clone());
+                all_metrics.push(default_metrics);
+            }
+        }
+        
+        all_metrics
     }
 
     /// Select best peers using a specific strategy
