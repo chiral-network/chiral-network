@@ -4365,10 +4365,10 @@ async fn handle_kademlia_event(
                                 info!("🔍 Raw metadata JSON: {}", metadata_json);
 
                                 // Construct FileMetadata from the JSON
-                                let merkle_root = metadata_json.get("merkleRoot").and_then(|v| v.as_str());
-                                let file_name = metadata_json.get("fileName").and_then(|v| v.as_str());
-                                let file_size = metadata_json.get("fileSize").and_then(|v| v.as_u64());
-                                let created_at = metadata_json.get("createdAt").and_then(|v| v.as_u64());
+                                let merkle_root = metadata_json.get("merkle_root").and_then(|v| v.as_str());
+                                let file_name = metadata_json.get("file_name").and_then(|v| v.as_str());
+                                let file_size = metadata_json.get("file_size").and_then(|v| v.as_u64());
+                                let created_at = metadata_json.get("created_at").and_then(|v| v.as_u64());
 
                                 info!("🔍 Parsed fields - merkleRoot: {:?}, fileName: {:?}, fileSize: {:?}, createdAt: {:?}", merkle_root, file_name, file_size, created_at);
 
