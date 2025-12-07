@@ -500,22 +500,8 @@
     ];
   }
 
-  // Check if current user is seeding this file
-  async function checkIfSeeding(metadata: FileMetadata): Promise<boolean> {
-    try {
-      const currentPeerId = await dhtService.getPeerId();
-      return metadata.seeders?.includes(currentPeerId) || false;
-    } catch (error) {
-      console.warn('Failed to check seeding status:', error);
-      return false;
-    }
-  }
-
   // Handle file download - show protocol selection modal first if multiple protocols available
   async function handleFileDownload(metadata: FileMetadata) {
-    // Check if user is seeding this file
-    selectedFileIsSeeding = await checkIfSeeding(metadata);
-
     // Handle BitTorrent downloads (magnet/torrent) - skip protocol selection, go directly to peer selection
     if (pendingTorrentType && pendingTorrentIdentifier) {
       selectedFile = metadata;

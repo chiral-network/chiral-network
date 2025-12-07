@@ -91,7 +91,7 @@
   let downloadError = ''
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
-  let chainId = 98765 // Default, will be fetched from backend
+  let chainId: number | null = 98765 // Default, will be fetched from backend
   let nodeAddress = ''
   let copiedNodeAddr = false
   

@@ -1802,26 +1802,35 @@ async fn run_dht_node(
                                     }
                                 }
 
-                                // Register this peer as a provider for the file, but only if we
-                                // currently have at least one dialable address (public or relay).
-                                if !swarm_has_dialable_addr(&swarm) {
-                                    warn!("🛑 Not registering as provider for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", merged_metadata.merkle_root);
-                                    {
-                                        let mut pending = pending_provider_registrations.lock().await;
-                                        pending.insert(merged_metadata.merkle_root.clone());
-                                    }
-                                    let _ = event_tx
-                                        .send(DhtEvent::Warning(format!(
-                                            "Not registering {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
-                                            merged_metadata.merkle_root
-                                        )))
-                                        .await;
-                                } else {
-                                    let provider_key = kad::RecordKey::new(&merged_metadata.merkle_root.as_bytes());
-                                    match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
-                                        Ok(query_id) => {
+                                // Register this peer as a provider for the file.
+                                // We allow provider registration even without dialable addresses because:
+                                // 1. Relay connectivity may be established later
+                                // 2. Other network mechanisms may enable connectivity
+                                // 3. Provider records are crucial for file discovery
+                                let has_dialable_addr = swarm_has_dialable_addr(&swarm);
+                                let provider_key = kad::RecordKey::new(&merged_metadata.merkle_root.as_bytes());
+                                match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                                    Ok(query_id) => {
+                                        if !has_dialable_addr {
+                                            info!("📢 Registered as provider for {} without dialable address - relying on relay/network connectivity", merged_metadata.merkle_root);
                                         }
-                                        Err(e) => {
+                                    }
+                                    Err(e) => {
+                                        if !has_dialable_addr {
+                                            // If we don't have dialable addresses and provider registration fails,
+                                            // add to pending list to retry when connectivity improves
+                                            warn!("🛑 Failed to register as provider for {} (no dialable address): {} - will retry when connectivity improves", merged_metadata.merkle_root, e);
+                                            {
+                                                let mut pending = pending_provider_registrations.lock().await;
+                                                pending.insert(merged_metadata.merkle_root.clone());
+                                            }
+                                            let _ = event_tx
+                                                .send(DhtEvent::Warning(format!(
+                                                    "Failed to register {} as provider (no dialable address): {} - will retry when relay connectivity is available",
+                                                    merged_metadata.merkle_root, e
+                                                )))
+                                                .await;
+                                        } else {
                                             error!("failed to register as provider for file {}: {}", merged_metadata.merkle_root, e);
                                             let _ = event_tx.send(DhtEvent::Error(format!("failed to register as provider: {}", e))).await;
                                         }
@@ -1940,24 +1949,29 @@ async fn run_dht_node(
                                     error!("Failed to put record for encrypted file {}: {}", metadata.merkle_root, e);
                                 }
 
-                                // 4. Announce self as provider (only if we have dialable addrs)
-                                if !swarm_has_dialable_addr(&swarm) {
-                                    warn!("🛑 Not registering encrypted file {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", metadata.merkle_root);
-                                    {
-                                        let mut pending = pending_provider_registrations.lock().await;
-                                        pending.insert(metadata.merkle_root.clone());
-                                    }
-                                    let _ = event_tx
-                                        .send(DhtEvent::Warning(format!(
-                                            "Not registering {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
-                                            metadata.merkle_root
-                                        )))
-                                        .await;
-                                } else {
-                                    let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                                    if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                                // 4. Announce self as provider for encrypted file
+                                let has_dialable_addr = swarm_has_dialable_addr(&swarm);
+                                let provider_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                                    if !has_dialable_addr {
+                                        // If we don't have dialable addresses and provider registration fails,
+                                        // add to pending list to retry when connectivity improves
+                                        warn!("🛑 Failed to register encrypted file {} as provider (no dialable address): {} - will retry when connectivity improves", metadata.merkle_root, e);
+                                        {
+                                            let mut pending = pending_provider_registrations.lock().await;
+                                            pending.insert(metadata.merkle_root.clone());
+                                        }
+                                        let _ = event_tx
+                                            .send(DhtEvent::Warning(format!(
+                                                "Failed to register encrypted file {} as provider (no dialable address): {} - will retry when relay connectivity is available",
+                                                metadata.merkle_root, e
+                                            )))
+                                            .await;
+                                    } else {
                                         error!("Failed to start providing encrypted file {}: {}", metadata.merkle_root, e);
                                     }
+                                } else if !has_dialable_addr {
+                                    info!("📢 Registered as provider for encrypted file {} without dialable address - relying on relay/network connectivity", metadata.merkle_root);
                                 }
 
                                 // Cache the published encrypted file locally
@@ -2192,25 +2206,27 @@ async fn run_dht_node(
                                     }
 
                                     let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
-                                    if !swarm_has_dialable_addr(&swarm) {
-                                        warn!("🛑 Skipping provider refresh for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", file_hash);
-                                        {
-                                            let mut pending = pending_provider_registrations.lock().await;
-                                            pending.insert(file_hash.clone());
+                                    if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(provider_key) {
+                                        if !swarm_has_dialable_addr(&swarm) {
+                                            // If we don't have dialable addresses and provider refresh fails,
+                                            // add to pending list to retry when connectivity improves
+                                            warn!("🛑 Failed to refresh provider record for {} (no dialable address): {} - will retry when connectivity improves", file_hash, e);
+                                            {
+                                                let mut pending = pending_provider_registrations.lock().await;
+                                                pending.insert(file_hash.clone());
+                                            }
+                                            let _ = event_tx
+                                                .send(DhtEvent::Warning(format!(
+                                                    "Failed to refresh provider record for {} (no dialable address): {} - will retry when relay connectivity is available",
+                                                    file_hash, e
+                                                )))
+                                                .await;
+                                        } else {
+                                            debug!(
+                                                "Failed to refresh provider record for {}: {}",
+                                                file_hash, e
+                                            );
                                         }
-                                        let _ = event_tx
-                                            .send(DhtEvent::Warning(format!(
-                                                "Skipping provider refresh for {}: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
-                                                file_hash
-                                            )))
-                                            .await;
-                                    } else if let Err(e) =
-                                        swarm.behaviour_mut().kademlia.start_providing(provider_key)
-                                    {
-                                        debug!(
-                                            "Failed to refresh provider record for {}: {}",
-                                            file_hash, e
-                                        );
                                     }
                                 } else {
                                     pending_heartbeat_updates
@@ -5702,9 +5718,6 @@ async fn flush_pending_providers(
     pending: &Arc<Mutex<HashSet<String>>>,
     event_tx: &mpsc::Sender<DhtEvent>,
 ) {
-    if !swarm_has_dialable_addr(swarm) {
-        return;
-    }
     let hashes: Vec<String> = {
         let mut guard = pending.lock().await;
         guard.drain().collect()
@@ -5716,13 +5729,18 @@ async fn flush_pending_providers(
                 info!("📢 Re-announced provider record for {}", file_hash);
             }
             Err(e) => {
+                // If re-announcement fails, put it back in pending for another retry
                 warn!(
-                    "Failed to re-announce provider record for {}: {}",
+                    "Failed to re-announce provider record for {}: {} - will retry later",
                     file_hash, e
                 );
+                {
+                    let mut guard = pending.lock().await;
+                    guard.insert(file_hash.clone());
+                }
                 let _ = event_tx
                     .send(DhtEvent::Warning(format!(
-                        "Failed to re-announce provider for {}: {}",
+                        "Failed to re-announce provider for {}: {} - will retry when connectivity improves",
                         file_hash, e
                     )))
                     .await;
