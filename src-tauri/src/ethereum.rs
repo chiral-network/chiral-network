@@ -374,7 +374,7 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg("full")
+            .arg("snap")
             .arg("--maxpeers")
             .arg("50")
             // P2P discovery settings
