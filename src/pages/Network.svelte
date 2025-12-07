@@ -1295,7 +1295,7 @@
       chainId = await invoke('get_network_chain_id') as number
     } catch (error) {
       console.error('Failed to fetch chain ID:', error)
-      chainId = null
+      // Keep the default value on error
     }
   }
 
