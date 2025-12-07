@@ -6988,17 +6988,9 @@ impl DhtService {
     ) -> Result<Option<FileMetadata>, String> {
         info!("🔍 Starting search for file: {} (timeout: {}ms)", file_hash, timeout_ms);
 
-        // First check local cache for recently uploaded/published files
-        {
-            let cache = self.file_metadata_cache.lock().await;
-            if let Some(metadata) = cache.get(&file_hash) {
-                info!("✅ Found file in local cache: {} (name: {})", file_hash, metadata.file_name);
-                return Ok(Some(metadata.clone()));
-            }
-        }
-
-        // If not in cache, query DHT for authoritative results
-        info!("File not in local cache, querying DHT for file {}...", file_hash);
+        // Skip local cache to always get fresh metadata from DHT
+        // This ensures we have the latest protocols, seeders, and availability info
+        info!("Querying DHT for fresh metadata for file {}...", file_hash);
 
         if timeout_ms == 0 {
             let (sender, _receiver) = oneshot::channel();

@@ -538,7 +538,7 @@
       {:else if !canAfford && currentPrice && currentPrice > 0}
         <span class="text-red-600 font-semibold">Insufficient balance to download this file</span>
       {:else if metadata.seeders?.length}
-        {metadata.seeders.length > 1 ? 'Choose any seeder to initiate a download.' : 'Single seeder available for download.'}
+        {metadata.seeders.length > 1 ? '' : 'Single seeder available.'}
       {:else}
         Waiting for peers to announce this file.
       {/if}
@@ -710,7 +710,7 @@
 
       {#if metadata.seeders && metadata.seeders.length > 0}
         <p class="text-sm text-muted-foreground text-center mb-4">
-          Found {metadata.seeders.length} available peer{metadata.seeders.length === 1 ? '' : 's'}. Choose one to start the download.
+          Found {metadata.seeders.length} available peer{metadata.seeders.length === 1 ? '' : 's'}.
         </p>
         <div class="space-y-2 max-h-60 overflow-auto pr-1 mb-6">
           {#each metadata.seeders as seeder, index}
