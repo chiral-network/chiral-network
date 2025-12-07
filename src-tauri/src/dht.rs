@@ -1949,26 +1949,65 @@ async fn run_dht_node(
                                     Ok(cid) => cid.clone(),
                                     Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                                 };
-                                let Some(first_seeder) = file_metadata.seeders.get(0) else {
+                                if file_metadata.seeders.is_empty() {
                                     let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
                                     return;
-                                };
+                                }
 
-                                let peer_id = match PeerId::from_str(first_seeder) {
-                                    Ok(id) => id.clone(),
-                                    Err(e) => {
-                                        let _ = event_tx.send(DhtEvent::Error(e.to_string())).await;
-                                        return;
-                                    }
-                                };
+                                // Try multiple seeders for initial connection/parsing reliability
+                                // IPFS Bitswap will handle peer discovery and distribution automatically,
+                                // but we want to ensure we start with a valid, reachable seeder
+                                let max_attempts = std::cmp::min(3, file_metadata.seeders.len());
+                                let mut tried_seeders: Vec<String> = Vec::new();
 
-                                // Request the root block which contains the CIDs
-                                let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+                                let mut successful_start = false;
 
-                                file_metadata.download_path = Some(download_path);
-                                // Store the root query ID to handle when we get the root block
-                                info!("INSERTING INTO ROOT QUERY MAPPING");
-                                root_query_mapping.lock().await.insert(root_query_id, file_metadata);
+                                for attempt in 0..max_attempts {
+                                    // Select next seeder (prefer earlier ones but skip tried ones)
+                                    let seeder_to_try = file_metadata.seeders
+                                        .iter()
+                                        .find(|s| !tried_seeders.contains(s))
+                                        .cloned();
+
+                                    let Some(seeder) = seeder_to_try else {
+                                        warn!("All {} seeders tried for file {} - none were valid",
+                                              file_metadata.seeders.len(), file_metadata.merkle_root);
+                                        break;
+                                    };
+
+                                    tried_seeders.push(seeder.clone());
+
+                                    let peer_id = match PeerId::from_str(&seeder) {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            warn!("Invalid seeder peer ID {} (attempt {}/{}): {}",
+                                                  seeder, attempt + 1, max_attempts, e);
+                                            continue;
+                                        }
+                                    };
+
+                                    info!("Attempting IPFS download from seeder {} (attempt {}/{}): {}",
+                                          seeder, attempt + 1, max_attempts, file_metadata.file_name);
+
+                                    // Request the root block which contains the CIDs
+                                    let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+
+                                    file_metadata.download_path = Some(download_path.clone());
+
+                                    // Store the root query ID to handle when we get the root block
+                                    info!("Started IPFS download attempt with seeder {}", seeder);
+                                    root_query_mapping.lock().await.insert(root_query_id, file_metadata.clone());
+
+                                    successful_start = true;
+                                    break; // Start with first valid seeder, let IPFS handle the rest
+                                }
+
+                                if !successful_start {
+                                    let _ = event_tx.send(DhtEvent::Error(format!(
+                                        "Failed to start IPFS download after trying {} seeders - all had invalid peer IDs",
+                                        tried_seeders.len()
+                                    ))).await;
+                                }
                             }
                             Some(DhtCommand::StopPublish(file_hash)) => {
                                 let key = kad::RecordKey::new(&file_hash);
