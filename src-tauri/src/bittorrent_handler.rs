@@ -1132,6 +1132,58 @@ impl BitTorrentHandler {
             BitTorrentError::Unknown { message: error_msg }
         }
     }
+
+    /// Monitor a running torrent and emit BitTorrentEvent messages via the provided sender.
+    /// This is used by the MultiSourceDownloadService to bridge librqbit progress into the
+    /// multi-source pipeline.
+    pub async fn monitor_download(
+        &self,
+        handle: Arc<ManagedTorrent>,
+        mut tx: mpsc::Sender<BitTorrentEvent>,
+    ) {
+        let mut interval = time::interval(Duration::from_secs(1));
+        let mut no_progress_count: u32 = 0;
+        const MAX_NO_PROGRESS_ITERATIONS: u32 = 300;
+
+        loop {
+            interval.tick().await;
+
+            let stats = handle.stats();
+            let downloaded = stats.progress_bytes;
+            let total = stats.total_bytes;
+
+            // If receiver dropped, stop monitoring
+            if tx.is_closed() {
+                return;
+            }
+
+            // Send progress update; if send fails, stop
+            if tx.send(BitTorrentEvent::Progress { downloaded, total }).await.is_err() {
+                return;
+            }
+
+            // Completed
+            if total > 0 && downloaded >= total {
+                let _ = tx.send(BitTorrentEvent::Completed).await;
+                return;
+            }
+
+            // Simple stalled-download detection
+            if downloaded == 0 {
+                no_progress_count = no_progress_count.saturating_add(1);
+                if no_progress_count >= MAX_NO_PROGRESS_ITERATIONS {
+                    let _ = tx
+                        .send(BitTorrentEvent::Failed(BitTorrentError::DownloadTimeout {
+                            timeout_secs: MAX_NO_PROGRESS_ITERATIONS as u64,
+                        }))
+                        .await;
+                    return;
+                }
+            } else {
+                no_progress_count = 0;
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -1848,7 +1900,7 @@ mod tests {
 
         // 3. Assert: Verify that the torrent was NOT added in a paused state.
         let stats = handle.stats();
-        assert_ne!(stats.state, TorrentState::Paused, "Torrent should not be paused when falling back to public network");
+        assert_ne!( stats.state, TorrentState::Paused, "Torrent should not be paused when falling back to public network");
         info!("Torrent state is {:?}, which is not Paused. Fallback test successful.", stats.state);
     }
 }
