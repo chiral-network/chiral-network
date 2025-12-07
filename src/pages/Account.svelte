@@ -1555,84 +1555,6 @@
     }
   }
 
-  let sessionTimeout = 3600; // seconds (1 hour)
-  let sessionTimer: number | null = null;
-  let sessionCleanup: (() => void) | null = null;
-  let autoLockMessage = '';
-
-  function clearSessionTimer() {
-    if (sessionTimer) {
-      clearTimeout(sessionTimer);
-      sessionTimer = null;
-    }
-  }
-
-  function resetSessionTimer() {
-    if (typeof window === 'undefined' || !$settings.enableWalletAutoLock) {
-      clearSessionTimer();
-      return;
-    }
-    clearSessionTimer();
-    sessionTimer = window.setTimeout(() => {
-      autoLockWallet();
-    }, sessionTimeout * 1000);
-  }
-
-  function autoLockWallet() {
-    if (!$settings.enableWalletAutoLock) return;
-    handleLogout();
-    autoLockMessage = 'Wallet auto-locked due to inactivity.';
-    showToast(autoLockMessage, 'warning');
-    setTimeout(() => autoLockMessage = '', 5000);
-  }
-
-  // Listen for user activity to reset timer
-  function setupSessionTimeout() {
-    if (typeof window === 'undefined') {
-      return () => {};
-    }
-    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
-    const handler = () => resetSessionTimer();
-    for (const ev of events) {
-      window.addEventListener(ev, handler);
-    }
-    resetSessionTimer();
-    return () => {
-      for (const ev of events) {
-        window.removeEventListener(ev, handler);
-      }
-      clearSessionTimer();
-    };
-  }
-
-  function teardownSessionTimeout() {
-    if (sessionCleanup) {
-      sessionCleanup();
-      sessionCleanup = null;
-    } else {
-      clearSessionTimer();
-    }
-  }
-
-  $: if (typeof window !== 'undefined') {
-    if ($settings.enableWalletAutoLock) {
-      if (!sessionCleanup) {
-        sessionCleanup = setupSessionTimeout();
-      } else {
-        resetSessionTimer();
-      }
-    } else {
-      teardownSessionTimeout();
-    }
-  }
-
-  onMount(() => {
-    if ($settings.enableWalletAutoLock && !sessionCleanup) {
-      sessionCleanup = setupSessionTimeout();
-    }
-    return () => teardownSessionTimeout();
-  });
-
 </script>
 
 <div class="space-y-6">
@@ -2879,11 +2801,6 @@
           </Button>
         </div>
       </div>
-    </div>
-  {/if}
-  {#if autoLockMessage}
-  <div class="fixed top-0 left-0 w-full bg-yellow-100 text-yellow-800 text-center py-2 z-50">
-    {autoLockMessage}
   </div>
   {/if}
 </div>
