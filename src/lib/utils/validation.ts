@@ -92,7 +92,8 @@ export function validateStoragePath(path: string): {
 
   // Detect platform - in browser environment, we can't reliably detect OS
   // So we'll accept both Windows and Unix absolute paths
-  const isWindowsAbsolute = /^[a-zA-Z]:[\\\/]/.test(trimmed);
+  // Windows absolute paths must have drive letter, separator, and at least one character
+  const isWindowsAbsolute = /^[a-zA-Z]:[\\\/].+/.test(trimmed);
   const isUnixAbsolute = trimmed.startsWith('/');
 
   // Check if path starts with tilde (should use Tauri dialog instead)
