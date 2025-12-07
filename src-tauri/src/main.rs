@@ -3360,14 +3360,14 @@ fn validate_storage_path(path: String) -> Result<(), String> {
         return Err("Storage path cannot be empty".to_string());
     }
     
-    // Check if path starts with tilde (should use dialog picker instead)
-    if trimmed.starts_with('~') {
-        return Err("Please use the folder picker button or enter an absolute path instead of using ~".to_string());
-    }
-    
     // Platform-specific validation BEFORE general absolute check
     #[cfg(target_os = "windows")]
     {
+        // On Windows, reject tilde since it's not supported
+        if trimmed.starts_with('~') {
+            return Err("The ~ character is not a valid Windows directory. Please enter a full Windows path (e.g., C:\\Users\\...) or use the folder picker.".to_string());
+        }
+        
         // On Windows, reject Unix-style paths (starting with /)
         if trimmed.starts_with('/') {
             return Err("Unix-style paths (e.g., /home/) are not valid on Windows. Please use a Windows path (e.g., C:\\Users\\...)".to_string());
@@ -7438,6 +7438,7 @@ fn main() {
             detect_locale,
             get_download_directory,
             check_directory_exists,
+            get_default_storage_directory,
             validate_storage_path,
             ensure_directory_exists,
             get_dht_health,
@@ -8485,6 +8486,29 @@ fn check_directory_exists(path: String) -> Result<bool, String> {
     use std::path::Path;
     let p = Path::new(&path);
     Ok(p.exists() && p.is_dir())
+}
+
+/// Returns the platform-specific default storage directory path as a string
+#[tauri::command]
+fn get_default_storage_directory() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        // Get the user's home directory from environment variable
+        let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\<user>".to_string());
+        return format!("{}\\Downloads\\Chiral-Network-Storage", user_profile);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Use home directory with tilde expansion
+        return "~/Downloads/Chiral-Network-Storage".to_string();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Use home directory with tilde expansion
+        return "~/Downloads/Chiral-Network-Storage".to_string();
+    }
+    // Fallback for other platforms
+    "~/Downloads/Chiral-Network-Storage".to_string()
 }
 
 /// Event pump for DHT events, moved out of start_dht_node

@@ -678,8 +678,16 @@
   }
 
   async function handleConfirmReset() {
-    localSettings = { ...defaultSettings }; // Reset local changes
-    settings.set(defaultSettings); // Reset the store
+    // Set platform-specific default storage path
+    // Get platform-specific default storage path from backend
+    let defaultPath = "~/Downloads/Chiral-Network-Storage";
+    try {
+      defaultPath = await invoke("get_default_storage_directory");
+    } catch (e) {
+      errorLogger.fileOperationError('Get default storage directory (reset)', e instanceof Error ? e.message : String(e));
+    }
+    localSettings = { ...defaultSettings, storagePath: defaultPath };
+    settings.set(localSettings); // Reset the store
     await saveSettings(); // Save the reset state
     showResetConfirmModal = false;
   }
@@ -1065,17 +1073,17 @@ selectedLanguage = initial; // Synchronize dropdown display value
       if (!pathValidation.isValid) {
         next.storagePath = pathValidation.error || "Invalid storage path";
       } else {
-        next.storagePath = null;
+        // Don't clear the error yet if we have a backend error
+        // This preserves platform-specific validation errors from backend
+        if (!errors.storagePath) {
+          next.storagePath = null;
+        } else {
+          next.storagePath = errors.storagePath;
+        }
       }
       
-      // Then validate with backend if in Tauri environment
-      // Backend validation will update errors asynchronously
-      if (typeof window !== "undefined" && "__TAURI__" in window) {
-        validateStoragePathBackend(localSettings.storagePath).catch((err) => {
-          // Error handling is done in validateStoragePathBackend
-          diagnosticLogger.debug('Settings', 'Storage path backend validation error', { error: String(err) });
-        });
-      }
+      // Schedule backend validation (debounced)
+      scheduleBackendValidation(localSettings.storagePath);
     } else {
       next.storagePath = null; // Empty is allowed (will use default)
       storagePathWarning = null; // Clear any warnings when path is empty
@@ -1120,6 +1128,38 @@ selectedLanguage = initial; // Synchronize dropdown display value
         storagePathWarning = null;
       }
     }
+  }
+
+
+  // Debounced backend validation to avoid too many calls while typing
+  let backendValidationTimeout: NodeJS.Timeout | null = null;
+  let isTauri = false;
+  async function detectTauri() {
+    try {
+      await getVersion();
+      isTauri = true;
+    } catch {
+      isTauri = false;
+    }
+  }
+  onMount(() => {
+    detectTauri();
+  });
+
+  function scheduleBackendValidation(path: string) {
+    if (backendValidationTimeout) {
+      clearTimeout(backendValidationTimeout);
+    }
+    backendValidationTimeout = setTimeout(() => {
+      console.log('Scheduling backend validation for path:', path);
+      console.log('Is Tauri:', isTauri);
+      if (isTauri) {
+        console.log('Passed check:', path);
+        validateStoragePathBackend(path).catch((err) => {
+          diagnosticLogger.debug('Settings', 'Storage path backend validation error', { error: String(err) });
+        });
+      }
+    }, 500); // Wait 500ms after user stops typing
   }
 
   // Revalidate whenever settings change
