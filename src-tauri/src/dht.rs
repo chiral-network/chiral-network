@@ -4355,34 +4355,39 @@ async fn handle_kademlia_event(
 
                         // Check if this is a response to a file search query
                         if let Some(pending_search) = pending_search_queries.lock().await.remove(&id) {
-                            info!("📥 Received search result for query ID: {:?}, searching for: {}", id, pending_search.file_hash);
+                            let search_file_hash = pending_search.file_hash.clone();
+                            info!("📥 Received search result for query ID: {:?}, searching for: {}", id, search_file_hash);
+
                             // This is a search result - parse it and send it back
-                            if let Ok(metadata_json) =
-                                serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
-                            {
+                            match serde_json::from_slice::<serde_json::Value>(&peer_record.record.value) {
+                                Ok(metadata_json) => {
+                                // Debug: Log the raw metadata JSON
+                                info!("🔍 Raw metadata JSON: {}", metadata_json);
+
                                 // Construct FileMetadata from the JSON
+                                let merkle_root = metadata_json.get("merkleRoot").and_then(|v| v.as_str());
+                                let file_name = metadata_json.get("fileName").and_then(|v| v.as_str());
+                                let file_size = metadata_json.get("fileSize").and_then(|v| v.as_u64());
+                                let created_at = metadata_json.get("createdAt").and_then(|v| v.as_u64());
+
+                                info!("🔍 Parsed fields - merkleRoot: {:?}, fileName: {:?}, fileSize: {:?}, createdAt: {:?}", merkle_root, file_name, file_size, created_at);
+
                                 if let (
                                     Some(file_hash),
-                                    Some(file_name),
-                                    Some(file_size),
-                                    Some(created_at),
-                                ) = (
-                                    // Use merkleRoot as the primary identifier (camelCase as per serde rename)
-                                    metadata_json.get("merkleRoot").and_then(|v| v.as_str()),
-                                    metadata_json.get("fileName").and_then(|v| v.as_str()),
-                                    metadata_json.get("fileSize").and_then(|v| v.as_u64()),
-                                    metadata_json.get("createdAt").and_then(|v| v.as_u64()),
-                                ) {
-                                    info!("🔍 Found metadata record - merkleRoot: {}, searching for: {}", file_hash, pending_search.file_hash);
+                                    Some(file_name_val),
+                                    Some(file_size_val),
+                                    Some(created_at_val),
+                                ) = (merkle_root, file_name, file_size, created_at                                ) {
+                                    info!("🔍 Found metadata record - merkleRoot: {}, searching for: {}", file_hash, search_file_hash);
                                     // Verify this is the file we were searching for
-                                    if file_hash == pending_search.file_hash {
+                                    if file_hash == search_file_hash {
                                         info!("🔧 Constructing metadata for found file: {}", file_hash);
                                         let mut metadata = construct_file_metadata_from_json_simple(
                                             &metadata_json,
                                             file_hash,
-                                            file_name,
-                                            file_size,
-                                            created_at,
+                                            file_name_val,
+                                            file_size_val,
+                                            created_at_val,
                                         );
                                         info!("🔧 Metadata constructed successfully");
 
@@ -4395,9 +4400,9 @@ async fn handle_kademlia_event(
                                                     metadata.seeders.push(provider.clone());
                                                 }
                                             }
-                                            info!("✅ Found searched file: {} ({}) with {} seeders (merged from metadata + providers)", file_name, file_hash, metadata.seeders.len());
+                                            info!("✅ Found searched file: {} ({}) with {} seeders (merged from metadata + providers)", file_name_val, file_hash, metadata.seeders.len());
                                         } else {
-                                            info!("✅ Found searched file: {} ({}) with {} seeders from metadata", file_name, file_hash, metadata.seeders.len());
+                                            info!("✅ Found searched file: {} ({}) with {} seeders from metadata", file_name_val, file_hash, metadata.seeders.len());
                                         }
 
                                         // Merge with local cache to preserve multi-protocol metadata
@@ -4421,25 +4426,22 @@ async fn handle_kademlia_event(
                                         info!("✅ Search result processing completed successfully");
                                         return; // Successfully handled the search result
                                     } else {
-                                        info!("❌ Hash mismatch - found metadata for {} but searching for {}", file_hash, pending_search.file_hash);
-                                        // Put the pending search back since this wasn't the right result
-                                        pending_search_queries.lock().await.insert(id, pending_search);
-                                        return; // Don't process this wrong result
+                                        info!("❌ Hash mismatch - found metadata for {} but searching for {}", file_hash, search_file_hash);
                                     }
                                 } else {
                                     debug!("Received incomplete metadata record during search");
-                                    // Put the search back since we couldn't parse the record
-                                    let _ = pending_search_queries.lock().await.insert(id, pending_search);
                                 }
-                            } else {
-                                debug!("Received non-JSON record during search for {}", pending_search.file_hash);
-                                // Put the search back
-                                let _ = pending_search_queries.lock().await.insert(id, pending_search);
                             }
-                            return; // Don't process this as a general discovery
-                        }
+                            Err(e) => {
+                                warn!("❌ Failed to parse metadata JSON: {}", e);
+                                info!("❌ Raw metadata bytes: {:?}", &peer_record.record.value);
+                            }
+                            }
 
-                        // Try to parse DHT record as essential metadata JSON (for general discoveries)
+                            // If we get here, put the search back for retry
+                            let _ = pending_search_queries.lock().await.insert(id, pending_search);
+                            return;
+                        }
                         if let Ok(metadata_json) =
                             serde_json::from_slice::<serde_json::Value>(&peer_record.record.value)
                         {
