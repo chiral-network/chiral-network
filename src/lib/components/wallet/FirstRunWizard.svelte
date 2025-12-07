@@ -189,7 +189,7 @@
 
 {#if mode === 'welcome'}
   <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-    <Card class="w-full max-w-md p-8 space-y-6">
+    <Card class="w-full max-w-3xl p-8 space-y-6">
       <div class="space-y-2">
         <h2 class="text-3xl font-bold text-center">{$t('account.firstRun.welcome')}</h2>
         <p class="text-center text-muted-foreground">
@@ -248,7 +248,7 @@
 
 {#if mode === 'import'}
   <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-    <Card class="w-full max-w-md p-8 space-y-6">
+    <Card class="w-full max-w-2xl p-8 space-y-6">
       <div class="space-y-2">
         <h2 class="text-3xl font-bold text-center">
           {$t('account.firstRun.importTitle') === 'account.firstRun.importTitle'
