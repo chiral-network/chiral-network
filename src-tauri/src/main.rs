@@ -3345,6 +3345,32 @@ fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
         .ok_or_else(|| "Failed to convert path to string".to_string())
 }
 
+/// Validates a storage path to ensure it's a valid absolute path
+/// This prevents issues where relative paths or tilde expansion
+/// could create directories in unexpected locations.
+#[tauri::command]
+fn validate_storage_path(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    
+    if trimmed.is_empty() {
+        return Err("Storage path cannot be empty".to_string());
+    }
+    
+    // Check if path starts with tilde (should use dialog picker instead)
+    if trimmed.starts_with('~') {
+        return Err("Please use the folder picker button or enter an absolute path instead of using ~".to_string());
+    }
+    
+    let path_obj = Path::new(trimmed);
+    
+    // Path must be absolute
+    if !path_obj.is_absolute() {
+        return Err("Storage path must be an absolute path (e.g., C:\\Users\\... on Windows or /home/... on Unix)".to_string());
+    }
+    
+    Ok(())
+}
+
 #[tauri::command]
 async fn ensure_directory_exists(path: String) -> Result<(), String> {
     let path_obj = Path::new(&path);
@@ -7381,6 +7407,7 @@ fn main() {
             detect_locale,
             get_download_directory,
             check_directory_exists,
+            validate_storage_path,
             ensure_directory_exists,
             get_dht_health,
             get_dht_peer_count,

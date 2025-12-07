@@ -38,6 +38,7 @@
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
   import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
+  import { validateStoragePath } from "$lib/utils/validation";
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -370,7 +371,16 @@
   // Check for changes
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
+  // Check for validation errors
+  $: hasValidationErrors = Object.values(errors).some(error => error !== null) || !!maxStorageError;
+
   async function saveSettings() {
+    // Prevent saving if there are validation errors
+    if (hasValidationErrors) {
+      showToast("Please fix validation errors before saving", "error");
+      return;
+    }
+
     // Map trustedProxyRelays to preferredRelays for consistency
     if (localSettings.trustedProxyRelays?.length) {
       localSettings.preferredRelays = localSettings.trustedProxyRelays;
@@ -642,7 +652,7 @@
 
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
-    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold || !!errors.storagePath;
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
@@ -1045,6 +1055,18 @@ selectedLanguage = initial; // Synchronize dropdown display value
       next.capWarningThresholds = null;
     }
 
+    // Validate storage path
+    if (localSettings.storagePath && localSettings.storagePath.trim()) {
+      const pathValidation = validateStoragePath(localSettings.storagePath);
+      if (!pathValidation.isValid) {
+        next.storagePath = pathValidation.error || "Invalid storage path";
+      } else {
+        next.storagePath = null;
+      }
+    } else {
+      next.storagePath = null; // Empty is allowed (will use default)
+    }
+
     errors = next;
 }
 
@@ -1242,7 +1264,7 @@ function sectionMatches(section: string, query: string) {
               id="storage-path"
               bind:value={localSettings.storagePath}
               placeholder={storagePathPlaceholder}
-              class="flex-1"
+              class={`flex-1 ${errors.storagePath ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
             />
             <Button
               variant="outline"
@@ -1252,7 +1274,9 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
-
+          {#if errors.storagePath}
+            <p class="mt-1 text-sm text-red-500">{errors.storagePath}</p>
+          {/if}
         </div>
 
         <div class="grid grid-cols-2 gap-4">
@@ -2415,9 +2439,9 @@ function sectionMatches(section: string, query: string) {
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges}
+        disabled={!hasChanges || hasValidationErrors}
 
-        class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
+        class={`transition-colors duration-200 ${!hasChanges || hasValidationErrors ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}
