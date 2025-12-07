@@ -545,7 +545,7 @@ impl BitTorrentHandler {
     async fn start_download_with_options(
         &self,
         identifier: &str,
-        mut add_opts: AddTorrentOptions,
+        add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
