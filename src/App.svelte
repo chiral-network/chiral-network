@@ -590,7 +590,7 @@ function handleFirstRunComplete() {
             const isGethRunning = await invoke<boolean>('is_geth_running').catch(() => false);
             
             if (isGethRunning) {
-              console.log("✅ Geth blockchain node already running (detected on startup)");
+              // Geth already running
             } else {
               // Check if Geth is installed
               const isGethInstalled = await invoke<boolean>('check_geth_binary').catch(() => false);
@@ -622,12 +622,9 @@ function handleFirstRunComplete() {
                   throw downloadError; // Don't try to start if download failed
                 }
               }
-              
-              console.log("🚀 Auto-starting Geth blockchain node...");
-              
+
               try {
                 await invoke('start_geth_node', { dataDir: './bin/geth-data' });
-                console.log("✅ Geth blockchain node auto-started successfully");
                 
                 // Update geth status
                 const { gethStatus } = await import('./lib/services/gethService');

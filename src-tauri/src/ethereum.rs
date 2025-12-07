@@ -783,7 +783,7 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
     // Convert wei to ether (1 ether = 10^18 wei)
     let balance_ether = balance_wei as f64 / 1e18;
     
-    tracing::info!("💰 Balance for {}: {} (raw: {})", address, balance_ether, balance_hex);
+    tracing::debug!("💰 Balance for {}: {} (raw: {})", address, balance_ether, balance_hex);
 
     Ok(format!("{:.6}", balance_ether))
 }

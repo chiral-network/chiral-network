@@ -197,7 +197,13 @@
 
   async function confirmDownload() {
     showDownloadConfirmDialog = false;
-    
+
+    // Skip payment for files the user is seeding (they already paid hosting costs)
+    if (isSeeding) {
+      showDecryptDialog = true;
+      return;
+    }
+
     // All downloads require payment (minimum 0.0001 Chiral)
     // Always show payment confirmation
     showPaymentConfirmDialog = true;
@@ -467,7 +473,9 @@
           <li class="flex items-center justify-between">
             <span class="text-muted-foreground">Price</span>
             <span class="font-semibold text-emerald-600">
-              {#if checkingBalance}
+              {#if isSeeding}
+                Free
+              {:else if checkingBalance}
                 Calculating...
               {:else if currentPrice !== null}
                 {currentPrice.toFixed(4)} Chiral
@@ -530,7 +538,7 @@
       {:else if !canAfford && currentPrice && currentPrice > 0}
         <span class="text-red-600 font-semibold">Insufficient balance to download this file</span>
       {:else if metadata.seeders?.length}
-        {metadata.seeders.length > 1 ? 'Choose any seeder to initiate a download.' : 'Single seeder available for download.'}
+        {metadata.seeders.length > 1 ? '' : 'Single seeder available.'}
       {:else}
         Waiting for peers to announce this file.
       {/if}
@@ -538,13 +546,13 @@
     <div class="flex items-center gap-2">
       <Button
         on:click={handleDownload}
-        disabled={isBusy || checkingBalance || (!canAfford && currentPrice && currentPrice > 0)}
-        class={!canAfford && currentPrice && currentPrice > 0 ? 'opacity-50 cursor-not-allowed' : ''}
+        disabled={isBusy || checkingBalance || (!canAfford && currentPrice && currentPrice > 0 && !isSeeding)}
+        class={!canAfford && currentPrice && currentPrice > 0 && !isSeeding ? 'opacity-50 cursor-not-allowed' : ''}
       >
         <Download class="h-4 w-4 mr-2" />
         {#if checkingBalance}
           Checking balance...
-        {:else if !canAfford && currentPrice && currentPrice > 0}
+        {:else if !canAfford && currentPrice && currentPrice > 0 && !isSeeding}
           Insufficient funds
         {:else}
           Download
@@ -609,7 +617,7 @@
 
       <p class="text-sm text-muted-foreground text-center mb-6">
         {isSeeding
-          ? `Do you want to download a local copy for ${(currentPrice ?? 0.0001).toFixed(4)} Chiral?`
+          ? `Download a local copy for free (you're already seeding this file)`
           : `You will be charged ${(currentPrice ?? 0.0001).toFixed(4)} Chiral. Continue?`}
       </p>
 
@@ -702,7 +710,7 @@
 
       {#if metadata.seeders && metadata.seeders.length > 0}
         <p class="text-sm text-muted-foreground text-center mb-4">
-          Found {metadata.seeders.length} available peer{metadata.seeders.length === 1 ? '' : 's'}. Choose one to start the download.
+          Found {metadata.seeders.length} available peer{metadata.seeders.length === 1 ? '' : 's'}.
         </p>
         <div class="space-y-2 max-h-60 overflow-auto pr-1 mb-6">
           {#each metadata.seeders as seeder, index}

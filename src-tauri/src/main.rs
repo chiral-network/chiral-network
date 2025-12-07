@@ -1497,7 +1497,7 @@ async fn start_dht_node(
 
     // --- AutoRelay is now disabled by default (can be enabled via config or env var)
     // Disable AutoRelay on bootstrap nodes (and via env var)
-    let mut final_enable_autorelay = enable_autorelay.unwrap_or(false);
+    let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
     if is_bootstrap.unwrap_or(false) {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled on bootstrap (hotfix).");
@@ -1723,6 +1723,7 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_uploads().await;
                     }
                     DhtEvent::FileDiscovered(metadata) => {
+                        info!("📡 Emitting found_file event to frontend for: {}", metadata.file_name);
                         let payload = serde_json::json!(metadata);
                         let _ = app_handle.emit("found_file", payload);
                     }
@@ -5750,6 +5751,7 @@ async fn encrypt_file_for_upload(
 // Update the search_file_metadata Tauri command around line 5392:
 #[tauri::command]
 async fn search_file_metadata(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     file_hash: String,
     timeout_ms: Option<u64>,
@@ -5761,7 +5763,15 @@ async fn search_file_metadata(
 
     if let Some(dht) = dht {
         let timeout = timeout_ms.unwrap_or(10_000);
-        dht.synchronous_search_metadata(file_hash, timeout).await
+        let result = dht.synchronous_search_metadata(file_hash, timeout).await?;
+
+        // If we found metadata (including from cache), emit the found_file event
+        // This ensures the frontend gets notified even for cache hits
+        if let Some(ref metadata) = result {
+            let _ = app.emit("found_file", metadata);
+        }
+
+        Ok(result)
     } else {
         Err("DHT node is not running".to_string())
     }
