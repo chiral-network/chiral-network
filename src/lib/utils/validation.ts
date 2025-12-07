@@ -75,6 +75,9 @@ export function validatePrivateKeyFormat(privateKey: string): {
  * - On Windows, tilde (~) is not expanded and is invalid
  * - Relative paths are not allowed
  *
+ * Note: For platform-specific validation (e.g., checking if drive exists on Windows,
+ * rejecting Unix paths on Windows), use the backend validate_storage_path command.
+ *
  * Used in: src/pages/Settings.svelte (storage path input validation)
  *
  * @param path - The storage path to validate

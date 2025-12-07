@@ -167,6 +167,9 @@
   // Logs directory (loaded from backend)
   let logsDirectory: string | null = null;
   let newBootstrapNode = '';
+  
+  // Storage path validation state
+  let storagePathWarning: string | null = null;
 
   const locationOptions = GEO_REGIONS
     .filter((region) => region.id !== UNKNOWN_REGION_ID)
@@ -1057,11 +1060,19 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
     // Validate storage path
     if (localSettings.storagePath && localSettings.storagePath.trim()) {
+      // First do basic frontend validation
       const pathValidation = validateStoragePath(localSettings.storagePath);
       if (!pathValidation.isValid) {
         next.storagePath = pathValidation.error || "Invalid storage path";
       } else {
         next.storagePath = null;
+      }
+      
+      // Then validate with backend if in Tauri environment
+      if (typeof window !== "undefined" && "__TAURI__" in window) {
+        validateStoragePathBackend(localSettings.storagePath).catch(() => {
+          // Error handling is done in the async function
+        });
       }
     } else {
       next.storagePath = null; // Empty is allowed (will use default)
@@ -1069,6 +1080,32 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
     errors = next;
 }
+
+  // Backend validation for storage path with platform-specific checks
+  async function validateStoragePathBackend(path: string) {
+    if (!path || !path.trim()) {
+      storagePathWarning = null;
+      return;
+    }
+    
+    storagePathWarning = null;
+    
+    try {
+      await invoke("validate_storage_path", { path });
+      // If successful, no warning
+      storagePathWarning = null;
+    } catch (error) {
+      const errorMsg = String(error);
+      // Check if it's a warning (directory doesn't exist)
+      if (errorMsg.startsWith("WARNING:")) {
+        storagePathWarning = errorMsg.substring(9); // Remove "WARNING: " prefix
+        // Warning doesn't block saving, just informs the user
+      } else {
+        // It's an actual error, update the errors object
+        errors = { ...errors, storagePath: errorMsg };
+      }
+    }
+  }
 
   // Revalidate whenever settings change
   $: validate(localSettings);
@@ -1264,7 +1301,7 @@ function sectionMatches(section: string, query: string) {
               id="storage-path"
               bind:value={localSettings.storagePath}
               placeholder={storagePathPlaceholder}
-              class={`flex-1 ${errors.storagePath ? 'border-red-500 focus:border-red-500 ring-red-500' : ''}`}
+              class={`flex-1 ${errors.storagePath ? 'border-red-500 focus:border-red-500 ring-red-500' : storagePathWarning ? 'border-yellow-500 focus:border-yellow-500 ring-yellow-500' : ''}`}
             />
             <Button
               variant="outline"
@@ -1276,6 +1313,11 @@ function sectionMatches(section: string, query: string) {
           </div>
           {#if errors.storagePath}
             <p class="mt-1 text-sm text-red-500">{errors.storagePath}</p>
+          {:else if storagePathWarning}
+            <p class="mt-1 text-sm text-yellow-600 flex items-center gap-1">
+              <AlertTriangle class="h-4 w-4" />
+              {storagePathWarning}
+            </p>
           {/if}
         </div>
 
