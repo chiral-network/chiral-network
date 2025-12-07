@@ -3365,14 +3365,7 @@ fn validate_storage_path(path: String) -> Result<(), String> {
         return Err("Please use the folder picker button or enter an absolute path instead of using ~".to_string());
     }
     
-    let path_obj = Path::new(trimmed);
-    
-    // Path must be absolute
-    if !path_obj.is_absolute() {
-        return Err("Storage path must be an absolute path (e.g., C:\\Users\\... on Windows or /home/... on Unix)".to_string());
-    }
-    
-    // Platform-specific validation
+    // Platform-specific validation BEFORE general absolute check
     #[cfg(target_os = "windows")]
     {
         // On Windows, reject Unix-style paths (starting with /)
@@ -3392,6 +3385,13 @@ fn validate_storage_path(path: String) -> Result<(), String> {
                 }
             }
         }
+    }
+    
+    let path_obj = Path::new(trimmed);
+    
+    // Path must be absolute (check after platform-specific validation)
+    if !path_obj.is_absolute() {
+        return Err("Storage path must be an absolute path (e.g., C:\\Users\\... on Windows or /home/... on Unix)".to_string());
     }
     
     // Check if directory exists - if not, it will be created

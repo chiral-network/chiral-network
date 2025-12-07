@@ -1069,6 +1069,7 @@ selectedLanguage = initial; // Synchronize dropdown display value
       }
       
       // Then validate with backend if in Tauri environment
+      // Backend validation will update errors asynchronously
       if (typeof window !== "undefined" && "__TAURI__" in window) {
         validateStoragePathBackend(localSettings.storagePath).catch((err) => {
           // Error handling is done in validateStoragePathBackend
@@ -1077,6 +1078,7 @@ selectedLanguage = initial; // Synchronize dropdown display value
       }
     } else {
       next.storagePath = null; // Empty is allowed (will use default)
+      storagePathWarning = null; // Clear any warnings when path is empty
     }
 
     errors = next;
@@ -1086,22 +1088,36 @@ selectedLanguage = initial; // Synchronize dropdown display value
   async function validateStoragePathBackend(path: string) {
     if (!path || !path.trim()) {
       storagePathWarning = null;
+      // Also clear any backend errors
+      if (errors.storagePath) {
+        errors = { ...errors, storagePath: null };
+      }
       return;
     }
     
+    // Clear previous warning
     storagePathWarning = null;
     
     try {
       await invoke("validate_storage_path", { path });
+      // If successful, clear any previous backend errors
+      if (errors.storagePath) {
+        errors = { ...errors, storagePath: null };
+      }
     } catch (error) {
       const errorMsg = String(error);
       // Check if it's a warning (directory doesn't exist)
       if (errorMsg.startsWith("WARNING:")) {
         storagePathWarning = errorMsg.substring(9); // Remove "WARNING: " prefix
-        // Warning doesn't block saving, just informs the user
+        // Warning doesn't block saving, clear error
+        if (errors.storagePath) {
+          errors = { ...errors, storagePath: null };
+        }
       } else {
         // It's an actual error, update the errors object
         errors = { ...errors, storagePath: errorMsg };
+        // Clear warning when there's an error
+        storagePathWarning = null;
       }
     }
   }
