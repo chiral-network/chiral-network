@@ -1536,34 +1536,18 @@ async function loadAndResumeDownloads() {
 
         console.log('🌐 download_file_from_network result:', result);
 
-        // Check if this was a local copy (completed immediately)
-        if (typeof result === 'string' && result.includes('local copy')) {
-          // Local copy completed - mark as done
-          files.update(f => f.map(file =>
-            file.id === downloadingFile.id
-              ? {
-                  ...file,
-                  status: 'completed',
-                  progress: 100,
-                  downloadPath: outputPath
-                }
-              : file
-          ));
-          showToast(`Download completed (local copy): "${downloadingFile.name}"`, 'success');
-        } else {
-          // WebRTC download initiated - update status to downloading
-          files.update(f => f.map(file =>
-            file.id === downloadingFile.id
-              ? {
-                  ...file,
-                  status: 'downloading',
-                  progress: 0,
-                  downloadPath: outputPath
-                }
-              : file
-          ));
-          showToast(`WebRTC download started for "${downloadingFile.name}"`, 'success');
-        }
+        // WebRTC download initiated - update status to downloading
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? {
+                ...file,
+                status: 'downloading',
+                progress: 0,
+                downloadPath: outputPath
+              }
+            : file
+        ));
+        showToast(`Download started for "${downloadingFile.name}"`, 'success');
 
       } catch (error) {
         errorLogger.fileOperationError('WebRTC download', error instanceof Error ? error.message : String(error));
