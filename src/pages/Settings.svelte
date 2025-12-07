@@ -1070,8 +1070,9 @@ selectedLanguage = initial; // Synchronize dropdown display value
       
       // Then validate with backend if in Tauri environment
       if (typeof window !== "undefined" && "__TAURI__" in window) {
-        validateStoragePathBackend(localSettings.storagePath).catch(() => {
-          // Error handling is done in the async function
+        validateStoragePathBackend(localSettings.storagePath).catch((err) => {
+          // Error handling is done in validateStoragePathBackend
+          diagnosticLogger.debug('Settings', 'Storage path backend validation error', { error: String(err) });
         });
       }
     } else {
@@ -1092,8 +1093,6 @@ selectedLanguage = initial; // Synchronize dropdown display value
     
     try {
       await invoke("validate_storage_path", { path });
-      // If successful, no warning
-      storagePathWarning = null;
     } catch (error) {
       const errorMsg = String(error);
       // Check if it's a warning (directory doesn't exist)
@@ -1109,6 +1108,12 @@ selectedLanguage = initial; // Synchronize dropdown display value
 
   // Revalidate whenever settings change
   $: validate(localSettings);
+
+  // Computed CSS class for storage path input
+  $: storagePathInputClass = `flex-1 ${
+    errors.storagePath ? 'border-red-500 focus:border-red-500 ring-red-500' : 
+    storagePathWarning ? 'border-yellow-500 focus:border-yellow-500 ring-yellow-500' : ''
+  }`;
 
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
@@ -1301,7 +1306,7 @@ function sectionMatches(section: string, query: string) {
               id="storage-path"
               bind:value={localSettings.storagePath}
               placeholder={storagePathPlaceholder}
-              class={`flex-1 ${errors.storagePath ? 'border-red-500 focus:border-red-500 ring-red-500' : storagePathWarning ? 'border-yellow-500 focus:border-yellow-500 ring-yellow-500' : ''}`}
+              class={storagePathInputClass}
             />
             <Button
               variant="outline"
