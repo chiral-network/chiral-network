@@ -1323,7 +1323,7 @@ async fn run_dht_node(
         >,
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
-    root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
+    root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, (FileMetadata, std::time::Instant)>>>,
     active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     seeder_heartbeats_cache: Arc<Mutex<HashMap<String, FileHeartbeatCacheEntry>>>,
@@ -1563,7 +1563,26 @@ async fn run_dht_node(
                                         }
                                     }
                                 }
-                    }
+                    },
+
+                    // Periodic cleanup of expired root block queries (Bitswap downloads that never received root blocks)
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                        let mut mapping = root_query_mapping.lock().await;
+                        let now = std::time::Instant::now();
+                        let timeout_duration = std::time::Duration::from_secs(60); // 60 second timeout for root blocks
+
+                        let expired_queries: Vec<_> = mapping.iter()
+                            .filter(|(_, (_, timestamp))| now.duration_since(*timestamp) > timeout_duration)
+                            .map(|(query_id, _)| *query_id)
+                            .collect();
+
+                        for query_id in expired_queries {
+                            if let Some((metadata, _)) = mapping.remove(&query_id) {
+                                warn!("Root block request timeout for file {} (query: {:?}) - no root block received within 60 seconds", metadata.merkle_root, query_id);
+                                let _ = event_tx.send(DhtEvent::Error(format!("Download failed: No root block received for file {} within timeout", metadata.file_name))).await;
+                            }
+                        }
+                    },
 
                     cmd = cmd_rx.recv() => {
                         match cmd {
@@ -2000,26 +2019,42 @@ async fn run_dht_node(
                                     },
                                     Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                                 };
-                                let Some(first_seeder) = file_metadata.seeders.get(0) else {
+                                if file_metadata.seeders.is_empty() {
                                     let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
                                     return;
-                                };
+                                }
 
-                                let peer_id = match PeerId::from_str(first_seeder) {
-                                    Ok(id) => id.clone(),
-                                    Err(e) => {
-                                        let _ = event_tx.send(DhtEvent::Error(e.to_string())).await;
-                                        return;
-                                    }
-                                };
+                                file_metadata.download_path = Some(download_path.clone());
 
-                                // Request the root block which contains the CIDs
-                                let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+                                // Try to request the root block from all seeders
+                                let mut root_query_ids = Vec::new();
+                                for seeder in &file_metadata.seeders {
+                                    let peer_id = match PeerId::from_str(seeder) {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            warn!("Invalid seeder peer ID '{}': {}", seeder, e);
+                                            continue;
+                                        }
+                                    };
 
-                                file_metadata.download_path = Some(download_path);
-                                // Store the root query ID to handle when we get the root block
-                                info!("INSERTING INTO ROOT QUERY MAPPING");
-                                root_query_mapping.lock().await.insert(root_query_id, file_metadata);
+                                    // Request the root block which contains the CIDs
+                                    let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+                                    root_query_ids.push(root_query_id);
+                                    info!("Requesting root block from seeder: {} (query: {:?})", seeder, root_query_id);
+                                }
+
+                                if root_query_ids.is_empty() {
+                                    let _ = event_tx.send(DhtEvent::Error("No valid seeders found".to_string())).await;
+                                    return;
+                                }
+
+                                // Store all root query IDs to handle when we get the root block from any seeder
+                                info!("INSERTING {} ROOT QUERY MAPPINGS", root_query_ids.len());
+                                let mut mapping = root_query_mapping.lock().await;
+                                let now = std::time::Instant::now();
+                                for query_id in root_query_ids {
+                                    mapping.insert(query_id, (file_metadata.clone(), now));
+                                }
                             }
                             Some(DhtCommand::StopPublish(file_hash)) => {
                                 let key = kad::RecordKey::new(&file_hash);
@@ -3025,7 +3060,7 @@ async fn run_dht_node(
                                     info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
 
                                     // Check if this is a root block query first
-                                    if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
+                                    if let Some((metadata, _)) = root_query_mapping.lock().await.remove(&query_id) {
                                         info!("✅ This is a ROOT BLOCK for file: {}", metadata.merkle_root);
 
                                         // This is the root block containing CIDs - parse and request all data blocks
@@ -3050,15 +3085,23 @@ async fn run_dht_node(
 
                                                 // Create queries map for this file's data blocks
                                                 let mut file_queries = HashMap::new();
-                                                let peer_id = match PeerId::from_str(&metadata.seeders[0]) {
-                                                    Ok(id) => id.clone(),
-                                                    Err(e) => {let _ = event_tx.send(DhtEvent::Error(e.to_string())).await; continue; }
-                                                };
 
+                                                // Request each data block from all available seeders
                                                 for (i, cid) in cids.iter().enumerate() {
-                                                    // Request the root block which contains the CIDs
-                                                    let block_query_id = swarm.behaviour_mut().bitswap.get_from(&cid, peer_id);
-                                                    file_queries.insert(block_query_id, i as u32);
+                                                    for seeder in &metadata.seeders {
+                                                        let peer_id = match PeerId::from_str(seeder) {
+                                                            Ok(id) => id,
+                                                            Err(e) => {
+                                                                warn!("Invalid seeder peer ID '{}': {}", seeder, e);
+                                                                continue;
+                                                            }
+                                                        };
+
+                                                        // Request this data block from this seeder
+                                                        let block_query_id = swarm.behaviour_mut().bitswap.get_from(&cid, peer_id);
+                                                        file_queries.insert(block_query_id, i as u32);
+                                                        debug!("Requesting data block {} from seeder: {} (query: {:?})", i, seeder, block_query_id);
+                                                    }
                                                 }
 
                                                 // Calculate chunk size based on file size and number of chunks
@@ -5945,7 +5988,7 @@ pub struct DhtService {
         >,
     >,
     pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>>,
-    root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>>,
+    root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, (FileMetadata, std::time::Instant)>>>,
     active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>>,
     get_providers_queries: Arc<Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>>,
     chunk_size: usize,
@@ -6604,9 +6647,9 @@ impl DhtService {
         let pending_key_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_provider_queries: Arc<Mutex<HashMap<String, PendingProviderQuery>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, FileMetadata>>> =
-            Arc::new(Mutex::new(HashMap::new()));
         let active_downloads: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveDownload>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let root_query_mapping: Arc<Mutex<HashMap<beetswap::QueryId, (FileMetadata, std::time::Instant)>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let get_providers_queries_local: Arc<
             Mutex<HashMap<kad::QueryId, (String, std::time::Instant)>>,
