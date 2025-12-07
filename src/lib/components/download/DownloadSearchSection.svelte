@@ -781,10 +781,10 @@
           await invoke('download_torrent_from_bytes', { bytes: pendingTorrentBytes })
         } else if (pendingTorrentType === 'magnet') {
           // For magnet links
-          await invoke('download_torrent', { identifier: pendingTorrentIdentifier })
+          await invoke('download', { identifier: pendingTorrentIdentifier })
         } else {
           // For BitTorrent from metadata
-          await invoke('download_torrent', { identifier: selectedFile?.infoHash })
+          await invoke('download', { identifier: selectedFile?.infoHash })
         }
 
         // Clear state
