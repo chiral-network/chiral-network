@@ -607,7 +607,10 @@ export class WalletService {
       } catch (e) {
         const errorMsg = String(e);
         // Only log if it's not a known blockchain state issue
-        if (!errorMsg.includes('missing trie node') && !errorMsg.includes('not available')) {
+        if (
+          !errorMsg.includes("missing trie node") &&
+          !errorMsg.includes("not available")
+        ) {
           console.log("[refreshBalance] Could not get balance from geth:", e);
         }
       }
@@ -1390,7 +1393,7 @@ export class WalletService {
       });
 
       // Store the results
-      console.log("[Accurate Totals] Updating store with:", {
+      console.debug("[Accurate Totals] Updating store with:", {
         blocksMined: result.blocks_mined,
         totalReceived: result.total_received,
         totalSent: result.total_sent,
@@ -1427,7 +1430,7 @@ export class WalletService {
           address: accountAddress,
           count: totalCount,
         });
-        console.log(
+        console.debug(
           `[Accurate Totals] Initialized backend blocks count to: ${totalCount} (scan: ${result.blocks_mined}, during calc: ${blocksDuringCalc}, session start: ${sessionCounterAtStart}, session end: ${sessionCounterAtEnd})`
         );
 
@@ -1445,7 +1448,7 @@ export class WalletService {
         );
       }
 
-      console.log(`[Accurate Totals] Complete!`, result);
+      console.debug(`[Accurate Totals] Complete!`, result);
     } catch (error) {
       console.error("Failed to calculate accurate totals:", error);
       throw error;

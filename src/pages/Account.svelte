@@ -630,7 +630,7 @@
   async function calculateAccurateTotals() {
     try {
       await walletService.calculateAccurateTotals();
-      console.log('Accurate totals calculated successfully');
+      console.debug('Accurate totals calculated successfully');
     } catch (error) {
       console.error('Failed to calculate accurate totals:', error);
     }

@@ -1680,13 +1680,17 @@ async fn run_dht_node(
                                 let merged_metadata = {
                                     let cache = file_metadata_cache.lock().await;
                                     if let Some(existing) = cache.get(&metadata.merkle_root) {
-                                        info!("🔍 DEBUG DHT PUBLISH: Found existing metadata, merging. Existing CIDs: {:?}", existing.cids);
-                                        merge_file_metadata(existing.clone(), metadata.clone())
+                                        info!("🔍 DEBUG DHT PUBLISH: Found existing metadata, merging.");
+                                        info!("🔍 DEBUG DHT PUBLISH: Existing CIDs: {:?}, FTP sources: {}", existing.cids, existing.ftp_sources.as_ref().map(|v| v.len()).unwrap_or(0));
+                                        info!("🔍 DEBUG DHT PUBLISH: New CIDs: {:?}, FTP sources: {}", metadata.cids, metadata.ftp_sources.as_ref().map(|v| v.len()).unwrap_or(0));
+                                        let merged = merge_file_metadata(existing.clone(), metadata.clone());
+                                        info!("🔍 DEBUG DHT PUBLISH: Final merged CIDs: {:?}, FTP sources: {}", merged.cids, merged.ftp_sources.as_ref().map(|v| v.len()).unwrap_or(0));
+                                        merged
                                     } else {
+                                        info!("🔍 DEBUG DHT PUBLISH: No existing metadata, using new metadata. CIDs: {:?}, FTP sources: {}", metadata.cids, metadata.ftp_sources.as_ref().map(|v| v.len()).unwrap_or(0));
                                         metadata.clone()
                                     }
                                 };
-                                info!("🔍 DEBUG DHT PUBLISH: Merged CIDs: {:?}", merged_metadata.cids);
 
                                 // Store minimal metadata in DHT (using merged metadata)
                                 let dht_metadata = serde_json::json!({
@@ -4420,7 +4424,10 @@ async fn handle_kademlia_event(
                                         }
 
                                         // Send event to frontend for search results
-                                        info!("📡 Sending DhtEvent::FileDiscovered for file: {}", metadata.file_name);
+                                        info!("📡 Sending DhtEvent::FileDiscovered for file: {} (CIDs: {:?}, FTP: {})",
+                                            metadata.file_name,
+                                            metadata.cids.as_ref().map(|v| v.len()),
+                                            metadata.ftp_sources.as_ref().map(|v| v.len()).unwrap_or(0));
                                         let _ = event_tx.send(DhtEvent::FileDiscovered(metadata.clone())).await;
                                         info!("📡 Sending result through channel for file: {}", metadata.file_name);
                                         let _ = pending_search.sender.send(Ok(Some(metadata)));
