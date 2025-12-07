@@ -474,54 +474,20 @@ export class DhtService {
     }
 
     try {
-      // Start listening for the search_result event
-      const metadataPromise = new Promise<FileMetadata | null>(
-        (resolve, reject) => {
-          const timeoutId = setTimeout(() => {
-            reject(new Error(`Search timeout after ${timeoutMs}ms`));
-          }, timeoutMs);
-
-          const unlistenPromise = listen<FileMetadata | null>(
-            "found_file",
-            (event) => {
-              clearTimeout(timeoutId);
-              const result = event.payload;
-              // ADDING FOR REPUTATION BASED PEER DISCOVERY: mark discovered providers as "seen" for freshness
-              try {
-                if (result && Array.isArray(result.seeders)) {
-                  for (const addr of result.seeders) {
-                    // Extract peer ID from multiaddr if present
-                    const pid = (addr?.split("/p2p/")[1] ?? addr)?.trim();
-                    if (pid) __rep.noteSeen(pid);
-                  }
-                }
-              } catch (e) {
-                console.warn("reputation noteSeen failed:", e);
-              }
-              resolve(
-                result
-                  ? {
-                      ...result,
-                      seeders: Array.isArray(result.seeders)
-                        ? result.seeders
-                        : [],
-                    }
-                  : null
-              );
-              // Unsubscribe once we got the event
-              unlistenPromise.then((unlistenFn) => unlistenFn());
-            }
-          );
+      // Trigger the backend search and wait for the direct result
+      console.log("🔍 Frontend calling search_file_metadata for:", trimmed);
+      const metadata = await invoke<FileMetadata | null>(
+        "search_file_metadata",
+        {
+          fileHash: trimmed,
+          timeoutMs,
         }
       );
+      console.log(
+        "🔍 Frontend received direct result from search_file_metadata:",
+        metadata
+      );
 
-      // Trigger the backend search
-      await invoke("search_file_metadata", {
-        fileHash: trimmed,
-        timeoutMs,
-      });
-
-      const metadata = await metadataPromise;
       if (metadata) {
         if (!metadata.merkleRoot && metadata.fileHash) {
           metadata.merkleRoot = metadata.fileHash;
