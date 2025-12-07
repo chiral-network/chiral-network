@@ -2181,6 +2181,7 @@ async fn run_dht_node(
                             }
                             Some(DhtCommand::SearchFile { file_hash, sender }) => {
                                info!("🔍 Received search command for file: {}", file_hash);
+                               info!("🔍 Initiating DHT queries for file search");
                             // Query both the metadata record AND the provider records
                             // This ensures we find the file even if only provider announcements exist
                             let key = kad::RecordKey::new(&file_hash.as_bytes());
@@ -7012,15 +7013,21 @@ impl DhtService {
         let (tx, rx) = oneshot::channel();
 
         // Send the validated search command
+        info!("🔍 Sending DHT search command for file: {}", file_hash);
         if let Err(err) = self
             .cmd_tx
             .send(DhtCommand::SearchFile { file_hash: file_hash.clone(), sender: tx })
             .await
         {
+            error!("❌ Failed to send DHT search command: {}", err);
             return Err(err.to_string());
         }
+        info!("✅ DHT search command sent successfully");
 
         // Wait for the validated result
+        // Check DHT health before waiting
+        let health = self.check_health(3, false).await;
+        info!("🔍 DHT health before search - peers: {}, healthy: {}", health.peer_count, health.healthy);
         info!("⏳ Waiting for search result with {}ms timeout", timeout_ms);
         match tokio::time::timeout(timeout_duration, rx).await {
             Ok(Ok(Ok(Some(metadata)))) => {
