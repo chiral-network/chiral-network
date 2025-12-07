@@ -182,6 +182,10 @@
         
         console.log(`📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}`);
         
+        // DISABLED: DHT verdict queries cause disconnections
+        // TODO: Move to background/lazy loading or cache locally
+        // Skip DHT queries for now and rely solely on backend metrics
+        /*
         // Try to get reputation verdicts to augment interaction count AND score
         try {
           console.log(`🔍 Fetching verdicts for peer: ${m.peer_id}`);
@@ -220,6 +224,7 @@
         } catch (err) {
           console.error(`❌ Failed to fetch verdicts for ${m.peer_id}:`, err);
         }
+        */
         
         const trustLevel = score >= 0.75 ? TrustLevel.Trusted :  // 2+ successful transfers
                           score >= 0.6 ? TrustLevel.High :
@@ -244,10 +249,7 @@
           }
         });
         
-        // Add small delay between queries to prevent DHT overload (100ms)
-        if (i < metrics.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
+        // No delay needed since we're not querying DHT anymore
       }
 
       // Build analytics
