@@ -16,7 +16,7 @@ use tracing::{error, info, instrument, warn};
 use crate::dht::DhtService;
 use libp2p::Multiaddr;
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, ser::Serializer};
 
 const MAX_ACTIVE_DOWNLOADS: usize = 3;
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
@@ -300,6 +300,29 @@ impl TorrentStateManager {
             Ok(())
         }
     }
+}
+
+/// Tauri command to update the priority of downloads based on a new order.
+/// The frontend sends a list of info_hashes in the desired order.
+#[tauri::command]
+pub async fn update_download_priorities(
+    ordered_info_hashes: Vec<String>,
+    // Assuming TorrentStateManager is managed in Tauri's state.
+    // This is a common pattern and may need to be adjusted based on your main.rs setup.
+    state_manager: tauri::State<'_, tokio::sync::Mutex<TorrentStateManager>>,
+) -> Result<(), String> {
+    info!("Updating download priorities for {} torrents.", ordered_info_hashes.len());
+
+    // Convert the ordered list of hashes into a list of (hash, priority) tuples.
+    let updates: Vec<(String, u32)> = ordered_info_hashes
+        .into_iter()
+        .enumerate()
+        .map(|(index, hash)| (hash, index as u32))
+        .collect();
+
+    let mut manager = state_manager.lock().await;
+    manager.update_priorities(&updates)
+           .map_err(|e| format!("Failed to save updated priorities: {}", e))
 }
 
 /// Convert BitTorrentError to String for compatibility with ProtocolHandler trait
