@@ -24,9 +24,10 @@
   export let fileSize: number;
   export let peers: PeerInfo[];
   export let mode: 'auto' | 'manual' = 'auto';
-  export let protocol: 'http' | 'webrtc' | 'bitswap' | 'bittorrent' | 'ed2k' | 'ftp' = 'http'; 
+  export let protocol: 'http' | 'webrtc' | 'bitswap' | 'bittorrent' | 'ed2k' | 'ftp' = 'http';
   export let isTorrent = false; // Flag to indicate torrent download (no peer selection needed)
   export let availableProtocols: Array<{id: string, name: string, description: string, available: boolean}> = [];
+  export let isSeeding = false; // Flag to indicate if user is seeding this file
 
   // Filter to only available protocols for display
   $: validProtocols = availableProtocols.filter(p => p.available);
@@ -304,7 +305,11 @@
           <div class="flex justify-between items-center">
             <span class="font-medium text-sm">Estimated Cost:</span>
             <span class="text-green-600 dark:text-green-400 font-bold">
-              {Math.max(totalCost, 0.0001).toFixed(4)} Chiral
+              {#if isSeeding}
+                Free
+              {:else}
+                {Math.max(totalCost, 0.0001).toFixed(4)} Chiral
+              {/if}
             </span>
           </div>
           {#if mode === 'manual'}

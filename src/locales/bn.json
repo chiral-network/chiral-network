@@ -584,6 +584,17 @@
       "market": "বাজার",
       "fast": "দ্রুত",
       "estimated": "আনুমানিক ফি"
+    },
+    "gas": {
+      "label": "লেনদেনের গতি",
+      "loading": "অনুমান করা হচ্ছে...",
+      "estimateError": "ডিফল্ট মান ব্যবহার করা হচ্ছে",
+      "slow": "সাশ্রয়ী",
+      "standard": "স্ট্যান্ডার্ড",
+      "fast": "অগ্রাধিকার",
+      "estimatedFee": "আনুমানিক ফি",
+      "totalCost": "মোট খরচ",
+      "networkCongestion": "নেটওয়ার্ক"
     }
   },
   "transactions": {
@@ -785,7 +796,8 @@
       "invalid": "অনুগ্রহ করে ০-এর চেয়ে বড় একটি বৈধ পরিমাণ লিখুন।",
       "min": "পরিমাণ কমপক্ষে {min} Chiral হতে হবে।",
       "insufficient": "ব্যালান্স অপর্যাপ্ত - আরও {more} Chiral প্রয়োজন।",
-      "insufficientWithFee": "অপর্যাপ্ত ফান্ড। মোট {total} Chiral (পরিমাণ + ফি) আপনার ব্যালান্স {balance} Chiral এর বেশি।"
+      "insufficientWithFee": "অপর্যাপ্ত ফান্ড। মোট {total} Chiral (পরিমাণ + ফি) আপনার ব্যালান্স {balance} Chiral এর বেশি।",
+      "insufficientWithGas": "অপর্যাপ্ত ব্যালান্স (গ্যাস সহ) - আরও {more} Chiral প্রয়োজন।"
     },
     "exportFailed": "এক্সপোর্ট ব্যর্থ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।",
     "createAccount": "অ্যাকাউন্ট তৈরি করতে ব্যর্থ: {error}"
