@@ -4,7 +4,7 @@ use crate::transfer_events::{
     current_timestamp_ms, calculate_progress, calculate_eta,
 };
 use async_trait::async_trait;
-use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions, create_torrent, CreateTorrentOptions, AddTorrentOptions};
+use librqbit::{AddTorrent, ManagedTorrent, Session, SessionOptions, create_torrent, CreateTorrentOptions, AddTorrentOptions, torrent_from_bytes};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -722,6 +722,27 @@ impl BitTorrentHandler {
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
+        // Phase 3: Get info_hash BEFORE adding the torrent to check for duplicates.
+        let info_hash_hex = if identifier.starts_with("magnet:") {
+            Self::extract_info_hash(identifier).ok_or_else(|| {
+                BitTorrentError::InvalidMagnetLink { url: identifier.to_string() }
+            })?
+        } else {
+            // For .torrent files, we must parse the file to get the info_hash.
+            let torrent_bytes = std::fs::read(identifier).map_err(|e| BitTorrentError::TorrentFileError {
+                message: format!("Could not read torrent file {}: {}", identifier, e),
+            })?;
+            let torrent_info = torrent_from_bytes::<Vec<u8>>(&torrent_bytes).map_err(|e| BitTorrentError::TorrentParsingError {
+                message: format!("Could not parse torrent file {}: {}", identifier, e),
+            })?;
+            hex::encode(torrent_info.info_hash.0)
+        };
+
+        // Phase 3: Check if the torrent already exists.
+        if self.has_torrent(&info_hash_hex).await {
+            return Err(BitTorrentError::TorrentExists { info_hash: info_hash_hex });
+        }
+
         let add_torrent = if identifier.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| { //
                 error!("Magnet link validation failed: {}", e);
@@ -740,24 +761,12 @@ impl BitTorrentHandler {
             })?
         };
 
+        // The original add_opts is overwritten later, so we can just use the default here.
+        // If you need to preserve passed-in options, you'd merge them.
         let add_opts = AddTorrentOptions::default();
 
-        // Add the torrent to the session first
-        // Temporarily get the info_hash to check for Chiral peers *before* adding the torrent.
-        // This is a bit of a workaround as librqbit doesn't let us easily get the hash before adding.
-        // We'll parse it from the magnet or torrent file.
-        let temp_info_hash = if identifier.starts_with("magnet:") {
-            crate::dht::parse_magnet_uri(identifier).map(|m| m.info_hash).ok()
-        } else {
-            // For .torrent files, we'll need to parse the info hash differently
-            // We can read the file and parse it manually, or use the info_hash after adding
-            // For now, we'll set to None and handle Chiral peer discovery after adding
-            None
-        };
-
-
         // Check for Chiral peers but don't require exclusive mode
-        if let Some(hash) = &temp_info_hash {
+        if let Some(hash) = Some(&info_hash_hex) {
             match self.dht_service.search_peers_by_infohash(hash.clone()).await {
                 Ok(chiral_peer_ids) if !chiral_peer_ids.is_empty() => {
                     info!("Found {} Chiral peers for {}. They will be discovered via DHT.", 
@@ -782,25 +791,21 @@ impl BitTorrentHandler {
             .into_handle()
             .ok_or(BitTorrentError::HandleUnavailable)?;
 
-        // Get the info_hash from the handle (works for both magnets and .torrent files)
-        let torrent_info_hash = handle.info_hash();
-        let hash_hex = hex::encode(torrent_info_hash.0);
-
         // Store the torrent handle for tracking
         {
             let mut torrents = self.active_torrents.lock().await;
-            torrents.insert(hash_hex.clone(), handle.clone());
+            torrents.insert(info_hash_hex.clone(), handle.clone());
         }
 
         // Add to active torrents
         let mut active_torrents = self.active_torrents.lock().await;
-        active_torrents.insert(hash_hex.clone(), handle.clone());
+        active_torrents.insert(info_hash_hex.clone(), handle.clone());
         drop(active_torrents);
 
         // Create persistent torrent state
         let persistent_torrent = if identifier.starts_with("magnet:") {
             PersistentTorrent {
-                info_hash: hash_hex.clone(),
+                info_hash: info_hash_hex.clone(),
                 source: PersistentTorrentSource::Magnet(identifier.to_string()),
                 output_path: self.download_directory.clone(),
                 status: PersistentTorrentStatus::Downloading,
@@ -810,7 +815,7 @@ impl BitTorrentHandler {
             }
         } else {
             PersistentTorrent {
-                info_hash: hash_hex.clone(),
+                info_hash: info_hash_hex.clone(),
                 source: PersistentTorrentSource::File(PathBuf::from(identifier)),
                 output_path: self.download_directory.clone(),
                 status: PersistentTorrentStatus::Downloading,
@@ -820,7 +825,7 @@ impl BitTorrentHandler {
             }
         };
 
-        self.save_torrent_to_state(&hash_hex, persistent_torrent).await?;
+        self.save_torrent_to_state(&info_hash_hex, persistent_torrent).await?;
 
         Ok(handle)
     }
@@ -859,6 +864,16 @@ impl BitTorrentHandler {
         info!("Stopping seeding for torrent: {}", info_hash);
         // For seeding, we just cancel without deleting files
         self.cancel_torrent(info_hash, false).await
+    }
+
+    /// Check if a torrent exists in the active session or persistent state.
+    pub async fn has_torrent(&self, info_hash: &str) -> bool {
+        // Check active torrents first
+        if self.active_torrents.lock().await.contains_key(info_hash) {
+            return true;
+        }
+        // Then check persistent state
+        self.has_persistent_torrent(info_hash).await
     }
 
     /// Get progress information for a torrent
@@ -1271,6 +1286,13 @@ impl SimpleProtocolHandler for BitTorrentHandler {
             }
         })?;
 
+        // Phase 3: Get info_hash from created torrent and check for duplicates.
+        let info_hash_str = hex::encode(torrent.info_hash().0);
+        if self.has_torrent(&info_hash_str).await {
+            // Convert BitTorrentError to String for the trait's return type.
+            return Err(BitTorrentError::TorrentExists { info_hash: info_hash_str }.into());
+        }
+
         let torrent_bytes = torrent.as_bytes().map_err(|e| {
             BitTorrentError::SeedingError {
                 message: format!("Failed to serialize torrent for {}: {}", file_path, e),
@@ -1296,8 +1318,6 @@ impl SimpleProtocolHandler for BitTorrentHandler {
             .into_handle()
             .ok_or(BitTorrentError::HandleUnavailable)?;
 
-        let info_hash = handle.info_hash();
-        let info_hash_str = hex::encode(info_hash.0);
         let magnet_link = format!("magnet:?xt=urn:btih:{}", info_hash_str);
 
         {
