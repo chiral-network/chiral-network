@@ -18,6 +18,7 @@ use libp2p::Multiaddr;
 use thiserror::Error;
 use serde::{Deserialize, Serialize};
 
+const MAX_ACTIVE_DOWNLOADS: usize = 3;
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
 
 /// Custom error type for BitTorrent operations
@@ -543,12 +544,67 @@ impl BitTorrentHandler {
         self.start_download_with_options(identifier, opts).await
     }
 
+    /// Re-evaluates the download queue, pausing or resuming torrents based on priority
+    /// and the MAX_ACTIVE_DOWNLOADS limit.
+    async fn re_evaluate_queue(&self) -> Result<(), BitTorrentError> {
+        info!("Re-evaluating download queue...");
+        let torrent_handles = self.active_torrents.lock().await;
+
+        // Create a sorted list of torrents based on priority.
+        // We need to collect stats for sorting.
+        let mut all_torrents: Vec<_> = torrent_handles.values().map(|h| (h.clone(), h.stats())).collect();
+        // A simple sort by state: downloading torrents first, then by other states.
+        // A more robust implementation would use the priority from TorrentStateManager.
+        // For now, we just find paused torrents to resume.
+        all_torrents.sort_by_key(|(_, stats)| stats.state.to_string() != "Downloading");
+
+        let mut active_downloads = all_torrents
+            .iter()
+            .filter(|(_, stats)| !stats.finished && stats.state.to_string() == "Downloading")
+            .count();
+
+        info!("Currently {} active downloads (limit is {}).", active_downloads, MAX_ACTIVE_DOWNLOADS);
+
+        // If we have open slots, try to resume paused torrents.
+        for (handle, stats) in all_torrents {
+            if active_downloads >= MAX_ACTIVE_DOWNLOADS {
+                break; // No more slots available.
+            }
+
+            // Find a paused torrent that is not finished and resume it.
+            if !stats.finished && stats.state.to_string() == "Paused" {
+                info!("Found paused torrent, resuming it to fill queue slot.");
+                if self.rqbit_session.unpause(&handle).await.is_ok() {
+                    active_downloads += 1;
+                } else {
+                    warn!("Failed to resume a paused torrent during queue re-evaluation.");
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn start_download_with_options(
         &self,
         identifier: &str,
         mut add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
+
+        // Queueing Logic: Check if we should pause this new torrent.
+        let active_downloads = {
+            let torrents = self.active_torrents.lock().await;
+            torrents.values().filter(|h| {
+                let stats = h.stats();
+                !stats.finished && stats.state.to_string() == "Downloading"
+            }).count()
+        };
+
+        if active_downloads >= MAX_ACTIVE_DOWNLOADS {
+            info!("Max active downloads ({}) reached. Adding new torrent in paused state.", MAX_ACTIVE_DOWNLOADS);
+            add_opts.paused = true;
+        }
+
 
         let add_torrent = if identifier.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| { //
@@ -654,6 +710,8 @@ impl BitTorrentHandler {
             if total > 0 && downloaded >= total {
                 info!("Download completed for torrent");
                 let _ = event_tx.send(BitTorrentEvent::Completed).await;
+                // Re-evaluate the queue to start the next download.
+                let _ = self.re_evaluate_queue().await;
                 return;
             }
 
@@ -961,6 +1019,10 @@ impl BitTorrentHandler {
                 .map_err(|e| BitTorrentError::ProtocolSpecific {
                     message: format!("Failed to cancel torrent: {}", e),
                 })?;
+
+            // Re-evaluate the queue as a slot may have opened up.
+            self.re_evaluate_queue().await?;
+
             info!("Successfully cancelled torrent: {}", info_hash);
             Ok(())
         } else {
