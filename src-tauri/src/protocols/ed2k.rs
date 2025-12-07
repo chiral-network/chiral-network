@@ -9,7 +9,7 @@ use super::traits::{
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, Ed2kFileInfo, ED2K_CHUNK_SIZE};
 use async_trait::async_trait;
 use md4::{Md4, Digest};
-use sha2::{Sha256, Digest as Sha2Digest};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -156,12 +156,15 @@ impl Ed2kProtocolHandler {
                 .read(&mut buffer)
                 .await
                 .map_err(|e| ProtocolError::Internal(e.to_string()))?;
-
+            
             if bytes_read == 0 {
                 break;
             }
 
             let chunk_data = &buffer[..bytes_read];
+
+            // DEBUG PRINT THE ACTUAL DATA BEING HASHED
+            info!("DEBUG: Hashing data (first 5 bytes): {:?}", &chunk_data[0..std::cmp::min(5, chunk_data.len())]);
 
             // Calculate MD4 hash for the chunk
             let mut md4_hasher = Md4::new();
@@ -772,6 +775,8 @@ impl ProtocolHandler for Ed2kProtocolHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex;
+    use std::env;
 
     #[test]
     fn test_supports_ed2k() {
@@ -806,5 +811,108 @@ mod tests {
         assert_eq!(Ed2kProtocolHandler::calculate_chunks(ED2K_CHUNK_SIZE as u64), 1);
         assert_eq!(Ed2kProtocolHandler::calculate_chunks(ED2K_CHUNK_SIZE as u64 + 1), 2);
         assert_eq!(Ed2kProtocolHandler::calculate_chunks(ED2K_CHUNK_SIZE as u64 * 3), 3);
+    }
+
+    #[tokio::test]
+    async fn test_generate_ed2k_link_with_chunks() {
+        let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test_data");
+        tokio::fs::create_dir_all(&test_dir).await.unwrap();
+
+        let file_path = test_dir.join("test_file_chunks.txt");
+        let content_single_chunk = vec![b'a'; ED2K_CHUNK_SIZE / 2]; // Half a chunk
+        let content_multiple_chunks = vec![b'b'; ED2K_CHUNK_SIZE * 2 + 100]; // Two full chunks + 100 bytes
+
+        // Test with content less than one chunk
+        tokio::fs::write(&file_path, &content_single_chunk).await.unwrap();
+        
+        let (link, sha256_hashes) = Ed2kProtocolHandler::generate_ed2k_link(&file_path).await.unwrap();
+        
+        let expected_md4_single = {
+            let mut hasher = Md4::new();
+            hasher.update(&content_single_chunk);
+            hex::encode(hasher.finalize())
+        };
+        assert_eq!(link, format!("ed2k://|file|test_file_chunks.txt|{}|{}|/", content_single_chunk.len(), expected_md4_single.to_uppercase()));
+        assert_eq!(sha256_hashes.len(), 1);
+        assert!(!sha256_hashes[0].is_empty());
+
+        // Test with content spanning multiple chunks
+        tokio::fs::write(&file_path, &content_multiple_chunks).await.unwrap();
+        let (link_multi, sha256_hashes_multi) = Ed2kProtocolHandler::generate_ed2k_link(&file_path).await.unwrap();
+
+        // Manually calculate expected root MD4 hash for multi-chunk
+        let mut md4_chunk_hashes_expected = Vec::new();
+        let mut sha256_chunk_hashes_expected = Vec::new();
+        let total_size = content_multiple_chunks.len();
+        let mut offset = 0;
+        while offset < total_size {
+            let end = (offset + ED2K_CHUNK_SIZE).min(total_size);
+            let chunk_data = &content_multiple_chunks[offset..end];
+
+            let mut md4_hasher = Md4::new();
+            md4_hasher.update(chunk_data);
+            md4_chunk_hashes_expected.push(md4_hasher.finalize());
+
+            let mut sha256_hasher = Sha256::new();
+            sha256_hasher.update(chunk_data);
+            sha256_chunk_hashes_expected.push(hex::encode(sha256_hasher.finalize()));
+
+            offset = end;
+        }
+
+        let expected_root_md4_multi = {
+            let mut combined_hashes = Vec::new();
+            for hash in &md4_chunk_hashes_expected {
+                combined_hashes.extend_from_slice(hash);
+            }
+            let mut md4_hasher = Md4::new();
+            md4_hasher.update(&combined_hashes);
+            hex::encode(md4_hasher.finalize())
+        };
+        
+        assert_eq!(link_multi, format!("ed2k://|file|test_file_chunks.txt|{}|{}|/", content_multiple_chunks.len(), expected_root_md4_multi.to_uppercase()));
+        assert_eq!(sha256_hashes_multi.len(), md4_chunk_hashes_expected.len());
+        assert_eq!(sha256_hashes_multi, sha256_chunk_hashes_expected);
+
+        tokio::fs::remove_file(&file_path).await.unwrap();
+    }
+
+    #[test]
+    fn test_verify_chunk_integrity_function() {
+        let data = b"some test data for hashing";
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let correct_hash = hex::encode(hasher.finalize());
+
+        let wrong_data = b"some other data";
+        let mut wrong_hasher = Sha256::new();
+        wrong_hasher.update(wrong_data);
+        let wrong_hash = hex::encode(wrong_hasher.finalize());
+
+        // Test with correct hash and data
+        assert!(Ed2kProtocolHandler::verify_chunk_integrity(&correct_hash, data).is_ok());
+
+        // Test with incorrect data
+        let result_wrong_data = Ed2kProtocolHandler::verify_chunk_integrity(&correct_hash, wrong_data);
+        assert!(result_wrong_data.is_err());
+        assert_eq!(result_wrong_data.unwrap_err().0, correct_hash);
+
+        // Test with incorrect hash string (different format)
+        let invalid_hash_format = "not_a_valid_hash";
+        assert!(Ed2kProtocolHandler::verify_chunk_integrity(invalid_hash_format, data).is_ok()); // Should gracefully skip verification
+
+        // Test with an empty hash string
+        let empty_hash = "";
+        assert!(Ed2kProtocolHandler::verify_chunk_integrity(empty_hash, data).is_ok()); // Should gracefully skip verification
+
+        // Test with a hash of incorrect length (but hex)
+        let short_hash = "abcdef12345";
+        assert!(Ed2kProtocolHandler::verify_chunk_integrity(short_hash, data).is_ok()); // Should gracefully skip verification
+
+        // Test with data whose hash matches an 'incorrect' hash by chance (highly improbable, but conceptually possible)
+        // For this test, we verify that it still detects mismatch if the *provided* expected hash is indeed incorrect.
+        let result_wrong_expected_hash = Ed2kProtocolHandler::verify_chunk_integrity(&wrong_hash, data);
+        assert!(result_wrong_expected_hash.is_err());
+        assert_eq!(result_wrong_expected_hash.unwrap_err().0, wrong_hash);
     }
 }
