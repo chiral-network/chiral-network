@@ -513,19 +513,29 @@ export class DhtService {
               );
             }
           );
-      // Trigger the backend search and wait for the direct result
-      console.log("🔍 Frontend calling search_file_metadata for:", trimmed);
-      const metadata = await invoke<FileMetadata | null>(
-        "search_file_metadata",
-        {
-          fileHash: trimmed,
-          timeoutMs,
+
+          // Trigger the backend search and wait for the direct result
+          console.log("🔍 Frontend calling search_file_metadata for:", trimmed);
+          const metadata = await invoke<FileMetadata | null>(
+            "search_file_metadata",
+            {
+              fileHash: trimmed,
+              timeoutMs,
+            }
+          );
+          console.log(
+            "🔍 Frontend received direct result from search_file_metadata:",
+            metadata
+          );
+
+          // Resolve with the metadata from the backend
+          clearTimeout(timeoutId);
+          resolve(metadata);
         }
       );
-      console.log(
-        "🔍 Frontend received direct result from search_file_metadata:",
-        metadata
-      );
+
+      // Wait for the metadata promise to resolve
+      const metadata = await metadataPromise;
 
       if (metadata) {
         if (!metadata.merkleRoot && metadata.fileHash) {
