@@ -338,6 +338,23 @@
 
                         if (paymentResult.success) {
                             paidFiles.add(completedFile.hash); // Mark as paid
+                            
+                            // Update reputation for the seeder peer after successful payment
+                            if (seederPeerId) {
+                              try {
+                                await invoke('record_transfer_success', {
+                                  peerId: seederPeerId,
+                                  bytes: completedFile.size,
+                                  durationMs: 0, // Bitswap doesn't track duration here
+                                });
+                                // Also update frontend reputation store for immediate UI feedback
+                                PeerSelectionService.notePeerSuccess(seederPeerId);
+                                console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after Bitswap download (+${completedFile.size} bytes)`);
+                              } catch (repError) {
+                                console.error('Failed to update seeder reputation:', repError);
+                              }
+                            }
+                            
                             diagnosticLogger.info('Download', 'Bitswap payment processed', { 
                               amount: paymentAmount.toFixed(6), 
                               seederWalletAddress, 
