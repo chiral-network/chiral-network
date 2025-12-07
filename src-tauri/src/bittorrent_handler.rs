@@ -201,6 +201,9 @@ pub struct PersistentTorrent {
 
     /// Timestamp (Unix epoch seconds) when the torrent was added.
     pub added_at: u64,
+
+    /// Priority of the download. Lower numbers mean higher priority (e.g., 0 is highest).
+    pub priority: u32,
 }
 
 /// Events sent by the BitTorrent download monitor
@@ -272,7 +275,29 @@ impl TorrentStateManager {
 
     /// Returns a vector of the torrents currently managed.
     pub fn get_all(&self) -> Vec<PersistentTorrent> {
-        self.torrents.values().cloned().collect()
+        let mut torrents: Vec<PersistentTorrent> = self.torrents.values().cloned().collect();
+        // Sort by priority (lower is higher), then by added_at timestamp as a tie-breaker.
+        torrents.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.added_at.cmp(&b.added_at)));
+        torrents
+    }
+
+    /// Updates the priorities of multiple torrents and saves the state.
+    /// Accepts a list of (info_hash, new_priority) tuples.
+    pub fn update_priorities(&mut self, updates: &[(String, u32)]) -> Result<(), std::io::Error> {
+        let mut changed = false;
+        for (info_hash, new_priority) in updates {
+            if let Some(torrent) = self.torrents.get_mut(info_hash) {
+                if torrent.priority != *new_priority {
+                    torrent.priority = *new_priority;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.save()
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -328,6 +353,7 @@ impl BitTorrentHandler {
         dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
     ) -> Result<Self, BitTorrentError> {
+        // Correctly call the main constructor, passing None for the app_handle.
         Self::new_with_port_range_and_app_handle(download_directory, dht_service, listen_port_range, None).await
     }
 
@@ -337,6 +363,7 @@ impl BitTorrentHandler {
         dht_service: Arc<DhtService>,
         app_handle: AppHandle,
     ) -> Result<Self, BitTorrentError> {
+        // Correctly call the main constructor, passing None for the port range and Some for the app_handle.
         Self::new_with_port_range_and_app_handle(download_directory, dht_service, None, Some(app_handle)).await
     }
 
@@ -1096,6 +1123,7 @@ mod tests {
             output_path: PathBuf::from("/downloads/test_magnet"),
             status: PersistentTorrentStatus::Downloading,
             added_at: 1678886400,
+            priority: 0, // Add priority field
         };
 
         let serialized_magnet = serde_json::to_string_pretty(&original_magnet).unwrap();
@@ -1121,6 +1149,7 @@ mod tests {
             output_path: PathBuf::from("/downloads/test_file"),
             status: PersistentTorrentStatus::Seeding,
             added_at: 1678887400,
+            priority: 1, // Add priority field
         };
 
         let serialized_file = serde_json::to_string_pretty(&original_file).unwrap();
@@ -1429,6 +1458,7 @@ mod torrent_state_manager_tests {
             output_path: PathBuf::from("/downloads/torrent1"),
             status: PersistentTorrentStatus::Downloading,
             added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            priority: 0,
         };
         let torrent2 = PersistentTorrent {
             info_hash: "hash2".to_string(),
@@ -1436,6 +1466,7 @@ mod torrent_state_manager_tests {
             output_path: PathBuf::from("/downloads/torrent2"),
             status: PersistentTorrentStatus::Seeding,
             added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 100,
+            priority: 1,
         };
 
         manager.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
@@ -1472,6 +1503,7 @@ mod torrent_state_manager_tests {
             output_path: PathBuf::from("/downloads/torrent1"),
             status: PersistentTorrentStatus::Downloading,
             added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            priority: 0,
         };
         let torrent2 = PersistentTorrent {
             info_hash: "hash2".to_string(),
@@ -1479,6 +1511,7 @@ mod torrent_state_manager_tests {
             output_path: PathBuf::from("/downloads/torrent2"),
             status: PersistentTorrentStatus::Seeding,
             added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 100,
+            priority: 1,
         };
 
         manager.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
