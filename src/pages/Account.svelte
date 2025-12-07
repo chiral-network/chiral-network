@@ -586,8 +586,6 @@
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
 
-  let balanceRefreshInterval: ReturnType<typeof setInterval> | null = null;
-  
   onMount(() => {
     // Initialize wallet service asynchronously
     walletService.initialize().then(async () => {
