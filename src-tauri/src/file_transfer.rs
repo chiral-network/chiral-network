@@ -4,13 +4,12 @@ use crate::transfer_events::{
     TransferStartedEvent, SourceInfo, SourceType, SourceSummary, ErrorCategory,
     current_timestamp_ms,
 };
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn};
@@ -334,7 +333,11 @@ impl FileTransferService {
         encryption_enabled: bool,
         keystore: Arc<Mutex<crate::keystore::Keystore>>,
     ) -> Result<Self, String> {
-        Self::new_with_storage_dir(Self::get_storage_dir()?, encryption_enabled, keystore, None).await
+        // Use default storage directory
+        let storage_dir = std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?
+            .join("files");
+        Self::new_with_storage_dir(storage_dir, encryption_enabled, keystore, None).await
     }
 
     /// Create with custom storage directory, encryption, keystore, and optional AppHandle
@@ -398,13 +401,14 @@ impl FileTransferService {
         let keystore = Arc::new(Mutex::new(
             crate::keystore::Keystore::load().unwrap_or_default(),
         ));
-        Self::new_with_storage_dir(Self::get_storage_dir()?, false, keystore, Some(app_handle)).await
-    }
 
-    fn get_storage_dir() -> Result<PathBuf, String> {
-        let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
-            .ok_or("Failed to get project directories")?;
-        Ok(proj_dirs.data_dir().join("files"))
+        let storage_dir = app_handle
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data directory: {}", e))?
+            .join("files");
+
+        Self::new_with_storage_dir(storage_dir, false, keystore, Some(app_handle)).await
     }
 
     async fn run_file_transfer_service(

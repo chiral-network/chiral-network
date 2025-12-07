@@ -43,7 +43,7 @@ pub struct HttpFileMetadata {
 pub struct HttpServerState {
     /// Path to file storage directory (where whole files are stored)
     /// This is the same directory used by FileTransferService
-    pub storage_dir: PathBuf,
+    pub storage_dir: Arc<Mutex<PathBuf>>,
 
     /// Maps file_hash → HttpFileMetadata
     /// Tracks which files are available for HTTP download
@@ -59,7 +59,7 @@ impl HttpServerState {
     /// The storage_dir should point to the FileTransferService storage directory
     pub fn new(storage_dir: PathBuf) -> Self {
         Self {
-            storage_dir,
+            storage_dir: Arc::new(Mutex::new(storage_dir)),
             files: Arc::new(RwLock::new(HashMap::new())),
             dht: Arc::new(Mutex::new(None)),
         }
@@ -70,6 +70,12 @@ impl HttpServerState {
         let mut dht_lock = self.dht.lock().await;
         *dht_lock = Some(dht);
         tracing::info!("✅ DHT service attached to HTTP server for metrics tracking");
+    }
+
+    /// Update the storage directory
+    pub async fn set_storage_dir(&self, storage_dir: PathBuf) {
+        let mut dir_guard = self.storage_dir.lock().await;
+        *dir_guard = storage_dir;
     }
 
     /// Register a file for HTTP serving
@@ -188,7 +194,8 @@ async fn serve_file(
     };
 
     // Build file path using the actual file_hash (SHA-256) used for storage
-    let file_path = state.storage_dir.join(&metadata.file_hash);
+    let storage_dir = state.storage_dir.lock().await.clone();
+    let file_path = storage_dir.join(&metadata.file_hash);
 
     // Check if file exists on disk
     if !file_path.exists() {

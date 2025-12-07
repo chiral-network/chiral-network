@@ -5957,8 +5957,7 @@ struct ActiveDownload {
     mmap: Arc<std::sync::Mutex<MmapMut>>,
     received_chunks: Arc<std::sync::Mutex<HashSet<u32>>>,
     total_chunks: u32,
-    chunk_offsets: Vec<u64>,
-}
+    chunk_offsets: Vec<u64>,}
 
 impl ActiveDownload {
     fn new(

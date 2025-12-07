@@ -537,8 +537,6 @@
         {/if}
       {:else if !canAfford && currentPrice && currentPrice > 0}
         <span class="text-red-600 font-semibold">Insufficient balance to download this file</span>
-      {:else if metadata.seeders?.length}
-        {metadata.seeders.length > 1 ? '' : 'Single seeder available.'}
       {:else}
         Waiting for peers to announce this file.
       {/if}

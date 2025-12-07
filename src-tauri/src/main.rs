@@ -3340,9 +3340,24 @@ fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
             .ok_or_else(|| "Failed to convert path to string".to_string());
     }
 
-    // Cross-platform default
-    let default_path = "~/Downloads/Chiral-Network-Storage";
+    // Cross-platform default with proper Windows Downloads folder handling
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, try to get the actual Downloads folder location
+        // First try environment variable, then fall back to home directory
+        if let Ok(downloads_path) = std::env::var("USERPROFILE") {
+            let downloads_dir = PathBuf::from(downloads_path).join("Downloads").join("Chiral-Network-Storage");
+            if downloads_dir.parent().map_or(false, |p| p.exists()) {
+                return downloads_dir
+                    .to_str()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| "Failed to convert path to string".to_string());
+            }
+        }
+    }
 
+    // Fallback for other platforms or if Windows Downloads detection fails
+    let default_path = "~/Downloads/Chiral-Network-Storage";
     let expanded_path = expand_tilde(default_path);
     expanded_path
         .to_str()
@@ -3393,6 +3408,12 @@ async fn start_file_transfer_service(
     {
         let mut ft_guard = state.file_transfer.lock().await;
         *ft_guard = Some(ft_arc.clone());
+    }
+
+    // Update HTTP server state with correct storage directory
+    {
+        let storage_dir = ft_arc.get_storage_path().clone();
+        state.http_server_state.set_storage_dir(storage_dir).await;
     }
 
     // Initialize WebRTC service with file transfer service
@@ -3545,7 +3566,8 @@ async fn upload_file_to_network(
 
         match protocol_name.as_str() {
             "HTTP" => {
-                let permanent_path = state.http_server_state.storage_dir.join(&file_hash);
+                let storage_dir = state.http_server_state.storage_dir.lock().await.clone();
+                let permanent_path = storage_dir.join(&file_hash);
                 // Move/rename temp file to permanent storage instead of copying
                 tokio::fs::rename(&file_path, &permanent_path)
                     .await
@@ -3970,12 +3992,22 @@ async fn upload_file_to_network(
                         // Get the account address for the uploader
                         let account = get_active_account(&state).await?;
 
+                        // Get the local peer ID to add as a seeder
+                        let local_peer_id = {
+                            let dht_guard = state.dht.lock().await;
+                            if let Some(dht) = dht_guard.as_ref() {
+                                Some(dht.get_peer_id().await)
+                            } else {
+                                None
+                            }
+                        };
+
                         let metadata = dht::models::FileMetadata {
                             merkle_root: merkle_root.clone(), // Store Merkle root for verification
                             file_name: session.file_name.clone(),
                             file_size: session.file_size,
                             file_data: vec![], // Empty - data is stored in Bitswap blocks
-                            seeders: vec![],
+                            seeders: local_peer_id.clone().map_or(vec![], |id| vec![id]),
                             created_at,
                             mime_type: None,
                             is_encrypted: false,
@@ -7583,13 +7615,10 @@ fn main() {
             proxy_auth_tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
 
             // Initialize HTTP server state (uses same storage as FileTransferService)
-            http_server_state: Arc::new(http_server::HttpServerState::new({
-                // Use same storage directory as FileTransferService (files/, not chunks/)
-                use directories::ProjectDirs;
-                ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("files"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("files"))
-            })),
+            // Note: This will be updated with the correct path in the setup hook
+            http_server_state: Arc::new(http_server::HttpServerState::new(
+                std::env::current_dir().unwrap().join("files")
+            )),
             http_server_addr: Arc::new(Mutex::new(None)),
             http_server_shutdown: Arc::new(Mutex::new(None)),
 
