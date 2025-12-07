@@ -4013,7 +4013,7 @@ async fn upload_file_to_network(
                             is_encrypted: false,
                             encryption_method: None,
                             key_fingerprint: None,
-                            cids: Some(vec![root_cid.clone()]), // The root CID for retrieval
+                            cids: Some(vec![root_cid.to_string()]), // The root CID for retrieval
                             encrypted_key_bundle: None,
                             parent_hash: None,
                             is_root: true,

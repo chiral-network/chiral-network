@@ -75,7 +75,7 @@ pub struct FileMetadata {
 
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cids: Option<Vec<Cid>>,
+    pub cids: Option<Vec<String>>,
 
     /// For encrypted files, this contains the encrypted AES key and other info.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "encryptedKeyBundle")]

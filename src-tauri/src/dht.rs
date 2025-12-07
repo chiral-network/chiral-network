@@ -698,7 +698,7 @@ fn construct_file_metadata_from_json_simple(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         cids: metadata_json.get("cids").and_then(|v| {
-            serde_json::from_value::<Option<Vec<Cid>>>(v.clone())
+            serde_json::from_value::<Option<Vec<String>>>(v.clone())
                 .unwrap_or(None)
         }),
         encrypted_key_bundle: metadata_json
@@ -1546,7 +1546,7 @@ async fn run_dht_node(
                                                 key_fingerprint: json_val.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
 
                                                 parent_hash: json_val.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                                cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
                                                 info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
@@ -1642,7 +1642,7 @@ async fn run_dht_node(
                                     if metadata.merkle_root.is_empty() {
                                         metadata.merkle_root = computed_merkle_root.clone();
                                     }
-                                    metadata.cids = Some(vec![root_cid]); // Store root CID for bitswap retrieval
+                                    metadata.cids = Some(vec![root_cid.to_string()]); // Store root CID for bitswap retrieval
 
                                     // Only clear file_data for large files (>10KB) to save DHT space
                                     // Keep small files (like reputation verdicts) in cache for fast retrieval
@@ -1841,7 +1841,7 @@ async fn run_dht_node(
                                 }
 
                                 // 2. Update metadata with the root CID
-                                metadata.cids = Some(vec![root_cid]);
+                                metadata.cids = Some(vec![root_cid.to_string()]);
 
                                 let now = unix_timestamp();
                                 let peer_id_str = peer_id.to_string();
@@ -1989,7 +1989,15 @@ async fn run_dht_node(
                                     });
 
                                 let root_cid = match root_cid_result {
-                                    Ok(cid) => cid.clone(),
+                                    Ok(cid_str) => match cid_str.parse::<Cid>() {
+                                        Ok(cid) => cid,
+                                        Err(e) => {
+                                            let msg = format!("Failed to parse CID '{}': {}", cid_str, e);
+                                            error!("{}", msg);
+                                            let _ = event_tx.send(DhtEvent::Error(msg)).await;
+                                            continue;
+                                        }
+                                    },
                                     Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                                 };
                                 let Some(first_seeder) = file_metadata.seeders.get(0) else {
@@ -3538,7 +3546,7 @@ async fn run_dht_node(
                                                 key_fingerprint: json_val.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
 
                                                 parent_hash: json_val.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                                cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
                                                 info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
@@ -4690,7 +4698,7 @@ async fn handle_kademlia_event(
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
                                     cids: metadata_json.get("cids").and_then(|v| {
-                                        serde_json::from_value::<Option<Vec<Cid>>>(v.clone())
+                                        serde_json::from_value::<Option<Vec<String>>>(v.clone())
                                             .unwrap_or(None)
                                     }),
                                     encrypted_key_bundle: metadata_json
@@ -5075,7 +5083,7 @@ async fn handle_kademlia_event(
                                                     encryption_method: metadata_json.get("encryptionMethod").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     key_fingerprint: metadata_json.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     parent_hash: metadata_json.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                    cids: metadata_json.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                                    cids: metadata_json.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
                                                     encrypted_key_bundle: metadata_json.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
                                                     info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     trackers: metadata_json.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
