@@ -775,17 +775,49 @@
     if ((pendingTorrentType && pendingTorrentIdentifier) || selectedProtocol === 'bittorrent') {
       try {
         const { invoke } = await import("@tauri-apps/api/core")
+        let infoHash: string | undefined;
+        let fileName: string;
 
         if (pendingTorrentType === 'file' && pendingTorrentBytes) {
           // For torrent files, pass the file bytes
           await invoke('download_torrent_from_bytes', { bytes: pendingTorrentBytes })
+          fileName = torrentFileName || 'Torrent Download';
+          // We can't easily get the infohash on the frontend from a torrent file
         } else if (pendingTorrentType === 'magnet') {
           // For magnet links
           await invoke('download', { identifier: pendingTorrentIdentifier })
+          const urlParams = new URLSearchParams(pendingTorrentIdentifier.split('?')[1]);
+          infoHash = urlParams.get('xt')?.replace('urn:btih:', '');
+          fileName = urlParams.get('dn') || 'Magnet Link Download';
         } else {
-          // For BitTorrent from metadata
+          // For BitTorrent from metadata (already on the network)
           await invoke('download', { identifier: selectedFile?.infoHash })
+          infoHash = selectedFile?.infoHash;
+          fileName = selectedFile?.fileName || 'BitTorrent Download';
         }
+
+        // After successfully initiating the download, create metadata and dispatch the event
+        // so the UI can track it.
+        const metadata: FileMetadata = {
+            merkleRoot: infoHash || '',
+            fileHash: infoHash || '',
+            fileName: selectedFile?.fileName || fileName,
+            fileSize: selectedFile?.fileSize || 0,
+            seeders: selectedFile?.seeders || [],
+            createdAt: Date.now() / 1000,
+            mimeType: selectedFile?.mimeType,
+            isEncrypted: selectedFile?.isEncrypted || false,
+            encryptionMethod: selectedFile?.encryptionMethod,
+            keyFingerprint: selectedFile?.keyFingerprint,
+            cids: selectedFile?.cids,
+            isRoot: true,
+            downloadPath: selectedFile?.downloadPath,
+            price: selectedFile?.price || 0,
+            uploaderAddress: selectedFile?.uploaderAddress,
+            httpSources: selectedFile?.httpSources,
+            infoHash: infoHash,
+        };
+        dispatch('download', metadata);
 
         // Clear state
         searchHash = ''
