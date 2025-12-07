@@ -630,7 +630,7 @@
   async function calculateAccurateTotals() {
     try {
       await walletService.calculateAccurateTotals();
-      console.log('Accurate totals calculated successfully');
+      console.debug('Accurate totals calculated successfully');
     } catch (error) {
       console.error('Failed to calculate accurate totals:', error);
     }
@@ -1417,8 +1417,12 @@
       
       gasEstimate = result;
     } catch (error) {
-      console.error('Failed to fetch gas estimate:', error);
-      gasError = String(error);
+      const errorMsg = String(error);
+      // Only show error if it's not insufficient funds (which is expected for empty accounts)
+      if (!errorMsg.includes('insufficient funds')) {
+        console.error('Failed to fetch gas estimate:', error);
+      }
+      gasError = errorMsg;
       // Set default values if gas estimation fails
       gasEstimate = {
         gasLimit: 21000,

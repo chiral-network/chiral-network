@@ -21,10 +21,7 @@
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  // 40 second timeout gives backend (35s) enough time, which gives Kademlia (30s) enough time
-  // Timeout hierarchy: Frontend (40s) > Backend (35s) > Kademlia (30s) + Provider delay (3-5s)
-  // This prevents premature timeouts that would kill queries that would eventually succeed
-  const SEARCH_TIMEOUT_MS = 40_000;
+  const SEARCH_TIMEOUT_MS = 10_000;
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash', 'magnet', 'torrent', 'ed2k', 'ftp'
@@ -46,6 +43,7 @@
   // Peer selection modal state
   let showPeerSelectionModal = false;
   let selectedFile: FileMetadata | null = null;
+  let selectedFileIsSeeding = false;
   let peerSelectionMode: 'auto' | 'manual' = 'auto';
   let selectedProtocol: 'http' | 'webrtc' | 'bitswap' | 'bittorrent' | 'ed2k' | 'ftp' = 'http';
   let availablePeers: PeerInfo[] = [];
@@ -357,10 +355,10 @@
         dhtSearchHistory.updateEntry(entry.id, {
           status: 'not_found',
           metadata: undefined,
-          errorMessage: undefined,
+          errorMessage: 'File not found in the network. This may be due to network connectivity issues or the file not being fully propagated yet.',
           elapsedMs: elapsed,
         });
-        pushMessage(tr('download.search.status.notFoundNotification'), 'warning', 6000);
+        pushMessage('File not found. If you just uploaded this file, try waiting a few minutes for it to propagate through the network, or check your network connectivity.', 'warning', 8000);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : tr('download.search.status.unknownError');
@@ -502,8 +500,22 @@
     ];
   }
 
+  // Check if current user is seeding this file
+  async function checkIfSeeding(metadata: FileMetadata): Promise<boolean> {
+    try {
+      const currentPeerId = await dhtService.getPeerId();
+      return metadata.seeders?.includes(currentPeerId) || false;
+    } catch (error) {
+      console.warn('Failed to check seeding status:', error);
+      return false;
+    }
+  }
+
   // Handle file download - show protocol selection modal first if multiple protocols available
   async function handleFileDownload(metadata: FileMetadata) {
+    // Check if user is seeding this file
+    selectedFileIsSeeding = await checkIfSeeding(metadata);
+
     // Handle BitTorrent downloads (magnet/torrent) - skip protocol selection, go directly to peer selection
     if (pendingTorrentType && pendingTorrentIdentifier) {
       selectedFile = metadata;
@@ -1087,6 +1099,7 @@
   bind:protocol={selectedProtocol}
   isTorrent={pendingTorrentType !== null}
   {availableProtocols}
+  isSeeding={selectedFileIsSeeding}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}
 />

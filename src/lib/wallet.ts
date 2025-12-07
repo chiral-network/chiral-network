@@ -514,7 +514,9 @@ export class WalletService {
 
   async updatePendingTransactions(): Promise<void> {
     const currentTransactions = get(transactions);
-    const pendingTransactions = currentTransactions.filter(tx => tx.status === 'pending' && tx.txHash);
+    const pendingTransactions = currentTransactions.filter(
+      (tx) => tx.status === "pending" && tx.txHash
+    );
 
     if (pendingTransactions.length === 0) {
       return;
@@ -524,26 +526,34 @@ export class WalletService {
     for (const tx of pendingTransactions) {
       try {
         const receipt = await invoke<any>("get_transaction_receipt", {
-          txHash: tx.txHash
+          txHash: tx.txHash,
         });
 
         // If receipt exists and is not null, transaction has been mined
         if (receipt) {
           const success = receipt.status === "0x1" || receipt.status === 1;
-          
-          transactions.update(txs => 
-            txs.map(t => 
+
+          transactions.update((txs) =>
+            txs.map((t) =>
               t.txHash === tx.txHash
-                ? { ...t, status: success ? "success" as const : "failed" as const }
+                ? {
+                    ...t,
+                    status: success
+                      ? ("success" as const)
+                      : ("failed" as const),
+                  }
                 : t
             )
           );
 
           // Update pending count
           if (tx.type === "sent") {
-            wallet.update(w => ({
+            wallet.update((w) => ({
               ...w,
-              pendingTransactions: Math.max(0, (w.pendingTransactions ?? 0) - 1)
+              pendingTransactions: Math.max(
+                0,
+                (w.pendingTransactions ?? 0) - 1
+              ),
             }));
           }
         }
@@ -581,7 +591,6 @@ export class WalletService {
     let accountAddress: string;
     try {
       accountAddress = await invoke<string>("get_active_account_address");
-      console.log("[refreshBalance] Got account address:", accountAddress);
     } catch (error) {
       console.log("[refreshBalance] No active account:", error);
       return;
@@ -595,9 +604,15 @@ export class WalletService {
           address: accountAddress,
         })) as string;
         realBalance = parseFloat(balanceStr);
-        console.log(`[refreshBalance] Got balance from geth: ${realBalance} CHIRAL`);
       } catch (e) {
-        console.log("[refreshBalance] Could not get balance from geth:", e);
+        const errorMsg = String(e);
+        // Only log if it's not a known blockchain state issue
+        if (
+          !errorMsg.includes("missing trie node") &&
+          !errorMsg.includes("not available")
+        ) {
+          console.log("[refreshBalance] Could not get balance from geth:", e);
+        }
       }
 
       const prevWallet = get(wallet);
@@ -1378,7 +1393,7 @@ export class WalletService {
       });
 
       // Store the results
-      console.log("[Accurate Totals] Updating store with:", {
+      console.debug("[Accurate Totals] Updating store with:", {
         blocksMined: result.blocks_mined,
         totalReceived: result.total_received,
         totalSent: result.total_sent,
@@ -1400,23 +1415,25 @@ export class WalletService {
         const sessionCounterAtEnd = await invoke<number>("get_blocks_mined", {
           address: accountAddress,
         });
-        
+
         // Blocks mined DURING the scan are not included in the scan result
         // (because scan only goes up to current_block captured at start)
         const blocksDuringCalc = sessionCounterAtEnd - sessionCounterAtStart;
-        
+
         // Total = historical (from scan) + blocks mined during scan
         // This avoids double-counting:
         // - Blocks before scan start might be in scan result (we don't add them again)
         // - Blocks during scan are definitely NOT in scan result (we add them)
         const totalCount = result.blocks_mined + blocksDuringCalc;
-        
+
         await invoke("initialize_mined_blocks_count", {
           address: accountAddress,
           count: totalCount,
         });
-        console.log(`[Accurate Totals] Initialized backend blocks count to: ${totalCount} (scan: ${result.blocks_mined}, during calc: ${blocksDuringCalc}, session start: ${sessionCounterAtStart}, session end: ${sessionCounterAtEnd})`);
-        
+        console.debug(
+          `[Accurate Totals] Initialized backend blocks count to: ${totalCount} (scan: ${result.blocks_mined}, during calc: ${blocksDuringCalc}, session start: ${sessionCounterAtStart}, session end: ${sessionCounterAtEnd})`
+        );
+
         // Update the mining state store
         const reward = get(blockReward);
         miningState.update((state) => ({
@@ -1425,10 +1442,13 @@ export class WalletService {
           totalRewards: totalCount * reward,
         }));
       } catch (initError) {
-        console.warn("[Accurate Totals] Failed to initialize backend counter:", initError);
+        console.warn(
+          "[Accurate Totals] Failed to initialize backend counter:",
+          initError
+        );
       }
 
-      console.log(`[Accurate Totals] Complete!`, result);
+      console.debug(`[Accurate Totals] Complete!`, result);
     } catch (error) {
       console.error("Failed to calculate accurate totals:", error);
       throw error;
