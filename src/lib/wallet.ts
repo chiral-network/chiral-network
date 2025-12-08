@@ -1268,6 +1268,19 @@ export class WalletService {
     return account;
   }
 
+  async deleteKeystoreAccount(address: string): Promise<void> {
+    if (!this.isTauri) {
+      throw new Error('Keystore deletion is only available in the desktop app');
+    }
+
+    try {
+      await invoke('remove_account_from_keystore', { address });
+    } catch (error) {
+      console.error('Failed to delete keystore account:', error);
+      throw error;
+    }
+  }
+
   async exportSnapshot(options?: {
     includePrivateKey?: boolean;
   }): Promise<WalletExportSnapshot> {
