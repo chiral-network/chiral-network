@@ -178,8 +178,6 @@ impl BitTorrentError {
     }
 }
 
-const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
-
 /// Represents the source of a torrent, which can be a magnet link or a .torrent file.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -220,6 +218,9 @@ pub struct PersistentTorrent {
 
     /// The total size of the torrent's content in bytes.
     pub size: Option<u64>,
+
+    /// The priority of the download.
+    pub priority: u32,
 }
 
 impl PersistentTorrent {
@@ -342,7 +343,7 @@ impl TorrentStateManager {
         self.state.torrents.values().cloned().collect()
     }
     pub fn get_all(&self) -> Vec<PersistentTorrent> {
-        let mut torrents: Vec<PersistentTorrent> = self.torrents.values().cloned().collect();
+        let mut torrents: Vec<PersistentTorrent> = self.state.torrents.values().cloned().collect();
         // Sort by priority (lower is higher), then by added_at timestamp as a tie-breaker.
         torrents.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.added_at.cmp(&b.added_at)));
         torrents
@@ -350,10 +351,10 @@ impl TorrentStateManager {
 
     /// Updates the priorities of multiple torrents and saves the state.
     /// Accepts a list of (info_hash, new_priority) tuples.
-    pub fn update_priorities(&mut self, updates: &[(String, u32)]) -> Result<(), std::io::Error> {
+    pub async fn update_priorities(&mut self, updates: &[(String, u32)]) -> Result<(), std::io::Error> {
         let mut changed = false;
         for (info_hash, new_priority) in updates {
-            if let Some(torrent) = self.torrents.get_mut(info_hash) {
+            if let Some(torrent) = self.state.torrents.get_mut(info_hash) {
                 if torrent.priority != *new_priority {
                     torrent.priority = *new_priority;
                     changed = true;
@@ -361,7 +362,7 @@ impl TorrentStateManager {
             }
         }
         if changed {
-            self.save()
+            self.save().await
         } else {
             Ok(())
         }
@@ -388,6 +389,7 @@ pub async fn update_download_priorities(
 
     let mut manager = state_manager.lock().await;
     manager.update_priorities(&updates)
+           .await
            .map_err(|e| format!("Failed to save updated priorities: {}", e))
 }
 
@@ -435,17 +437,12 @@ impl BitTorrentHandler {
         dht_service: Arc<DhtService>,
     ) -> Result<Self, BitTorrentError> {
         let state_file_path = download_directory.join("torrents_state.json");
-        Self::new_with_port_range_app_handle_and_state_path(download_directory, dht_service, None, None, state_file_path).await
+        Self::new_with_port_range_app_handle_and_state_path(download_directory, dht_service, None, None, state_file_path).await //
     }
 
     /// Creates a new BitTorrentHandler with a specific port range to avoid conflicts.
     pub async fn new_with_port_range(
-        download_directory: std::path::PathBuf,
-        dht_service: Arc<DhtService>,
-        listen_port_range: Option<std::ops::Range<u16>>,
-    ) -> Result<Self, BitTorrentError> {
-        let state_file_path = download_directory.join("torrents_state.json");
-        Self::new_with_port_range_and_state_path(download_directory, dht_service, listen_port_range, state_file_path).await
+        download_directory: std::path::PathBuf, dht_service: Arc<DhtService>, listen_port_range: Option<std::ops::Range<u16>>,) -> Result<Self, BitTorrentError> {
         // Correctly call the main constructor, passing None for the app_handle.
         Self::new_with_port_range_and_app_handle(download_directory, dht_service, listen_port_range, None).await
     }
@@ -457,8 +454,7 @@ impl BitTorrentHandler {
         app_handle: AppHandle,
     ) -> Result<Self, BitTorrentError> {
         let state_file_path = download_directory.join("torrents_state.json");
-        Self::new_with_port_range_app_handle_and_state_path(download_directory, dht_service, None, Some(app_handle), state_file_path).await
-        // Correctly call the main constructor, passing None for the port range and Some for the app_handle.
+        // Correctly call the main constructor, passing None for the port range and Some for the app_handle. //
         Self::new_with_port_range_and_app_handle(download_directory, dht_service, None, Some(app_handle)).await
     }
 
@@ -922,6 +918,7 @@ impl BitTorrentHandler {
                 status: PersistentTorrentStatus::Downloading,
                 added_at: PersistentTorrent::current_timestamp(),
                 name: None,
+                priority: 0, // Default priority
                 size: None,
             }
         } else {
@@ -932,57 +929,14 @@ impl BitTorrentHandler {
                 status: PersistentTorrentStatus::Downloading,
                 added_at: PersistentTorrent::current_timestamp(),
                 name: None,
+                priority: 0, // Default priority
                 size: None,
             }
         };
 
         self.save_torrent_to_state(&info_hash_hex, persistent_torrent).await?;
-            // Check for completion
-            if total > 0 && downloaded >= total {
-                info!("Download completed for torrent");
-                let _ = event_tx.send(BitTorrentEvent::Completed).await;
-                // Re-evaluate the queue to start the next download.
-                let _ = self.re_evaluate_queue().await;
-                return;
-            }
 
         Ok(handle)
-    }
-
-    /// Cancel/remove a torrent by info hash
-    pub async fn cancel_torrent(&self, info_hash: &str, delete_files: bool) -> Result<(), BitTorrentError> {
-        info!("Cancelling torrent: {} (delete_files: {})", info_hash, delete_files);
-        
-        let handle = {
-            let mut torrents = self.active_torrents.lock().await;
-            torrents.remove(info_hash)
-        };
-        
-        if let Some(handle) = handle {
-            let torrent_id = handle.id();
-            self.rqbit_session
-                .delete(torrent_id.into(), delete_files)
-                .await
-                .map_err(|e| BitTorrentError::ProtocolSpecific {
-                    message: format!("Failed to cancel torrent: {}", e),
-                })?;
-
-            self.remove_torrent_from_state(info_hash).await?;
-            
-            info!("Successfully cancelled torrent: {}", info_hash);
-            Ok(())
-        } else {
-            Err(BitTorrentError::TorrentNotFound {
-                info_hash: info_hash.to_string(),
-            })
-        }
-    }
-
-    /// Stop seeding a torrent (same as cancel but specifically for seeding)
-    pub async fn stop_seeding_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
-        info!("Stopping seeding for torrent: {}", info_hash);
-        // For seeding, we just cancel without deleting files
-        self.cancel_torrent(info_hash, false).await
     }
 
     /// Check if a torrent exists in the active session or persistent state.
@@ -993,50 +947,6 @@ impl BitTorrentHandler {
         }
         // Then check persistent state
         self.has_persistent_torrent(info_hash).await
-    }
-
-    /// Get progress information for a torrent
-    pub async fn get_torrent_progress(&self, info_hash: &str) -> Result<TorrentProgress, BitTorrentError> {
-        let torrents = self.active_torrents.lock().await;
-        
-        if let Some(handle) = torrents.get(info_hash) {
-            let stats = handle.stats();
-            
-            // Extract download/upload speed from live stats if available
-            // Speed is in Mbps, convert to bytes/sec (Mbps * 1_000_000 / 8)
-            let (download_speed, upload_speed, eta_seconds) = if let Some(live) = &stats.live {
-                let download_speed = live.download_speed.mbps as f64 * 125_000.0; // Mbps to bytes/sec
-                let upload_speed = live.upload_speed.mbps as f64 * 125_000.0;
-                // time_remaining is a DurationWithHumanReadable, extract seconds if available
-                let eta = live.average_piece_download_time.map(|d| {
-                    if stats.total_bytes > stats.progress_bytes {
-                        let remaining = stats.total_bytes - stats.progress_bytes;
-                        let speed_bps = download_speed.max(1.0);
-                        (remaining as f64 / speed_bps) as u64
-                    } else {
-                        0
-                    }
-                });
-                (download_speed, upload_speed, eta)
-            } else {
-                (0.0, 0.0, None)
-            };
-            
-            Ok(TorrentProgress {
-                downloaded_bytes: stats.progress_bytes,
-                uploaded_bytes: stats.uploaded_bytes,
-                total_bytes: stats.total_bytes,
-                download_speed,
-                upload_speed,
-                eta_seconds,
-                is_finished: stats.finished,
-                state: format!("{}", stats.state),
-            })
-        } else {
-            Err(BitTorrentError::TorrentNotFound {
-                info_hash: info_hash.to_string(),
-            })
-        }
     }
 
     /// Get all persistent torrents from state
@@ -1250,19 +1160,6 @@ impl BitTorrentHandler {
             })
         }
     }
-}
-
-/// Progress information for a torrent
-#[derive(Debug, Clone)]
-pub struct TorrentProgress {
-    pub downloaded_bytes: u64,
-    pub uploaded_bytes: u64,
-    pub total_bytes: u64,
-    pub download_speed: f64,
-    pub upload_speed: f64,
-    pub eta_seconds: Option<u64>,
-    pub is_finished: bool,
-    pub state: String,
 }
 
 // Helper functions for error mapping and validation
@@ -1554,6 +1451,7 @@ impl SimpleProtocolHandler for BitTorrentHandler {
             added_at: PersistentTorrent::current_timestamp(),
             name: path.file_name().and_then(|n| n.to_str()).map(String::from),
             size: std::fs::metadata(path).ok().map(|m| m.len()),
+            priority: 0, // Default priority for new seeds
         };
         
         // Save the state to torrent_state.json
@@ -1641,6 +1539,8 @@ mod tests {
             status: PersistentTorrentStatus::Downloading,
             added_at: 1678886400,
             priority: 0, // Add priority field
+            name: None,
+            size: None,
         };
 
         let serialized_magnet = serde_json::to_string_pretty(&original_magnet).unwrap();
@@ -1667,6 +1567,8 @@ mod tests {
             status: PersistentTorrentStatus::Seeding,
             added_at: 1678887400,
             priority: 1, // Add priority field
+            name: None,
+            size: None,
         };
 
         let serialized_file = serde_json::to_string_pretty(&original_file).unwrap();
