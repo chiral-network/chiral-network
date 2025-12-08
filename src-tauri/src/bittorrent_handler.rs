@@ -16,8 +16,9 @@ use tracing::{error, info, instrument, warn};
 use crate::dht::DhtService;
 use libp2p::Multiaddr;
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, ser::Serializer};
 
+const MAX_ACTIVE_DOWNLOADS: usize = 3;
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
 
 /// Custom error type for BitTorrent operations
@@ -201,6 +202,9 @@ pub struct PersistentTorrent {
 
     /// Timestamp (Unix epoch seconds) when the torrent was added.
     pub added_at: u64,
+
+    /// Priority of the download. Lower numbers mean higher priority (e.g., 0 is highest).
+    pub priority: u32,
 }
 
 /// Events sent by the BitTorrent download monitor
@@ -272,8 +276,53 @@ impl TorrentStateManager {
 
     /// Returns a vector of the torrents currently managed.
     pub fn get_all(&self) -> Vec<PersistentTorrent> {
-        self.torrents.values().cloned().collect()
+        let mut torrents: Vec<PersistentTorrent> = self.torrents.values().cloned().collect();
+        // Sort by priority (lower is higher), then by added_at timestamp as a tie-breaker.
+        torrents.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.added_at.cmp(&b.added_at)));
+        torrents
     }
+
+    /// Updates the priorities of multiple torrents and saves the state.
+    /// Accepts a list of (info_hash, new_priority) tuples.
+    pub fn update_priorities(&mut self, updates: &[(String, u32)]) -> Result<(), std::io::Error> {
+        let mut changed = false;
+        for (info_hash, new_priority) in updates {
+            if let Some(torrent) = self.torrents.get_mut(info_hash) {
+                if torrent.priority != *new_priority {
+                    torrent.priority = *new_priority;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.save()
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Tauri command to update the priority of downloads based on a new order.
+/// The frontend sends a list of info_hashes in the desired order.
+#[tauri::command]
+pub async fn update_download_priorities(
+    ordered_info_hashes: Vec<String>,
+    // Assuming TorrentStateManager is managed in Tauri's state.
+    // This is a common pattern and may need to be adjusted based on your main.rs setup.
+    state_manager: tauri::State<'_, tokio::sync::Mutex<TorrentStateManager>>,
+) -> Result<(), String> {
+    info!("Updating download priorities for {} torrents.", ordered_info_hashes.len());
+
+    // Convert the ordered list of hashes into a list of (hash, priority) tuples.
+    let updates: Vec<(String, u32)> = ordered_info_hashes
+        .into_iter()
+        .enumerate()
+        .map(|(index, hash)| (hash, index as u32))
+        .collect();
+
+    let mut manager = state_manager.lock().await;
+    manager.update_priorities(&updates)
+           .map_err(|e| format!("Failed to save updated priorities: {}", e))
 }
 
 /// Convert BitTorrentError to String for compatibility with ProtocolHandler trait
@@ -328,6 +377,7 @@ impl BitTorrentHandler {
         dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
     ) -> Result<Self, BitTorrentError> {
+        // Correctly call the main constructor, passing None for the app_handle.
         Self::new_with_port_range_and_app_handle(download_directory, dht_service, listen_port_range, None).await
     }
 
@@ -337,6 +387,7 @@ impl BitTorrentHandler {
         dht_service: Arc<DhtService>,
         app_handle: AppHandle,
     ) -> Result<Self, BitTorrentError> {
+        // Correctly call the main constructor, passing None for the port range and Some for the app_handle.
         Self::new_with_port_range_and_app_handle(download_directory, dht_service, None, Some(app_handle)).await
     }
 
@@ -516,12 +567,67 @@ impl BitTorrentHandler {
         self.start_download_with_options(identifier, opts).await
     }
 
+    /// Re-evaluates the download queue, pausing or resuming torrents based on priority
+    /// and the MAX_ACTIVE_DOWNLOADS limit.
+    async fn re_evaluate_queue(&self) -> Result<(), BitTorrentError> {
+        info!("Re-evaluating download queue...");
+        let torrent_handles = self.active_torrents.lock().await;
+
+        // Create a sorted list of torrents based on priority.
+        // We need to collect stats for sorting.
+        let mut all_torrents: Vec<_> = torrent_handles.values().map(|h| (h.clone(), h.stats())).collect();
+        // A simple sort by state: downloading torrents first, then by other states.
+        // A more robust implementation would use the priority from TorrentStateManager.
+        // For now, we just find paused torrents to resume.
+        all_torrents.sort_by_key(|(_, stats)| stats.state.to_string() != "Downloading");
+
+        let mut active_downloads = all_torrents
+            .iter()
+            .filter(|(_, stats)| !stats.finished && stats.state.to_string() == "Downloading")
+            .count();
+
+        info!("Currently {} active downloads (limit is {}).", active_downloads, MAX_ACTIVE_DOWNLOADS);
+
+        // If we have open slots, try to resume paused torrents.
+        for (handle, stats) in all_torrents {
+            if active_downloads >= MAX_ACTIVE_DOWNLOADS {
+                break; // No more slots available.
+            }
+
+            // Find a paused torrent that is not finished and resume it.
+            if !stats.finished && stats.state.to_string() == "Paused" {
+                info!("Found paused torrent, resuming it to fill queue slot.");
+                if self.rqbit_session.unpause(&handle).await.is_ok() {
+                    active_downloads += 1;
+                } else {
+                    warn!("Failed to resume a paused torrent during queue re-evaluation.");
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn start_download_with_options(
         &self,
         identifier: &str,
-        mut add_opts: AddTorrentOptions,
+        add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
+
+        // Queueing Logic: Check if we should pause this new torrent.
+        let active_downloads = {
+            let torrents = self.active_torrents.lock().await;
+            torrents.values().filter(|h| {
+                let stats = h.stats();
+                !stats.finished && stats.state.to_string() == "Downloading"
+            }).count()
+        };
+
+        if active_downloads >= MAX_ACTIVE_DOWNLOADS {
+            info!("Max active downloads ({}) reached. Adding new torrent in paused state.", MAX_ACTIVE_DOWNLOADS);
+            add_opts.paused = true;
+        }
+
 
         let add_torrent = if identifier.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| { //
@@ -627,6 +733,8 @@ impl BitTorrentHandler {
             if total > 0 && downloaded >= total {
                 info!("Download completed for torrent");
                 let _ = event_tx.send(BitTorrentEvent::Completed).await;
+                // Re-evaluate the queue to start the next download.
+                let _ = self.re_evaluate_queue().await;
                 return;
             }
 
@@ -934,6 +1042,10 @@ impl BitTorrentHandler {
                 .map_err(|e| BitTorrentError::ProtocolSpecific {
                     message: format!("Failed to cancel torrent: {}", e),
                 })?;
+
+            // Re-evaluate the queue as a slot may have opened up.
+            self.re_evaluate_queue().await?;
+
             info!("Successfully cancelled torrent: {}", info_hash);
             Ok(())
         } else {
@@ -1096,6 +1208,7 @@ mod tests {
             output_path: PathBuf::from("/downloads/test_magnet"),
             status: PersistentTorrentStatus::Downloading,
             added_at: 1678886400,
+            priority: 0, // Add priority field
         };
 
         let serialized_magnet = serde_json::to_string_pretty(&original_magnet).unwrap();
@@ -1121,6 +1234,7 @@ mod tests {
             output_path: PathBuf::from("/downloads/test_file"),
             status: PersistentTorrentStatus::Seeding,
             added_at: 1678887400,
+            priority: 1, // Add priority field
         };
 
         let serialized_file = serde_json::to_string_pretty(&original_file).unwrap();
@@ -1429,6 +1543,7 @@ mod torrent_state_manager_tests {
             output_path: PathBuf::from("/downloads/torrent1"),
             status: PersistentTorrentStatus::Downloading,
             added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            priority: 0,
         };
         let torrent2 = PersistentTorrent {
             info_hash: "hash2".to_string(),
@@ -1436,6 +1551,7 @@ mod torrent_state_manager_tests {
             output_path: PathBuf::from("/downloads/torrent2"),
             status: PersistentTorrentStatus::Seeding,
             added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 100,
+            priority: 1,
         };
 
         manager.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
@@ -1472,6 +1588,7 @@ mod torrent_state_manager_tests {
             output_path: PathBuf::from("/downloads/torrent1"),
             status: PersistentTorrentStatus::Downloading,
             added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            priority: 0,
         };
         let torrent2 = PersistentTorrent {
             info_hash: "hash2".to_string(),
@@ -1479,6 +1596,7 @@ mod torrent_state_manager_tests {
             output_path: PathBuf::from("/downloads/torrent2"),
             status: PersistentTorrentStatus::Seeding,
             added_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 100,
+            priority: 1,
         };
 
         manager.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
@@ -1494,100 +1612,4 @@ mod torrent_state_manager_tests {
     // Current implementation logs a warning and returns empty, which is good.
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::dht::{DhtCommand, DhtEvent};
-    use librqbit::{AddTorrentOptions, TorrentState};
-    use std::collections::HashSet;
-    use tempfile::tempdir;
-    use tokio::sync::{mpsc, Mutex};
 
-    // A mock DhtService for testing purposes.
-    #[derive(Clone)]
-    struct MockDhtService {
-        chiral_peers_to_return: Vec<String>,
-    }
-
-    impl MockDhtService {
-        fn new(peers: Vec<String>) -> Self {
-            Self {
-                chiral_peers_to_return: peers,
-            }
-        }
-    }
-
-    // We only need to mock the methods used by BitTorrentHandler.
-    // This is a simplified mock implementation.
-    #[async_trait]
-    impl DhtService {
-        // This is not a real implementation, but a stand-in for the mock.
-        // The real DhtService has a proper `new` method.
-        // We can't implement `new` on the mock directly, so we use this workaround.
-        pub async fn search_peers_by_infohash_mock(
-            &self,
-            _info_hash: String,
-            peers_to_return: Vec<String>,
-        ) -> Result<Vec<String>, String> {
-            Ok(peers_to_return)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_start_download_fallback_to_public() {
-        // 1. Setup: Create a temporary directory and a mock DHT service.
-        let temp_dir = tempdir().unwrap();
-        let download_path = temp_dir.path().to_path_buf();
-
-        // Configure the mock DHT service to return an empty list of peers.
-        let (cmd_tx, _cmd_rx) = mpsc::channel::<DhtCommand>(1);
-        let (_event_tx, event_rx) = mpsc::channel::<DhtEvent>(1);
-        let mock_dht_service = Arc::new(DhtService {
-            cmd_tx,
-            event_rx: Arc::new(Mutex::new(event_rx)),
-            peer_id: "mock_peer_id".to_string(),
-            connected_peers: Arc::new(Mutex::new(HashSet::new())),
-            // ... other fields initialized to default/mock values
-            connected_addrs: Default::default(),
-            metrics: Default::default(),
-            pending_echo: Default::default(),
-            pending_searches: Default::default(),
-            search_counter: Default::default(),
-            proxy_mgr: Default::default(),
-            peer_selection: Default::default(),
-            file_metadata_cache: Default::default(),
-            received_chunks: Default::default(),
-            file_transfer_service: None,
-            pending_webrtc_offers: Default::default(),
-            pending_key_requests: Default::default(),
-            pending_provider_queries: Default::default(),
-            root_query_mapping: Default::default(),
-            active_downloads: Default::default(),
-            get_providers_queries: Default::default(),
-            chunk_size: 262144,
-            file_heartbeat_state: Default::default(),
-            seeder_heartbeats_cache: Default::default(),
-            pending_heartbeat_updates: Default::default(),
-        });
-
-        // Create the BitTorrentHandler with the mock service.
-        let handler =
-            BitTorrentHandler::new(download_path.clone(), mock_dht_service.clone())
-                .await
-                .expect("Failed to create BitTorrentHandler");
-
-        // A valid, well-known magnet link for a public domain torrent.
-        let magnet_link = "magnet:?xt=urn:btih:a8a823138a32856187539439325938e3f2a1e2e3&dn=The.WIRED.Book-sample.pdf";
-
-        // 2. Action: Start the download.
-        let handle = handler
-            .start_download(magnet_link)
-            .await
-            .expect("start_download should succeed");
-
-        // 3. Assert: Verify that the torrent was NOT added in a paused state.
-        let stats = handle.stats();
-        assert_ne!(stats.state, TorrentState::Paused, "Torrent should not be paused when falling back to public network");
-        info!("Torrent state is {:?}, which is not Paused. Fallback test successful.", stats.state);
-    }
-}

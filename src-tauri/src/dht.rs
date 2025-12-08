@@ -1696,11 +1696,13 @@ async fn run_dht_node(
                                 };
 
                                 // Store minimal metadata in DHT (using merged metadata)
+                                // Include file_data for small files (e.g., reputation verdicts < 10KB)
                                 let dht_metadata = serde_json::json!({
                                     "file_hash": merged_metadata.merkle_root,
                                     "merkle_root": merged_metadata.merkle_root,
                                     "file_name": merged_metadata.file_name,
                                     "file_size": merged_metadata.file_size,
+                                    "file_data": merged_metadata.file_data, // Small files kept inline for fast retrieval
                                     "created_at": merged_metadata.created_at,
                                     "mime_type": merged_metadata.mime_type,
                                     "is_encrypted": merged_metadata.is_encrypted,
@@ -3960,20 +3962,24 @@ async fn run_dht_node(
                                         // WebRTC offer request
                                         Message::Request { request, channel, .. } => {
                                             let WebRTCOfferRequest { offer_sdp, file_hash, requester_peer_id: _requester_peer_id } = request;
-                                            info!("Received WebRTC offer from {} for file {}", peer, file_hash);
+                                            info!("📨 Received WebRTC offer from {} for file {}", peer, file_hash);
+                                            info!("📨 Offer SDP length: {} bytes", offer_sdp.len());
 
                                             // Get WebRTC service to handle the offer
                                             if let Some(webrtc_service) = get_webrtc_service().await {
+                                                info!("✅ WebRTC service is available, creating answer...");
                                                 // Create WebRTC answer using the WebRTC service
                                                 match webrtc_service.establish_connection_with_offer(peer.to_string(), offer_sdp).await {
                                                     Ok(answer_sdp) => {
-                                                        info!("Created WebRTC answer for peer {}", peer);
+                                                        info!("✅ Created WebRTC answer for peer {}, sending response...", peer);
+                                                        info!("📤 Answer SDP length: {} bytes", answer_sdp.len());
                                                         swarm.behaviour_mut().webrtc_signaling_rr
                                                             .send_response(channel, WebRTCAnswerResponse { answer_sdp })
-                                                            .unwrap_or_else(|e| error!("send_response failed: {e:?}"));
+                                                            .unwrap_or_else(|e| error!("❌ send_response failed: {e:?}"));
+                                                        info!("✅ WebRTC answer sent successfully to peer {}", peer);
                                                     }
                                                     Err(e) => {
-                                                        error!("Failed to create WebRTC answer for peer {}: {}", peer, e);
+                                                        error!("❌ Failed to create WebRTC answer for peer {}: {}", peer, e);
                                                         let error_answer = "error:failed-to-create-answer".to_string();
                                                         swarm.behaviour_mut().webrtc_signaling_rr
                                                             .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })
@@ -3981,7 +3987,7 @@ async fn run_dht_node(
                                                     }
                                                 }
                                             } else {
-                                                error!("WebRTC service not available for handling offer from peer {}", peer);
+                                                error!("❌ WebRTC service not available for handling offer from peer {}", peer);
                                                 let error_answer = "error:webrtc-service-unavailable".to_string();
                                                 swarm.behaviour_mut().webrtc_signaling_rr
                                                     .send_response(channel, WebRTCAnswerResponse { answer_sdp: error_answer })
@@ -6445,9 +6451,15 @@ impl DhtService {
         let identify = identify::Behaviour::new(identify_config);
 
         // mDNS for local peer discovery
+        // Disable mDNS when running multiple instances to avoid "address already in use" errors
         let disable_mdns_env = std::env::var("CHIRAL_DISABLE_MDNS").ok().as_deref() == Some("1");
+        let multiple_instances = std::env::var("CHIRAL_ALLOW_MULTIPLE_INSTANCES").ok().as_deref() == Some("1");
         let mdns_opt = if disable_mdns_env {
             tracing::info!("mDNS disabled via env CHIRAL_DISABLE_MDNS=1");
+            None
+        } else if multiple_instances {
+            tracing::info!("mDNS disabled for multi-instance mode (CHIRAL_ALLOW_MULTIPLE_INSTANCES=1)");
+            tracing::info!("This prevents 'address already in use' errors when running multiple instances on the same machine");
             None
         } else {
             Some(Mdns::new(Default::default(), local_peer_id)?)
@@ -8527,7 +8539,7 @@ pub fn parse_magnet_uri(uri: &str) -> Result<MagnetData, String> {
     let params: HashMap<String, Vec<String>> = url::form_urlencoded::parse(params_str.as_bytes())
         .into_owned()
         .fold(HashMap::new(), |mut acc, (key, val)| {
-            acc.entry(key).or_default().push(val);
+            acc.entry(key.to_lowercase()).or_default().push(val);
             acc
         });
 

@@ -597,7 +597,7 @@ export const totalSpent = derived(transactions, ($txs) =>
 
 export const totalReceived = derived(transactions, ($txs) =>
   $txs
-    .filter((tx) => tx.type === "received")
+    .filter((tx) => tx.type === "received" || tx.type === "mining")
     .reduce((sum, tx) => sum + tx.amount, 0)
 );
 
@@ -667,7 +667,6 @@ export interface AppSettings {
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
   anonymousMode: boolean;
   shareAnalytics: boolean;
-  enableWalletAutoLock: boolean;
   autoStartDHT: boolean; // Whether to automatically start DHT on app launch
   autoStartGeth: boolean; // Whether to automatically start Geth blockchain node on app launch
   enableNotifications: boolean;

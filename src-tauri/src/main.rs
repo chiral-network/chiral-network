@@ -1498,6 +1498,13 @@ async fn start_dht_node(
     // --- AutoRelay is now disabled by default (can be enabled via config or env var)
     // Disable AutoRelay on bootstrap nodes (and via env var)
     let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
+    
+    // Allow forcing AutoRelay ON via environment variable (useful for multi-instance testing)
+    if std::env::var("CHIRAL_ENABLE_AUTORELAY").ok().as_deref() == Some("1") {
+        final_enable_autorelay = true;
+        tracing::info!("AutoRelay enabled via env CHIRAL_ENABLE_AUTORELAY=1");
+    }
+    
     if is_bootstrap.unwrap_or(false) {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled on bootstrap (hotfix).");
@@ -3348,6 +3355,63 @@ fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
         .to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "Failed to convert path to string".to_string())
+}
+
+/// Validates a storage path to ensure it's a valid absolute path
+/// This prevents issues where relative paths or tilde expansion
+/// could create directories in unexpected locations.
+/// 
+/// Returns Ok(()) if path is valid, or Err with validation message.
+/// The error message may be a warning (starting with "WARNING:") if the path
+/// is valid but the directory doesn't exist yet.
+#[tauri::command]
+fn validate_storage_path(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    
+    if trimmed.is_empty() {
+        return Err("Storage path cannot be empty".to_string());
+    }
+    
+    // Platform-specific validation BEFORE general absolute check
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, reject tilde since it's not supported
+        if trimmed.starts_with('~') {
+            return Err("The ~ character is not a valid Windows directory. Please enter a full Windows path (e.g., C:\\Users\\...) or use the folder picker.".to_string());
+        }
+        
+        // On Windows, reject Unix-style paths (starting with /)
+        if trimmed.starts_with('/') {
+            return Err("Unix-style paths (e.g., /home/) are not valid on Windows. Please use a Windows path (e.g., C:\\Users\\...)".to_string());
+        }
+        
+        // Extract drive letter and check if it exists
+        if let Some(drive_letter) = trimmed.chars().next() {
+            if drive_letter.is_ascii_alphabetic() {
+                let drive_root = format!("{}:\\", drive_letter.to_ascii_uppercase());
+                let drive_path = Path::new(&drive_root);
+                
+                // Check if the drive exists by checking if we can read the root directory
+                if !drive_path.exists() {
+                    return Err(format!("Drive {}:\\ does not exist on this system", drive_letter.to_ascii_uppercase()));
+                }
+            }
+        }
+    }
+    
+    let path_obj = Path::new(trimmed);
+    
+    // Path must be absolute (check after platform-specific validation)
+    if !path_obj.is_absolute() {
+        return Err("Storage path must be an absolute path (e.g., C:\\Users\\... on Windows or /home/... on Unix)".to_string());
+    }
+    
+    // Check if directory exists - if not, it will be created
+    if !path_obj.exists() {
+        return Err(format!("WARNING: Directory does not exist and will be created: {}", trimmed));
+    }
+    
+    Ok(())
 }
 
 #[tauri::command]
@@ -7727,6 +7791,8 @@ fn main() {
             detect_locale,
             get_download_directory,
             check_directory_exists,
+            get_default_storage_directory,
+            validate_storage_path,
             ensure_directory_exists,
             get_dht_health,
             get_dht_peer_count,
@@ -8766,6 +8832,29 @@ fn check_directory_exists(path: String) -> Result<bool, String> {
     use std::path::Path;
     let p = Path::new(&path);
     Ok(p.exists() && p.is_dir())
+}
+
+/// Returns the platform-specific default storage directory path as a string
+#[tauri::command]
+fn get_default_storage_directory() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        // Get the user's home directory from environment variable
+        let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\<user>".to_string());
+        return format!("{}\\Downloads\\Chiral-Network-Storage", user_profile);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Use home directory with tilde expansion
+        return "~/Downloads/Chiral-Network-Storage".to_string();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Use home directory with tilde expansion
+        return "~/Downloads/Chiral-Network-Storage".to_string();
+    }
+    // Fallback for other platforms
+    "~/Downloads/Chiral-Network-Storage".to_string()
 }
 
 /// Event pump for DHT events, moved out of start_dht_node
