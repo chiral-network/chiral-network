@@ -221,6 +221,7 @@
         } catch (err) {
           console.error(`❌ Failed to fetch verdicts for ${m.peer_id}:`, err);
         }
+        */
         
         const trustLevel = score >= 0.75 ? TrustLevel.Trusted :  // 2+ successful transfers
                           score >= 0.6 ? TrustLevel.High :
@@ -621,9 +622,11 @@
           <div class="flex items-center justify-between mt-6 pt-6 border-t border-gray-200">
             <div class="text-sm text-gray-600">
               {$t('reputation.pagination.showing', {
-                start: (currentPage - 1) * peersPerPage + 1,
-                end: Math.min(currentPage * peersPerPage, filteredPeers.length),
-                total: filteredPeers.length
+                values: {
+                  start: (currentPage - 1) * peersPerPage + 1,
+                  end: Math.min(currentPage * peersPerPage, filteredPeers.length),
+                  total: filteredPeers.length
+                }
               })}
             </div>
             <div class="flex items-center gap-2">
