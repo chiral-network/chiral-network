@@ -439,12 +439,29 @@
         const snapshot = await walletService.exportSnapshot({ includePrivateKey: true });
         const dataStr = JSON.stringify(snapshot, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const fileName = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+
+        if (isTauri) {
+          try {
+            const storagePath = await invoke<string>('get_download_directory');
+            await invoke('ensure_directory_exists', { path: storagePath });
+            const { join } = await import('@tauri-apps/api/path');
+            const exportPath = await join(storagePath, fileName);
+            const { writeFile } = await import('@tauri-apps/plugin-fs');
+            await writeFile(exportPath, new TextEncoder().encode(dataStr));
+            exportMessage = tr('wallet.exportSuccess');
+            setTimeout(() => exportMessage = '', 3000);
+            return;
+          } catch (error) {
+            console.error('Tauri export failed, falling back to browser flow:', error);
+          }
+        }
         
         // Check if the File System Access API is supported
         if ('showSaveFilePicker' in window) {
           try {
             const fileHandle = await (window as any).showSaveFilePicker({
-              suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
+              suggestedName: fileName,
               types: [{
                 description: 'JSON files',
                 accept: {
@@ -470,7 +487,7 @@
           const url = URL.createObjectURL(dataBlob);
           const link = document.createElement('a');
           link.href = url;
-          link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+          link.download = fileName;
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
