@@ -8370,7 +8370,7 @@ pub fn parse_magnet_uri(uri: &str) -> Result<MagnetData, String> {
     let params: HashMap<String, Vec<String>> = url::form_urlencoded::parse(params_str.as_bytes())
         .into_owned()
         .fold(HashMap::new(), |mut acc, (key, val)| {
-            acc.entry(key).or_default().push(val);
+            acc.entry(key.to_lowercase()).or_default().push(val);
             acc
         });
 
