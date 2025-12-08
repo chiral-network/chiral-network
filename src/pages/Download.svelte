@@ -2665,11 +2665,6 @@ async function loadAndResumeDownloads() {
                             Resumed
                           </Badge>
                         {/if}
-                        {#if multiSourceProgress.has(file.hash)}
-                          <Badge class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">
-                            Multi-source
-                          </Badge>
-                        {/if}
                         <Badge class="text-xs font-semibold bg-muted-foreground/20 text-foreground border-0 px-2 py-0.5">
                           {formatFileSize(file.size)}
                         </Badge>

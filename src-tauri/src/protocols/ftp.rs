@@ -20,6 +20,7 @@ use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use suppaftp::{FtpError, FtpStream};
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -163,6 +164,92 @@ impl FtpProtocolHandler {
             .and_then(|segments| segments.last())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "unknown_file".to_string())
+    }
+
+    /// Download file with progress updates
+    async fn download_with_progress(
+        downloader: &FtpDownloader,
+        stream: &mut FtpStream,
+        remote_path: &str,
+        file_size: u64,
+        event_bus: &Option<Arc<TransferEventBus>>,
+        transfer_id: &str,
+        start_time: Instant,
+    ) -> Result<(Vec<u8>, u64, f64), String> {
+        use crate::transfer_events::TransferProgressEvent;
+
+        let mut data = Vec::new();
+        let mut downloaded_bytes = 0u64;
+        let mut last_progress_update = start_time.elapsed().as_millis() as u64;
+
+        // Use a streaming approach to download with progress
+        let result = stream.retr(remote_path, |reader| {
+            let mut temp_buf = vec![0u8; 8192]; // 8KB chunks for progress updates
+
+            loop {
+                match reader.read(&mut temp_buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        data.extend_from_slice(&temp_buf[..n]);
+                        downloaded_bytes += n as u64;
+
+                        // Send progress update every 100ms or when significant progress is made
+                        let now = start_time.elapsed().as_millis() as u64;
+                        if now - last_progress_update > 100 || downloaded_bytes == file_size {
+                            if let Some(ref bus) = event_bus {
+                                let progress_pct = if file_size > 0 {
+                                    (downloaded_bytes as f64 / file_size as f64) * 100.0
+                                } else {
+                                    0.0
+                                };
+
+                                let elapsed_secs = start_time.elapsed().as_secs();
+                                let download_speed = if elapsed_secs > 0 {
+                                    downloaded_bytes as f64 / elapsed_secs as f64
+                                } else {
+                                    0.0
+                                };
+
+                                let eta_seconds = if download_speed > 0.0 && file_size > downloaded_bytes {
+                                    Some(((file_size - downloaded_bytes) as f64 / download_speed) as u32)
+                                } else {
+                                    None
+                                };
+
+                                let _ = bus.emit_progress(TransferProgressEvent {
+                                    transfer_id: transfer_id.to_string(),
+                                    downloaded_bytes,
+                                    total_bytes: file_size,
+                                    completed_chunks: 0,
+                                    total_chunks: 1,
+                                    progress_percentage: progress_pct,
+                                    download_speed_bps: download_speed,
+                                    upload_speed_bps: 0.0,
+                                    eta_seconds,
+                                    active_sources: 1,
+                                    timestamp: current_timestamp_ms(),
+                                });
+                            }
+                            last_progress_update = now;
+                        }
+                    }
+                    Err(e) => return Err(FtpError::ConnectionError(e)),
+                }
+            }
+
+            Ok(())
+        });
+
+        result.map_err(|e| format!("RETR command failed: {}", e))?;
+
+        let download_duration_secs = start_time.elapsed().as_secs();
+        let download_speed = if download_duration_secs > 0 {
+            data.len() as f64 / download_duration_secs as f64
+        } else {
+            data.len() as f64
+        };
+
+        Ok((data, download_duration_secs, download_speed))
     }
 
     /// Parse FTP URL and extract credentials if present
@@ -355,15 +442,19 @@ impl ProtocolHandler for FtpProtocolHandler {
                 });
             }
 
-            // Download the file
-            match downloader.download_full(&mut stream, remote_path).await {
-                Ok(data) => {
-                    let download_duration_secs = start_time.elapsed().as_secs();
-                    let download_speed = if download_duration_secs > 0 {
-                        data.len() as f64 / download_duration_secs as f64
-                    } else {
-                        data.len() as f64
-                    };
+            // Download the file with progress updates
+            let download_result = Self::download_with_progress(
+                &downloader,
+                &mut stream,
+                remote_path,
+                file_size,
+                &event_bus,
+                &id,
+                start_time,
+            ).await;
+
+            match download_result {
+                Ok((data, download_duration_secs, download_speed)) => {
 
                     // Write to file
                     if let Err(e) = tokio::fs::write(&output_path, &data).await {
