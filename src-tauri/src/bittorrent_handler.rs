@@ -358,12 +358,23 @@ pub struct BitTorrentHandler {
     // NEW: Manage active torrents and their stats.
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
-    app_handle: Option<AppHandle>,
-    event_bus: Option<Arc<TransferEventBus>>,
+    app_handle: Arc<tokio::sync::Mutex<Option<AppHandle>>>,
+    event_bus: Arc<tokio::sync::Mutex<Option<Arc<TransferEventBus>>>>,
     state_manager: Option<Arc<tokio::sync::Mutex<TorrentStateManager>>>, // NEW: State manager for persistence
 }
 
 impl BitTorrentHandler {
+    /// Set the AppHandle after construction.
+    /// This allows the stats_poller to emit events to the frontend.
+    pub async fn set_app_handle(&self, app_handle: AppHandle) {
+        *self.app_handle.lock().await = Some(app_handle.clone());
+
+        // Also update the event_bus
+        *self.event_bus.lock().await = Some(Arc::new(TransferEventBus::new(app_handle)));
+
+        info!("AppHandle set on BitTorrentHandler - stats polling will now emit events");
+    }
+
     /// Creates a new BitTorrentHandler with the specified download directory.
     pub async fn new(
         download_directory: std::path::PathBuf,
@@ -467,8 +478,8 @@ pub async fn new_with_state(
         download_directory: download_directory.clone(),
         active_torrents: Default::default(),
         peer_states: Default::default(),
-        app_handle,
-        event_bus,
+        app_handle: Arc::new(tokio::sync::Mutex::new(app_handle)),
+        event_bus: Arc::new(tokio::sync::Mutex::new(event_bus)),
         state_manager: state_manager_arc.clone(),
     };
     
@@ -558,7 +569,7 @@ pub async fn new_with_state(
                     let total_bytes = stats.total_bytes;
 
                     // Emit progress event via TransferEventBus
-                    if let Some(ref bus) = event_bus {
+                    if let Some(ref bus) = *event_bus.lock().await {
                         let progress_pct = calculate_progress(downloaded_total, total_bytes);
                         let (download_speed, upload_speed) = if let Some(live) = &stats.live {
                             (
@@ -589,7 +600,7 @@ pub async fn new_with_state(
                     }
 
                     // Also emit torrent_event Progress for the frontend UI
-                    if let Some(ref app) = app_handle {
+                    if let Some(ref app) = *app_handle.lock().await {
                         let (download_speed, _upload_speed) = if let Some(live) = &stats.live {
                             (
                                 live.download_speed.mbps as f64 * 125_000.0,
@@ -606,31 +617,35 @@ pub async fn new_with_state(
                         // This is just for display purposes
                         let peers = 0;
 
-                        // Check if download is complete
+                        // Always emit Progress event with current stats
+                        let progress_event = serde_json::json!({
+                            "Progress": {
+                                "info_hash": info_hash_str,
+                                "downloaded": downloaded_total,
+                                "total": total_bytes,
+                                "speed": download_speed as u64,
+                                "peers": peers,
+                                "eta_seconds": eta.unwrap_or(0) as u64
+                            }
+                        });
+                        let _ = app.emit("torrent_event", progress_event);
+
+                        // Check if download just completed (emit Complete event only once)
                         if stats.finished || (total_bytes > 0 && downloaded_total >= total_bytes) {
-                            // Emit Complete event
-                            // Use info_hash as name since we don't have easy access to the actual name
-                            let torrent_name = format!("Torrent {}", &info_hash_str[..8]);
-                            let complete_event = serde_json::json!({
-                                "Complete": {
-                                    "info_hash": info_hash_str,
-                                    "name": torrent_name
-                                }
-                            });
-                            let _ = app.emit("torrent_event", complete_event);
-                        } else {
-                            // Emit Progress event
-                            let progress_event = serde_json::json!({
-                                "Progress": {
-                                    "info_hash": info_hash_str,
-                                    "downloaded": downloaded_total,
-                                    "total": total_bytes,
-                                    "speed": download_speed as u64,
-                                    "peers": peers,
-                                    "eta_seconds": eta.unwrap_or(0) as u64
-                                }
-                            });
-                            let _ = app.emit("torrent_event", progress_event);
+                            // Check if we've already notified about completion by tracking last state
+                            let was_complete = state.last_downloaded_bytes >= total_bytes && total_bytes > 0;
+                            if !was_complete {
+                                // Emit Complete event only on transition to complete
+                                // Use info_hash as name since we don't have easy access to the actual name
+                                let torrent_name = format!("Torrent {}", &info_hash_str[..8]);
+                                let complete_event = serde_json::json!({
+                                    "Complete": {
+                                        "info_hash": info_hash_str,
+                                        "name": torrent_name
+                                    }
+                                });
+                                let _ = app.emit("torrent_event", complete_event);
+                            }
                         }
                     }
 
@@ -648,7 +663,7 @@ pub async fn new_with_state(
                             bytes_uploaded: uploaded_delta,
                         };
 
-                        if let Some(handle) = app_handle.as_ref() {
+                        if let Some(ref handle) = *app_handle.lock().await {
                             if let Err(e) = handle.emit("payment_required", payload) {
                                 error!("Failed to emit payment_required event: {}", e);
                             }
@@ -725,7 +740,7 @@ pub async fn new_with_state(
         }
 
         // Emit torrent_event Added event to notify the frontend
-        if let Some(app) = &self.app_handle {
+        if let Some(app) = &*self.app_handle.lock().await {
             // Use info_hash as name since we don't have easy access to the actual name
             let torrent_name = format!("Torrent {}", &hash_hex[..8]);
             let added_event = serde_json::json!({
@@ -784,7 +799,7 @@ pub async fn new_with_state(
     async fn start_download_with_options(
         &self,
         identifier: &str,
-        add_opts: AddTorrentOptions,
+        mut add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
@@ -1143,7 +1158,7 @@ impl BitTorrentHandler {
                 })?;
 
             // Emit paused event via TransferEventBus
-            if let Some(ref bus) = self.event_bus {
+            if let Some(ref bus) = *self.event_bus.lock().await {
                 bus.emit_paused(TransferPausedEvent {
                     transfer_id: info_hash.to_string(),
                     paused_at: current_timestamp_ms(),
@@ -1178,7 +1193,7 @@ impl BitTorrentHandler {
                 })?;
 
             // Emit resumed event via TransferEventBus
-            if let Some(ref bus) = self.event_bus {
+            if let Some(ref bus) = *self.event_bus.lock().await {
                 bus.emit_resumed(TransferResumedEvent {
                     transfer_id: info_hash.to_string(),
                     resumed_at: current_timestamp_ms(),
@@ -1234,6 +1249,21 @@ impl BitTorrentHandler {
         info!("Stopping seeding for torrent: {}", info_hash);
         // For seeding, we just cancel without deleting files
         self.cancel_torrent(info_hash, false).await
+    }
+
+    /// Get the download folder path for a torrent
+    pub async fn get_torrent_folder(&self, info_hash: &str) -> Result<PathBuf, BitTorrentError> {
+        let torrents = self.active_torrents.lock().await;
+
+        if torrents.contains_key(info_hash) {
+            // The download_directory is where all torrents are stored
+            // Each torrent typically creates its own subfolder based on the torrent name
+            Ok(self.download_directory.clone())
+        } else {
+            Err(BitTorrentError::TorrentNotFound {
+                info_hash: info_hash.to_string(),
+            })
+        }
     }
 
     /// Get progress information for a torrent

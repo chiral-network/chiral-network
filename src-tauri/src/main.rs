@@ -536,6 +536,19 @@ async fn download_torrent_from_bytes(bytes: Vec<u8>, state: State<'_, AppState>,
     Ok(())
 }
 
+/// Tauri command to open the folder containing a torrent's downloaded files.
+#[tauri::command]
+async fn open_torrent_folder(info_hash: String, state: State<'_, AppState>) -> Result<(), String> {
+    println!("Opening folder for torrent: {}", info_hash);
+
+    let handler = state.bittorrent_handler.clone();
+    let folder_path = handler.get_torrent_folder(&info_hash)
+        .await
+        .map_err(|e| format!("Failed to get torrent folder: {}", e))?;
+
+    show_in_folder(folder_path.to_string_lossy().to_string()).await
+}
+
 /// Tauri command to seed a file.
 /// It takes a local file path, starts seeding, and returns a magnet link.
 #[tauri::command]
@@ -7828,6 +7841,7 @@ fn main() {
             get_power_consumption,
             download,
             download_torrent_from_bytes,
+            open_torrent_folder,
             seed,
             create_and_seed_torrent,
             is_geth_running,
@@ -8336,12 +8350,15 @@ fn main() {
                         // Call get_all() to get Vec<PersistentTorrent>
                         let persistent_torrents = state_manager.get_all();
                         
+                        // Set the app_handle on the BitTorrent handler so it can emit events
+                        let bittorrent_handler = state.bittorrent_handler.clone();
+                        bittorrent_handler.set_app_handle(app_handle.clone()).await;
+                        info!("AppHandle set on BitTorrentHandler");
+
                         if persistent_torrents.is_empty() {
                             info!("No saved torrents to restore");
                         } else {
                             info!("Restoring {} saved torrent(s)", persistent_torrents.len());
-                            
-                            let bittorrent_handler = state.bittorrent_handler.clone();
                             
                             // Re-add each torrent to librqbit
                             for torrent in persistent_torrents {
