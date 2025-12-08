@@ -1,6 +1,6 @@
 // DHT configuration and utilities
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
@@ -466,76 +466,27 @@ export class DhtService {
 
   async searchFileMetadata(
     fileHash: string,
-    timeoutMs = 40_000
+    timeoutMs = 10_000
   ): Promise<FileMetadata | null> {
     const trimmed = fileHash.trim();
     if (!trimmed) {
       throw new Error("File hash is required");
     }
 
-    const cleanup: { fn: UnlistenFn | null } = { fn: null };
-    
     try {
-      // Start listening for the search_result event
-      const metadataPromise = new Promise<FileMetadata | null>(
-        async (resolve, reject) => {
-          const timeoutId = setTimeout(() => {
-            reject(new Error(`Search timeout after ${timeoutMs}ms`));
-          }, timeoutMs);
-
-          // Set up the event listener and store the unlisten function
-          cleanup.fn = await listen<FileMetadata | null>(
-            "found_file",
-            (event) => {
-              clearTimeout(timeoutId);
-              const result = event.payload;
-              // ADDING FOR REPUTATION BASED PEER DISCOVERY: mark discovered providers as "seen" for freshness
-              try {
-                if (result && Array.isArray(result.seeders)) {
-                  for (const addr of result.seeders) {
-                    // Extract peer ID from multiaddr if present
-                    const pid = (addr?.split("/p2p/")[1] ?? addr)?.trim();
-                    if (pid) __rep.noteSeen(pid);
-                  }
-                }
-              } catch (e) {
-                console.warn("reputation noteSeen failed:", e);
-              }
-              resolve(
-                result
-                  ? {
-                      ...result,
-                      seeders: Array.isArray(result.seeders)
-                        ? result.seeders
-                        : [],
-                    }
-                  : null
-              );
-            }
-          );
-
-          // Trigger the backend search and wait for the direct result
-          console.log("🔍 Frontend calling search_file_metadata for:", trimmed);
-          const metadata = await invoke<FileMetadata | null>(
-            "search_file_metadata",
-            {
-              fileHash: trimmed,
-              timeoutMs,
-            }
-          );
-          console.log(
-            "🔍 Frontend received direct result from search_file_metadata:",
-            metadata
-          );
-
-          // Resolve with the metadata from the backend
-          clearTimeout(timeoutId);
-          resolve(metadata);
+      // Trigger the backend search and wait for the direct result
+      console.log("🔍 Frontend calling search_file_metadata for:", trimmed);
+      const metadata = await invoke<FileMetadata | null>(
+        "search_file_metadata",
+        {
+          fileHash: trimmed,
+          timeoutMs,
         }
       );
-
-      // Wait for the metadata promise to resolve
-      const metadata = await metadataPromise;
+      console.log(
+        "🔍 Frontend received direct result from search_file_metadata:",
+        metadata
+      );
 
       if (metadata) {
         if (!metadata.merkleRoot && metadata.fileHash) {
@@ -557,9 +508,6 @@ export class DhtService {
     } catch (error) {
       console.error("Failed to search file metadata:", error);
       throw error;
-    } finally {
-      // Always clean up the event listener, whether we succeed, timeout, or error
-      cleanup.fn?.();
     }
   }
 }
