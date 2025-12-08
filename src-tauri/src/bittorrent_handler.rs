@@ -1961,7 +1961,7 @@ mod torrent_state_manager_tests {
         assert!(!state_file_path.exists()); // File should not be created on new if empty
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_torrent_state_manager_save_and_load() {
         let temp_dir = tempdir().unwrap();
         let state_file_path = temp_dir.path().join("torrent_state.json");
@@ -2010,7 +2010,7 @@ mod torrent_state_manager_tests {
         assert_eq!(loaded_manager.torrents.get("hash2").unwrap(), &torrent2);
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_torrent_state_manager_get_all() {
         let temp_dir = tempdir().unwrap();
         let state_file_path = temp_dir.path().join("torrent_state.json"); 
@@ -2049,18 +2049,4 @@ mod torrent_state_manager_tests {
 
     // Test for malformed JSON file (should load empty or return error, depending on desired behavior)
     // Current implementation logs a warning and returns empty, which is good.
-}
-
-
-        // 2. Action: Start the download.
-        let handle = handler
-            .start_download(magnet_link)
-            .await
-            .expect("start_download should succeed");
-
-        // 3. Assert: Verify that the torrent was NOT added in a paused state.
-        let stats = handle.stats();
-        assert_ne!( stats.state, TorrentState::Paused, "Torrent should not be paused when falling back to public network");
-        info!("Torrent state is {:?}, which is not Paused. Fallback test successful.", stats.state);
-    }
 }
