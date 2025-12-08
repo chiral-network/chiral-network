@@ -504,7 +504,10 @@
   async function checkIfSeeding(metadata: FileMetadata): Promise<boolean> {
     try {
       const currentPeerId = await dhtService.getPeerId();
-      return metadata.seeders?.includes(currentPeerId) || false;
+      if (currentPeerId) {
+        return metadata.seeders?.includes(currentPeerId) || false;
+      }
+      return false;
     } catch (error) {
       console.warn('Failed to check seeding status:', error);
       return false;
