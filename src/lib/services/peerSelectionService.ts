@@ -122,6 +122,10 @@ export class PeerSelectionService {
       return metrics || [];
     } catch (error) {
       console.error("Failed to get batch peer metrics:", error);
+      return [];
+    }
+  }
+  /**
    * Get peer metrics for all currently connected DHT peers
    * This includes peers without transfer history, ensuring the reputation system shows all active peers
    */
