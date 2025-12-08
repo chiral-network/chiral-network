@@ -6265,8 +6265,8 @@ impl DhtService {
         // Start in Client mode - will switch to Server after AutoNAT confirms public reachability
         // This prevents NAT'd nodes from advertising unreachable addresses in the DHT
         // which would cause other peers to fail when trying to fetch records from them
-        kademlia.set_mode(Some(Mode::Server));
-        info!("Starting Kademlia in Server mode");
+        kademlia.set_mode(Some(Mode::Client));
+        info!("Starting Kademlia in Client mode (waiting for AutoNAT confirmation)");
 
         // Create identify behaviour with proactive push updates
         let identify_config =
