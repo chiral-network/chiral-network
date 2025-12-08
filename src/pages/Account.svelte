@@ -1039,6 +1039,26 @@
     }
   }
 
+  async function deleteKeystoreAccount() {
+    if (!selectedKeystoreAccount) return;
+
+    const confirmMsg = tr('keystore.delete.confirm', { values: { address: selectedKeystoreAccount } });
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      await walletService.deleteKeystoreAccount(selectedKeystoreAccount);
+      // Refresh list
+      await loadKeystoreAccountsList();
+      // Clear selection and password
+      selectedKeystoreAccount = '';
+      loadKeystorePassword = '';
+      showToast(tr('keystore.delete.success'), 'success');
+    } catch (error) {
+      console.error('Failed to delete keystore account:', error);
+      showToast(tr('keystore.delete.error', { values: { error: String(error) } }), 'error');
+    }
+  }
+
   function saveOrClearPassword(address: string, password: string) {
     try {
       const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
@@ -1801,6 +1821,15 @@
                   >
                     <KeyRound class="h-4 w-4 mr-2" />
                     {isLoadingFromKeystore ? $t('actions.unlocking') : $t('actions.unlockAccount')}
+                  </Button>
+                  <Button
+                    class="w-full mt-2"
+                    variant="outline"
+                    on:click={deleteKeystoreAccount}
+                    disabled={!selectedKeystoreAccount || isLoadingFromKeystore}
+                  >
+                    <BadgeX class="h-4 w-4 mr-2 text-red-600" />
+                    {$t('keystore.delete.button')}
                   </Button>
                   {#if keystoreLoadMessage}
                     <p class="text-xs text-center {keystoreLoadMessage.toLowerCase().includes('success') ? 'text-green-600' : 'text-red-600'}">{keystoreLoadMessage}</p>

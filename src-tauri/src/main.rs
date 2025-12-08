@@ -506,6 +506,77 @@ async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), 
     state.protocol_manager.download_simple(&identifier).await
 }
 
+/// Tauri command to download a torrent from raw .torrent file bytes.
+#[tauri::command]
+async fn download_torrent_from_bytes(bytes: Vec<u8>, state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    println!("Received download_torrent_from_bytes command with {} bytes", bytes.len());
+
+    // Get the BitTorrent handler from the state
+    let handler = state.bittorrent_handler.clone();
+
+    // Start the download from bytes
+    // Note: start_download_from_bytes already emits the torrent_event Added event with the actual torrent name
+    let _managed_torrent = handler.start_download_from_bytes(bytes)
+        .await
+        .map_err(|e| format!("Failed to download torrent from bytes: {}", e))?;
+
+    Ok(())
+}
+
+/// Tauri command to download a torrent from a magnet link.
+#[tauri::command]
+async fn download_torrent_from_magnet(magnet_link: String, state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    println!("Received download_torrent_from_magnet command: {}", magnet_link);
+
+    // Get the BitTorrent handler from the state
+    let handler = state.bittorrent_handler.clone();
+
+    // Start the download from magnet link
+    let managed_torrent = handler.start_download(&magnet_link)
+        .await
+        .map_err(|e| format!("Failed to download torrent from magnet: {}", e))?;
+
+    // Emit torrent_event Added event
+    let info_hash = hex::encode(managed_torrent.info_hash().0);
+
+    // Try to extract display name from magnet link, otherwise use placeholder
+    let torrent_name = magnet_link
+        .split('?')
+        .nth(1)
+        .and_then(|query| {
+            query.split('&')
+                .find(|param| param.starts_with("dn="))
+                .map(|dn| dn.trim_start_matches("dn="))
+        })
+        .map(|name| urlencoding::decode(name).unwrap_or_else(|_| name.into()).to_string())
+        .unwrap_or_else(|| format!("Torrent {}", &info_hash[..8]));
+
+    let added_event = serde_json::json!({
+        "Added": {
+            "info_hash": info_hash,
+            "name": torrent_name
+        }
+    });
+    if let Err(e) = app.emit("torrent_event", added_event) {
+        error!("Failed to emit torrent_event Added: {}", e);
+    }
+
+    Ok(())
+}
+
+/// Tauri command to open the folder containing a torrent's downloaded files.
+#[tauri::command]
+async fn open_torrent_folder(info_hash: String, state: State<'_, AppState>) -> Result<(), String> {
+    println!("Opening folder for torrent: {}", info_hash);
+
+    let handler = state.bittorrent_handler.clone();
+    let folder_path = handler.get_torrent_folder(&info_hash)
+        .await
+        .map_err(|e| format!("Failed to get torrent folder: {}", e))?;
+
+    show_in_folder(folder_path.to_string_lossy().to_string()).await
+}
+
 /// Tauri command to seed a file.
 /// It takes a local file path, starts seeding, and returns a magnet link.
 #[tauri::command]
@@ -592,6 +663,13 @@ async fn load_account_from_keystore(
 async fn list_keystore_accounts() -> Result<Vec<String>, String> {
     let keystore = Keystore::load()?;
     Ok(keystore.list_accounts())
+}
+
+#[tauri::command]
+async fn remove_account_from_keystore(address: String) -> Result<(), String> {
+    let mut keystore = Keystore::load()?;
+    keystore.remove_account(&address)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -4292,7 +4370,13 @@ async fn start_ftp_download(
     }
 
     // Get file size if possible
-    let file_size = ftp.size(path).unwrap_or(0) as u64;
+    let file_size = match ftp.size(path) {
+        Ok(size) => size as u64,
+        Err(e) => {
+            warn!("Could not get file size for {}: {}", path, e);
+            0 // Continue with download even if size is unknown
+        }
+    };
 
     // Emit started event
     transfer_event_bus
@@ -7528,7 +7612,7 @@ fn main() {
     // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
 
-    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
+    let (bittorrent_handler_arc, ftp_server_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Use the instance_id and instance_suffix from above for BitTorrent paths
         let download_dir =
             directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
@@ -7554,7 +7638,6 @@ fn main() {
             port_range.start, port_range.end
         );
 
-        // Pass the initialized DHT service to the BitTorrent handler
         let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir.clone(),
             dht_service_for_bt,
@@ -7563,6 +7646,14 @@ fn main() {
         .await
         .expect("Failed to create BitTorrent handler");
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
+
+        // Create FTP server for seeding support
+        let ftp_server = Arc::new(chiral_network::ftp_server::FtpServer::new(
+            directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .map(|dirs| dirs.data_dir().join("ftp_files"))
+                .unwrap_or_else(|| std::env::current_dir().unwrap().join("ftp_files")),
+            2121, // FTP port
+        ));
 
         let mut manager = ProtocolManager::new();
 
@@ -7575,10 +7666,10 @@ fn main() {
         let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
         manager.register(Box::new(ed2k_handler));
 
-        let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
+        let ftp_handler = protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
         manager.register(Box::new(ftp_handler));
 
-        (bittorrent_handler_arc, Arc::new(manager))
+        (bittorrent_handler_arc, ftp_server, Arc::new(manager))
     });
 
     // Reputation system Tauri commands
@@ -7731,13 +7822,8 @@ fn main() {
             // Download restart service (will be initialized in setup)
             download_restart: Mutex::new(None),
 
-            // FTP server for serving uploaded files
-            ftp_server: Arc::new(chiral_network::ftp_server::FtpServer::new(
-                directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("ftp_files"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("ftp_files")),
-                2121, // FTP port
-            )),
+            // FTP server for serving uploaded files (created earlier for protocol manager)
+            ftp_server: ftp_server_arc,
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -7762,6 +7848,7 @@ fn main() {
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
+            remove_account_from_keystore,
             pool::discover_mining_pools,
             pool::create_mining_pool,
             pool::join_mining_pool,
@@ -7781,6 +7868,9 @@ fn main() {
             get_cpu_temperature,
             get_power_consumption,
             download,
+            download_torrent_from_bytes,
+            download_torrent_from_magnet,
+            open_torrent_folder,
             seed,
             create_and_seed_torrent,
             is_geth_running,
@@ -8264,6 +8354,81 @@ fn main() {
                         );
                         if let Ok(mut dr_guard) = state.download_restart.try_lock() {
                             *dr_guard = Some(download_restart_service);
+                        }
+                    }
+                });
+            }
+
+            // Load and restore torrent state on startup
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        // Compute the path to torrent_state.json in app data directory
+                        let app_data_dir = app_handle
+                            .path()
+                            .app_data_dir()
+                            .expect("Failed to get app data directory");
+                        let torrent_state_path = app_data_dir.join("torrent_state.json");
+                        
+                        info!("Loading torrent state from: {:?}", torrent_state_path);
+                        
+                        // Instantiate TorrentStateManager with that path
+                        let state_manager = bittorrent_handler::TorrentStateManager::new(torrent_state_path);
+                        
+                        // Call get_all() to get Vec<PersistentTorrent>
+                        let persistent_torrents = state_manager.get_all();
+                        
+                        // Set the app_handle on the BitTorrent handler so it can emit events
+                        let bittorrent_handler = state.bittorrent_handler.clone();
+                        bittorrent_handler.set_app_handle(app_handle.clone()).await;
+                        info!("AppHandle set on BitTorrentHandler");
+
+                        if persistent_torrents.is_empty() {
+                            info!("No saved torrents to restore");
+                        } else {
+                            info!("Restoring {} saved torrent(s)", persistent_torrents.len());
+                            
+                            // Re-add each torrent to librqbit
+                            for torrent in persistent_torrents {
+                                info!(
+                                    "Restoring torrent: {} (status: {:?})",
+                                    torrent.info_hash, torrent.status
+                                );
+                                
+                                // Determine the identifier based on the source
+                                let identifier = match &torrent.source {
+                                    bittorrent_handler::PersistentTorrentSource::Magnet(url) => {
+                                        info!("  Source: magnet link");
+                                        url.clone()
+                                    }
+                                    bittorrent_handler::PersistentTorrentSource::File(path) => {
+                                        info!("  Source: torrent file at {:?}", path);
+                                        path.to_string_lossy().to_string()
+                                    }
+                                };
+                                
+                                // Re-add the torrent with the original output path
+                                match bittorrent_handler
+                                    .start_download_to(&identifier, torrent.output_path.clone())
+                                    .await
+                                {
+                                    Ok(_handle) => {
+                                        info!(
+                                            "✓ Successfully restored torrent: {} to {:?}",
+                                            torrent.info_hash, torrent.output_path
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "✗ Failed to restore torrent {}: {}",
+                                            torrent.info_hash, e
+                                        );
+                                    }
+                                }
+                            }
+                            
+                            info!("Torrent restoration complete");
                         }
                     }
                 });

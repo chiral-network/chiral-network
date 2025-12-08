@@ -374,14 +374,27 @@ impl GethProcess {
             .arg("*")
             .arg("--syncmode")
             .arg("snap")
+            // Sync performance optimizations
+            .arg("--cache")
+            .arg("2048") // Increase cache to 2GB for faster sync (default is 1024)
+            .arg("--cache.database")
+            .arg("60") // 60% of cache for database
+            .arg("--cache.trie")
+            .arg("30") // 30% for trie cache
+            .arg("--cache.gc")
+            .arg("10") // 10% for garbage collection
             .arg("--maxpeers")
-            .arg("50")
+            .arg("100") // Increase peer connections for faster sync (was 50)
             // P2P discovery settings
             .arg("--port")
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
             .arg("any")
+            // Snapshot sync acceleration
+            .arg("--snapshot")
+            .arg("--state.scheme")
+            .arg("hash") // Use hash-based state scheme for better performance
             // Enable transaction pool gossip to propagate transactions across network
             .arg("--txpool.globalslots")
             .arg("16384") // Increase tx pool size for network-wide transactions
