@@ -404,7 +404,10 @@ export class PeerSelectionService {
     // For new peers with no transfer history, return exactly 0.7 (3.5 stars, "High" trust level)
     // Once they have transfers, use the weighted calculation
     if (p.transfer_count === 0) {
-      console.log(`✨ New peer ${p.peer_id.substring(0,15)}... has 0 transfers, returning 0.7 score (High trust)`);
+      // Only log if window.DEBUG is set (for debugging)
+      if (typeof window !== "undefined" && (window as any).DEBUG) {
+        console.log(`✨ New peer ${p.peer_id.substring(0,15)}... has 0 transfers, returning 0.7 score (High trust)`);
+      }
       return 0.7; // Exactly 3.5/5.0 stars for new peers
     }
     
