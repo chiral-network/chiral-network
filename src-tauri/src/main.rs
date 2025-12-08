@@ -7452,7 +7452,6 @@ fn main() {
             port_range.start, port_range.end
         );
 
-        // Pass the initialized DHT service to the BitTorrent handler
         let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir.clone(),
             dht_service_for_bt,
@@ -8159,6 +8158,78 @@ fn main() {
                         );
                         if let Ok(mut dr_guard) = state.download_restart.try_lock() {
                             *dr_guard = Some(download_restart_service);
+                        }
+                    }
+                });
+            }
+
+            // Load and restore torrent state on startup
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        // Compute the path to torrent_state.json in app data directory
+                        let app_data_dir = app_handle
+                            .path()
+                            .app_data_dir()
+                            .expect("Failed to get app data directory");
+                        let torrent_state_path = app_data_dir.join("torrent_state.json");
+                        
+                        info!("Loading torrent state from: {:?}", torrent_state_path);
+                        
+                        // Instantiate TorrentStateManager with that path
+                        let state_manager = bittorrent_handler::TorrentStateManager::new(torrent_state_path);
+                        
+                        // Call get_all() to get Vec<PersistentTorrent>
+                        let persistent_torrents = state_manager.get_all();
+                        
+                        if persistent_torrents.is_empty() {
+                            info!("No saved torrents to restore");
+                        } else {
+                            info!("Restoring {} saved torrent(s)", persistent_torrents.len());
+                            
+                            let bittorrent_handler = state.bittorrent_handler.clone();
+                            
+                            // Re-add each torrent to librqbit
+                            for torrent in persistent_torrents {
+                                info!(
+                                    "Restoring torrent: {} (status: {:?})",
+                                    torrent.info_hash, torrent.status
+                                );
+                                
+                                // Determine the identifier based on the source
+                                let identifier = match &torrent.source {
+                                    bittorrent_handler::PersistentTorrentSource::Magnet(url) => {
+                                        info!("  Source: magnet link");
+                                        url.clone()
+                                    }
+                                    bittorrent_handler::PersistentTorrentSource::File(path) => {
+                                        info!("  Source: torrent file at {:?}", path);
+                                        path.to_string_lossy().to_string()
+                                    }
+                                };
+                                
+                                // Re-add the torrent with the original output path
+                                match bittorrent_handler
+                                    .start_download_to(&identifier, torrent.output_path.clone())
+                                    .await
+                                {
+                                    Ok(_handle) => {
+                                        info!(
+                                            "✓ Successfully restored torrent: {} to {:?}",
+                                            torrent.info_hash, torrent.output_path
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "✗ Failed to restore torrent {}: {}",
+                                            torrent.info_hash, e
+                                        );
+                                    }
+                                }
+                            }
+                            
+                            info!("Torrent restoration complete");
                         }
                     }
                 });
