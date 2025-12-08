@@ -1528,8 +1528,16 @@
 
       // Clear any stored session data from both localStorage and sessionStorage
       if (typeof localStorage !== 'undefined') {
-        localStorage.removeItem('lastAccount');
-        localStorage.removeItem('miningSession');
+        const walletKeys = [
+          'lastAccount',
+          'miningSession',
+          'chiral_wallet',
+          'chiral_transactions',
+          'transactionPagination',
+          'miningPagination',
+          'chiral_keystore_passwords',
+        ];
+        walletKeys.forEach(key => localStorage.removeItem(key));
         // Clear all sessionStorage data for security
         sessionStorage.clear();
       }
