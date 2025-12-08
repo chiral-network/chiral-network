@@ -226,7 +226,6 @@
         } catch (err) {
           console.error(`❌ Failed to fetch verdicts for ${m.peer_id}:`, err);
         }
-        */
         
         const trustLevel = score >= 0.75 ? TrustLevel.Trusted :  // 2+ successful transfers
                           score >= 0.6 ? TrustLevel.High :
