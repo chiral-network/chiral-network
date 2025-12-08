@@ -667,6 +667,7 @@ export interface AppSettings {
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
   anonymousMode: boolean;
   shareAnalytics: boolean;
+  enableWalletAutoLock: boolean;
   autoStartDHT: boolean; // Whether to automatically start DHT on app launch
   autoStartGeth: boolean; // Whether to automatically start Geth blockchain node on app launch
   enableNotifications: boolean;

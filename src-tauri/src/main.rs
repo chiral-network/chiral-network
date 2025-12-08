@@ -8899,8 +8899,6 @@ fn get_default_storage_directory() -> String {
         // Use home directory with tilde expansion
         return "~/Downloads/Chiral-Network-Storage".to_string();
     }
-    // Fallback for other platforms
-    "~/Downloads/Chiral-Network-Storage".to_string()
 }
 
 /// Event pump for DHT events, moved out of start_dht_node
