@@ -25,8 +25,8 @@ pub mod transaction_services;
 
 // Re-export modules from the lib crate
 use chiral_network::{
-    analytics, bandwidth, bittorrent_handler, dht, download_restart,
-    ed2k_client, encryption, file_transfer, http_download, keystore,
+    analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source,
+    ed2k_client, encryption, file_transfer, ftp_client, http_download, keystore,
     logger, manager, multi_source_download, peer_selection, protocols, reputation,
     stream_auth, webrtc_service,
 };
@@ -7123,9 +7123,9 @@ async fn download_ftp(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     use chiral_network::transfer_events::{
-        current_timestamp_ms, SourceInfo, SourceType, TransferPriority,
+        calculate_eta, calculate_progress, current_timestamp_ms, SourceInfo, SourceType, TransferPriority,
         TransferQueuedEvent, TransferStartedEvent, TransferEvent,
-        TransferFailedEvent, TransferCompletedEvent, SourceConnectedEvent,
+        TransferFailedEvent, TransferCompletedEvent, TransferProgressEvent, SourceConnectedEvent,
         SourceSummary, ErrorCategory,
     };
     use chiral_network::ftp_downloader::FtpDownloader;
@@ -7289,40 +7289,82 @@ async fn download_ftp(
             }
         };
         
-        // Download the file
-        match downloader.download_full(&mut stream, &remote_path).await {
-            Ok(data) => {
-                let download_duration = download_start.elapsed();
-                let duration_secs = download_duration.as_secs_f64();
-                let speed_bps = if duration_secs > 0.0 {
-                    data.len() as f64 / duration_secs
+        // Create FTP source info for the progress-enabled download
+        let ftp_source_info = download_source::FtpSourceInfo {
+            url: parsed_url_clone.to_string(),
+            username: None, // Anonymous FTP
+            encrypted_password: None,
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: Some(30),
+        };
+
+        // Track progress for event emission
+        let progress_state = Arc::new(std::sync::Mutex::new((download_start, 0u64))); // (last_progress_update, last_downloaded_bytes)
+        let transfer_id_for_callback = transfer_id_clone.clone();
+        let app_handle_for_callback = app_handle.clone();
+
+        // Create progress callback
+        let progress_state_clone = Arc::clone(&progress_state);
+        let progress_callback: ftp_client::ProgressCallback = Box::new(move |downloaded: u64, total: u64| {
+            let now = std::time::Instant::now();
+
+            let mut state = progress_state_clone.lock().unwrap();
+            let (last_progress_update, last_downloaded_bytes) = *state;
+
+            // Throttle progress updates to every 100ms to avoid overwhelming the UI
+            if now.duration_since(last_progress_update).as_millis() >= 100 || downloaded == total {
+                let elapsed_secs = download_start.elapsed().as_secs_f64();
+                let speed = if elapsed_secs > 0.0 {
+                    downloaded as f64 / elapsed_secs
                 } else {
                     0.0
                 };
-                
-                // Save to disk
-                if let Err(e) = std::fs::write(&output_path, &data) {
-                    let failed_event = TransferFailedEvent {
-                        transfer_id: transfer_id_clone.clone(),
-                        file_hash: transfer_id_clone.clone(),
-                        failed_at: current_timestamp_ms(),
-                        error: format!("Failed to save file: {}", e),
-                        error_category: ErrorCategory::Filesystem,
-                        downloaded_bytes: data.len() as u64,
-                        total_bytes: file_size,
-                        retry_possible: true,
-                    };
-                    let _ = app_handle.emit("transfer:event", &TransferEvent::Failed(failed_event));
-                    tracing::error!("Failed to save FTP download: {}", e);
-                    return;
-                }
-                
+
+                let remaining = total.saturating_sub(downloaded);
+                let eta = calculate_eta(remaining, speed);
+
+                let progress_event = TransferProgressEvent {
+                    transfer_id: transfer_id_for_callback.clone(),
+                    downloaded_bytes: downloaded,
+                    total_bytes: total,
+                    completed_chunks: if total > 0 && downloaded >= total { 1 } else { 0 },
+                    total_chunks: 1,
+                    progress_percentage: calculate_progress(downloaded, total),
+                    download_speed_bps: speed,
+                    upload_speed_bps: 0.0,
+                    eta_seconds: eta,
+                    active_sources: 1,
+                    timestamp: current_timestamp_ms(),
+                };
+
+                let _ = app_handle_for_callback.emit("transfer:event", &TransferEvent::Progress(progress_event));
+
+                *state = (now, downloaded);
+            }
+        });
+
+        // Download the file with progress tracking
+        match ftp_client::download_from_ftp_with_progress(
+            &ftp_source_info,
+            &output_path,
+            progress_callback
+        ).await {
+            Ok(bytes_downloaded) => {
+                let download_duration = download_start.elapsed();
+                let duration_secs = download_duration.as_secs_f64();
+                let speed_bps = if duration_secs > 0.0 {
+                    bytes_downloaded as f64 / duration_secs
+                } else {
+                    0.0
+                };
+
                 // Emit completed event
                 let completed_event = TransferCompletedEvent {
                     transfer_id: transfer_id_clone.clone(),
                     file_hash: transfer_id_clone.clone(),
                     file_name: file_name_clone.clone(),
-                    file_size: data.len() as u64,
+                    file_size: bytes_downloaded,
                     output_path: output_path.to_string_lossy().to_string(),
                     completed_at: current_timestamp_ms(),
                     duration_seconds: duration_secs as u64,
@@ -7332,23 +7374,26 @@ async fn download_ftp(
                         source_id: source_id_clone.clone(),
                         source_type: SourceType::Ftp,
                         chunks_provided: 1,
-                        bytes_provided: data.len() as u64,
+                        bytes_provided: bytes_downloaded,
                         average_speed_bps: speed_bps,
                         connection_duration_seconds: duration_secs as u64,
                     }],
                 };
                 let _ = app_handle.emit("transfer:event", &TransferEvent::Completed(completed_event));
-                tracing::info!("FTP download completed: {} ({} bytes in {:.2}s)", 
-                    file_name_clone, data.len(), duration_secs);
+                tracing::info!("FTP download completed: {} ({} bytes in {:.2}s)",
+                    file_name_clone, bytes_downloaded, duration_secs);
             }
             Err(e) => {
+                // Get the last downloaded bytes from the progress state
+                let downloaded_bytes = progress_state.lock().unwrap().1;
+
                 let failed_event = TransferFailedEvent {
                     transfer_id: transfer_id_clone.clone(),
                     file_hash: transfer_id_clone.clone(),
                     failed_at: current_timestamp_ms(),
                     error: format!("FTP download failed: {}", e),
                     error_category: ErrorCategory::Network,
-                    downloaded_bytes: 0,
+                    downloaded_bytes,
                     total_bytes: file_size,
                     retry_possible: true,
                 };
