@@ -506,6 +506,36 @@ async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), 
     state.protocol_manager.download_simple(&identifier).await
 }
 
+/// Tauri command to download a torrent from raw .torrent file bytes.
+#[tauri::command]
+async fn download_torrent_from_bytes(bytes: Vec<u8>, state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    println!("Received download_torrent_from_bytes command with {} bytes", bytes.len());
+
+    // Get the BitTorrent handler from the state
+    let handler = state.bittorrent_handler.clone();
+
+    // Start the download from bytes
+    let managed_torrent = handler.start_download_from_bytes(bytes)
+        .await
+        .map_err(|e| format!("Failed to download torrent from bytes: {}", e))?;
+
+    // Emit torrent_event Added event
+    let info_hash = hex::encode(managed_torrent.info_hash().0);
+    // Use info_hash as name since we don't have easy access to the actual name
+    let torrent_name = format!("Torrent {}", &info_hash[..8]);
+    let added_event = serde_json::json!({
+        "Added": {
+            "info_hash": info_hash,
+            "name": torrent_name
+        }
+    });
+    if let Err(e) = app.emit("torrent_event", added_event) {
+        error!("Failed to emit torrent_event Added: {}", e);
+    }
+
+    Ok(())
+}
+
 /// Tauri command to seed a file.
 /// It takes a local file path, starts seeding, and returns a magnet link.
 #[tauri::command]
@@ -7679,6 +7709,7 @@ fn main() {
             get_cpu_temperature,
             get_power_consumption,
             download,
+            download_torrent_from_bytes,
             seed,
             create_and_seed_torrent,
             is_geth_running,
