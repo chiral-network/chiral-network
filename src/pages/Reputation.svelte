@@ -194,6 +194,16 @@
         await PeerSelectionService.getConnectedPeerMetrics();
       console.log(`📊 Loading ${metrics.length} peers from backend`);
 
+      // Load backend metrics into ReputationStore for persistence and frontend tracking
+      const repStore = (await import('$lib/reputationStore')).default.getInstance();
+      repStore.loadFromBackendMetrics(metrics.map(m => ({
+        peer_id: m.peer_id,
+        successful_transfers: m.successful_transfers,
+        failed_transfers: m.failed_transfers,
+        latency_ms: m.latency_ms,
+        last_seen: m.last_seen
+      })));
+
       // Fetch reputation verdicts sequentially with delays to prevent DHT overload
       // Loading all peers at once causes DHT disconnections
       const mappedPeers: PeerReputation[] = [];
@@ -275,6 +285,78 @@
       };
 
       peers = mappedPeers;
+
+      // If no peers from backend, try to load from ReputationStore
+      if (peers.length === 0) {
+        console.log('📊 No peers from backend, checking ReputationStore...');
+        const repStore = (await import('$lib/reputationStore')).default.getInstance();
+        const allStoredPeers = repStore.getAllPeers();
+        
+        const storedPeers: PeerReputation[] = [];
+        for (const [peerId, rep] of allStoredPeers) {
+          const score = repStore.composite(peerId);
+          const totalInteractions = Math.max(1, rep.alpha + rep.beta);
+          const successfulInteractions = rep.alpha;
+          
+          const trustLevel = score >= 0.75 ? TrustLevel.Trusted :
+                            score >= 0.6 ? TrustLevel.High :
+                            score >= 0.4 ? TrustLevel.Medium :
+                            score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
+          
+          storedPeers.push({
+            peerId,
+            trustLevel,
+            score,
+            totalInteractions,
+            successfulInteractions,
+            lastSeen: new Date(rep.lastSeenMs),
+            reputationHistory: [],
+            metrics: {
+              averageLatency: rep.rttMsEMA,
+              bandwidth: 0,
+              uptime: repStore.freshScore(peerId) * 100,
+              storageOffered: 0,
+              filesShared: 0,
+              encryptionSupported: false
+            }
+          });
+        }
+        
+        if (storedPeers.length > 0) {
+          console.log(`📊 Loaded ${storedPeers.length} peers from ReputationStore`);
+          peers = storedPeers;
+          
+          // Rebuild analytics
+          const totalPeers = storedPeers.length;
+          const trustedPeers = storedPeers.filter(p => p.trustLevel === TrustLevel.Trusted).length;
+          const averageScore = totalPeers > 0
+            ? storedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers
+            : 0;
+          const topPerformers = [...storedPeers].sort((a, b) => b.score - a.score).slice(0, 10);
+          const trustLevelDistribution = trustLevelOptions.reduce(
+            (acc, level) => {
+              acc[level] = storedPeers.filter(p => p.trustLevel === level).length;
+              return acc;
+            },
+            {
+              [TrustLevel.Trusted]: 0,
+              [TrustLevel.High]: 0,
+              [TrustLevel.Medium]: 0,
+              [TrustLevel.Low]: 0,
+              [TrustLevel.Unknown]: 0,
+            } as Record<TrustLevel, number>,
+          );
+          
+          analytics = {
+            totalPeers,
+            trustedPeers,
+            averageScore,
+            topPerformers,
+            recentEvents: [],
+            trustLevelDistribution,
+          };
+        }
+      }
     } catch (e) {
       console.error("Failed to load peer metrics", e);
       peers = [];
