@@ -40,6 +40,8 @@ fn get_local_ip() -> Option<String> {
 pub struct FtpProtocolHandler {
     /// Underlying FTP downloader (wrapped in Arc for sharing across async tasks)
     downloader: Arc<FtpDownloader>,
+    /// FTP server for seeding files
+    ftp_server: Option<Arc<crate::ftp_server::FtpServer>>,
     /// Track active downloads
     active_downloads: Arc<Mutex<HashMap<String, FtpDownloadState>>>,
     /// Track download progress
@@ -63,23 +65,52 @@ struct FtpDownloadState {
 }
 
 impl FtpProtocolHandler {
-    /// Creates a new FTP protocol handler with default config (no event bus)
+    /// Creates a new FTP protocol handler with default config (no event bus, no server)
     pub fn new() -> Self {
         Self {
             downloader: Arc::new(FtpDownloader::new()),
+            ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             event_bus: None,
         }
     }
 
+    /// Creates a handler with FTP server support
+    pub fn with_ftp_server(ftp_server: Arc<crate::ftp_server::FtpServer>) -> Self {
+        Self {
+            downloader: Arc::new(FtpDownloader::new()),
+            ftp_server: Some(ftp_server),
+            active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            download_progress: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: None,
+        }
+    }
+
+    /// Set the FTP server for seeding support
+    pub fn set_ftp_server(&mut self, ftp_server: Arc<crate::ftp_server::FtpServer>) {
+        self.ftp_server = Some(ftp_server);
+    }
+
     /// Creates a handler with custom configuration (no event bus)
     pub fn with_config(config: FtpDownloadConfig) -> Self {
         Self {
             downloader: Arc::new(FtpDownloader::with_config(config)),
+            ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             event_bus: None,
+        }
+    }
+
+    /// Creates a handler with FTP server and event bus for UI integration
+    pub fn with_ftp_server_and_event_bus(ftp_server: Arc<crate::ftp_server::FtpServer>, app_handle: AppHandle) -> Self {
+        Self {
+            downloader: Arc::new(FtpDownloader::new()),
+            ftp_server: Some(ftp_server),
+            active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            download_progress: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
         }
     }
 
@@ -87,6 +118,7 @@ impl FtpProtocolHandler {
     pub fn with_event_bus(app_handle: AppHandle) -> Self {
         Self {
             downloader: Arc::new(FtpDownloader::new()),
+            ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
@@ -97,6 +129,7 @@ impl FtpProtocolHandler {
     pub fn with_config_and_event_bus(config: FtpDownloadConfig, app_handle: AppHandle) -> Self {
         Self {
             downloader: Arc::new(FtpDownloader::with_config(config)),
+            ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
@@ -459,33 +492,61 @@ impl ProtocolHandler for FtpProtocolHandler {
         file_path: PathBuf,
         _options: SeedOptions,
     ) -> Result<SeedingInfo, ProtocolError> {
-        info!("FTP: Seeding not directly supported - would need FTP server");
+        info!("FTP: Starting seed for file: {}", file_path.display());
 
-        // FTP "seeding" would mean uploading to an FTP server
-        // This requires server configuration which we don't have here
-        warn!("FTP seeding requires an FTP server to be configured. The generated URL will only work if you have an FTP server running.");
-
-        // Try to get the local IP address for more useful URLs
-        let host = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-        
         let file_name = file_path.file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
+            .ok_or_else(|| ProtocolError::InvalidIdentifier("Invalid file path".to_string()))?;
 
-        // Return a URL that would work if an FTP server is running on the local machine
-        // Note: For this to work, the user must have an FTP server running and serving files from the appropriate directory
-        Ok(SeedingInfo {
-            identifier: format!("ftp://{}/{}", host, file_name),
-            file_path,
-            protocol: "ftp".to_string(),
-            active_peers: 0,
-            bytes_uploaded: 0,
-        })
+        if let Some(ftp_server) = &self.ftp_server {
+            // Start FTP server if not running
+            if !ftp_server.is_running().await {
+                ftp_server.start().await
+                    .map_err(|e| ProtocolError::ProtocolSpecific(format!("Failed to start FTP server: {}", e)))?;
+            }
+
+            // Add file to FTP server
+            let ftp_url = ftp_server.add_file(&file_path, &file_name).await
+                .map_err(|e| ProtocolError::ProtocolSpecific(format!("Failed to add file to FTP server: {}", e)))?;
+
+            info!("FTP: File seeded at: {}", ftp_url);
+
+            Ok(SeedingInfo {
+                identifier: ftp_url.clone(),
+                file_path: file_path.clone(),
+                protocol: "ftp".to_string(),
+                active_peers: 0, // FTP doesn't track peers like P2P protocols
+                bytes_uploaded: 0, // Could track this in the future
+            })
+        } else {
+            // Fallback: Return a placeholder URL if no FTP server is configured
+            warn!("FTP seeding requires an FTP server to be configured. The generated URL will only work if you have an FTP server running.");
+            let host = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+
+            Ok(SeedingInfo {
+                identifier: format!("ftp://{}/{}", host, file_name),
+                file_path,
+                protocol: "ftp".to_string(),
+                active_peers: 0,
+                bytes_uploaded: 0,
+            })
+        }
     }
 
     async fn stop_seeding(&self, identifier: &str) -> Result<(), ProtocolError> {
-        warn!("FTP: stop_seeding - {}", identifier);
-        // Would delete file from FTP server
+        info!("FTP: Stopping seed for: {}", identifier);
+
+        if let Some(ftp_server) = &self.ftp_server {
+            // Extract filename from FTP URL
+            if let Ok(url) = url::Url::parse(identifier) {
+                if let Some(file_name) = url.path_segments().and_then(|segments| segments.last()) {
+                    ftp_server.remove_file(file_name).await
+                        .map_err(|e| ProtocolError::ProtocolSpecific(format!("Failed to remove file from FTP server: {}", e)))?;
+                    info!("FTP: Removed file from FTP server: {}", file_name);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -513,7 +574,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                     transfer_id: identifier.to_string(),
                     paused_at: Self::now_ms(),
                     reason: PauseReason::UserRequested,
-                    can_resume: true,
+                    can_resume: false,  // Resume not implemented
                     downloaded_bytes,
                     total_bytes: state.file_size,
                 });
@@ -598,8 +659,8 @@ impl ProtocolHandler for FtpProtocolHandler {
 
     fn capabilities(&self) -> ProtocolCapabilities {
         ProtocolCapabilities {
-            supports_seeding: true,  // Via upload to FTP server
-            supports_pause_resume: true,  // Via REST command
+            supports_seeding: self.ftp_server.is_some(),  // Seeding supported when FTP server is available
+            supports_pause_resume: false,  // Pause works, but resume not fully implemented
             supports_multi_source: false,
             supports_encryption: true,  // FTPS
             supports_dht: false,

@@ -4329,7 +4329,13 @@ async fn start_ftp_download(
     }
 
     // Get file size if possible
-    let file_size = ftp.size(path).unwrap_or(0) as u64;
+    let file_size = match ftp.size(path) {
+        Ok(size) => size as u64,
+        Err(e) => {
+            warn!("Could not get file size for {}: {}", path, e);
+            0 // Continue with download even if size is unknown
+        }
+    };
 
     // Emit started event
     transfer_event_bus
@@ -7565,7 +7571,7 @@ fn main() {
     // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
 
-    let (bittorrent_handler_arc, protocol_manager_arc) = runtime.block_on(async move {
+    let (bittorrent_handler_arc, ftp_server_arc, protocol_manager_arc) = runtime.block_on(async move {
         // Use the instance_id and instance_suffix from above for BitTorrent paths
         let download_dir =
             directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
@@ -7601,6 +7607,14 @@ fn main() {
         .expect("Failed to create BitTorrent handler");
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
+        // Create FTP server for seeding support
+        let ftp_server = Arc::new(chiral_network::ftp_server::FtpServer::new(
+            directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .map(|dirs| dirs.data_dir().join("ftp_files"))
+                .unwrap_or_else(|| std::env::current_dir().unwrap().join("ftp_files")),
+            2121, // FTP port
+        ));
+
         let mut manager = ProtocolManager::new();
 
         // Wrap the simple handler in the enhanced protocol handler
@@ -7612,10 +7626,10 @@ fn main() {
         let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
         manager.register(Box::new(ed2k_handler));
 
-        let ftp_handler = protocols::ftp::FtpProtocolHandler::new();
+        let ftp_handler = protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
         manager.register(Box::new(ftp_handler));
 
-        (bittorrent_handler_arc, Arc::new(manager))
+        (bittorrent_handler_arc, ftp_server, Arc::new(manager))
     });
 
     // Reputation system Tauri commands
@@ -7768,13 +7782,8 @@ fn main() {
             // Download restart service (will be initialized in setup)
             download_restart: Mutex::new(None),
 
-            // FTP server for serving uploaded files
-            ftp_server: Arc::new(chiral_network::ftp_server::FtpServer::new(
-                directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
-                    .map(|dirs| dirs.data_dir().join("ftp_files"))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap().join("ftp_files")),
-                2121, // FTP port
-            )),
+            // FTP server for serving uploaded files (created earlier for protocol manager)
+            ftp_server: ftp_server_arc,
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
