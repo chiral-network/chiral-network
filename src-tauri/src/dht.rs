@@ -1719,11 +1719,13 @@ async fn run_dht_node(
                                 };
 
                                 // Store minimal metadata in DHT (using merged metadata)
+                                // Include file_data for small files (e.g., reputation verdicts < 10KB)
                                 let dht_metadata = serde_json::json!({
                                     "file_hash": merged_metadata.merkle_root,
                                     "merkle_root": merged_metadata.merkle_root,
                                     "file_name": merged_metadata.file_name,
                                     "file_size": merged_metadata.file_size,
+                                    "file_data": merged_metadata.file_data, // Small files kept inline for fast retrieval
                                     "created_at": merged_metadata.created_at,
                                     "mime_type": merged_metadata.mime_type,
                                     "is_encrypted": merged_metadata.is_encrypted,
@@ -6353,9 +6355,15 @@ impl DhtService {
         let identify = identify::Behaviour::new(identify_config);
 
         // mDNS for local peer discovery
+        // Disable mDNS when running multiple instances to avoid "address already in use" errors
         let disable_mdns_env = std::env::var("CHIRAL_DISABLE_MDNS").ok().as_deref() == Some("1");
+        let multiple_instances = std::env::var("CHIRAL_ALLOW_MULTIPLE_INSTANCES").ok().as_deref() == Some("1");
         let mdns_opt = if disable_mdns_env {
             tracing::info!("mDNS disabled via env CHIRAL_DISABLE_MDNS=1");
+            None
+        } else if multiple_instances {
+            tracing::info!("mDNS disabled for multi-instance mode (CHIRAL_ALLOW_MULTIPLE_INSTANCES=1)");
+            tracing::info!("This prevents 'address already in use' errors when running multiple instances on the same machine");
             None
         } else {
             Some(Mdns::new(Default::default(), local_peer_id)?)
@@ -8554,7 +8562,7 @@ pub fn parse_magnet_uri(uri: &str) -> Result<MagnetData, String> {
     let params: HashMap<String, Vec<String>> = url::form_urlencoded::parse(params_str.as_bytes())
         .into_owned()
         .fold(HashMap::new(), |mut acc, (key, val)| {
-            acc.entry(key).or_default().push(val);
+            acc.entry(key.to_lowercase()).or_default().push(val);
             acc
         });
 

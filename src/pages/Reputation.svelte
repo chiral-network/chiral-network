@@ -182,9 +182,6 @@
         
         console.log(`📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}`);
         
-        // DISABLED: DHT verdict queries cause disconnections
-        // TODO: Move to background/lazy loading or cache locally
-        // Skip DHT queries for now and rely solely on backend metrics
         /*
         // Try to get reputation verdicts to augment interaction count AND score
         try {
