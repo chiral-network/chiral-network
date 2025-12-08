@@ -424,13 +424,30 @@ pub struct BitTorrentHandler {
     download_directory: std::path::PathBuf,
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
-    app_handle: Option<AppHandle>,
-    event_bus: Option<Arc<TransferEventBus>>,
-    state_manager: Arc<tokio::sync::Mutex<TorrentStateManager>>,
+    app_handle: Arc<tokio::sync::Mutex<Option<AppHandle>>>,
+    event_bus: Arc<tokio::sync::Mutex<Option<Arc<TransferEventBus>>>>,
+    state_manager: Option<Arc<tokio::sync::Mutex<TorrentStateManager>>>, // NEW: State manager for persistence
     state_file_path: std::path::PathBuf,
 }
 
 impl BitTorrentHandler {
+    /// Set the AppHandle after construction.
+    /// This allows the stats_poller to emit events to the frontend.
+    pub async fn set_app_handle(&self, app_handle: AppHandle) {
+        *self.app_handle.lock().await = Some(app_handle.clone());
+
+        // Also update the event_bus
+        *self.event_bus.lock().await = Some(Arc::new(TransferEventBus::new(app_handle)));
+
+        info!("AppHandle set on BitTorrentHandler - stats polling will now emit events");
+    }
+
+    /// Get a reference to the rqbit session.
+    /// This is useful for accessing torrent metadata.
+    pub fn rqbit_session(&self) -> &Arc<Session> {
+        &self.rqbit_session
+    }
+
     /// Creates a new BitTorrentHandler with the specified download directory.
     pub async fn new(
         download_directory: std::path::PathBuf,
@@ -459,6 +476,9 @@ impl BitTorrentHandler {
     }
 
     /// Creates a new BitTorrentHandler with all options.
+    /// 
+    /// If a state_manager is provided, this constructor will automatically restore
+    /// all previously saved torrents on initialization.
     pub async fn new_with_port_range_and_app_handle(
         download_directory: std::path::PathBuf,
         dht_service: Arc<DhtService>,
@@ -500,168 +520,134 @@ impl BitTorrentHandler {
             "Creating BitTorrent session with download_directory: {:?}, port_range: {:?}, state_file: {:?}",
             download_directory, listen_port_range, state_file_path
         );
+        // Call new_with_state with None for state_manager
+        Self::new_with_state(download_directory, dht_service, listen_port_range, app_handle, None).await
+    }
 
-        // Clean up any stale DHT or session state files that might be locked
-        let state_files = ["session.json", "dht.json", "dht.db", "session.db", "dht.dat"];
-        for file in &state_files {
-            let state_path = download_directory.join(file);
-            if state_path.exists() {
-                if let Err(e) = std::fs::remove_file(&state_path) {
-                    warn!("Failed to remove stale state file {:?}: {}", state_path, e);
-                } else {
-                    info!("Removed stale state file: {:?}", state_path);
+    /// Creates a new BitTorrentHandler with all options including state restoration.
+/// 
+/// If a state_manager is provided, this constructor will automatically restore
+/// all previously saved torrents on initialization.
+pub async fn new_with_state(
+    download_directory: std::path::PathBuf,
+    dht_service: Arc<DhtService>,
+    listen_port_range: Option<std::ops::Range<u16>>,
+    app_handle: Option<AppHandle>,
+    state_manager: Option<TorrentStateManager>,
+) -> Result<Self, BitTorrentError> {
+    info!(
+        "Creating BitTorrent session with download_directory: {:?}, port_range: {:?}, state_manager: {}",
+        download_directory, listen_port_range, state_manager.is_some()
+    );
+
+    // Clean up any stale DHT or session state files that might be locked
+    let state_files = ["session.json", "dht.json", "dht.db", "session.db", "dht.dat"];
+    for file in &state_files {
+        let state_path = download_directory.join(file);
+        if state_path.exists() {
+            if let Err(e) = std::fs::remove_file(&state_path) {
+                warn!("Failed to remove stale state file {:?}: {}", state_path, e);
+            } else {
+                info!("Removed stale state file: {:?}", state_path);
+            }
+        }
+    }
+
+    let mut opts = SessionOptions::default();
+
+    // Set port range if provided
+    if let Some(range) = listen_port_range.clone() {
+        opts.listen_port_range = Some(range);
+    }
+
+    // Enable persistence for session and DHT state
+    // This allows torrents to resume after app restart
+    opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
+        folder: Some(download_directory.clone()),
+    });
+
+    let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
+        error!("Session initialization failed: {}", e);
+        BitTorrentError::SessionInit {
+            message: format!("Failed to create session: {}", e),
+        }
+    })?;
+
+    // Create TransferEventBus if app_handle is provided
+    let event_bus = app_handle.as_ref().map(|handle| Arc::new(TransferEventBus::new(handle.clone())));
+
+    // Wrap state_manager in Arc<Mutex> if provided
+    let state_manager_arc = state_manager.map(|sm| Arc::new(tokio::sync::Mutex::new(sm)));
+
+    let handler = Self {
+        rqbit_session: session.clone(),
+        dht_service,
+        download_directory: download_directory.clone(),
+        active_torrents: Default::default(),
+        peer_states: Default::default(),
+        app_handle: Arc::new(tokio::sync::Mutex::new(app_handle)),
+        event_bus: Arc::new(tokio::sync::Mutex::new(event_bus)),
+        state_manager: state_manager_arc.clone(),
+    };
+    
+    // Spawn the background task for statistics polling.
+    handler.spawn_stats_poller();
+
+    info!(
+        "Initializing BitTorrentHandler with download directory: {:?}",
+        handler.download_directory
+    );
+
+    // Restore torrents from state if state_manager was provided
+    if let Some(sm) = state_manager_arc {
+        let sm_guard = sm.lock().await;
+        let persistent_torrents = sm_guard.get_all();
+        drop(sm_guard); // Release lock before async operations
+        
+        if !persistent_torrents.is_empty() {
+            info!("Restoring {} saved torrent(s) on initialization", persistent_torrents.len());
+            
+            for torrent in persistent_torrents {
+                info!(
+                    "Restoring torrent: {} (status: {:?})",
+                    torrent.info_hash, torrent.status
+                );
+                
+                // Determine the identifier based on the source
+                let identifier = match &torrent.source {
+                    PersistentTorrentSource::Magnet(url) => {
+                        info!("  Source: magnet link");
+                        url.clone()
+                    }
+                    PersistentTorrentSource::File(path) => {
+                        info!("  Source: torrent file at {:?}", path);
+                        path.to_string_lossy().to_string()
+                    }
+                };
+                
+                // Re-add the torrent with the original output path
+                match handler.start_download_to(&identifier, torrent.output_path.clone()).await {
+                    Ok(_) => {
+                        info!(
+                            "✓ Successfully restored torrent: {} to {:?}",
+                            torrent.info_hash, torrent.output_path
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            "✗ Failed to restore torrent {}: {}",
+                            torrent.info_hash, e
+                        );
+                    }
                 }
             }
-        }
-
-        let mut opts = SessionOptions::default();
-
-        // Set port range if provided
-        if let Some(range) = listen_port_range.clone() {
-            opts.listen_port_range = Some(range);
-        }
-
-        // Enable persistence for session and DHT state
-        // This allows torrents to resume after app restart
-        opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
-            folder: Some(download_directory.clone()),
-        });
-
-        let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
-            error!("Session initialization failed: {}", e);
-            BitTorrentError::SessionInit {
-                message: format!("Failed to create session: {}", e),
-            }
-        })?;
-
-        let state_manager = TorrentStateManager::new(state_file_path.clone()).await;
-
-        let event_bus = app_handle.as_ref().map(|handle| Arc::new(TransferEventBus::new(handle.clone())));
-
-        let handler = Self {
-            rqbit_session: session.clone(),
-            dht_service,
-            download_directory: download_directory.clone(),
-            active_torrents: Default::default(),
-            peer_states: Default::default(),
-            app_handle,
-            event_bus,
-            state_manager: Arc::new(tokio::sync::Mutex::new(state_manager)),
-            state_file_path,
-        };
-        
-        handler.spawn_stats_poller();
-        if let Err(e) = handler.restore_torrents_from_state().await {
-            warn!("Error restoring torrents from state: {}. Continuing with empty state.", e);
-        }
-
-        info!(
-            "Initializing BitTorrentHandler with download directory: {:?}",
-            handler.download_directory
-        );
-        Ok(handler)
-    }
-
-    /// Restore torrents from persistent state on startup
-    async fn restore_torrents_from_state(&self) -> Result<(), BitTorrentError> {
-        let state_manager = self.state_manager.lock().await;
-        let all_torrents = state_manager.get_all_torrents();
-        
-        if all_torrents.is_empty() {
-            info!("No torrents to restore from state");
-            return Ok(());
-        }
-
-        info!("Restoring {} torrents from persistent state", all_torrents.len());
-        
-        for (info_hash, persistent_torrent) in all_torrents {
-            match self.restore_single_torrent(persistent_torrent).await {
-                Ok(handle) => {
-                    let mut active_torrents = self.active_torrents.lock().await;
-                    active_torrents.insert(info_hash.clone(), handle);
-                    info!("Successfully restored torrent: {}", info_hash);
-                }
-                Err(e) => {
-                    warn!("Failed to restore torrent {}: {}", info_hash, e);
-                }
-            }
-        }
-        
-        Ok(())
-    }
-
-    /// Restore a single torrent from persistent state
-    async fn restore_single_torrent(&self, persistent_torrent: &PersistentTorrent) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
-        let add_torrent = match &persistent_torrent.source {
-            PersistentTorrentSource::Magnet(magnet_link) => {
-                Self::validate_magnet_link(magnet_link)?;
-                AddTorrent::from_url(magnet_link)
-            }
-            PersistentTorrentSource::File(torrent_path) => {
-                let path_str = torrent_path.to_str().ok_or_else(|| BitTorrentError::TorrentFileError {
-                    message: "Invalid torrent file path".to_string(),
-                })?;
-                Self::validate_torrent_file(path_str)?;
-                AddTorrent::from_local_filename(path_str).map_err(|e| BitTorrentError::TorrentFileError {
-                    message: format!("Cannot read torrent file {}: {}", path_str, e),
-                })?
-            }
-        };
-
-        let add_opts = AddTorrentOptions {
-            overwrite: persistent_torrent.status == PersistentTorrentStatus::Seeding,
-            ..Default::default()
-        };
-
-        let add_torrent_response = self
-            .rqbit_session
-            .add_torrent(add_torrent, Some(add_opts))
-            .await
-            .map_err(|e| Self::map_generic_error(e))?;
-
-        let handle = add_torrent_response
-            .into_handle()
-            .ok_or(BitTorrentError::HandleUnavailable)?;
-
-        Ok(handle)
-    }
-
-    /// Save a torrent to persistent state
-    async fn save_torrent_to_state(&self, info_hash: &str, persistent_torrent: PersistentTorrent) -> Result<(), BitTorrentError> {
-        let mut state_manager = self.state_manager.lock().await;
-        
-        state_manager.add_torrent(persistent_torrent).await.map_err(|e: std::io::Error| {
-            error!("Failed to save torrent {} to state: {}", info_hash, e);
-            BitTorrentError::ConfigError {
-                message: format!("Failed to save torrent state: {}", e),
-            }
-        })?;
-
-        info!("Saved torrent {} to persistent state", info_hash);
-        Ok(())
-    }
-
-    /// Remove a torrent from persistent state
-    async fn remove_torrent_from_state(&self, info_hash: &str) -> Result<(), BitTorrentError> {
-        let mut state_manager = self.state_manager.lock().await;
-        
-        match state_manager.remove_torrent(info_hash).await {
-            Ok(Some(_)) => {
-                info!("Removed torrent {} from persistent state", info_hash);
-                Ok(())
-            }
-            Ok(None) => {
-                warn!("Torrent {} was not found in persistent state", info_hash);
-                Ok(())
-            }
-            Err(e) => { // e is std::io::Error
-                error!("Failed to remove torrent {} from state: {}", info_hash, e);
-                Err(BitTorrentError::ConfigError {
-                    message: format!("Failed to remove torrent state: {}", e),
-                })
-            }
+            
+            info!("Torrent restoration complete");
         }
     }
+
+    Ok(handler)
+}
 
     /// Spawns a background task to periodically poll for and process per-peer statistics.
     fn spawn_stats_poller(&self) {
@@ -687,7 +673,8 @@ impl BitTorrentHandler {
                     let downloaded_total = stats.progress_bytes;
                     let total_bytes = stats.total_bytes;
 
-                    if let Some(ref bus) = event_bus {
+                    // Emit progress event via TransferEventBus
+                    if let Some(ref bus) = *event_bus.lock().await {
                         let progress_pct = calculate_progress(downloaded_total, total_bytes);
                         let (download_speed, upload_speed) = if let Some(live) = &stats.live {
                             (
@@ -717,6 +704,56 @@ impl BitTorrentHandler {
                         });
                     }
 
+                    // Also emit torrent_event Progress for the frontend UI
+                    if let Some(ref app) = *app_handle.lock().await {
+                        let (download_speed, _upload_speed) = if let Some(live) = &stats.live {
+                            (
+                                live.download_speed.mbps as f64 * 125_000.0,
+                                live.upload_speed.mbps as f64 * 125_000.0,
+                            )
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        let eta = calculate_eta(
+                            total_bytes.saturating_sub(downloaded_total),
+                            download_speed,
+                        );
+                        // Note: librqbit doesn't expose peer count directly, so we use 0 for now
+                        // This is just for display purposes
+                        let peers = 0;
+
+                        // Always emit Progress event with current stats
+                        let progress_event = serde_json::json!({
+                            "Progress": {
+                                "info_hash": info_hash_str,
+                                "downloaded": downloaded_total,
+                                "total": total_bytes,
+                                "speed": download_speed as u64,
+                                "peers": peers,
+                                "eta_seconds": eta.unwrap_or(0) as u64
+                            }
+                        });
+                        let _ = app.emit("torrent_event", progress_event);
+
+                        // Check if download just completed (emit Complete event only once)
+                        if stats.finished || (total_bytes > 0 && downloaded_total >= total_bytes) {
+                            // Check if we've already notified about completion by tracking last state
+                            let was_complete = state.last_downloaded_bytes >= total_bytes && total_bytes > 0;
+                            if !was_complete {
+                                // Emit Complete event only on transition to complete
+                                // Use info_hash as name since we don't have easy access to the actual name
+                                let torrent_name = format!("Torrent {}", &info_hash_str[..8]);
+                                let complete_event = serde_json::json!({
+                                    "Complete": {
+                                        "info_hash": info_hash_str,
+                                        "name": torrent_name
+                                    }
+                                });
+                                let _ = app.emit("torrent_event", complete_event);
+                            }
+                        }
+                    }
+
                     let uploaded_delta = uploaded_total.saturating_sub(state.last_uploaded_bytes);
                     if uploaded_delta >= PAYMENT_THRESHOLD_BYTES {
                         info!(
@@ -731,7 +768,7 @@ impl BitTorrentHandler {
                             bytes_uploaded: uploaded_delta,
                         };
 
-                        if let Some(handle) = app_handle.as_ref() {
+                        if let Some(ref handle) = *app_handle.lock().await {
                             if let Err(e) = handle.emit("payment_required", payload) {
                                 error!("Failed to emit payment_required event: {}", e);
                             }
@@ -767,6 +804,63 @@ impl BitTorrentHandler {
         self.start_download_with_options(identifier, opts).await
     }
 
+    /// Start a download from torrent file bytes.
+    /// This method accepts the raw bytes of a .torrent file and starts downloading.
+    pub async fn start_download_from_bytes(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
+        info!("Starting BitTorrent download from torrent file bytes ({} bytes)", bytes.len());
+
+        // Create AddTorrent from the bytes
+        let add_torrent = AddTorrent::from_bytes(bytes);
+
+        // Use default options for downloads
+        let add_opts = AddTorrentOptions::default();
+
+        // Add the torrent to the session
+        let add_torrent_response = self
+            .rqbit_session
+            .add_torrent(add_torrent, Some(add_opts))
+            .await
+            .map_err(|e| {
+                error!("Failed to add torrent from bytes: {}", e);
+                Self::map_generic_error(e)
+            })?;
+
+        let handle = add_torrent_response
+            .into_handle()
+            .ok_or(BitTorrentError::HandleUnavailable)?;
+
+        // Get the info_hash from the handle
+        let torrent_info_hash = handle.info_hash();
+        let hash_hex = hex::encode(torrent_info_hash.0);
+        info!("Torrent from bytes added successfully, info_hash: {}", hash_hex);
+
+        // Store the torrent handle for tracking
+        {
+            let mut torrents = self.active_torrents.lock().await;
+            torrents.insert(hash_hex.clone(), handle.clone());
+        }
+
+        // Emit torrent_event Added event to notify the frontend
+        if let Some(app) = &*self.app_handle.lock().await {
+            // Use a placeholder name initially - the actual name will be updated once metadata is fetched
+            let torrent_name = format!("Torrent {}", &hash_hex[..8]);
+
+            let added_event = serde_json::json!({
+                "Added": {
+                    "info_hash": hash_hex.clone(),
+                    "name": torrent_name
+                }
+            });
+            if let Err(e) = app.emit("torrent_event", added_event) {
+                error!("Failed to emit torrent_event Added: {}", e);
+            }
+        }
+
+        Ok(handle)
+  }
     /// Re-evaluates the download queue, pausing or resuming torrents based on priority
     /// and the MAX_ACTIVE_DOWNLOADS limit.
     async fn re_evaluate_queue(&self) -> Result<(), BitTorrentError> {
@@ -1050,6 +1144,160 @@ impl BitTorrentHandler {
             info!("Successfully paused torrent: {}", info_hash);
             Ok(())
         } else {
+            BitTorrentError::Unknown { message: error_msg }
+        }
+    }
+
+    
+}
+
+/// Helper to convert a libp2p Multiaddr to a standard SocketAddr.
+/// This is a simplified conversion that only handles TCP/IP.
+fn multiaddr_to_socket_addr(multiaddr: &Multiaddr) -> Result<std::net::SocketAddr, &'static str> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut iter = multiaddr.iter();
+    let proto1 = iter.next().ok_or("Empty Multiaddr")?;
+    let proto2 = iter.next().ok_or("Multiaddr needs at least two protocols")?;
+    
+    match (proto1, proto2) {
+        (Protocol::Ip4(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
+        (Protocol::Ip6(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
+        _ => Err("Multiaddr format not supported (expected IP/TCP)"),
+    }
+}
+
+#[async_trait]
+impl SimpleProtocolHandler for BitTorrentHandler {
+    fn name(&self) -> &'static str {
+        "bittorrent"
+    }
+
+    fn supports(&self, identifier: &str) -> bool {
+        identifier.starts_with("magnet:") || identifier.ends_with(".torrent")
+    }
+
+    #[instrument(skip(self), fields(protocol = "bittorrent"))]
+    async fn download(&self, identifier: &str) -> Result<(), String> {
+        let handle = self.start_download(identifier).await?;
+        let self_arc = Arc::new(self.clone());
+        let (tx, mut rx) = mpsc::channel(10);
+        tokio::spawn(async move {
+            self_arc.monitor_download(handle, tx).await;
+        });
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                BitTorrentEvent::Completed => return Ok(()),
+                BitTorrentEvent::Failed(e) => return Err(e.into()),
+                _ => {}
+            }
+        }
+        // If the loop exits, it means the channel was closed without a final event.
+        Err("Monitoring channel closed unexpectedly.".to_string())
+    }
+
+    #[instrument(skip(self), fields(protocol = "bittorrent"))]
+    async fn seed(&self, file_path: &str) -> Result<String, String> {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            let error = BitTorrentError::FileSystemError {
+                message: format!("File does not exist: {}", file_path),
+            };
+            error!("Seeding failed: {}", error);
+            return Err(error.into());
+        }
+
+        if !path.is_file() {
+            let error = BitTorrentError::FileSystemError {
+                message: format!("Path is not a file: {}", file_path),
+            };
+            error!("Seeding failed: {}", error);
+            return Err(error.into());
+        }
+
+        // Create a torrent from the file
+        let torrent = create_torrent(path, CreateTorrentOptions::default()).await.map_err(|e| {
+            let error = BitTorrentError::SeedingError {
+                message: format!("Failed to create torrent from file {}: {}", file_path, e),
+            };
+            error!("Torrent creation failed: {}", e);
+            error!("Seeding failed: {}", error);
+            String::from(error)
+        })?;
+
+        // Convert the torrent to bytes and create AddTorrent
+        let torrent_bytes = torrent.as_bytes().map_err(|e| {
+            let error = BitTorrentError::SeedingError {
+                message: format!("Failed to serialize torrent for {}: {}", file_path, e),
+            };
+            error!("Torrent serialization failed: {}", e);
+            error!("Seeding failed: {}", error);
+            String::from(error)
+        })?;
+
+        let add_torrent = AddTorrent::from_bytes(torrent_bytes.clone());
+
+        // For seeding, we need to allow overwriting existing files
+        let options = AddTorrentOptions {
+            overwrite: true,
+            ..Default::default()
+        };
+
+        let handle = self
+            .rqbit_session
+            .add_torrent(add_torrent, Some(options))
+            .await
+            .map_err(|e| {
+                let error = BitTorrentError::SeedingError {
+                    message: format!("Failed to add torrent for seeding: {}", e),
+                };
+                error!("Failed to add torrent to session: {}", e);
+                error!("Seeding failed: {}", error);
+                String::from(error)
+            })?
+            .into_handle()
+            .ok_or_else(|| String::from(BitTorrentError::HandleUnavailable))?;
+
+        // Get the info hash and construct a magnet link
+        let info_hash = handle.info_hash();
+        let magnet_link = format!("magnet:?xt=urn:btih:{}", hex::encode(info_hash.0));
+
+        Ok(magnet_link)
+    }
+}
+
+/// Pause/Resume/Cancel methods for torrent control
+impl BitTorrentHandler {
+    /// Pause a torrent by info hash
+    pub async fn pause_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
+        info!("Pausing torrent: {}", info_hash);
+
+        let torrents = self.active_torrents.lock().await;
+        if let Some(handle) = torrents.get(info_hash) {
+            let stats = handle.stats();
+            self.rqbit_session
+                .pause(handle)
+                .await
+                .map_err(|e| BitTorrentError::ProtocolSpecific {
+                    message: format!("Failed to pause torrent: {}", e),
+                })?;
+
+            // Emit paused event via TransferEventBus
+            if let Some(ref bus) = *self.event_bus.lock().await {
+                bus.emit_paused(TransferPausedEvent {
+                    transfer_id: info_hash.to_string(),
+                    paused_at: current_timestamp_ms(),
+                    reason: PauseReason::UserRequested,
+                    can_resume: true,
+                    downloaded_bytes: stats.progress_bytes,
+                    total_bytes: stats.total_bytes,
+                });
+            }
+
+            info!("Successfully paused torrent: {}", info_hash);
+            Ok(())
+        } else {
             Err(BitTorrentError::TorrentNotFound {
                 info_hash: info_hash.to_string(),
             })
@@ -1068,6 +1316,17 @@ impl BitTorrentHandler {
                 .map_err(|e| BitTorrentError::ProtocolSpecific {
                     message: format!("Failed to resume torrent: {}", e),
                 })?;
+
+            // Emit resumed event via TransferEventBus
+            if let Some(ref bus) = *self.event_bus.lock().await {
+                bus.emit_resumed(TransferResumedEvent {
+                    transfer_id: info_hash.to_string(),
+                    resumed_at: current_timestamp_ms(),
+                    downloaded_bytes: stats.progress_bytes,
+                    remaining_bytes: stats.total_bytes.saturating_sub(stats.progress_bytes),
+                    active_sources: 1,
+                });
+            }
 
             info!("Successfully resumed torrent: {}", info_hash);
             Ok(())
@@ -1115,6 +1374,21 @@ impl BitTorrentHandler {
         info!("Stopping seeding for torrent: {}", info_hash);
         // For seeding, we just cancel without deleting files
         self.cancel_torrent(info_hash, false).await
+    }
+
+    /// Get the download folder path for a torrent
+    pub async fn get_torrent_folder(&self, info_hash: &str) -> Result<PathBuf, BitTorrentError> {
+        let torrents = self.active_torrents.lock().await;
+
+        if torrents.contains_key(info_hash) {
+            // The download_directory is where all torrents are stored
+            // Each torrent typically creates its own subfolder based on the torrent name
+            Ok(self.download_directory.clone())
+        } else {
+            Err(BitTorrentError::TorrentNotFound {
+                info_hash: info_hash.to_string(),
+            })
+        }
     }
 
     /// Get progress information for a torrent

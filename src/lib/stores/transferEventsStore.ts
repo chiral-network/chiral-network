@@ -429,6 +429,7 @@ function handleCompletedEvent(transfers: Map<string, Transfer>, event: any) {
   transfer.durationSeconds = event.durationSeconds;
   transfer.averageSpeedBps = event.averageSpeedBps;
   transfer.downloadedBytes = event.fileSize;
+  transfer.fileSize = event.fileSize; // Update file size for correct display
   transfer.progressPercentage = 100;
   transfer.sourcesUsed = event.sourcesUsed;
 }

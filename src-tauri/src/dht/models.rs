@@ -24,6 +24,34 @@ where
     }
 }
 
+// Custom deserializer for CIDs to convert from strings back to CID objects
+fn deserialize_cids_from_strings<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<Cid>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt_strings: Option<Vec<String>> = Option::deserialize(deserializer)?;
+    match opt_strings {
+        Some(strings) => {
+            let mut cids = Vec::new();
+            for cid_str in strings {
+                match cid_str.parse::<Cid>() {
+                    Ok(cid) => cids.push(cid),
+                    Err(e) => {
+                        return Err(serde::de::Error::custom(format!(
+                            "Failed to parse CID from string '{}': {}",
+                            cid_str, e
+                        )));
+                    }
+                }
+            }
+            Ok(Some(cids))
+        }
+        None => Ok(None),
+    }
+}
+
 // =========================================================================
 // Error Types
 // =========================================================================
@@ -93,6 +121,7 @@ pub struct FileMetadata {
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_cids_as_strings")]
+    #[serde(deserialize_with = "deserialize_cids_from_strings")]
     pub cids: Option<Vec<Cid>>,
 
     /// For encrypted files, this contains the encrypted AES key and other info.
