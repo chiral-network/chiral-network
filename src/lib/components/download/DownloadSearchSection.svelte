@@ -775,17 +775,35 @@
     if ((pendingTorrentType && pendingTorrentIdentifier) || selectedProtocol === 'bittorrent') {
       try {
         const { invoke } = await import("@tauri-apps/api/core")
+        let infoHash: string | undefined;
+        let fileName: string;
 
         if (pendingTorrentType === 'file' && pendingTorrentBytes) {
           // For torrent files, pass the file bytes
           await invoke('download_torrent_from_bytes', { bytes: pendingTorrentBytes })
+          fileName = torrentFileName || 'Torrent Download';
+          // We can't easily get the infohash on the frontend from a torrent file
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
         } else if (pendingTorrentType === 'magnet') {
           // For magnet links
-          await invoke('download_torrent', { identifier: pendingTorrentIdentifier })
+          await invoke('download', { identifier: pendingTorrentIdentifier })
+          const urlParams = new URLSearchParams(pendingTorrentIdentifier.split('?')[1]);
+          infoHash = urlParams.get('xt')?.replace('urn:btih:', '');
+          fileName = urlParams.get('dn') || 'Magnet Link Download';
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
         } else {
-          // For BitTorrent from metadata
-          await invoke('download_torrent', { identifier: selectedFile?.infoHash })
+          // For BitTorrent from metadata (already on the network)
+          await invoke('download', { identifier: selectedFile?.infoHash })
+          infoHash = selectedFile?.infoHash;
+          fileName = selectedFile?.fileName || 'BitTorrent Download';
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
         }
+
+        // Note: We don't dispatch the download event for BitTorrent downloads
+        // The torrent_event listener in Download.svelte will handle showing the download progress
 
         // Clear state
         searchHash = ''

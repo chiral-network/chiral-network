@@ -516,6 +516,52 @@ impl BitTorrentHandler {
                         });
                     }
 
+                    // Also emit torrent_event Progress for the frontend UI
+                    if let Some(ref app) = app_handle {
+                        let (download_speed, _upload_speed) = if let Some(live) = &stats.live {
+                            (
+                                live.download_speed.mbps as f64 * 125_000.0,
+                                live.upload_speed.mbps as f64 * 125_000.0,
+                            )
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        let eta = calculate_eta(
+                            total_bytes.saturating_sub(downloaded_total),
+                            download_speed,
+                        );
+                        // Note: librqbit doesn't expose peer count directly, so we use 0 for now
+                        // This is just for display purposes
+                        let peers = 0;
+
+                        // Check if download is complete
+                        if stats.finished || (total_bytes > 0 && downloaded_total >= total_bytes) {
+                            // Emit Complete event
+                            // Use info_hash as name since we don't have easy access to the actual name
+                            let torrent_name = format!("Torrent {}", &info_hash_str[..8]);
+                            let complete_event = serde_json::json!({
+                                "Complete": {
+                                    "info_hash": info_hash_str,
+                                    "name": torrent_name
+                                }
+                            });
+                            let _ = app.emit("torrent_event", complete_event);
+                        } else {
+                            // Emit Progress event
+                            let progress_event = serde_json::json!({
+                                "Progress": {
+                                    "info_hash": info_hash_str,
+                                    "downloaded": downloaded_total,
+                                    "total": total_bytes,
+                                    "speed": download_speed as u64,
+                                    "peers": peers,
+                                    "eta_seconds": eta.unwrap_or(0) as u64
+                                }
+                            });
+                            let _ = app.emit("torrent_event", progress_event);
+                        }
+                    }
+
                     let uploaded_delta = uploaded_total.saturating_sub(state.last_uploaded_bytes);
                     if uploaded_delta >= PAYMENT_THRESHOLD_BYTES {
                         info!(
@@ -567,6 +613,62 @@ impl BitTorrentHandler {
         self.start_download_with_options(identifier, opts).await
     }
 
+    /// Start a download from torrent file bytes.
+    /// This method accepts the raw bytes of a .torrent file and starts downloading.
+    pub async fn start_download_from_bytes(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
+        info!("Starting BitTorrent download from torrent file bytes ({} bytes)", bytes.len());
+
+        // Create AddTorrent from the bytes
+        let add_torrent = AddTorrent::from_bytes(bytes);
+
+        // Use default options for downloads
+        let add_opts = AddTorrentOptions::default();
+
+        // Add the torrent to the session
+        let add_torrent_response = self
+            .rqbit_session
+            .add_torrent(add_torrent, Some(add_opts))
+            .await
+            .map_err(|e| {
+                error!("Failed to add torrent from bytes: {}", e);
+                Self::map_generic_error(e)
+            })?;
+
+        let handle = add_torrent_response
+            .into_handle()
+            .ok_or(BitTorrentError::HandleUnavailable)?;
+
+        // Get the info_hash from the handle
+        let torrent_info_hash = handle.info_hash();
+        let hash_hex = hex::encode(torrent_info_hash.0);
+        info!("Torrent from bytes added successfully, info_hash: {}", hash_hex);
+
+        // Store the torrent handle for tracking
+        {
+            let mut torrents = self.active_torrents.lock().await;
+            torrents.insert(hash_hex.clone(), handle.clone());
+        }
+
+        // Emit torrent_event Added event to notify the frontend
+        if let Some(app) = &self.app_handle {
+            // Use info_hash as name since we don't have easy access to the actual name
+            let torrent_name = format!("Torrent {}", &hash_hex[..8]);
+            let added_event = serde_json::json!({
+                "Added": {
+                    "info_hash": hash_hex.clone(),
+                    "name": torrent_name
+                }
+            });
+            if let Err(e) = app.emit("torrent_event", added_event) {
+                error!("Failed to emit torrent_event Added: {}", e);
+            }
+        }
+
+        Ok(handle)
+  }
     /// Re-evaluates the download queue, pausing or resuming torrents based on priority
     /// and the MAX_ACTIVE_DOWNLOADS limit.
     async fn re_evaluate_queue(&self) -> Result<(), BitTorrentError> {
