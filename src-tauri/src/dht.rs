@@ -5216,6 +5216,7 @@ async fn handle_kademlia_event(
                                                     ..Default::default()
                                                 };
                                             }
+                                            }
                                         } else {
                                             info!("No cached metadata for providers, waiting for metadata record query");
                                         }
