@@ -308,6 +308,23 @@
 
                         if (paymentResult.success) {
                             paidFiles.add(completedFile.hash); // Mark as paid
+                            
+                            // Update reputation for the seeder peer after successful payment
+                            if (seederPeerId) {
+                              try {
+                                await invoke('record_transfer_success', {
+                                  peerId: seederPeerId,
+                                  bytes: completedFile.size,
+                                  durationMs: 0, // Bitswap doesn't track duration here
+                                });
+                                // Also update frontend reputation store for immediate UI feedback
+                                PeerSelectionService.notePeerSuccess(seederPeerId);
+                                console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after Bitswap download (+${completedFile.size} bytes)`);
+                              } catch (repError) {
+                                console.error('Failed to update seeder reputation:', repError);
+                              }
+                            }
+                            
                             diagnosticLogger.info('Download', 'Bitswap payment processed', { 
                               amount: paymentAmount.toFixed(6), 
                               seederWalletAddress, 
@@ -484,7 +501,97 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         : file
     ));
 
-    showToast(`Successfully saved "${data.fileName}"`, 'success');
+    // Process payment for WebRTC download (only once per file)
+    const completedFile = $files.find(f => f.hash === data.fileHash);
+    
+    if (completedFile && !paidFiles.has(completedFile.hash)) {
+      diagnosticLogger.info('Download', 'WebRTC download completed, processing payment', { fileName: completedFile.name });
+      const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
+      
+      // Get seeder information from file metadata
+      const seederPeerId = completedFile.seederAddresses?.[0];
+      const seederWalletAddress = completedFile.uploaderAddress || 
+                                   (paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
+                                     ? completedFile.seederAddresses?.[0]!
+                                     : null);
+      
+      if (!seederWalletAddress) {
+        diagnosticLogger.warn('Download', 'Skipping WebRTC payment due to missing or invalid uploader wallet address', {
+          file: completedFile.name,
+          seederAddresses: completedFile.seederAddresses,
+          uploaderAddress: completedFile.uploaderAddress
+        });
+        showToast('Payment skipped: missing uploader wallet address', 'warning');
+      } else {
+        try {
+          const paymentResult = await paymentService.processDownloadPayment(
+            completedFile.hash,
+            completedFile.name,
+            completedFile.size,
+            seederWalletAddress,
+            seederPeerId
+          );
+
+          if (paymentResult.success) {
+            paidFiles.add(completedFile.hash); // Mark as paid
+
+            // Update reputation for the seeder peer after successful payment
+            if (seederPeerId) {
+              try {
+                await invoke('record_transfer_success', {
+                  peerId: seederPeerId,
+                  bytes: completedFile.size,
+                  durationMs: 0, // WebRTC doesn't track duration here
+                });
+                // Also update frontend reputation store for immediate UI feedback
+                PeerSelectionService.notePeerSuccess(seederPeerId);
+                console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (+${completedFile.size} bytes)`);
+              } catch (repError) {
+                console.error('Failed to update seeder reputation:', repError);
+              }
+            }
+ 
+            diagnosticLogger.info('Download', 'WebRTC payment processed', { 
+              amount: paymentAmount.toFixed(6), 
+              seederWalletAddress, 
+              seederPeerId 
+            });
+            showToast(
+              `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
+              'success'
+            );
+          } else {
+            errorLogger.fileOperationError('WebRTC payment', paymentResult.error || 'Unknown error');
+            showToast(`Payment failed: ${paymentResult.error}`, 'warning');
+          }
+        } catch (error) {
+          errorLogger.fileOperationError('WebRTC payment processing', error instanceof Error ? error.message : String(error));
+          showToast(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'warning');
+        }
+      }
+    } else if (completedFile) {
+
+      // File already paid for or free - still update reputation for successful transfer
+      const seederPeerId = completedFile.seederAddresses?.[0];
+      if (seederPeerId) {
+        try {
+          await invoke('record_transfer_success', {
+            peerId: seederPeerId,
+            bytes: completedFile.size,
+            durationMs: 0,
+          });
+          // Also update frontend reputation store for immediate UI feedback
+          PeerSelectionService.notePeerSuccess(seederPeerId);
+          console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (already paid)`);
+        } catch (repError) {
+          console.error('Failed to update seeder reputation:', repError);
+        }
+      }
+
+      showToast(`Successfully saved "${data.fileName}"`, 'success');
+    } else {
+      showToast(`Successfully saved "${data.fileName}"`, 'success');
+    }
     
   } catch (error) {
     errorLogger.fileOperationError('Save WebRTC file', error instanceof Error ? error.message : String(error));
@@ -1445,34 +1552,18 @@ async function loadAndResumeDownloads() {
 
         console.log('🌐 download_file_from_network result:', result);
 
-        // Check if this was a local copy (completed immediately)
-        if (typeof result === 'string' && result.includes('local copy')) {
-          // Local copy completed - mark as done
-          files.update(f => f.map(file =>
-            file.id === downloadingFile.id
-              ? {
-                  ...file,
-                  status: 'completed',
-                  progress: 100,
-                  downloadPath: outputPath
-                }
-              : file
-          ));
-          showToast(`Download completed (local copy): "${downloadingFile.name}"`, 'success');
-        } else {
-          // WebRTC download initiated - update status to downloading
-          files.update(f => f.map(file =>
-            file.id === downloadingFile.id
-              ? {
-                  ...file,
-                  status: 'downloading',
-                  progress: 0,
-                  downloadPath: outputPath
-                }
-              : file
-          ));
-          showToast(`WebRTC download started for "${downloadingFile.name}"`, 'success');
-        }
+        // WebRTC download initiated - update status to downloading
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? {
+                ...file,
+                status: 'downloading',
+                progress: 0,
+                downloadPath: outputPath
+              }
+            : file
+        ));
+        showToast(`Download started for "${downloadingFile.name}"`, 'success');
 
       } catch (error) {
         errorLogger.fileOperationError('WebRTC download', error instanceof Error ? error.message : String(error));

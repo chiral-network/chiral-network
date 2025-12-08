@@ -782,6 +782,20 @@ async fn record_download_payment(
         seeder_wallet_address
     );
 
+    // Update peer reputation: record successful payment transaction
+    // This increments transfer_count for blockchain payments (separate from file transfers)
+    {
+        let dht_guard = state.dht.lock().await;
+        if let Some(ref dht) = *dht_guard {
+            // Record successful payment as a transfer success
+            dht.record_transfer_success(&seeder_peer_id, file_size, 0).await;
+            println!(
+                "✅ Updated reputation for seeder peer {} after successful payment of {} Chiral",
+                seeder_peer_id, amount
+            );
+        }
+    }
+
     // Seeder will see the payment when they check the blockchain
     Ok(())
 }
@@ -1537,6 +1551,9 @@ async fn start_dht_node(
         guard.clone()
     };
 
+    // Clone bootstrap nodes for health monitor before moving to DhtService::new
+    let bootstrap_nodes_for_monitor = bootstrap_nodes.clone();
+
     let dht_service = DhtService::new(
         port,
         bootstrap_nodes,
@@ -1832,7 +1849,64 @@ async fn start_dht_node(
     }
 
     // Also attach DHT to HTTP server state for provider-side metrics
-    state.http_server_state.set_dht(dht_arc).await;
+    state.http_server_state.set_dht(dht_arc.clone()).await;
+
+    // Monitor peer health and auto-reconnect to bootstrap when needed
+    let dht_for_monitor = dht_arc.clone();
+    let app_for_monitor = app.clone();
+    
+    tokio::spawn(async move {
+        use std::time::Duration;
+        let mut last_check = std::time::Instant::now();
+        let check_interval = Duration::from_secs(30); // Check every 30 seconds
+        const MINIMUM_PEERS: usize = 5; // Auto-reconnect if below this
+        
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            
+            // Check if DHT is still alive
+            if Arc::strong_count(&dht_for_monitor) <= 1 {
+                tracing::info!("DHT health monitor: DHT service shut down, exiting");
+                break;
+            }
+            
+            if last_check.elapsed() < check_interval {
+                continue;
+            }
+            
+            last_check = std::time::Instant::now();
+            let peer_count = dht_for_monitor.get_peer_count().await;
+            
+            if peer_count < MINIMUM_PEERS {
+                tracing::warn!(
+                    "⚠️ Low peer count: {} (minimum: {}). Attempting to reconnect to bootstrap nodes...",
+                    peer_count,
+                    MINIMUM_PEERS
+                );
+                
+                // Reconnect to bootstrap nodes
+                for bootstrap_node in &bootstrap_nodes_for_monitor {
+                    match dht_for_monitor.connect_peer(bootstrap_node.clone()).await {
+                        Ok(_) => {
+                            tracing::info!("📡 Reconnected to bootstrap node: {}", bootstrap_node);
+                        }
+                        Err(e) => {
+                            tracing::debug!("Failed to reconnect to {}: {}", bootstrap_node, e);
+                        }
+                    }
+                }
+                
+                // Emit warning to UI
+                let _ = app_for_monitor.emit("dht_low_peer_count", serde_json::json!({
+                    "peer_count": peer_count,
+                    "minimum": MINIMUM_PEERS,
+                    "message": format!("DHT has only {} peers. Reconnecting to bootstrap nodes...", peer_count)
+                }));
+            } else {
+                tracing::debug!("✅ DHT peer count healthy: {}", peer_count);
+            }
+        }
+    });
 
     Ok(peer_id)
 }
@@ -4560,47 +4634,6 @@ async fn download_file_from_network(
                         metadata.file_name, metadata.file_size
                     );
 
-                    // Check if we are the seeder - if so, use local copy instead of WebRTC
-                    let local_peer_id = dht_service.get_peer_id().await;
-                    let is_local_seeder = metadata.seeders.contains(&local_peer_id);
-                    
-                    if is_local_seeder {
-                        info!("We are a seeder for this file - using local copy instead of WebRTC");
-                        
-                        // Get file data from local storage
-                        let ft = {
-                            let ft_guard = state.file_transfer.lock().await;
-                            ft_guard.as_ref().cloned()
-                        };
-                        
-                        if let Some(file_transfer) = ft {
-                            match file_transfer.get_file_data(&metadata.merkle_root).await {
-                                Some(file_data) => {
-                                    // Get unique output path to avoid overwriting existing files
-                                    let unique_output_path = get_unique_filepath(Path::new(&output_path));
-                                    let final_output_path = unique_output_path.to_string_lossy().to_string();
-                                    
-                                    // Write to output path
-                                    use std::io::Write;
-                                    let mut file = std::fs::File::create(&final_output_path)
-                                        .map_err(|e| format!("Failed to create output file: {}", e))?;
-                                    file.write_all(&file_data)
-                                        .map_err(|e| format!("Failed to write file data: {}", e))?;
-                                    
-                                    info!("Local copy completed: {} -> {}", metadata.file_name, final_output_path);
-                                    return Ok(format!(
-                                        "Download completed (local copy): {} ({} bytes)",
-                                        metadata.file_name, file_data.len()
-                                    ));
-                                }
-                                None => {
-                                    warn!("Failed to get local file data - file not found in local storage");
-                                    // Fall through to try WebRTC with other peers
-                                }
-                            }
-                        }
-                    }
-
                     // Implement peer discovery for file chunks
                     info!(
                         "Discovering peers for file: {} with {} known seeders",
@@ -6364,6 +6397,18 @@ async fn get_peer_metrics(
 }
 
 #[tauri::command]
+async fn get_connected_peer_metrics(
+    state: State<'_, AppState>,
+) -> Result<Vec<peer_selection::PeerMetrics>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(ref dht) = *dht_guard {
+        Ok(dht.get_connected_peer_metrics().await)
+    } else {
+        Err("DHT service not available".to_string())
+    }
+}
+
+#[tauri::command]
 async fn report_malicious_peer(
     peer_id: String,
     severity: String,
@@ -7837,6 +7882,7 @@ fn main() {
             record_transfer_success,
             record_transfer_failure,
             get_peer_metrics,
+            get_connected_peer_metrics,
             report_malicious_peer,
             select_peers_with_strategy,
             set_peer_encryption_support,
@@ -8846,8 +8892,6 @@ fn get_default_storage_directory() -> String {
         // Use home directory with tilde expansion
         return "~/Downloads/Chiral-Network-Storage".to_string();
     }
-    // Fallback for other platforms
-    "~/Downloads/Chiral-Network-Storage".to_string()
 }
 
 /// Event pump for DHT events, moved out of start_dht_node

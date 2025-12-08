@@ -16,7 +16,7 @@ use tracing::{error, info, instrument, warn};
 use crate::dht::DhtService;
 use libp2p::Multiaddr;
 use thiserror::Error;
-use serde::{Deserialize, Serialize, ser::Serializer};
+use serde::{Deserialize, Serialize};
 
 const MAX_ACTIVE_DOWNLOADS: usize = 3;
 const PAYMENT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB
@@ -610,7 +610,7 @@ impl BitTorrentHandler {
     async fn start_download_with_options(
         &self,
         identifier: &str,
-        add_opts: AddTorrentOptions,
+        mut add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
