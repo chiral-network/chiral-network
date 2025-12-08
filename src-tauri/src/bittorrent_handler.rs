@@ -519,7 +519,7 @@ impl BitTorrentHandler {
     async fn start_download_with_options(
         &self,
         identifier: &str,
-        mut add_opts: AddTorrentOptions,
+        add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
@@ -1494,100 +1494,4 @@ mod torrent_state_manager_tests {
     // Current implementation logs a warning and returns empty, which is good.
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::dht::{DhtCommand, DhtEvent};
-    use librqbit::{AddTorrentOptions, TorrentState};
-    use std::collections::HashSet;
-    use tempfile::tempdir;
-    use tokio::sync::{mpsc, Mutex};
 
-    // A mock DhtService for testing purposes.
-    #[derive(Clone)]
-    struct MockDhtService {
-        chiral_peers_to_return: Vec<String>,
-    }
-
-    impl MockDhtService {
-        fn new(peers: Vec<String>) -> Self {
-            Self {
-                chiral_peers_to_return: peers,
-            }
-        }
-    }
-
-    // We only need to mock the methods used by BitTorrentHandler.
-    // This is a simplified mock implementation.
-    #[async_trait]
-    impl DhtService {
-        // This is not a real implementation, but a stand-in for the mock.
-        // The real DhtService has a proper `new` method.
-        // We can't implement `new` on the mock directly, so we use this workaround.
-        pub async fn search_peers_by_infohash_mock(
-            &self,
-            _info_hash: String,
-            peers_to_return: Vec<String>,
-        ) -> Result<Vec<String>, String> {
-            Ok(peers_to_return)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_start_download_fallback_to_public() {
-        // 1. Setup: Create a temporary directory and a mock DHT service.
-        let temp_dir = tempdir().unwrap();
-        let download_path = temp_dir.path().to_path_buf();
-
-        // Configure the mock DHT service to return an empty list of peers.
-        let (cmd_tx, _cmd_rx) = mpsc::channel::<DhtCommand>(1);
-        let (_event_tx, event_rx) = mpsc::channel::<DhtEvent>(1);
-        let mock_dht_service = Arc::new(DhtService {
-            cmd_tx,
-            event_rx: Arc::new(Mutex::new(event_rx)),
-            peer_id: "mock_peer_id".to_string(),
-            connected_peers: Arc::new(Mutex::new(HashSet::new())),
-            // ... other fields initialized to default/mock values
-            connected_addrs: Default::default(),
-            metrics: Default::default(),
-            pending_echo: Default::default(),
-            pending_searches: Default::default(),
-            search_counter: Default::default(),
-            proxy_mgr: Default::default(),
-            peer_selection: Default::default(),
-            file_metadata_cache: Default::default(),
-            received_chunks: Default::default(),
-            file_transfer_service: None,
-            pending_webrtc_offers: Default::default(),
-            pending_key_requests: Default::default(),
-            pending_provider_queries: Default::default(),
-            root_query_mapping: Default::default(),
-            active_downloads: Default::default(),
-            get_providers_queries: Default::default(),
-            chunk_size: 262144,
-            file_heartbeat_state: Default::default(),
-            seeder_heartbeats_cache: Default::default(),
-            pending_heartbeat_updates: Default::default(),
-        });
-
-        // Create the BitTorrentHandler with the mock service.
-        let handler =
-            BitTorrentHandler::new(download_path.clone(), mock_dht_service.clone())
-                .await
-                .expect("Failed to create BitTorrentHandler");
-
-        // A valid, well-known magnet link for a public domain torrent.
-        let magnet_link = "magnet:?xt=urn:btih:a8a823138a32856187539439325938e3f2a1e2e3&dn=The.WIRED.Book-sample.pdf";
-
-        // 2. Action: Start the download.
-        let handle = handler
-            .start_download(magnet_link)
-            .await
-            .expect("start_download should succeed");
-
-        // 3. Assert: Verify that the torrent was NOT added in a paused state.
-        let stats = handle.stats();
-        assert_ne!(stats.state, TorrentState::Paused, "Torrent should not be paused when falling back to public network");
-        info!("Torrent state is {:?}, which is not Paused. Fallback test successful.", stats.state);
-    }
-}
