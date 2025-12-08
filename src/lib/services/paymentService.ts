@@ -11,7 +11,7 @@
 import { wallet, transactions, type Transaction } from "$lib/stores";
 import { get } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
-import { reputationService } from './reputationService';
+import { reputationService } from "./reputationService";
 
 // type FullNetworkStats = {
 //   network_difficulty: number
@@ -40,7 +40,9 @@ function saveTransactionsToStorage(txs: Transaction[]) {
   try {
     const serialized = JSON.stringify(txs);
     localStorage.setItem("chiral_transactions", serialized);
-    console.log(`💾 Saved ${txs.length} transactions to localStorage (${(serialized.length / 1024).toFixed(2)} KB)`);
+    console.log(
+      `💾 Saved ${txs.length} transactions to localStorage (${(serialized.length / 1024).toFixed(2)} KB)`
+    );
   } catch (error) {
     console.error("Failed to save transactions to localStorage:", error);
   }
@@ -60,7 +62,6 @@ function loadTransactionsFromStorage(): Transaction[] {
   try {
     const saved = localStorage.getItem("chiral_transactions");
     if (!saved) {
-      console.log("📭 No transactions found in localStorage");
       return [];
     }
 
@@ -70,8 +71,7 @@ function loadTransactionsFromStorage(): Transaction[] {
       ...tx,
       date: new Date(tx.date),
     }));
-    
-    console.log(`📬 Loaded ${transactions.length} transactions from localStorage`);
+
     return transactions;
   } catch (error) {
     console.error("Failed to load transactions from localStorage:", error);
@@ -138,26 +138,17 @@ export class PaymentService {
 
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
     const cost = sizeInMB * dynamicPricePerMb;
-    
+
     // Ensure minimum cost of 0.0001 Chiral for any file download
     const minimumCost = 0.0001;
     const finalCost = Math.max(cost, minimumCost);
-
-    console.log(`📊 Download cost calculation:`, {
-      fileSizeBytes: fileSizeInBytes,
-      fileSizeMB: sizeInMB.toFixed(4),
-      pricePerMB: dynamicPricePerMb.toFixed(8),
-      calculatedCost: cost.toFixed(8),
-      minimumCost: minimumCost.toFixed(8),
-      finalCost: finalCost.toFixed(8)
-    });
 
     return parseFloat(finalCost.toFixed(8));
   }
 
   /**
    * Fetch dynamic network metrics and calculate real-time price per MB
-   * based on current Ethereum conditions
+   * based on current network conditions
    */
   static async getDynamicPricePerMB(normalizationFactor = 1): Promise<number> {
     try {
@@ -168,44 +159,40 @@ export class PaymentService {
         power_usage: number;
       }>("get_full_network_stats");
 
-      const {
-        network_difficulty,
-        network_hashrate,
-        active_miners,
-        power_usage,
-      } = stats;
+      const { network_hashrate, active_miners, power_usage } = stats;
 
-      console.log(`📈 Network stats for pricing:`, {
-        difficulty: network_difficulty,
-        hashrate: network_hashrate,
-        miners: active_miners,
-        power: power_usage
-      });
+      // Base price per MB in Chiral tokens
+      const basePricePerMB = 0.001;
 
-      if (network_hashrate <= 0) {
-        console.warn("⚠️ Network hashrate is 0, using fallback price");
-        return 0.001;
+      // Calculate network load factor (more miners = slightly higher price due to demand)
+      // Clamped between 0.5x and 2x the base price
+      const minerFactor = Math.min(Math.max(active_miners / 10, 0.5), 2.0);
+
+      // Calculate efficiency factor based on power usage relative to hashrate
+      // Higher power usage per hash = slightly higher price
+      // Default to 1.0 if we can't calculate
+      let efficiencyFactor = 1.0;
+      if (network_hashrate > 0 && power_usage > 0) {
+        // Normalize: assume 100W per 1MH/s is baseline efficiency
+        const baselineEfficiency = 100 / 1_000_000; // W per H/s
+        const actualEfficiency = power_usage / network_hashrate;
+        // Ratio clamped between 0.8x and 1.5x
+        efficiencyFactor = Math.min(
+          Math.max(actualEfficiency / baselineEfficiency, 0.8),
+          1.5
+        );
       }
 
-      // --- Average hash power per miner ---
-      const avgHashPower =
-        active_miners > 0 ? network_hashrate / active_miners : network_hashrate;
-
-      // unit cost of one hash for this miner, normalized to the average mining power
-      // basically for this miner, how expensive is each hash compared to the network average
-      const baseHashCost = power_usage / Math.max(avgHashPower, 1);
-
-      // --- Price per MB (scaled by difficulty) ---
+      // Final price calculation
       const pricePerMB =
-        (baseHashCost / avgHashPower) *
-        network_difficulty *
-        normalizationFactor;
+        basePricePerMB * minerFactor * efficiencyFactor * normalizationFactor;
 
-      console.log(`💵 Calculated price per MB: ${pricePerMB.toFixed(8)}`);
-      return parseFloat(pricePerMB.toFixed(8));
+      // Ensure price stays within reasonable bounds: 0.0001 to 1.0 Chiral per MB
+      const finalPrice = Math.min(Math.max(pricePerMB, 0.0001), 1.0);
+
+      return parseFloat(finalPrice.toFixed(8));
     } catch (error) {
-      console.warn("⚠️ Failed to fetch dynamic pricing from network:", error);
-      // fallback to static price from settings
+      // fallback to static price from settings when network pricing unavailable
       return 0.001;
     }
   }
@@ -376,43 +363,60 @@ export class PaymentService {
       // Get our own peer ID first for the issuer_id
       let downloaderPeerId = currentWallet.address; // Fallback to wallet address
       try {
-        downloaderPeerId = await invoke<string>('get_peer_id');
+        downloaderPeerId = await invoke<string>("get_peer_id");
         console.log("📊 Got downloader peer ID:", downloaderPeerId);
       } catch (err) {
-        console.warn("Could not get peer ID for issuer_id, using wallet address:", err);
+        console.warn(
+          "Could not get peer ID for issuer_id, using wallet address:",
+          err
+        );
       }
 
       // Publish reputation verdict using signed message system (see docs/SIGNED_TRANSACTION_MESSAGES.md)
       try {
-        console.log("📊 Attempting to publish reputation verdict for downloader→seeder");
+        console.log(
+          "📊 Attempting to publish reputation verdict for downloader→seeder"
+        );
         console.log("📊 seederPeerId:", seederPeerId);
         console.log("📊 seederAddress:", seederAddress);
         console.log("📊 Using target_id:", seederPeerId || seederAddress);
         console.log("📊 Using issuer_id:", downloaderPeerId);
-        
+
         await reputationService.publishVerdict({
           target_id: seederPeerId || seederAddress,
           tx_hash: transactionHash,
-          outcome: 'good',
+          outcome: "good",
           details: `Successful payment for file: ${fileName}`,
-          metric: 'transaction',
+          metric: "transaction",
           issued_at: Math.floor(Date.now() / 1000),
           issuer_id: downloaderPeerId,
           issuer_seq_no: transactionId,
         });
-        
-        console.log("✅ Published good reputation verdict for seeder:", seederPeerId || seederAddress);
+
+        console.log(
+          "✅ Published good reputation verdict for seeder:",
+          seederPeerId || seederAddress
+        );
       } catch (reputationError) {
-        console.error("❌ Failed to publish reputation verdict:", reputationError);
+        console.error(
+          "❌ Failed to publish reputation verdict:",
+          reputationError
+        );
         // Don't fail the payment if reputation update fails
       }
 
       // Notify backend about the payment - this will send P2P message to the seeder
       try {
-        console.log("📤 Sending payment notification with downloaderPeerId:", downloaderPeerId);
+        console.log(
+          "📤 Sending payment notification with downloaderPeerId:",
+          downloaderPeerId
+        );
         console.log("📤 Type of downloaderPeerId:", typeof downloaderPeerId);
-        console.log("📤 Is downloaderPeerId a peer ID?", downloaderPeerId?.startsWith('12D3Koo'));
-        
+        console.log(
+          "📤 Is downloaderPeerId a peer ID?",
+          downloaderPeerId?.startsWith("12D3Koo")
+        );
+
         await invoke("record_download_payment", {
           fileHash,
           fileName,
@@ -532,34 +536,48 @@ export class PaymentService {
       // Get our own peer ID first for the issuer_id
       let seederPeerId = currentWallet.address; // Fallback to wallet address
       try {
-        seederPeerId = await invoke<string>('get_peer_id');
+        seederPeerId = await invoke<string>("get_peer_id");
         console.log("📊 Got seeder peer ID:", seederPeerId);
       } catch (err) {
-        console.warn("Could not get peer ID for issuer_id, using wallet address:", err);
+        console.warn(
+          "Could not get peer ID for issuer_id, using wallet address:",
+          err
+        );
       }
 
       // Publish reputation verdict using signed message system (see docs/SIGNED_TRANSACTION_MESSAGES.md)
       try {
-        console.log("📊 Attempting to publish reputation verdict for seeder→downloader");
+        console.log(
+          "📊 Attempting to publish reputation verdict for seeder→downloader"
+        );
         console.log("📊 downloaderPeerId:", downloaderPeerId);
         console.log("📊 downloaderAddress:", downloaderAddress);
-        console.log("📊 Using target_id:", downloaderPeerId || downloaderAddress);
+        console.log(
+          "📊 Using target_id:",
+          downloaderPeerId || downloaderAddress
+        );
         console.log("📊 Using issuer_id:", seederPeerId);
-        
+
         await reputationService.publishVerdict({
           target_id: downloaderPeerId || downloaderAddress,
           tx_hash: transactionHash || null,
-          outcome: 'good',
+          outcome: "good",
           details: `Payment received for file: ${fileName}`,
-          metric: 'transaction',
+          metric: "transaction",
           issued_at: Math.floor(Date.now() / 1000),
           issuer_id: seederPeerId,
           issuer_seq_no: transactionId,
         });
-        
-        console.log("✅ Published good reputation verdict for downloader:", downloaderPeerId || downloaderAddress);
+
+        console.log(
+          "✅ Published good reputation verdict for downloader:",
+          downloaderPeerId || downloaderAddress
+        );
       } catch (reputationError) {
-        console.error("❌ Failed to publish reputation verdict:", reputationError);
+        console.error(
+          "❌ Failed to publish reputation verdict:",
+          reputationError
+        );
         // Don't fail the payment if reputation update fails
       }
 
@@ -613,7 +631,7 @@ export class PaymentService {
   }> {
     const sizeInMB = fileSizeInBytes / (1024 * 1024);
     const amount = await this.calculateDownloadCost(fileSizeInBytes);
-    console.log(`Download cost: ${amount.toFixed(8)} Chiral`);
+    console.log(`Download cost: ${amount.toFixed(4)} Chiral`);
 
     let pricePerMb = await this.getDynamicPricePerMB(1.2);
     if (!Number.isFinite(pricePerMb) || pricePerMb <= 0) {
@@ -624,7 +642,7 @@ export class PaymentService {
       amount,
       pricePerMb: Number(pricePerMb.toFixed(8)),
       sizeInMB,
-      formattedAmount: `${amount.toFixed(8)} Chiral`,
+      formattedAmount: `${amount.toFixed(4)} Chiral`,
     };
   }
 

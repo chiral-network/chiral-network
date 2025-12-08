@@ -218,7 +218,7 @@ impl ChunkManager {
     }
 
     // This function now saves the combined [nonce][ciphertext] blob
-    fn save_chunk(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
+    pub fn save_chunk(&self, hash: &str, data_with_nonce: &[u8]) -> Result<(), Error> {
         fs::create_dir_all(&self.storage_path)?;
         let chunk_path = self.storage_path.join(hash);
         // --- Deduplication: Only write if the chunk does not already exist ---

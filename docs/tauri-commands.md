@@ -320,14 +320,6 @@ These commands currently operate on in-memory mock data to support “progressiv
 - **Returns**: `string[]`
 - **Description**: List of peer IDs currently connected to this node.
 
-### `send_dht_message`
-
-- **Parameters**
-  - `peer_id: string`
-  - `message: Record<string, unknown>`
-- **Returns**: `void`
-- **Description**: Sends an arbitrary JSON payload to a peer via the DHT messaging channel.
-
 ### `get_dht_health`
 
 - **Parameters**: _(none)_
@@ -590,6 +582,76 @@ These commands currently operate on in-memory mock data to support “progressiv
   - `max_peers?: number`
 - **Returns**: `string` – message describing how the download was initiated.
 - **Description**: Attempts a multi-source download and falls back to single-source behavior if the service is unavailable.
+
+## ed2k Commands
+
+These commands expose functionality for interacting with the eDonkey (ed2k) network, managing file sources, and testing connections.
+
+### `add_ed2k_source`
+
+Adds an ed2k link as a potential source for a given file hash.
+
+* **Parameters**:
+    * `file_hash: string`
+    * `ed2k_link: string`
+* **Returns**: `void`
+* **Description**: Parses the ed2k link, creates an `Ed2kSourceInfo` struct, and adds it to the `FileMetadata` for the specified `file_hash`.
+
+### `list_ed2k_sources`
+
+Retrieves all registered ed2k sources for a given file hash.
+
+* **Parameters**:
+    * `file_hash: string`
+* **Returns**: `Ed2kSourceInfo[]`
+* **Description**: Fetches the `FileMetadata` and returns the `ed2k_sources` array, or an empty array if none exist.
+
+### `remove_ed2k_source`
+
+Removes a specific ed2k source from a file's metadata based on its server URL.
+
+* **Parameters**:
+    * `file_hash: string`
+    * `server_url: string`
+* **Returns**: `void`
+* **Description**: Finds and removes the `Ed2kSourceInfo` entry that matches the `server_url` for the given `file_hash`.
+
+### `test_ed2k_connection`
+
+Attempts to connect to a given ed2k server to check its status.
+
+* **Parameters**:
+    * `server_url: string`
+* **Returns**: `Ed2kServerInfo`
+* **Description**: Uses the `ed2k_client` to connect to the server and request its info. Throws an error if the connection fails.
+
+### `search_ed2k_file`
+
+Searches the ed2k network for a file based on a query string.
+
+* **Parameters**:
+    * `query: string`
+    * `server_url?: string` (Optional: uses a default server if not provided)
+* **Returns**: `Ed2kSearchResult[]`
+* **Description**: Connects to an ed2k server and performs a file search.
+
+### `get_ed2k_download_status`
+
+Gets the current download status for a file from ed2k sources.
+
+* **Parameters**:
+    * `file_hash: string`
+* **Returns**: `Ed2kDownloadStatus`
+* **Description**: Retrieves the download status for an ed2k file (placeholder, as full download logic is in `multi_source_download`).
+
+### `parse_ed2k_link`
+
+A utility function to parse an ed2k link string into its structured `Ed2kSourceInfo` format.
+
+* **Parameters**:
+    * `ed2k_link: string`
+* **Returns**: `Ed2kSourceInfo`
+* **Description**: Exposes the backend's `Ed2kSourceInfo::from_ed2k_link` parser to the frontend.
 
 ## Encryption & Packaging Helpers
 

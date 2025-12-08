@@ -151,6 +151,9 @@
         "title": "中继状态",
         "enabled": "自动中继已启用",
         "disabled": "自动中继已禁用",
+        "timeline": "自动中继时间线",
+        "enabledAt": "最近启用时间",
+        "disabledAt": "最近禁用时间",
         "noPeer": "未连接到中继",
         "activePeer": "活动中继",
         "status": "状态",
@@ -159,6 +162,8 @@
         "renewals": "预留续期次数",
         "evictions": "预留被逐次数",
         "never": "从未",
+        "neverEnabled": "从未启用",
+        "neverDisabled": "从未禁用",
         "noEvictions": "无被逐记录",
         "accepted": "预留已接受",
         "pending": "待定",
@@ -254,6 +259,10 @@
     "enableUpnp": "启用UPnP",
     "enableNat": "启用NAT端口映射",
     "enableDht": "启用DHT",
+    "autoStartNode": "启动时自动启动 DHT 节点",
+    "autoStartNodeDescription": "应用程序启动时自动启动 DHT 文件共享节点",
+    "autoStartGeth": "启动时自动启动区块链节点",
+    "autoStartGethDescription": "应用程序启动时自动启动 Geth 区块链节点（启用钱包和挖矿）",
     "geoDistribution": {
       "title": "地理分布",
       "subtitle": "正在映射 {peers} 个已观测的节点",
@@ -410,6 +419,7 @@
     "balance": "余额",
     "totalEarned": "总收入",
     "totalSpent": "总支出",
+    "totalReceived": "总收入",
     "address": "Chiral地址",
     "qrModal": {
       "title": "你的Chiral地址",
@@ -454,6 +464,23 @@
       "noDetails": "没有可用的待处理交易详情。",
       "count": "{count} 笔待处理交易",
       "none": "无待处理交易"
+    },
+    "fees": {
+      "low": "低",
+      "market": "市场",
+      "fast": "快",
+      "estimated": "预估费用"
+    },
+    "gas": {
+      "label": "交易速度",
+      "loading": "估算中...",
+      "estimateError": "使用默认值",
+      "slow": "经济",
+      "standard": "标准",
+      "fast": "优先",
+      "estimatedFee": "预估费用",
+      "totalCost": "总费用",
+      "networkCongestion": "网络"
     }
   },
   "transactions": {
@@ -664,7 +691,8 @@
       "invalid": "请输入大于0的有效数量。",
       "min": "数量必须至少为 {min} Chiral。",
       "insufficient": "余额不足：缺少 {more} Chiral。",
-      "insufficientWithFee": "资金不足。总计 {total} Chiral (金额 + 费用) 超过您的余额 {balance} Chiral。"
+      "insufficientWithFee": "资金不足。总计 {total} Chiral (金额 + 费用) 超过您的余额 {balance} Chiral。",
+      "insufficientWithGas": "余额不足（包括 Gas）- 缺少 {more} Chiral。"
     },
     "exportFailed": "导出失败。请重试。",
     "createAccount": "无法创建账户: {error}"
@@ -1455,6 +1483,14 @@
     "blocks": {
       "latest": "最新区块",
       "noBlocks": "未找到区块"
+    },
+    "sync": {
+      "syncing": "同步中",
+      "current": "当前区块",
+      "highest": "最高区块",
+      "remaining": "剩余",
+      "eta": "预计时间",
+      "complete": "同步完成"
     },
     "search": {
       "title": "搜索区块链",

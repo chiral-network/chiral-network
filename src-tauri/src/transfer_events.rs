@@ -11,7 +11,9 @@
 // - Observable: Easy to subscribe to specific event types or all events
 // - Debuggable: All events carry contextual information for troubleshooting
 
+use crate::analytics::AnalyticsService;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter};
 use tracing::{debug, error};
@@ -340,6 +342,7 @@ pub enum ErrorCategory {
 // ============================================================================
 
 /// The main event bus for emitting transfer events
+#[derive(Clone)]
 pub struct TransferEventBus {
     app_handle: AppHandle,
 }
@@ -446,6 +449,69 @@ impl TransferEventBus {
     /// Helper to emit speed update event
     pub fn emit_speed_update(&self, event: SpeedUpdateEvent) {
         self.emit(TransferEvent::SpeedUpdate(event));
+    }
+
+    // =========================================================================
+    // Analytics Integration
+    // =========================================================================
+
+    /// Emit a transfer event to all listeners AND update analytics
+    ///
+    /// This method should be used when you want to emit an event and also
+    /// update the backend analytics service in a single call.
+    pub async fn emit_with_analytics(&self, event: TransferEvent, analytics: &Arc<AnalyticsService>) {
+        // Emit to frontend
+        self.emit(event.clone());
+
+        // Update backend analytics
+        analytics.handle_transfer_event(&event).await;
+
+        debug!("Emitted event with analytics update");
+    }
+
+    /// Helper to emit queued event with analytics
+    pub async fn emit_queued_with_analytics(&self, event: TransferQueuedEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::Queued(event), analytics).await;
+    }
+
+    /// Helper to emit started event with analytics
+    pub async fn emit_started_with_analytics(&self, event: TransferStartedEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::Started(event), analytics).await;
+    }
+
+    /// Helper to emit source connected event with analytics
+    pub async fn emit_source_connected_with_analytics(&self, event: SourceConnectedEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::SourceConnected(event), analytics).await;
+    }
+
+    /// Helper to emit progress event with analytics
+    pub async fn emit_progress_with_analytics(&self, event: TransferProgressEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::Progress(event), analytics).await;
+    }
+
+    /// Helper to emit completed event with analytics
+    pub async fn emit_completed_with_analytics(&self, event: TransferCompletedEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::Completed(event), analytics).await;
+    }
+
+    /// Helper to emit failed event with analytics
+    pub async fn emit_failed_with_analytics(&self, event: TransferFailedEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::Failed(event), analytics).await;
+    }
+
+    /// Helper to emit canceled event with analytics
+    pub async fn emit_canceled_with_analytics(&self, event: TransferCanceledEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::Canceled(event), analytics).await;
+    }
+
+    /// Helper to emit paused event with analytics
+    pub async fn emit_paused_with_analytics(&self, event: TransferPausedEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::Paused(event), analytics).await;
+    }
+
+    /// Helper to emit resumed event with analytics
+    pub async fn emit_resumed_with_analytics(&self, event: TransferResumedEvent, analytics: &Arc<AnalyticsService>) {
+        self.emit_with_analytics(TransferEvent::Resumed(event), analytics).await;
     }
 }
 

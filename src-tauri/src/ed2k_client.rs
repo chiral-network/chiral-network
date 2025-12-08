@@ -54,6 +54,9 @@ pub struct Ed2kFileInfo {
 
     /// Available sources (IP:Port)
     pub sources: Vec<String>,
+
+    /// ED2K chunk hashes (MD4 hashes for each 9.28MB chunk)
+    pub chunk_hashes: Vec<String>,
 }
 
 /// ed2k server information
@@ -88,10 +91,27 @@ pub struct Ed2kSearchResult {
     pub source_count: u32,
 }
 
+/// ed2k protocol opcodes
+mod opcodes {
+    pub const OP_LOGINREQUEST: u8 = 0x01;
+    pub const OP_SERVERMESSAGE: u8 = 0x38;
+    pub const OP_SERVERLIST: u8 = 0x32;
+    pub const OP_SERVERIDENT: u8 = 0x41;
+    pub const OP_OFFERFILES: u8 = 0x15;
+    pub const OP_GETSOURCES: u8 = 0x19;
+    pub const OP_FOUNDSOURCES: u8 = 0x42;
+    pub const OP_REQUESTPARTS: u8 = 0x58;
+    pub const OP_SENDINGPART: u8 = 0x46;
+}
+
 /// ed2k client for downloading files
 pub struct Ed2kClient {
     config: Ed2kConfig,
     connection: Option<TcpStream>,
+    /// Files we're currently sharing (hash -> file info)
+    shared_files: std::collections::HashMap<String, Ed2kFileInfo>,
+    /// Our client ID assigned by server
+    client_id: Option<u32>,
 }
 
 /// ed2k protocol errors
@@ -125,6 +145,8 @@ impl Ed2kClient {
                 ..Default::default()
             },
             connection: None,
+            shared_files: std::collections::HashMap::new(),
+            client_id: None,
         }
     }
 
@@ -133,6 +155,8 @@ impl Ed2kClient {
         Self {
             config,
             connection: None,
+            shared_files: std::collections::HashMap::new(),
+            client_id: None,
         }
     }
 
@@ -268,39 +292,180 @@ impl Ed2kClient {
         computed_hash.eq_ignore_ascii_case(expected_hash)
     }
 
+    /// Offer files to the ED2K server for sharing
+    /// This announces to the server that we have these files available
+    pub async fn offer_files(&mut self, files: Vec<Ed2kFileInfo>) -> Result<(), Ed2kError> {
+        if self.connection.is_none() {
+            return Err(Ed2kError::ConnectionError("Not connected to server".to_string()));
+        }
+
+        let conn = self.connection.as_mut().unwrap();
+
+        // Build OP_OFFERFILES packet
+        // Format: [opcode:1][file_count:4][files...]
+        // Each file: [hash:16][client_id:4][port:2][tags...]
+        let mut packet = Vec::new();
+        packet.push(opcodes::OP_OFFERFILES);
+        packet.extend_from_slice(&(files.len() as u32).to_le_bytes());
+
+        for file in &files {
+            // File hash (16 bytes MD4)
+            let hash_bytes = hex::decode(&file.file_hash)
+                .map_err(|e| Ed2kError::ProtocolError(format!("Invalid hash: {}", e)))?;
+            if hash_bytes.len() != 16 {
+                return Err(Ed2kError::ProtocolError("Hash must be 16 bytes".to_string()));
+            }
+            packet.extend_from_slice(&hash_bytes);
+
+            // Client ID (4 bytes) - use our assigned ID or 0
+            packet.extend_from_slice(&self.client_id.unwrap_or(0).to_le_bytes());
+
+            // Port (2 bytes) - ED2K default port
+            packet.extend_from_slice(&ED2K_DEFAULT_PORT.to_le_bytes());
+
+            // Tag count (4 bytes) - we'll send 2 tags: filename and filesize
+            packet.extend_from_slice(&2u32.to_le_bytes());
+
+            // Tag 1: Filename (type 0x02 = string, id 0x01 = filename)
+            if let Some(ref name) = file.file_name {
+                packet.push(0x02); // String tag type
+                packet.push(0x01); // Filename tag ID
+                let name_bytes = name.as_bytes();
+                packet.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+                packet.extend_from_slice(name_bytes);
+            }
+
+            // Tag 2: Filesize (type 0x03 = integer, id 0x02 = filesize)
+            packet.push(0x03); // Integer tag type
+            packet.push(0x02); // Filesize tag ID
+            packet.extend_from_slice(&(file.file_size as u32).to_le_bytes());
+
+            // Track locally
+            self.shared_files.insert(file.file_hash.clone(), file.clone());
+        }
+
+        // Send packet
+        conn.write_all(&packet).await?;
+
+        Ok(())
+    }
+
+    /// Remove a file from sharing
+    pub async fn remove_shared_file(&mut self, file_hash: &str) -> Result<(), Ed2kError> {
+        // Remove from local tracking
+        self.shared_files.remove(file_hash);
+
+        // Re-send offer with remaining files to update server
+        // (ED2K doesn't have explicit "unshare" - we just re-offer without the file)
+        if self.connection.is_some() && !self.shared_files.is_empty() {
+            let files: Vec<Ed2kFileInfo> = self.shared_files.values().cloned().collect();
+            self.offer_files(files).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Get list of files we're currently sharing
+    pub fn get_shared_files(&self) -> Vec<Ed2kFileInfo> {
+        self.shared_files.values().cloned().collect()
+    }
+
     /// Get file information from ed2k network
     pub async fn get_file_info(&mut self, file_hash: &str) -> Result<Ed2kFileInfo, Ed2kError> {
-        // Placeholder implementation
-        // In a real implementation, this would query the server
+        // Check if we have it locally first
+        if let Some(info) = self.shared_files.get(file_hash) {
+            return Ok(info.clone());
+        }
+
+        // Request sources to get file info
+        let sources = self.get_sources(file_hash).await?;
+
         Ok(Ed2kFileInfo {
             file_hash: file_hash.to_string(),
-            file_size: 0,
+            file_size: 0, // Unknown until we query a source
             file_name: None,
-            sources: Vec::new(),
+            sources,
+            chunk_hashes: Vec::new(), // Will be populated from server metadata
         })
     }
 
-    /// Get source list for a file
+    /// Get source list for a file from the server
     pub async fn get_sources(&mut self, file_hash: &str) -> Result<Vec<String>, Ed2kError> {
-        // Placeholder implementation
-        // In a real implementation, this would request sources from the server
-        Ok(Vec::new())
+        if self.connection.is_none() {
+            return Err(Ed2kError::ConnectionError("Not connected to server".to_string()));
+        }
+
+        let conn = self.connection.as_mut().unwrap();
+
+        // Parse file hash
+        let hash_bytes = hex::decode(file_hash)?;
+        if hash_bytes.len() != 16 {
+            return Err(Ed2kError::ProtocolError("Hash must be 16 bytes (MD4)".to_string()));
+        }
+
+        // Build OP_GETSOURCES packet
+        let mut packet = Vec::new();
+        packet.push(opcodes::OP_GETSOURCES);
+        packet.extend_from_slice(&hash_bytes);
+
+        // Send request
+        conn.write_all(&packet).await?;
+
+        // Read response (OP_FOUNDSOURCES)
+        let mut header = [0u8; 5];
+        let read_result = tokio::time::timeout(
+            self.config.timeout,
+            conn.read_exact(&mut header)
+        ).await;
+
+        match read_result {
+            Ok(Ok(_)) => {
+                if header[0] != opcodes::OP_FOUNDSOURCES {
+                    return Err(Ed2kError::ProtocolError(
+                        format!("Unexpected response opcode: 0x{:02x}", header[0])
+                    ));
+                }
+
+                // Parse source count
+                let source_count = u32::from_le_bytes([header[1], header[2], header[3], header[4]]) as usize;
+                let mut sources = Vec::with_capacity(source_count);
+
+                // Read source entries (6 bytes each: 4 bytes IP + 2 bytes port)
+                for _ in 0..source_count {
+                    let mut source_data = [0u8; 6];
+                    conn.read_exact(&mut source_data).await?;
+
+                    let ip = format!(
+                        "{}.{}.{}.{}",
+                        source_data[0], source_data[1], source_data[2], source_data[3]
+                    );
+                    let port = u16::from_le_bytes([source_data[4], source_data[5]]);
+
+                    sources.push(format!("{}:{}", ip, port));
+                }
+
+                Ok(sources)
+            }
+            Ok(Err(e)) => Err(Ed2kError::IoError(e)),
+            Err(_) => Err(Ed2kError::Timeout),
+        }
     }
 
     /// Get server information
     pub async fn get_server_info(&mut self) -> Result<Ed2kServerInfo, Ed2kError> {
-        // Placeholder implementation
+        // Server info is typically received after login
+        // For now, return basic info
         Ok(Ed2kServerInfo {
-            name: "ed2k Server".to_string(),
-            description: Some("Test server".to_string()),
+            name: "ED2K Server".to_string(),
+            description: Some("Connected ED2K server".to_string()),
             users: 0,
             files: 0,
         })
     }
 
     /// Search for files on ed2k network
-    pub async fn search(&mut self, query: &str) -> Result<Vec<Ed2kSearchResult>, Ed2kError> {
-        // Placeholder implementation
+    pub async fn search(&mut self, _query: &str) -> Result<Vec<Ed2kSearchResult>, Ed2kError> {
+        // Search requires OP_SEARCHREQUEST - implement if needed
         Ok(Vec::new())
     }
 

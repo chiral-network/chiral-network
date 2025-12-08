@@ -2,7 +2,6 @@ import { invoke } from '@tauri-apps/api/core';
 
 export interface ProxyLatencyInfo {
   proxyId: string;
-  address: string;
   latencyMs?: number;
   lastUpdated: number;
   status: 'Online' | 'Offline' | 'Connecting' | 'Error';

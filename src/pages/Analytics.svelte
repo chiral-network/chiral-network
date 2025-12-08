@@ -7,13 +7,14 @@ import { files, wallet, settings } from '$lib/stores';
 import { proxyNodes } from '$lib/proxy';
 import { onMount, onDestroy } from 'svelte'
 import { t } from 'svelte-i18n'
-import { suspiciousActivity } from '$lib/stores'; // only import
+import { suspiciousActivity } from '$lib/stores';
 import type { FileItem } from '$lib/stores';
 import { toHumanReadableSize } from '$lib/utils';
 import { miningState } from '$lib/stores';
 import { miningProgress } from '$lib/stores';
 import { analyticsService } from '$lib/services/analyticsService';
 import type { BandwidthStats, NetworkActivity } from '$lib/services/analyticsService';
+import { reputationRateLimiter, type RateLimitStatus } from '$lib/services/reputationRateLimiter';
 import { showToast } from '$lib/toast';
 import { get } from 'svelte/store';
 import type { AppSettings } from '$lib/stores';
@@ -48,6 +49,7 @@ let notificationPermissionRequested = false
 // Real analytics data
 let realBandwidthStats: BandwidthStats | null = null
 let realNetworkActivity: NetworkActivity | null = null
+let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
   
   // Latency analytics (derived from proxy nodes)
   let avgLatency = 0
@@ -92,6 +94,17 @@ let realNetworkActivity: NetworkActivity | null = null
     if (value >= 100) return value.toFixed(0)
     if (value >= 10) return value.toFixed(1)
     return value.toFixed(2)
+  }
+
+  function formatDuration(ms?: number | null) {
+    if (!ms || ms <= 0) return 'Now'
+    const seconds = Math.ceil(ms / 1000)
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    const remainingMinutes = minutes % 60
+    return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`
   }
 
   async function pushDesktopNotification(title: string, body: string) {
@@ -460,6 +473,8 @@ let realNetworkActivity: NetworkActivity | null = null
         download: realBandwidthStats.downloadBytes / (1024 * 1024)
       };
     }
+
+    rateLimitStatus = reputationRateLimiter.getStatus();
   }
 
   // Generate mock latency history once on mount
@@ -611,7 +626,7 @@ let realNetworkActivity: NetworkActivity | null = null
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('analytics.totalEarnings')}</p>
-          <p class="text-2xl font-bold">{($miningState.totalRewards ?? 0).toFixed(2)} Chiral</p>
+          <p class="text-2xl font-bold">{($miningState.totalRewards ?? 0).toFixed(4)} Chiral</p>
           <p class="text-xs flex items-center gap-1 mt-1"
             class:text-green-600={percentChange >= 0}
             class:text-red-600={percentChange < 0}>
@@ -775,6 +790,55 @@ let realNetworkActivity: NetworkActivity | null = null
           <Badge variant="secondary">{realNetworkActivity?.uniquePeersAllTime ?? 0}</Badge>
         </div>
       </div>
+    </Card>
+
+    <Card class="p-6">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <h2 class="text-lg font-semibold mb-1">Reputation rate limits</h2>
+          <p class="text-sm text-muted-foreground">
+            {rateLimitStatus.enabled ? 'Enabled' : 'Disabled'} · {rateLimitStatus.mode === 'enforce' ? 'Enforced' : 'Log-only monitor'}
+          </p>
+        </div>
+        <Badge variant={rateLimitStatus.shadowBlocked ? 'destructive' : 'secondary'}>
+          {rateLimitStatus.mode === 'enforce' ? 'Enforce' : 'Shadow'}
+        </Badge>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+        <div class="bg-slate-50 rounded-lg p-3">
+          <p class="text-xs text-muted-foreground mb-1">Daily usage</p>
+          <p class="text-xl font-semibold">{rateLimitStatus.dailyUsed}/{rateLimitStatus.dailyCap}</p>
+          <p class="text-xs text-muted-foreground">Resets in {formatDuration(rateLimitStatus.nextDailyResetMs)}</p>
+        </div>
+        <div class="bg-slate-50 rounded-lg p-3">
+          <p class="text-xs text-muted-foreground mb-1">Per-peer</p>
+          <p class="text-xl font-semibold">{rateLimitStatus.perTargetUsed}/{rateLimitStatus.perTargetCap}</p>
+          <p class="text-xs text-muted-foreground">
+            {rateLimitStatus.perTargetCooldownRemainingMs > 0
+              ? `Cooldown ends in ${formatDuration(rateLimitStatus.perTargetCooldownRemainingMs)}`
+              : 'No active cooldown'}
+          </p>
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mt-4 text-sm">
+        <div class="flex items-center gap-2 text-muted-foreground">
+          <span class="inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
+          Burst window: {rateLimitStatus.burstCount} in last {formatDuration(rateLimitStatus.burstWindowMs)}
+        </div>
+        <div class="text-sm font-medium">
+          {rateLimitStatus.burstCooldownRemainingMs > 0
+            ? `Cooldown: ${formatDuration(rateLimitStatus.burstCooldownRemainingMs)}`
+            : 'No active cooldown'}
+        </div>
+      </div>
+
+      {#if rateLimitStatus.lastDecision}
+        <div class="mt-3 border-t pt-3 text-xs text-muted-foreground">
+          Last check: {new Date(rateLimitStatus.lastDecision.ts).toLocaleTimeString()} — {rateLimitStatus.lastDecision.allowed ? 'allowed' : 'blocked'}{rateLimitStatus.lastDecision.reason ? ` (${rateLimitStatus.lastDecision.reason})` : ''}
+        </div>
+      {/if}
     </Card>
   </div>
 
@@ -1044,8 +1108,8 @@ let realNetworkActivity: NetworkActivity | null = null
     <div class="flex h-48 gap-2">
       <!-- Y-axis labels -->
       <div class="flex flex-col justify-between text-xs text-muted-foreground pr-2">
-        <span>{chartMax.toFixed(0)} Chiral</span>
-        <span>{(chartMax / 2).toFixed(0)} Chiral</span>
+        <span>{chartMax.toFixed(4)} Chiral</span>
+        <span>{(chartMax / 2).toFixed(4)} Chiral</span>
         <span>0</span>
       </div>
 
@@ -1066,20 +1130,20 @@ let realNetworkActivity: NetworkActivity | null = null
                       tabindex="0"
                       class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative group"
                       style="height: {(day.earnings / chartMax) * 100}%"
-                      title="{day.date}: {day.earnings.toFixed(2)} Chiral"
+                      title="{day.date}: {day.earnings.toFixed(4)} Chiral"
                       on:mouseenter={() => { hoveredDay = day; hoveredIndex = i; }}
                       on:mouseleave={() => { hoveredDay = null; hoveredIndex = null; }}
                       on:click={() => selectDay(day, i)}
                       on:keydown={(event) => handleKeySelection(event, day, i)}
                       aria-pressed={selectedIndex === i}
-                      aria-label="{day.date}: {day.earnings.toFixed(2)} Chiral"
+                      aria-label="{day.date}: {day.earnings.toFixed(4)} Chiral"
               >
                 {#if selectedIndex === i && selectedDay}
                   <div
                           class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
                           style="white-space:nowrap;"
                   >
-                    {selectedDay.date}: {selectedDay.earnings.toFixed(2)} Chiral
+                    {selectedDay.date}: {selectedDay.earnings.toFixed(4)} Chiral
                     <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
                   </div>
                 {/if}
@@ -1088,7 +1152,7 @@ let realNetworkActivity: NetworkActivity | null = null
                           class="absolute left-1/2 -translate-x-1/2 -top-8 z-20 px-2 py-1 rounded bg-muted-foreground text-background text-xs shadow-lg pointer-events-none"
                           style="white-space:nowrap;"
                   >
-                    {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} Chiral
+                    {hoveredDay.date}: {hoveredDay.earnings.toFixed(4)} Chiral
                     <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-muted-foreground"></span>
                   </div>
                 {/if}
@@ -1155,7 +1219,7 @@ let realNetworkActivity: NetworkActivity | null = null
                   white-space: nowrap;
                 "
               >
-                {hoveredDay.date}: {hoveredDay.earnings.toFixed(2)} Chiral
+                {hoveredDay.date}: {hoveredDay.earnings.toFixed(4)} Chiral
                 <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-muted-foreground"></span>
               </div>
             {/if}
@@ -1171,7 +1235,7 @@ let realNetworkActivity: NetworkActivity | null = null
                   white-space: nowrap;
                 "
               >
-                {selectedDay.date}: {selectedDay.earnings.toFixed(2)} Chiral
+                {selectedDay.date}: {selectedDay.earnings.toFixed(4)} Chiral
                 <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-primary"></span>
               </div>
             {/if}

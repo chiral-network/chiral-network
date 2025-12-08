@@ -21,12 +21,9 @@
     Copy,
     Download as DownloadIcon,
     Upload as UploadIcon,
-    Globe,
-    Blocks,
-    Share2
   } from "lucide-svelte";
   import { onMount } from "svelte";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import {open} from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
@@ -40,6 +37,8 @@
   import { settings, activeBandwidthLimits, type AppSettings } from "$lib/stores";
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
+  import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
+  import { validateStoragePath } from "$lib/utils/validation";
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -52,7 +51,9 @@
   let privacySectionOpen = false;
   let notificationsSectionOpen = false;
   let diagnosticsSectionOpen = false;
-  let protocolSectionOpen = false;
+
+  // Dynamic placeholder for storage path
+  let storagePathPlaceholder = "Select download directory";
 
   const ACCORDION_STORAGE_KEY = "settingsAccordionState";
 
@@ -66,7 +67,6 @@
     advanced: boolean;
     diagnostics: boolean;
     backupRestore: boolean;
-    protocol: boolean;
   };
 
   let accordionStateInitialized = false;
@@ -74,7 +74,7 @@
   // Settings state
   let defaultSettings: AppSettings = {
     // Storage settings
-    storagePath: "~/Chiral-Network-Storage",
+    storagePath: "", // Will be set to platform-specific default at runtime
     maxStorageSize: 100, // GB
     autoCleanup: true,
     cleanupThreshold: 90, // %
@@ -107,7 +107,8 @@
     shareAnalytics: true,
     enableWalletAutoLock: false,
     customBootstrapNodes: [],
-    autoStartDHT: false,
+    autoStartDHT: true, // Auto-start DHT by default
+    autoStartGeth: true, // Auto-start Geth by default
 
     // Notifications
     enableNotifications: true,
@@ -131,10 +132,11 @@
     maxLogSizeMB: 10, // MB per log file
 
     // Upload Protocol
-    selectedProtocol: "Bitswap" as "WebRTC" | "Bitswap" | "BitTorrent", // Default to Bitswap
+    selectedProtocol: "Bitswap", // Default to Bitswap
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
+  savedSettings = {...defaultSettings,...savedSettings}
   let hasChanges = false;
   let fileInputEl: HTMLInputElement | null = null;
   let selectedLanguage: string | undefined = undefined;
@@ -165,6 +167,9 @@
   // Logs directory (loaded from backend)
   let logsDirectory: string | null = null;
   let newBootstrapNode = '';
+  
+  // Storage path validation state
+  let storagePathWarning: string | null = null;
 
   const locationOptions = GEO_REGIONS
     .filter((region) => region.id !== UNKNOWN_REGION_ID)
@@ -234,7 +239,6 @@
         if (typeof parsed.network === "boolean") networkSectionOpen = parsed.network;
         if (typeof parsed.bandwidthScheduling === "boolean") bandwidthSectionOpen = parsed.bandwidthScheduling;
         if (typeof parsed.language === "boolean") languageSectionOpen = parsed.language;
-        if (typeof parsed.protocol === "boolean") protocolSectionOpen = parsed.protocol;
         if (typeof parsed.privacy === "boolean") privacySectionOpen = parsed.privacy;
         if (typeof parsed.notifications === "boolean") notificationsSectionOpen = parsed.notifications;
         if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
@@ -242,7 +246,7 @@
         if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
       }
     } catch (error) {
-      console.warn("Failed to restore settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to restore settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     } finally {
       accordionStateInitialized = true;
     }
@@ -255,7 +259,6 @@
         network: networkSectionOpen,
         bandwidthScheduling: bandwidthSectionOpen,
         language: languageSectionOpen,
-        protocol: protocolSectionOpen,
         privacy: privacySectionOpen,
         notifications: notificationsSectionOpen,
         advanced: advancedSectionOpen,
@@ -264,7 +267,7 @@
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
-      console.warn("Failed to persist settings accordion state:", error);
+      diagnosticLogger.warn('Settings', 'Failed to persist settings accordion state', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -371,7 +374,16 @@
   // Check for changes
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
+  // Check for validation errors
+  $: hasValidationErrors = Object.values(errors).some(error => error !== null) || !!maxStorageError;
+
   async function saveSettings() {
+    // Prevent saving if there are validation errors
+    if (hasValidationErrors) {
+      showToast("Please fix validation errors before saving", "error");
+      return;
+    }
+
     // Map trustedProxyRelays to preferredRelays for consistency
     if (localSettings.trustedProxyRelays?.length) {
       localSettings.preferredRelays = localSettings.trustedProxyRelays;
@@ -415,7 +427,7 @@
           settingsJson: JSON.stringify(localSettings),
         });
       } catch (error) {
-        console.error("Failed to save settings to app data directory:", error);
+        errorLogger.fileOperationError('Save settings', error instanceof Error ? error.message : String(error));
       }
     }
 
@@ -434,7 +446,7 @@
       // showToast("Settings Updated!");
       showToast(tr('toasts.settings.updated'));
     } catch (error) {
-      console.error("Failed to apply networking settings:", error);
+      errorLogger.networkError(`Failed to apply networking settings: ${error instanceof Error ? error.message : String(error)}`);
       // showToast("Settings saved, but networking update failed", "error");
       showToast(tr('toasts.settings.networkingError'), "error");
     }
@@ -452,7 +464,7 @@
         enabled: localSettings.enableFileLogging,
       });
     } catch (error) {
-      console.warn("Failed to update log configuration:", error);
+      diagnosticLogger.warn('Settings', 'Failed to update log configuration', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -566,7 +578,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while updating privacy settings:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while updating privacy settings', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -575,7 +587,7 @@
       try {
         await invoke("disable_privacy_routing");
       } catch (error) {
-        console.warn("disable_privacy_routing failed while turning privacy off:", error);
+        diagnosticLogger.warn('Settings', 'disable_privacy_routing failed while turning privacy off', { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -594,7 +606,7 @@
     try {
       await invoke("stop_dht_node");
     } catch (error) {
-      console.debug("stop_dht_node failed (probably already stopped):", error);
+      diagnosticLogger.debug('Settings', 'stop_dht_node failed (probably already stopped)', { error: error instanceof Error ? error.message : String(error) });
     }
 
     // Use custom bootstrap nodes if configured, otherwise use defaults
@@ -605,7 +617,7 @@
       try {
         bootstrapNodes = await invoke<string[]>("get_bootstrap_nodes_command");
       } catch (error) {
-        console.error("Failed to fetch bootstrap nodes:", error);
+        errorLogger.networkError(`Failed to fetch bootstrap nodes: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
       }
 
@@ -623,6 +635,7 @@
       cacheSizeMb: localSettings.cacheSize,
       enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
       enableRelayServer: localSettings.enableRelayServer,
+      enableUpnp: localSettings.enableUPnP,
     };
 
     if (localSettings.autonatServers?.length) {
@@ -642,7 +655,7 @@
 
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
-    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold || !!errors.storagePath;
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
@@ -665,8 +678,16 @@
   }
 
   async function handleConfirmReset() {
-    localSettings = { ...defaultSettings }; // Reset local changes
-    settings.set(defaultSettings); // Reset the store
+    // Set platform-specific default storage path
+    // Get platform-specific default storage path from backend
+    let defaultPath = "~/Downloads/Chiral-Network-Storage";
+    try {
+      defaultPath = await invoke("get_default_storage_directory");
+    } catch (e) {
+      errorLogger.fileOperationError('Get default storage directory (reset)', e instanceof Error ? e.message : String(e));
+    }
+    localSettings = { ...defaultSettings, storagePath: defaultPath };
+    settings.set(localSettings); // Reset the store
     await saveSettings(); // Save the reset state
     showResetConfirmModal = false;
   }
@@ -704,7 +725,7 @@
           localSettings = { ...localSettings, storagePath: directoryHandle.name };
         } catch (err: any) {
           if (err.name !== "AbortError") {
-            console.error("Directory picker error:", err);
+            errorLogger.fileOperationError('Directory picker', err instanceof Error ? err.message : String(err));
           }
         }
       } else {
@@ -769,7 +790,7 @@
           type: "success",
         };
       } catch (err) {
-        console.error("Failed to import settings:", err);
+        errorLogger.fileOperationError('Import settings', err instanceof Error ? err.message : String(err));
         importExportFeedback = {
           message: tr("advanced.importError", {
             default: "Invalid JSON file. Please select a valid export.",
@@ -889,14 +910,17 @@
   }
 
     onMount(async () => {
-    // Get platform-specific default storage path from Tauri
+    // Get the canonical download directory from backend (single source of truth)
     try {
-      const platformDefaultPath = await invoke<string>("get_default_storage_path");
-      defaultSettings.storagePath = platformDefaultPath;
+      // Pass null/undefined to get the default when no frontend settings exist
+      const defaultPath = await invoke<string>("get_download_directory");
+      defaultSettings.storagePath = defaultPath;
+      storagePathPlaceholder = defaultPath; // Update placeholder to show actual default
     } catch (e) {
-      console.error("Failed to get default storage path:", e);
-      // Fallback to the hardcoded default if the command fails
-      defaultSettings.storagePath = "~/ChiralNetwork/Storage";
+      errorLogger.fileOperationError('Get download directory', e instanceof Error ? e.message : String(e));
+      // Fallback if backend fails
+      defaultSettings.storagePath = "~/Downloads/Chiral";
+      storagePathPlaceholder = "~/Downloads/Chiral";
     }
 
     // Load settings from local storage
@@ -904,13 +928,17 @@
     if (stored) {
   try {
     const loadedSettings: AppSettings = JSON.parse(stored);
+    // Ensure storagePath is set to default if missing or empty
+    if (!loadedSettings.storagePath || loadedSettings.storagePath.trim() === "") {
+      loadedSettings.storagePath = defaultSettings.storagePath;
+    }
     // Set the store, which ensures it is available globally
     settings.set({ ...defaultSettings, ...loadedSettings });
     // Update local state from the store after loading
     localSettings = JSON.parse(JSON.stringify(get(settings)));
     savedSettings = JSON.parse(JSON.stringify(localSettings));
   } catch (e) {
-    console.error("Failed to load settings:", e);
+    errorLogger.fileOperationError('Load settings', e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -924,7 +952,7 @@ selectedLanguage = initial; // Synchronize dropdown display value
     await getVersion();
     logsDirectory = await invoke("get_logs_directory");
   } catch (error) {
-    console.error("Failed to get logs directory:", error);
+    errorLogger.fileOperationError('Get logs directory', error instanceof Error ? error.message : String(error));
   }
 
 });
@@ -1038,11 +1066,110 @@ selectedLanguage = initial; // Synchronize dropdown display value
       next.capWarningThresholds = null;
     }
 
+    // Validate storage path
+    if (localSettings.storagePath && localSettings.storagePath.trim()) {
+      // First do basic frontend validation
+      const pathValidation = validateStoragePath(localSettings.storagePath);
+      if (!pathValidation.isValid) {
+        next.storagePath = pathValidation.error || "Invalid storage path";
+      } else {
+        // Don't clear the error yet if we have a backend error
+        // This preserves platform-specific validation errors from backend
+        if (!errors.storagePath) {
+          next.storagePath = null;
+        } else {
+          next.storagePath = errors.storagePath;
+        }
+      }
+      
+      // Schedule backend validation (debounced)
+      scheduleBackendValidation(localSettings.storagePath);
+    } else {
+      next.storagePath = null; // Empty is allowed (will use default)
+      storagePathWarning = null; // Clear any warnings when path is empty
+    }
+
     errors = next;
 }
 
+  // Backend validation for storage path with platform-specific checks
+  async function validateStoragePathBackend(path: string) {
+    if (!path || !path.trim()) {
+      storagePathWarning = null;
+      // Also clear any backend errors
+      if (errors.storagePath) {
+        errors = { ...errors, storagePath: null };
+      }
+      return;
+    }
+    
+    // Clear previous warning
+    storagePathWarning = null;
+    
+    try {
+      await invoke("validate_storage_path", { path });
+      // If successful, clear any previous backend errors
+      if (errors.storagePath) {
+        errors = { ...errors, storagePath: null };
+      }
+    } catch (error) {
+      const errorMsg = String(error);
+      // Check if it's a warning (directory doesn't exist)
+      if (errorMsg.startsWith("WARNING:")) {
+        storagePathWarning = errorMsg.substring(9); // Remove "WARNING: " prefix
+        // Warning doesn't block saving, clear error
+        if (errors.storagePath) {
+          errors = { ...errors, storagePath: null };
+        }
+      } else {
+        // It's an actual error, update the errors object
+        errors = { ...errors, storagePath: errorMsg };
+        // Clear warning when there's an error
+        storagePathWarning = null;
+      }
+    }
+  }
+
+
+  // Debounced backend validation to avoid too many calls while typing
+  let backendValidationTimeout: NodeJS.Timeout | null = null;
+  let isTauri = false;
+  async function detectTauri() {
+    try {
+      await getVersion();
+      isTauri = true;
+    } catch {
+      isTauri = false;
+    }
+  }
+  onMount(() => {
+    detectTauri();
+  });
+
+  function scheduleBackendValidation(path: string) {
+    if (backendValidationTimeout) {
+      clearTimeout(backendValidationTimeout);
+    }
+    backendValidationTimeout = setTimeout(() => {
+      console.log('Scheduling backend validation for path:', path);
+      console.log('Is Tauri:', isTauri);
+      if (isTauri) {
+        console.log('Passed check:', path);
+        validateStoragePathBackend(path).catch((err) => {
+          diagnosticLogger.debug('Settings', 'Storage path backend validation error', { error: String(err) });
+        });
+      }
+    }, 500); // Wait 500ms after user stops typing
+  }
+
   // Revalidate whenever settings change
   $: validate(localSettings);
+
+  // Computed CSS class for storage path input
+  $: storagePathInputClass = `flex-1 ${
+    errors.storagePath ? 'border-red-500 focus:border-red-500 ring-red-500' : 
+    storagePathWarning ? 'border-yellow-500 focus:border-yellow-500 ring-yellow-500' : ''
+  }`;
 
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
@@ -1183,13 +1310,6 @@ $: sectionLabels = {
     tr("advanced.exportSettings"),
     tr("advanced.importSettings"),
   ],
-  protocol: [
-    "Upload Protocol",
-    "Select Protocol",
-    "WebRTC",
-    "Bitswap",
-    "BitTorrent",
-  ],
 };
 
 function sectionMatches(section: string, query: string) {
@@ -1241,8 +1361,8 @@ function sectionMatches(section: string, query: string) {
             <Input
               id="storage-path"
               bind:value={localSettings.storagePath}
-              placeholder="~/Chiral-Network-Storage"
-              class="flex-1"
+              placeholder={storagePathPlaceholder}
+              class={storagePathInputClass}
             />
             <Button
               variant="outline"
@@ -1252,7 +1372,14 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
-
+          {#if errors.storagePath}
+            <p class="mt-1 text-sm text-red-500">{errors.storagePath}</p>
+          {:else if storagePathWarning}
+            <p class="mt-1 text-sm text-yellow-600 flex items-center gap-1">
+              <AlertTriangle class="h-4 w-4" />
+              {storagePathWarning}
+            </p>
+          {/if}
         </div>
 
         <div class="grid grid-cols-2 gap-4">
@@ -1476,15 +1603,36 @@ function sectionMatches(section: string, query: string) {
             </Label>
           </div>
 
-          <div class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="auto-start-dht"
-              bind:checked={localSettings.autoStartDHT}
-            />
-            <Label for="auto-start-dht" class="cursor-pointer">
-              Auto-start DHT on launch
-            </Label>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-start-dht"
+                bind:checked={localSettings.autoStartDHT}
+              />
+              <Label for="auto-start-dht" class="cursor-pointer">
+                {$t("network.autoStartNode")}
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              {$t("network.autoStartNodeDescription")}
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-start-geth"
+                bind:checked={localSettings.autoStartGeth}
+              />
+              <Label for="auto-start-geth" class="cursor-pointer">
+                {$t("network.autoStartGeth")}
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              {$t("network.autoStartGethDescription")}
+            </p>
           </div>
 
         </div>
@@ -1767,82 +1915,6 @@ function sectionMatches(section: string, query: string) {
     </Expandable>
   {/if}
 
-  <!-- Upload Protocol Settings -->
-  {#if sectionMatches("protocol", search)}
-    <Expandable bind:isOpen={protocolSectionOpen}>
-      <div slot="title" class="flex items-center gap-3">
-        <UploadIcon class="h-6 w-6 text-purple-600" />
-        <h2 class="text-xl font-semibold text-black">Upload Protocol</h2>
-      </div>
-      <div class="space-y-4">
-        <p class="text-sm text-muted-foreground">Select which protocol to use for uploading files. This setting is persisted when you save.</p>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <!-- WebRTC Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'WebRTC'
-              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'WebRTC')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Globe class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">WebRTC</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("upload.webrtcDescription")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'WebRTC'}
-              <CheckCircle class="h-5 w-5 text-blue-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-
-          <!-- Bitswap Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-blue-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'Bitswap'
-              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'Bitswap')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full">
-              <Blocks class="w-8 h-8 text-blue-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">Bitswap</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("upload.bitswapDescription")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'Bitswap'}
-              <CheckCircle class="h-5 w-5 text-blue-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-
-          <!-- BitTorrent Option -->
-          <button
-            class="p-6 border-2 rounded-lg hover:border-green-500 transition-colors duration-200 flex flex-col items-center gap-4 {localSettings.selectedProtocol === 'BitTorrent'
-              ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-              : 'border-gray-200 dark:border-gray-700'}"
-            on:click={() => (localSettings.selectedProtocol = 'BitTorrent')}
-          >
-            <div class="w-16 h-16 flex items-center justify-center bg-green-100 rounded-full">
-              <Share2 class="w-8 h-8 text-green-600" />
-            </div>
-            <div class="text-center">
-              <h3 class="text-lg font-semibold mb-2">BitTorrent</h3>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {$t("torrent.seed.description")}
-              </p>
-            </div>
-            {#if localSettings.selectedProtocol === 'BitTorrent'}
-              <CheckCircle class="h-5 w-5 text-green-600 absolute top-2 right-2" />
-            {/if}
-          </button>
-        </div>
-      </div>
-    </Expandable>
-  {/if}
 
   <!-- Privacy Settings -->
   {#if sectionMatches("privacy", search)}
@@ -2470,9 +2542,9 @@ function sectionMatches(section: string, query: string) {
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges}
+        disabled={!hasChanges || hasValidationErrors}
 
-        class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
+        class={`transition-colors duration-200 ${!hasChanges || hasValidationErrors ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}

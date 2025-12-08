@@ -145,6 +145,9 @@
         "title": "Status do Relay",
         "enabled": "AutoRelay Ativado",
         "disabled": "AutoRelay Desativado",
+        "timeline": "Linha do tempo do AutoRelay",
+        "enabledAt": "Última ativação",
+        "disabledAt": "Última desativação",
         "noPeer": "Não conectado ao relay",
         "activePeer": "Relay Ativo",
         "status": "Status",
@@ -153,6 +156,8 @@
         "renewals": "Reservas renovadas",
         "evictions": "Reservas despejadas",
         "never": "Nunca",
+        "neverEnabled": "Nunca ativado",
+        "neverDisabled": "Nunca desativado",
         "noEvictions": "Sem despejos",
         "accepted": "Reserva aceita",
         "pending": "Pendente",
@@ -261,6 +266,10 @@
     "enableUpnp": "Ativar UPnP",
     "enableNat": "Ativar Mapeamento de Porta NAT",
     "enableDht": "Ativar DHT",
+    "autoStartNode": "Iniciar nó DHT automaticamente ao abrir",
+    "autoStartNodeDescription": "Iniciar automaticamente o nó DHT de compartilhamento de arquivos quando o aplicativo for iniciado",
+    "autoStartGeth": "Iniciar nó blockchain automaticamente ao abrir",
+    "autoStartGethDescription": "Iniciar automaticamente o nó blockchain Geth quando o aplicativo for iniciado (habilita carteira e mineração)",
     "geoDistribution": {
       "title": "Distribuição Geográfica",
       "subtitle": "Mapeando {peers} pares observados",
@@ -525,6 +534,7 @@
     "balance": "Saldo",
     "totalEarned": "Total Minerado",
     "totalSpent": "Total Gasto",
+    "totalReceived": "Total Recebido",
     "address": "Endereço Chiral",
     "qrModal": {
       "title": "Seu Endereço Chiral",
@@ -569,6 +579,23 @@
       "noDetails": "Nenhum detalhe de transação pendente disponível.",
       "count": "{count, plural, one {# Transação Pendente} other {# Transações Pendentes}}",
       "none": "Transações Pendentes"
+    },
+    "fees": {
+      "low": "Baixa",
+      "market": "Mercado",
+      "fast": "Rápida",
+      "estimated": "Taxa estimada"
+    },
+    "gas": {
+      "label": "Velocidade da Transação",
+      "loading": "Estimando...",
+      "estimateError": "Usando valores padrão",
+      "slow": "Econômico",
+      "standard": "Padrão",
+      "fast": "Prioritário",
+      "estimatedFee": "Taxa Estimada",
+      "totalCost": "Custo Total",
+      "networkCongestion": "Rede"
     }
   },
   "transactions": {
@@ -770,7 +797,8 @@
       "invalid": "Por favor, digite uma quantidade válida maior que 0.",
       "min": "A quantidade deve ser pelo menos {min} Chiral.",
       "insufficient": "Saldo insuficiente - Necessário mais {more} Chiral.",
-      "insufficientWithFee": "Fundos insuficientes. Total de {total} Chiral (quantidade + taxa) excede seu saldo de {balance} Chiral."
+      "insufficientWithFee": "Fundos insuficientes. Total de {total} Chiral (quantidade + taxa) excede seu saldo de {balance} Chiral.",
+      "insufficientWithGas": "Saldo insuficiente (incluindo gás) - Necessário mais {more} Chiral."
     },
     "exportFailed": "Exportação falhou. Por favor, tente novamente.",
     "createAccount": "Falha ao criar conta: {error}"
@@ -1561,6 +1589,14 @@
     "blocks": {
       "latest": "Blocos recentes",
       "noBlocks": "Nenhum bloco encontrado"
+    },
+    "sync": {
+      "syncing": "Sincronizando",
+      "current": "Bloco atual",
+      "highest": "Bloco mais alto",
+      "remaining": "Restante",
+      "eta": "ETA",
+      "complete": "Sincronização completa"
     },
     "search": {
       "title": "Pesquisar na blockchain",

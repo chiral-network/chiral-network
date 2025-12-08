@@ -10,11 +10,7 @@ This proposal outlines the implementation of cryptographic integrity verificatio
 
 The Chiral Network multi-source download service supports downloading files from multiple sources simultaneously (FTP, HTTP, WebRTC/P2P, ed2k) to improve download speed and reliability. However, the current implementation lacks integrity verification for downloaded chunks.
 
-**Critical Gap**: At line 920 in `src-tauri/src/multi_source_download.rs`, there is a TODO comment:
-```rust
-// TODO: Add hash verification here once chunk hashes are properly calculated
-// For now, we'll skip hash verification as it needs to be implemented in the chunk calculation
-```
+**Status**: ✅ Hash verification has been implemented in `src-tauri/src/multi_source_download.rs`.
 
 ### Risks Without Verification
 
@@ -74,6 +70,7 @@ The Chiral Network multi-source download service supports downloading files from
 - `verify_chunk_integrity()`: Performs hash computation and comparison
 
 **Design Decisions**:
+
 - Graceful degradation: Skip verification if hash format is invalid (maintains compatibility)
 - Return detailed error information: Both expected and actual hashes for debugging
 
@@ -144,7 +141,7 @@ fn normalized_sha256_hex(hash: &str) -> Option<String>
 
 // Core verification function
 fn verify_chunk_integrity(
-    chunk: &ChunkInfo, 
+    chunk: &ChunkInfo,
     data: &[u8]
 ) -> Result<(), (String, String)>
 
@@ -211,7 +208,8 @@ async fn start_ftp_chunk_downloads(...) {
 ### Risk 1: Performance Impact
 
 **Risk**: Hash computation slows down downloads
-**Mitigation**: 
+**Mitigation**:
+
 - SHA-256 is fast (~1ms per chunk)
 - Can be parallelized if needed
 - Hardware acceleration available on modern CPUs
@@ -219,14 +217,16 @@ async fn start_ftp_chunk_downloads(...) {
 ### Risk 2: Backward Compatibility
 
 **Risk**: Breaking existing downloads that use placeholder hashes
-**Mitigation**: 
+**Mitigation**:
+
 - Graceful degradation: Skip verification for invalid hash formats
 - No breaking changes to existing APIs
 
 ### Risk 3: False Positives
 
 **Risk**: Valid chunks incorrectly rejected
-**Mitigation**: 
+**Mitigation**:
+
 - Comprehensive unit tests
 - Careful hash normalization (case-insensitive, whitespace trimming)
 - Detailed error logging for debugging
@@ -249,4 +249,3 @@ Chunk hash verification is a critical security and reliability feature that ensu
 - **Observable**: Clear error messages and logging
 
 This feature lays the foundation for future enhancements like proof-of-delivery receipts and improved reputation systems, while immediately improving the reliability and trustworthiness of the network.
-

@@ -3,13 +3,13 @@
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Expandable from '$lib/components/ui/Expandable.svelte';
+  import BootstrapHealthDashboard from '$lib/components/network/BootstrapHealthDashboard.svelte';
   import { RefreshCw, HardDrive, Activity, FolderOpen, AlertCircle, Server, Wifi } from 'lucide-svelte';
   import { onDestroy, onMount, createEventDispatcher } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { getStatus, type GethStatus } from '$lib/services/gethService';
-  import { invoke } from '@tauri-apps/api/core';
 
   export let dataDir: string;
   export let logLines = 40;
@@ -27,27 +27,7 @@
   let componentMounted = false;
   let previousDataDir: string | undefined;
 
-  // Bootstrap node health state
-  interface BootstrapNodeHealth {
-    enode: string;
-    description: string;
-    region: string;
-    reachable: boolean;
-    latency_ms: number | null;
-    error: string | null;
-  }
-
-  interface BootstrapHealthReport {
-    total_nodes: number;
-    reachable_nodes: number;
-    unreachable_nodes: number;
-    nodes: BootstrapNodeHealth[];
-  }
-
   let bootstrapExpanded = false;
-  let bootstrapHealth: BootstrapHealthReport | null = null;
-  let bootstrapLoading = false;
-  let bootstrapError: string | null = null;
 
   $: lastUpdatedLabel = status
     ? tr('network.geth.lastUpdated', {
@@ -91,23 +71,6 @@
 
   export async function refresh() {
     await loadStatus(true);
-  }
-
-  async function checkBootstrapHealth() {
-    if (!isTauri) return;
-
-    bootstrapLoading = true;
-    bootstrapError = null;
-
-    try {
-      const result = await invoke<BootstrapHealthReport>('check_bootstrap_health');
-      bootstrapHealth = result;
-    } catch (err) {
-      console.error('Failed to check bootstrap health:', err);
-      bootstrapError = String(err);
-    } finally {
-      bootstrapLoading = false;
-    }
   }
 
   onMount(async () => {
@@ -292,104 +255,7 @@
           <span>{tr('network.geth.bootstrap.title')}</span>
         </div>
 
-        <div class="space-y-4">
-          <div class="prose prose-sm dark:prose-invert max-w-none">
-            <p class="text-sm text-muted-foreground">
-              {tr('network.geth.bootstrap.description')}
-            </p>
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            class="flex items-center gap-2"
-            on:click={checkBootstrapHealth}
-            disabled={bootstrapLoading}
-          >
-            <RefreshCw class={`h-3 w-3 ${bootstrapLoading ? 'animate-spin' : ''}`} />
-            {bootstrapLoading ? tr('network.geth.bootstrap.checking') : tr('network.geth.bootstrap.checkNow')}
-          </Button>
-
-          {#if bootstrapError}
-            <div class="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle class="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>{bootstrapError}</span>
-            </div>
-          {/if}
-
-          {#if bootstrapHealth}
-            <div class="space-y-3">
-              <!-- Summary -->
-              <div class="grid grid-cols-3 gap-3">
-                <div class="rounded-md border border-border bg-muted/40 p-3">
-                  <p class="text-xs text-muted-foreground">{tr('network.geth.bootstrap.totalNodes')}</p>
-                  <p class="text-lg font-semibold">{bootstrapHealth.total_nodes}</p>
-                </div>
-                <div class="rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3">
-                  <p class="text-xs text-emerald-600 dark:text-emerald-400">{tr('network.geth.bootstrap.reachable')}</p>
-                  <p class="text-lg font-semibold text-emerald-600 dark:text-emerald-400">{bootstrapHealth.reachable_nodes}</p>
-                </div>
-                <div class="rounded-md border border-destructive/40 bg-destructive/10 p-3">
-                  <p class="text-xs text-destructive">{tr('network.geth.bootstrap.unreachable')}</p>
-                  <p class="text-lg font-semibold text-destructive">{bootstrapHealth.unreachable_nodes}</p>
-                </div>
-              </div>
-
-              <!-- Node Details -->
-              <div class="space-y-2">
-                <p class="text-sm font-medium">{tr('network.geth.bootstrap.nodeDetails')}</p>
-                {#each bootstrapHealth.nodes as node}
-                  <div class="rounded-md border border-border p-3 space-y-2 {node.reachable ? 'bg-emerald-500/5' : 'bg-destructive/5'}">
-                    <div class="flex items-start justify-between gap-2">
-                      <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-2">
-                          <Badge class={node.reachable ? positiveBadgeClass : negativeBadgeClass}>
-                            {node.reachable ? '✓' : '✗'}
-                          </Badge>
-                          <span class="text-sm font-medium">{node.description}</span>
-                          <span class="text-xs text-muted-foreground">({node.region})</span>
-                        </div>
-                      </div>
-                      {#if node.latency_ms !== null}
-                        <Badge variant="outline" class="text-xs">
-                          {node.latency_ms}ms
-                        </Badge>
-                      {/if}
-                    </div>
-                    <code class="text-xs break-all text-muted-foreground block">{node.enode}</code>
-                    {#if node.error}
-                      <p class="text-xs text-destructive">{tr('network.geth.bootstrap.error')}: {node.error}</p>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-
-              <!-- Health Status Message -->
-              {#if bootstrapHealth.reachable_nodes === 0}
-                <div class="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-                  <AlertCircle class="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <div class="space-y-1">
-                    <p class="font-medium">{tr('network.geth.bootstrap.allNodesDown')}</p>
-                    <p class="text-xs">{tr('network.geth.bootstrap.cannotConnect')}</p>
-                  </div>
-                </div>
-              {:else if bootstrapHealth.unreachable_nodes > 0}
-                <div class="flex items-start gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-600 dark:text-yellow-400">
-                  <AlertCircle class="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <div class="space-y-1">
-                    <p class="font-medium">{tr('network.geth.bootstrap.someNodesDown')}</p>
-                    <p class="text-xs">{tr('network.geth.bootstrap.usingAvailable')}</p>
-                  </div>
-                </div>
-              {:else}
-                <div class="flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-600 dark:text-emerald-400">
-                  <Activity class="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <p>{tr('network.geth.bootstrap.allNodesHealthy')}</p>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
+        <BootstrapHealthDashboard />
       </Expandable>
     </div>
   {/if}

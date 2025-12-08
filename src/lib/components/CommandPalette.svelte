@@ -2,18 +2,19 @@
 <script lang="ts">
   import { t } from 'svelte-i18n';
   import { 
-    Download, Upload, Wallet, Globe, BarChart3, Settings, Cpu, 
-    Star, Server, Database, Search, ArrowRight, Clock
+    Download, Upload, Wallet, Globe, BarChart3, Settings, Cpu,
+    Star, Server, Database, Search, ArrowRight
   } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
-  
+  import { getContext } from 'svelte';
+
   type Props = {
     isOpen: boolean;
     onClose: () => void;
   };
-  
+
   let { isOpen, onClose }: Props = $props();
-  
+
   type Action = {
     id: string;
     labelKey: string;
@@ -22,11 +23,27 @@
     action: () => void;
     shortcut?: string;
   };
-  
+
   let searchQuery = $state('');
   let selectedIndex = $state(0);
   let searchInput = $state<HTMLInputElement | undefined>(undefined);
-  
+
+  // Grab navigation context from App.svelte
+  const navigation = getContext('navigation') as {
+    navigateTo?: (page: string, path: string) => void;
+  };
+
+  // Helper that always goes through App.svelte's navigateTo when possible
+  const performNavigation = (page: string, path: string) => {
+    if (navigation?.navigateTo) {
+      navigation.navigateTo(page, path);
+    } else {
+      // Fallback (e.g. if context is missing for some reason)
+      goto(path);
+    }
+    onClose();
+  };
+
   // Navigation actions with label keys instead of immediate translation
   const navigationActions: Action[] = [
     {
@@ -34,10 +51,7 @@
       labelKey: 'commandPalette.actions.goToDownload',
       icon: Download,
       category: 'navigation',
-      action: () => {
-        goto('/download');
-        onClose();
-      },
+      action: () => performNavigation('download', '/download'),
       shortcut: 'Ctrl+D'
     },
     {
@@ -45,10 +59,7 @@
       labelKey: 'commandPalette.actions.goToUpload',
       icon: Upload,
       category: 'navigation',
-      action: () => {
-        goto('/upload');
-        onClose();
-      },
+      action: () => performNavigation('upload', '/upload'),
       shortcut: 'Ctrl+U'
     },
     {
@@ -56,10 +67,7 @@
       labelKey: 'commandPalette.actions.goToNetwork',
       icon: Globe,
       category: 'navigation',
-      action: () => {
-        goto('/network');
-        onClose();
-      },
+      action: () => performNavigation('network', '/network'),
       shortcut: 'Ctrl+N'
     },
     {
@@ -67,10 +75,7 @@
       labelKey: 'commandPalette.actions.goToMining',
       icon: Cpu,
       category: 'navigation',
-      action: () => {
-        goto('/mining');
-        onClose();
-      },
+      action: () => performNavigation('mining', '/mining'),
       shortcut: 'Ctrl+M'
     },
     {
@@ -78,50 +83,35 @@
       labelKey: 'commandPalette.actions.goToRelay',
       icon: Server,
       category: 'navigation',
-      action: () => {
-        goto('/relay');
-        onClose();
-      }
+      action: () => performNavigation('relay', '/relay')
     },
     {
       id: 'nav:analytics',
       labelKey: 'commandPalette.actions.goToAnalytics',
       icon: BarChart3,
       category: 'navigation',
-      action: () => {
-        goto('/analytics');
-        onClose();
-      }
+      action: () => performNavigation('analytics', '/analytics')
     },
     {
       id: 'nav:reputation',
       labelKey: 'commandPalette.actions.goToReputation',
       icon: Star,
       category: 'navigation',
-      action: () => {
-        goto('/reputation');
-        onClose();
-      }
+      action: () => performNavigation('reputation', '/reputation')
     },
     {
       id: 'nav:blockchain',
       labelKey: 'commandPalette.actions.goToBlockchain',
       icon: Database,
       category: 'navigation',
-      action: () => {
-        goto('/blockchain');
-        onClose();
-      }
+      action: () => performNavigation('blockchain', '/blockchain')
     },
     {
       id: 'nav:account',
       labelKey: 'commandPalette.actions.goToAccount',
       icon: Wallet,
       category: 'navigation',
-      action: () => {
-        goto('/account');
-        onClose();
-      },
+      action: () => performNavigation('account', '/account'),
       shortcut: 'Ctrl+A'
     },
     {
@@ -129,21 +119,18 @@
       labelKey: 'commandPalette.actions.goToSettings',
       icon: Settings,
       category: 'navigation',
-      action: () => {
-        goto('/settings');
-        onClose();
-      },
+      action: () => performNavigation('settings', '/settings'),
       shortcut: 'Ctrl+,'
     }
   ];
-  
+
   // Fuzzy search function
   function fuzzyMatch(query: string, text: string): boolean {
     if (!query) return true;
-    
+
     const lowerQuery = query.toLowerCase();
     const lowerText = text.toLowerCase();
-    
+
     // Simple fuzzy matching: check if all characters appear in order
     let queryIndex = 0;
     for (let i = 0; i < lowerText.length && queryIndex < lowerQuery.length; i++) {
@@ -153,22 +140,22 @@
     }
     return queryIndex === lowerQuery.length;
   }
-  
+
   // Filter actions based on search query
   $effect(() => {
     selectedIndex = 0; // Reset selection when query changes
   });
-  
+
   const filteredActions = $derived(
-    navigationActions.filter(action => 
+    navigationActions.filter(action =>
       fuzzyMatch(searchQuery, $t(action.labelKey))
     )
   );
-  
+
   // Handle keyboard navigation
   function handleKeydown(event: KeyboardEvent) {
     if (!isOpen) return;
-    
+
     switch (event.key) {
       case 'Escape':
         event.preventDefault();
@@ -190,14 +177,14 @@
         break;
     }
   }
-  
+
   // Focus search input when opened
   $effect(() => {
     if (isOpen && searchInput) {
       setTimeout(() => searchInput?.focus(), 50);
     }
   });
-  
+
   // Close on background click
   function handleBackgroundClick(event: MouseEvent) {
     if (event.target === event.currentTarget) {
@@ -210,12 +197,14 @@
 
 {#if isOpen}
   <!-- Modal Overlay -->
-  <div 
+  <div
     class="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-[15vh] p-4 backdrop-blur-sm"
     onclick={handleBackgroundClick}
+    onkeydown={(e) => e.key === 'Escape' && (isOpen = false)}
     role="dialog"
     aria-modal="true"
     aria-labelledby="command-palette-title"
+    tabindex="-1"
   >
     <!-- Modal Content -->
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl max-w-2xl w-full overflow-hidden">
@@ -233,7 +222,7 @@
           />
         </div>
       </div>
-      
+
       <!-- Actions List -->
       <div class="max-h-[400px] overflow-y-auto">
         {#if filteredActions.length > 0}
@@ -243,8 +232,8 @@
                 onclick={() => action.action()}
                 onmouseenter={() => selectedIndex = index}
                 class="w-full flex items-center justify-between px-4 py-3 rounded-lg transition-colors {
-                  selectedIndex === index 
-                    ? 'bg-blue-50 dark:bg-blue-900/20' 
+                  selectedIndex === index
+                    ? 'bg-blue-50 dark:bg-blue-900/20'
                     : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                 }"
               >
@@ -281,7 +270,7 @@
           </div>
         {/if}
       </div>
-      
+
       <!-- Footer -->
       <div class="px-4 py-3 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700">
         <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
@@ -310,11 +299,11 @@
   div[role="dialog"] {
     animation: fadeIn 0.15s ease-out;
   }
-  
+
   div[role="dialog"] > div {
     animation: slideDown 0.2s ease-out;
   }
-  
+
   @keyframes fadeIn {
     from {
       opacity: 0;
@@ -323,7 +312,7 @@
       opacity: 1;
     }
   }
-  
+
   @keyframes slideDown {
     from {
       transform: translateY(-20px);
@@ -334,26 +323,26 @@
       opacity: 1;
     }
   }
-  
+
   /* Custom scrollbar */
   .overflow-y-auto {
     scrollbar-width: thin;
     scrollbar-color: #cbd5e0 transparent;
   }
-  
+
   .overflow-y-auto::-webkit-scrollbar {
     width: 8px;
   }
-  
+
   .overflow-y-auto::-webkit-scrollbar-track {
     background: transparent;
   }
-  
+
   .overflow-y-auto::-webkit-scrollbar-thumb {
     background: #cbd5e0;
     border-radius: 4px;
   }
-  
+
   .overflow-y-auto::-webkit-scrollbar-thumb:hover {
     background: #a0aec0;
   }

@@ -57,7 +57,6 @@ impl HttpServerState {
     /// Create new HTTP server state
     ///
     /// The storage_dir should point to the FileTransferService storage directory
-    /// (e.g., ~/.local/share/chiral-network/files/)
     pub fn new(storage_dir: PathBuf) -> Self {
         Self {
             storage_dir,
@@ -80,11 +79,6 @@ impl HttpServerState {
     pub async fn register_file(&self, metadata: HttpFileMetadata) {
         let mut files = self.files.write().await;
         files.insert(metadata.hash.clone(), metadata.clone());
-        tracing::info!(
-            "Registered file for HTTP serving: {} ({})",
-            metadata.name,
-            metadata.hash
-        );
     }
 
     /// Unregister a file (e.g., when user stops seeding)
@@ -415,7 +409,7 @@ pub fn create_router(state: Arc<HttpServerState>) -> Router {
 pub async fn start_server(
     state: Arc<HttpServerState>,
     addr: SocketAddr,
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<SocketAddr, String> {
     let app = create_router(state);
 
@@ -431,7 +425,7 @@ pub async fn start_server(
         let server = axum::serve(listener, app)
             .with_graceful_shutdown(async move {
                 // Wait for shutdown signal
-                let _ = shutdown_rx.recv().await;
+                let _ = shutdown_rx.await;
                 tracing::info!("HTTP server received shutdown signal, closing connections gracefully...");
             });
 

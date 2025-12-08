@@ -109,6 +109,20 @@ export class PeerSelectionService {
   }
 
   /**
+   * Get peer metrics for all currently connected DHT peers
+   * This includes peers without transfer history, ensuring the reputation system shows all active peers
+   */
+  static async getConnectedPeerMetrics(): Promise<PeerMetrics[]> {
+    try {
+      const metrics = await invoke<PeerMetrics[]>("get_connected_peer_metrics");
+      return metrics || [];
+    } catch (error) {
+      console.error("Failed to get connected peer metrics:", error);
+      return [];
+    }
+  }
+
+  /**
    * Select peers using a specific strategy
    */
   static async selectPeersWithStrategy(

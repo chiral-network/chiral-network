@@ -94,7 +94,11 @@
         "cannotConnect": "Your Chiral node may have difficulty connecting to the blockchain network. Check your internet connection or firewall settings.",
         "someNodesDown": "Some bootstrap nodes are unreachable",
         "usingAvailable": "Your Chiral node will use the available nodes. Network connectivity should be stable.",
-        "allNodesHealthy": "All bootstrap nodes are healthy and reachable"
+        "allNodesHealthy": "All bootstrap nodes are healthy and reachable",
+        "lastChecked": "Last checked",
+        "reconnecting": "Reconnecting...",
+        "reconnect": "Reconnect to Bootstrap",
+        "consecutiveFailures": "consecutive failures"
       }
     },
     "dht": {
@@ -161,6 +165,9 @@
         "title": "Relay Status",
         "enabled": "AutoRelay Enabled",
         "disabled": "AutoRelay Disabled",
+        "timeline": "AutoRelay timeline",
+        "enabledAt": "Last enabled",
+        "disabledAt": "Last disabled",
         "noPeer": "Not connected to relay",
         "activePeer": "Active Relay",
         "status": "Status",
@@ -169,6 +176,8 @@
         "renewals": "Reservations renewed",
         "evictions": "Reservations evicted",
         "never": "Never",
+        "neverEnabled": "Never enabled",
+        "neverDisabled": "Never disabled",
         "noEvictions": "No evictions",
         "accepted": "Reservation accepted",
         "pending": "Pending",
@@ -277,6 +286,10 @@
     "enableUpnp": "Enable UPnP",
     "enableNat": "Enable NAT Port Mapping",
     "enableDht": "Enable DHT",
+    "autoStartNode": "Auto-start DHT node on launch",
+    "autoStartNodeDescription": "Automatically start the DHT file-sharing node when the application launches",
+    "autoStartGeth": "Auto-start blockchain node on launch",
+    "autoStartGethDescription": "Automatically start the Geth blockchain node when the application launches (enables wallet and mining)",
     "geoDistribution": {
       "title": "Geographic Distribution",
       "subtitle": "Mapping {peers} observed peers",
@@ -545,6 +558,7 @@
     "balance": "Balance",
     "totalEarned": "Total Mined",
     "totalSpent": "Total Spent",
+    "totalReceived": "Total Received",
     "address": "Chiral Address",
     "qrModal": {
       "title": "Your Chiral Address",
@@ -589,6 +603,23 @@
       "noDetails": "No pending transaction details available.",
       "count": "{count, plural, one {# Pending Transaction} other {# Pending Transactions}}",
       "none": "Pending Transactions"
+    },
+    "fees": {
+      "low": "Low",
+      "market": "Market",
+      "fast": "Fast",
+      "estimated": "Estimated fee"
+    },
+    "gas": {
+      "label": "Transaction Speed",
+      "loading": "Estimating...",
+      "estimateError": "Using defaults",
+      "slow": "Economy",
+      "standard": "Standard",
+      "fast": "Priority",
+      "estimatedFee": "Estimated Fee",
+      "totalCost": "Total Cost",
+      "networkCongestion": "Network"
     }
   },
   "transactions": {
@@ -635,6 +666,13 @@
       "savePasswordDisabled": "For security, the 'Save Password' feature is currently disabled. Please enter your password each time you unlock your account.",
       "savePasswordWarning": "Warning: Saving your password locally is convenient but less secure. Use with caution.",
       "addressMismatch": "Decryption error: address does not match."
+    }
+    ,
+    "delete": {
+      "confirm": "Delete keystore account {address}? This cannot be undone.",
+      "success": "Keystore account removed.",
+      "error": "Failed to delete keystore account: {error}",
+      "button": "Delete"
     }
   },
   "blacklist": {
@@ -792,7 +830,8 @@
       "invalid": "Please enter a valid amount greater than 0.",
       "min": "Amount must be at least {min} Chiral.",
       "insufficient": "Insufficient balance - Need {more} more Chiral.",
-      "insufficientWithFee": "Insufficient funds. Total of {total} Chiral (amount + fee) exceeds your balance of {balance} Chiral."
+      "insufficientWithFee": "Insufficient funds. Total of {total} Chiral (amount + fee) exceeds your balance of {balance} Chiral.",
+      "insufficientWithGas": "Insufficient balance (including gas) - Need {more} more Chiral."
     },
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
@@ -1384,12 +1423,14 @@
     "encryption": {
       "title": "Encrypted Sharing",
       "subtitle": "Share files encrypted for specific recipients",
-      "enableForRecipient": "Enable encrypted sharing for specific recipient",
-      "recipientPublicKey": "Recipient's Public Key",
+      "enableForRecipient": "Enable encrypted sharing",
+      "recipientPublicKey": "Recipient Public Key",
       "publicKeyPlaceholder": "Enter recipient's X25519 public key (64 hex characters)",
       "publicKeyHint": "Enter the recipient's X25519 public key (hex format, 64 characters). The file will be encrypted so only they can decrypt it. Leave empty to encrypt for yourself.",
       "invalidPublicKey": "⚠️ Invalid public key format. Must be 64 hexadecimal characters.",
-      "encryptedBadge": "Encrypted"
+      "encryptedBadge": "Encrypted",
+      "recipientsList": "Recipients List",
+      "numberOfRecipientsAdded": "recipient(s) added"
     },
     "currentProtocol": "Current Protocol",
     "changeProtocol": "Change Protocol",
@@ -1586,6 +1627,14 @@
     "blocks": {
       "latest": "Latest Blocks",
       "noBlocks": "No blocks found"
+    },
+    "sync": {
+      "syncing": "Syncing",
+      "current": "Current Block",
+      "highest": "Highest Block",
+      "remaining": "Remaining",
+      "eta": "ETA",
+      "complete": "Sync Complete"
     },
     "search": {
       "title": "Search Blockchain",
