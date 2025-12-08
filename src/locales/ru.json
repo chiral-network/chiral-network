@@ -565,6 +565,17 @@
       "market": "Рыночная",
       "fast": "Быстрая",
       "estimated": "Расчетная комиссия"
+    },
+    "gas": {
+      "label": "Скорость транзакции",
+      "loading": "Оценка...",
+      "estimateError": "Использование значений по умолчанию",
+      "slow": "Экономный",
+      "standard": "Стандартный",
+      "fast": "Приоритетный",
+      "estimatedFee": "Расчетная комиссия",
+      "totalCost": "Общая стоимость",
+      "networkCongestion": "Сеть"
     }
   },
   "transactions": {
@@ -766,7 +777,8 @@
       "invalid": "Пожалуйста, введите действительную сумму больше 0.",
       "min": "Сумма должна быть не менее {min} Chiral.",
       "insufficient": "Недостаточный баланс - Необходимо еще {more} Chiral.",
-      "insufficientWithFee": "Недостаточно средств. Общая сумма {total} Chiral (сумма + комиссия) превышает ваш баланс {balance} Chiral."
+      "insufficientWithFee": "Недостаточно средств. Общая сумма {total} Chiral (сумма + комиссия) превышает ваш баланс {balance} Chiral.",
+      "insufficientWithGas": "Недостаточный баланс (включая газ) - Необходимо еще {more} Chiral."
     },
     "exportFailed": "Экспорт не удался. Пожалуйста, попробуйте снова.",
     "createAccount": "Не удалось создать аккаунт: {error}"

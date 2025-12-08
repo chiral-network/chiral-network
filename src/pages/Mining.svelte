@@ -5,15 +5,10 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { blockReward, miningState, type MiningHistoryPoint, wallet } from '$lib/stores';
+  import { blockReward, miningState, type MiningHistoryPoint, wallet, accurateTotals, isCalculatingAccurateTotals } from '$lib/stores';
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
 
-  // Event payload types for mining events
-  interface MiningScanProgressPayload {
-    address: string;
-    blocks_found_in_batch: number;
-  }
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { getVersion } from "@tauri-apps/api/app";
@@ -103,6 +98,41 @@
   // $: breakEvenDays = dailyProfit > 0 ? 0 : Infinity // No upfront hardware cost in this model (unused)
   $: profitMargin = dailyRevenue > 0 ? ((dailyProfit / dailyRevenue) * 100) : 0
   $: isProfitable = dailyProfit > 0
+
+  // Track if we've synced with accurate totals to avoid repeated fetches
+  let hasSyncedWithAccurateTotals = false;
+
+  // Reset sync flag when accurateTotals is cleared (account change/logout)
+  $: if (!$accurateTotals) {
+    hasSyncedWithAccurateTotals = false;
+  }
+
+  // Re-fetch blocks count from backend when accurateTotals is calculated
+  // This ensures the Mining page picks up the initialized backend counter
+  // Note: We only sync if NOT actively mining, to avoid interrupting live updates
+  $: if ($accurateTotals && !hasSyncedWithAccurateTotals && !$miningState.isMining && isTauri) {
+    hasSyncedWithAccurateTotals = true;
+    // Re-fetch from backend to get the initialized count
+    // The backend counter is now properly initialized with historical + session blocks
+    (async () => {
+      try {
+        const currentWallet = get(wallet);
+        if (currentWallet?.address) {
+          const blocksCount = await invoke<number>('get_blocks_mined', {
+            address: currentWallet.address
+          });
+          const reward = get(blockReward) || 2;
+          miningState.update((state) => ({
+            ...state,
+            blocksFound: blocksCount,
+            totalRewards: blocksCount * reward,
+          }));
+        }
+      } catch (error) {
+        console.error('[Mining Page] Failed to sync blocks count after accurate totals:', error);
+      }
+    })();
+  }
 
   function calculateDailyBlocks(hashRate: number, networkDiff: number): number {
     if (hashRate === 0 || networkDiff === 0) return 0
@@ -435,6 +465,14 @@
       await walletService.refreshTransactions()
       await walletService.refreshBalance()
 
+      // Trigger accurate totals calculation if not already available or calculating
+      // This ensures "mined rewards" shows accurate blockchain data, not just session data
+      if (!$accurateTotals && !$isCalculatingAccurateTotals) {
+        walletService.calculateAccurateTotals().catch((error) => {
+          console.warn('[Mining Page] Failed to calculate accurate totals:', error);
+        });
+      }
+
       // Start power sensor detection
       await updatePowerConsumption()
 
@@ -473,23 +511,13 @@
           }, 500); // Wait only 500ms since we know the exact block
         });
 
-        // Listen for mining scan progress events (real-time incremental updates)
-        const unlistenScanProgress = await listen('mining_scan_progress', (event: { payload: MiningScanProgressPayload }) => {
-          // Update mining stats incrementally as blocks are discovered during scanning
-          // Only apply during non-mining periods to avoid interfering with real-time counter
-          const currentWallet = get(wallet);
-          if (event.payload.address === currentWallet?.address && !$miningState.isMining) {
-            miningState.update((state) => ({
-              ...state,
-              blocksFound: state.blocksFound + (event.payload.blocks_found_in_batch || 0),
-              totalRewards: (state.blocksFound + (event.payload.blocks_found_in_batch || 0)) * (get(blockReward) || 2)
-            }));
-          }
-        });
+        // Note: mining_scan_progress events are no longer used for UI updates
+        // We now rely on get_blocks_mined (backend counter) as the single source of truth
+        // This avoids double-counting issues between the scan counter and the mined blocks counter
 
         // Store unlisten functions for cleanup
         miningMonitorUnlisten = unlistenBlockMined;
-        scanProgressUnlisten = unlistenScanProgress;
+        scanProgressUnlisten = null;
       } catch (error) {
         console.error('[Mining Page] ❌ FAILED to start mining monitor:', error);
       }

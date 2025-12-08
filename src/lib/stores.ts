@@ -56,6 +56,7 @@ export interface FileItem {
   isDownload?: boolean;
   isSeedingDownload?: boolean;
   protocol?: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
+  uploaderAddress?: string; // Wallet address of the uploader for payment
 }
 
 export interface ProtocolEntry {
@@ -714,7 +715,7 @@ export const settings = writable<AppSettings>({
   enableAutonat: true, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: false, // Disabled by default - enable if you need relay connections
+  enableAutorelay: true, // Enabled by default - allows relay connections for NAT traversal
   preferredRelays: [], // Use bootstrap nodes as relays by default
   enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
@@ -722,7 +723,7 @@ export const settings = writable<AppSettings>({
   shareAnalytics: true,
   enableWalletAutoLock: false,
   autoStartDHT: true, // Auto-start DHT by default
-  autoStartGeth: false, // Don't auto-start Geth by default (requires download)
+  autoStartGeth: true, // Auto-start Geth by default
   enableNotifications: true,
   notifyOnComplete: true,
   notifyOnError: true,
