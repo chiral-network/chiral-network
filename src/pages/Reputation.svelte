@@ -277,7 +277,6 @@
         
         // No delay needed since we're not querying DHT anymore
       }
-      */
 
         // Build analytics
         const totalPeers = mappedPeers.length;
