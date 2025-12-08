@@ -251,6 +251,55 @@
           isSearching = false
           return
         }
+
+        // Handle FTP URL - extract filename and create metadata for download
+        try {
+          const ftpUrl = new URL(identifier)
+          const pathSegments = ftpUrl.pathname.split('/').filter(s => s.length > 0)
+          let fileName = pathSegments.length > 0 ? decodeURIComponent(pathSegments[pathSegments.length - 1]) : 'unknown_file'
+          
+          // Strip hash prefix if present (format: {64-char-hash}_{original_filename})
+          if (fileName.length > 65 && fileName.charAt(64) === '_') {
+            fileName = fileName.substring(65)
+          }
+
+          // Create metadata with FTP source so download routing works correctly
+          latestMetadata = {
+            merkleRoot: '',
+            fileHash: '',
+            fileName: fileName,
+            fileSize: 0, // Unknown for FTP URLs
+            seeders: [],
+            createdAt: Date.now() / 1000,
+            mimeType: undefined,
+            isEncrypted: false,
+            encryptionMethod: undefined,
+            keyFingerprint: undefined,
+            cids: undefined,
+            isRoot: true,
+            downloadPath: undefined,
+            price: 0,
+            uploaderAddress: undefined,
+            httpSources: undefined,
+            ftpSources: [{
+              url: identifier,
+              username: ftpUrl.username || undefined,
+              password: ftpUrl.password || undefined,
+              supportsResume: true, // Assume true for user-provided FTP URLs
+              isAvailable: true
+            }]
+          }
+
+          latestStatus = 'found'
+          hasSearched = true
+          isSearching = false
+          pushMessage(`FTP file ready to download: ${fileName}`, 'success')
+        } catch (error) {
+          console.error("Failed to parse FTP URL:", error)
+          pushMessage(`Invalid FTP URL: ${String(error)}`, 'error')
+          isSearching = false
+        }
+        return
       }
 
       if (identifier) {
