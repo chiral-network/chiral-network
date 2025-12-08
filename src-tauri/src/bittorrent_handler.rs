@@ -360,6 +360,7 @@ pub struct BitTorrentHandler {
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
     app_handle: Option<AppHandle>,
     event_bus: Option<Arc<TransferEventBus>>,
+    state_manager: Option<Arc<tokio::sync::Mutex<TorrentStateManager>>>, // NEW: State manager for persistence
 }
 
 impl BitTorrentHandler {
@@ -392,72 +393,143 @@ impl BitTorrentHandler {
     }
 
     /// Creates a new BitTorrentHandler with all options.
+    /// 
+    /// If a state_manager is provided, this constructor will automatically restore
+    /// all previously saved torrents on initialization.
     pub async fn new_with_port_range_and_app_handle(
         download_directory: std::path::PathBuf,
         dht_service: Arc<DhtService>,
         listen_port_range: Option<std::ops::Range<u16>>,
         app_handle: Option<AppHandle>,
     ) -> Result<Self, BitTorrentError> {
-        info!(
-            "Creating BitTorrent session with download_directory: {:?}, port_range: {:?}",
-            download_directory, listen_port_range
-        );
+        // Call new_with_state with None for state_manager
+        Self::new_with_state(download_directory, dht_service, listen_port_range, app_handle, None).await
+    }
 
-        // Clean up any stale DHT or session state files that might be locked
-        let state_files = ["session.json", "dht.json", "dht.db", "session.db", "dht.dat"];
-        for file in &state_files {
-            let state_path = download_directory.join(file);
-            if state_path.exists() {
-                if let Err(e) = std::fs::remove_file(&state_path) {
-                    warn!("Failed to remove stale state file {:?}: {}", state_path, e);
-                } else {
-                    info!("Removed stale state file: {:?}", state_path);
+    /// Creates a new BitTorrentHandler with all options including state restoration.
+/// 
+/// If a state_manager is provided, this constructor will automatically restore
+/// all previously saved torrents on initialization.
+pub async fn new_with_state(
+    download_directory: std::path::PathBuf,
+    dht_service: Arc<DhtService>,
+    listen_port_range: Option<std::ops::Range<u16>>,
+    app_handle: Option<AppHandle>,
+    state_manager: Option<TorrentStateManager>,
+) -> Result<Self, BitTorrentError> {
+    info!(
+        "Creating BitTorrent session with download_directory: {:?}, port_range: {:?}, state_manager: {}",
+        download_directory, listen_port_range, state_manager.is_some()
+    );
+
+    // Clean up any stale DHT or session state files that might be locked
+    let state_files = ["session.json", "dht.json", "dht.db", "session.db", "dht.dat"];
+    for file in &state_files {
+        let state_path = download_directory.join(file);
+        if state_path.exists() {
+            if let Err(e) = std::fs::remove_file(&state_path) {
+                warn!("Failed to remove stale state file {:?}: {}", state_path, e);
+            } else {
+                info!("Removed stale state file: {:?}", state_path);
+            }
+        }
+    }
+
+    let mut opts = SessionOptions::default();
+
+    // Set port range if provided
+    if let Some(range) = listen_port_range.clone() {
+        opts.listen_port_range = Some(range);
+    }
+
+    // Enable persistence for session and DHT state
+    // This allows torrents to resume after app restart
+    opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
+        folder: Some(download_directory.clone()),
+    });
+
+    let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
+        error!("Session initialization failed: {}", e);
+        BitTorrentError::SessionInit {
+            message: format!("Failed to create session: {}", e),
+        }
+    })?;
+
+    // Create TransferEventBus if app_handle is provided
+    let event_bus = app_handle.as_ref().map(|handle| Arc::new(TransferEventBus::new(handle.clone())));
+
+    // Wrap state_manager in Arc<Mutex> if provided
+    let state_manager_arc = state_manager.map(|sm| Arc::new(tokio::sync::Mutex::new(sm)));
+
+    let handler = Self {
+        rqbit_session: session.clone(),
+        dht_service,
+        download_directory: download_directory.clone(),
+        active_torrents: Default::default(),
+        peer_states: Default::default(),
+        app_handle,
+        event_bus,
+        state_manager: state_manager_arc.clone(),
+    };
+    
+    // Spawn the background task for statistics polling.
+    handler.spawn_stats_poller();
+
+    info!(
+        "Initializing BitTorrentHandler with download directory: {:?}",
+        handler.download_directory
+    );
+
+    // Restore torrents from state if state_manager was provided
+    if let Some(sm) = state_manager_arc {
+        let sm_guard = sm.lock().await;
+        let persistent_torrents = sm_guard.get_all();
+        drop(sm_guard); // Release lock before async operations
+        
+        if !persistent_torrents.is_empty() {
+            info!("Restoring {} saved torrent(s) on initialization", persistent_torrents.len());
+            
+            for torrent in persistent_torrents {
+                info!(
+                    "Restoring torrent: {} (status: {:?})",
+                    torrent.info_hash, torrent.status
+                );
+                
+                // Determine the identifier based on the source
+                let identifier = match &torrent.source {
+                    PersistentTorrentSource::Magnet(url) => {
+                        info!("  Source: magnet link");
+                        url.clone()
+                    }
+                    PersistentTorrentSource::File(path) => {
+                        info!("  Source: torrent file at {:?}", path);
+                        path.to_string_lossy().to_string()
+                    }
+                };
+                
+                // Re-add the torrent with the original output path
+                match handler.start_download_to(&identifier, torrent.output_path.clone()).await {
+                    Ok(_) => {
+                        info!(
+                            "✓ Successfully restored torrent: {} to {:?}",
+                            torrent.info_hash, torrent.output_path
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            "✗ Failed to restore torrent {}: {}",
+                            torrent.info_hash, e
+                        );
+                    }
                 }
             }
+            
+            info!("Torrent restoration complete");
         }
-
-        let mut opts = SessionOptions::default();
-
-        // Set port range if provided
-        if let Some(range) = listen_port_range.clone() {
-            opts.listen_port_range = Some(range);
-        }
-
-        // Enable persistence for session and DHT state
-        // This allows torrents to resume after app restart
-        opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
-            folder: Some(download_directory.clone()),
-        });
-
-        let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
-            error!("Session initialization failed: {}", e);
-            BitTorrentError::SessionInit {
-                message: format!("Failed to create session: {}", e),
-            }
-        })?;
-
-        // Create TransferEventBus if app_handle is provided
-        let event_bus = app_handle.as_ref().map(|handle| Arc::new(TransferEventBus::new(handle.clone())));
-
-        let handler = Self {
-            rqbit_session: session.clone(),
-            dht_service,
-            download_directory: download_directory.clone(),
-            active_torrents: Default::default(),
-            peer_states: Default::default(),
-            app_handle,
-            event_bus,
-        };
-        
-        // Spawn the background task for statistics polling.
-        handler.spawn_stats_poller();
-
-        info!(
-            "Initializing BitTorrentHandler with download directory: {:?}",
-            handler.download_directory
-        );
-        Ok(handler)
     }
+
+    Ok(handler)
+}
 
     /// Spawns a background task to periodically poll for and process per-peer statistics.
     fn spawn_stats_poller(&self) {
@@ -712,7 +784,7 @@ impl BitTorrentHandler {
     async fn start_download_with_options(
         &self,
         identifier: &str,
-        mut add_opts: AddTorrentOptions,
+        add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
@@ -1054,7 +1126,7 @@ impl SimpleProtocolHandler for BitTorrentHandler {
     }
 }
 
-// Pause/Resume/Cancel methods for torrent control
+/// Pause/Resume/Cancel methods for torrent control
 impl BitTorrentHandler {
     /// Pause a torrent by info hash
     pub async fn pause_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
