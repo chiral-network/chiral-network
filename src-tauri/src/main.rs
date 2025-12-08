@@ -625,6 +625,13 @@ async fn list_keystore_accounts() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+async fn remove_account_from_keystore(address: String) -> Result<(), String> {
+    let mut keystore = Keystore::load()?;
+    keystore.remove_account(&address)?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_disk_space(path: String) -> Result<u64, String> {
     match available_space(Path::new(&path)) {
         Ok(space) => Ok(space),
@@ -7792,6 +7799,7 @@ fn main() {
             save_account_to_keystore,
             load_account_from_keystore,
             list_keystore_accounts,
+            remove_account_from_keystore,
             pool::discover_mining_pools,
             pool::create_mining_pool,
             pool::join_mining_pool,
