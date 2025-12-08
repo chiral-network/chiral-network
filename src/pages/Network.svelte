@@ -54,6 +54,9 @@
 
   const UNKNOWN_DISTANCE = 1_000_000;
 
+  // Reactive node role based on health snapshot
+  $: nodeRole = getNodeRole(dhtHealth?.reachability);
+
   $: if (sortBy || sortDirection) {
     // Reset to page 1 when sorting changes
     currentPage = 1
@@ -243,6 +246,21 @@
         return tr('network.dht.reachability.state.private')
       default:
         return tr('network.dht.reachability.state.unknown')
+    }
+  }
+
+  function getNodeRole(state?: NatReachabilityState | null): { title: string, description: string, color: string } {
+    if (state === 'public') {
+      return {
+        title: 'Participant (Full Node)',
+        description: 'Your node is publicly reachable. You are storing records and helping the network.',
+        color: 'text-emerald-600 dark:text-emerald-400'
+      }
+    }
+    return {
+      title: 'Observer (Client)',
+      description: 'Your node is behind a NAT. You can download files, but you are not routing traffic.',
+      color: 'text-muted-foreground'
     }
   }
 
@@ -1679,6 +1697,21 @@
         </div>
       {:else}
         <div class="space-y-3">
+          <!-- Node Role Banner -->
+          <div class="rounded-lg border p-3 flex items-start gap-3 {dhtHealth?.reachability === 'public' ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-secondary/50 border-border'}">
+             <div class="mt-0.5">
+               {#if dhtHealth?.reachability === 'public'}
+                 <Server class="h-5 w-5 text-emerald-600" />
+               {:else}
+                 <Users class="h-5 w-5 text-muted-foreground" />
+               {/if}
+             </div>
+             <div>
+               <p class="text-sm font-semibold {nodeRole.color}">{nodeRole.title}</p>
+               <p class="text-xs text-muted-foreground mt-0.5">{nodeRole.description}</p>
+             </div>
+          </div>
+
           <div class="grid grid-cols-2 gap-4">
             <div class="bg-secondary rounded-lg p-3">
               <p class="text-sm text-muted-foreground">{$t('network.dht.port')}</p>
