@@ -215,7 +215,9 @@
         let successfulInteractions = Math.min(totalInteractions, m.successful_transfers);
 
         console.log(
-          `📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}`,
+          `📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}, ` +
+          `success_rate: ${m.success_rate.toFixed(2)}, reliability: ${m.reliability_score.toFixed(2)}, ` +
+          `composite: ${score.toFixed(2)}, stars: ${(score * 5).toFixed(1)}/5.0`
         );
 
         // Determine trust level based on score

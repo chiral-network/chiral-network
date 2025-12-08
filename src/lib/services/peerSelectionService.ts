@@ -374,22 +374,36 @@ export class PeerSelectionService {
 
   /**
    * Composite score in [0,1], combining:
-   *  - local reputation (Beta) 60%
-   *  - freshness (last_seen)   25%
-   *  - performance (latency)   15%
+   *  - backend success_rate 60% (uses actual transfer data)
+   *  - freshness (last_seen) 25%
+   *  - performance (latency) 15%
    */
   static compositeScoreFromMetrics(p: PeerMetrics): number {
     // keep the store updated with what we see
     this.rep.noteSeen(p.peer_id);
-    if (typeof p.latency_ms === "number") {
-      // don't mark success here; RTT success will be recorded where you actually connect/transfer
-      // but we can gently update EMA if we want to reflect recent latency probes
-      // (optional, comment out if you prefer only connection-based updates)
-      // this.rep.success(p.peer_id, p.latency_ms);
+    
+    // Sync backend transfer data with frontend store
+    if (p.successful_transfers > 0 || p.failed_transfers > 0) {
+      const storedRep = this.rep.getAllPeers().get(p.peer_id);
+      const storedSuccesses = storedRep?.alpha || 0;
+      const storedFailures = storedRep?.beta || 0;
+      
+      // Update store if backend has more recent data
+      if (p.successful_transfers > storedSuccesses) {
+        for (let i = storedSuccesses; i < p.successful_transfers; i++) {
+          this.rep.success(p.peer_id, p.latency_ms);
+        }
+      }
+      if (p.failed_transfers > storedFailures) {
+        for (let i = storedFailures; i < p.failed_transfers; i++) {
+          this.rep.failure(p.peer_id);
+        }
+      }
     }
 
-    // local rep components
-    const repScore = this.rep.repScore(p.peer_id);
+    // Use backend success_rate directly (more accurate than frontend Beta distribution)
+    const repScore = p.success_rate; // This is calculated from actual transfers in backend
+    
     const freshScore = (() => {
       const nowSec = Date.now() / 1000;
       const ageSec = Math.max(0, nowSec - (p.last_seen || 0));
