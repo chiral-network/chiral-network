@@ -11,6 +11,7 @@ fn test_serialize_ed2k_source_info() {
         file_name: Some("test.iso".to_string()),
         sources: Some(vec!["192.168.1.1:4000".to_string()]),
         timeout: Some(60),
+        chunk_hashes: Some(Vec::new()),
     };
 
     let json = serde_json::to_string(&info).unwrap();
@@ -157,6 +158,7 @@ fn test_multiple_ed2k_sources() {
         file_name: Some("test.iso".to_string()),
         sources: None, 
         timeout: None,
+        chunk_hashes: Some(Vec::new()),
     };
 
     let metadata = FileMetadata {
@@ -218,9 +220,9 @@ fn test_empty_none_source_lists() {
 
 #[test]
 fn test_source_deduplication() {
-    let info1 = Ed2kSourceInfo { server_url: "server1".to_string(), file_hash: String::new(), file_size: 0, file_name: None, sources: None, timeout: None };
-    let info2 = Ed2kSourceInfo { server_url: "server2".to_string(), file_hash: String::new(), file_size: 0, file_name: None, sources: None, timeout: None };
-    let info1_dup = Ed2kSourceInfo { server_url: "server1".to_string(), file_hash: String::new(), file_size: 0, file_name: None, sources: None, timeout: None };
+    let info1 = Ed2kSourceInfo { server_url: "server1".to_string(), file_hash: String::new(), file_size: 0, file_name: None, sources: None, timeout: None, chunk_hashes: Some(Vec::new()) };
+    let info2 = Ed2kSourceInfo { server_url: "server2".to_string(), file_hash: String::new(), file_size: 0, file_name: None, sources: None, timeout: None, chunk_hashes: Some(Vec::new()) };
+    let info1_dup = Ed2kSourceInfo { server_url: "server1".to_string(), file_hash: String::new(), file_size: 0, file_name: None, sources: None, timeout: None, chunk_hashes: Some(Vec::new()) };
 
     let mut sources = vec![info1, info2, info1_dup];
     
@@ -256,6 +258,7 @@ fn test_dht_storage_round_trip() {
         file_name: Some("test.iso".to_string()),
         sources: Some(vec!["1.1.1.1:1".to_string()]),
         timeout: None,
+        chunk_hashes: Some(Vec::new()),
     };
 
     let metadata_in = FileMetadata {

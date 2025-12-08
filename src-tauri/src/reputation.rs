@@ -867,23 +867,20 @@ impl ReputationDhtService {
             search_key
         );
 
-        // synchronous_search_metadata already checks local cache first
-        println!("🔍 Calling synchronous_search_metadata with 5000ms timeout");
-        match dht_service
-            .synchronous_search_metadata(search_key.clone(), 5000)
-            .await
-        {
-            Ok(Some(metadata)) => {
+        // Use GetDhtValue to retrieve the verdict data directly
+        println!("🔍 Calling get_dht_value for key: {}", search_key);
+        match dht_service.get_dht_value(search_key.clone()).await {
+            Ok(Some(verdict_bytes)) => {
                 println!(
-                    "✅ Found verdict metadata, size={} bytes",
-                    metadata.file_data.len()
+                    "✅ Found verdict data, size={} bytes",
+                    verdict_bytes.len()
                 );
                 tracing::info!(
-                    "✅ Found verdict metadata, size={} bytes",
-                    metadata.file_data.len()
+                    "✅ Found verdict data, size={} bytes",
+                    verdict_bytes.len()
                 );
-                // Try to deserialize the file data as a TransactionVerdict
-                match serde_json::from_slice::<TransactionVerdict>(&metadata.file_data) {
+                // Try to deserialize the verdict data as a TransactionVerdict
+                match serde_json::from_slice::<TransactionVerdict>(&verdict_bytes) {
                     Ok(verdict) => {
                         println!(
                             "✅ Deserialized verdict: issuer={}, outcome={:?}",

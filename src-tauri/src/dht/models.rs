@@ -7,6 +7,23 @@ use std::time::SystemTime;
 use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 
+// Custom serializer for CIDs to convert them to strings for frontend compatibility
+fn serialize_cids_as_strings<S>(
+    cids: &Option<Vec<Cid>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match cids {
+        Some(cid_vec) => {
+            let strings: Vec<String> = cid_vec.iter().map(|cid| cid.to_string()).collect();
+            serializer.serialize_some(&strings)
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
 // =========================================================================
 // Error Types
 // =========================================================================
@@ -75,6 +92,7 @@ pub struct FileMetadata {
 
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_cids_as_strings")]
     pub cids: Option<Vec<Cid>>,
 
     /// For encrypted files, this contains the encrypted AES key and other info.
