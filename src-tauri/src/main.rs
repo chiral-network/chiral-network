@@ -1498,13 +1498,6 @@ async fn start_dht_node(
     // --- AutoRelay is now disabled by default (can be enabled via config or env var)
     // Disable AutoRelay on bootstrap nodes (and via env var)
     let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
-    
-    // Allow forcing AutoRelay ON via environment variable (useful for multi-instance testing)
-    if std::env::var("CHIRAL_ENABLE_AUTORELAY").ok().as_deref() == Some("1") {
-        final_enable_autorelay = true;
-        tracing::info!("AutoRelay enabled via env CHIRAL_ENABLE_AUTORELAY=1");
-    }
-    
     if is_bootstrap.unwrap_or(false) {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled on bootstrap (hotfix).");

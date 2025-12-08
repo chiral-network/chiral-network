@@ -2289,8 +2289,6 @@ pub async fn calculate_accurate_totals(
 
         if miner == target_address {
             blocks_mined += 1;
-            // Add mining reward to total received
-            total_received += BLOCK_REWARD;
         }
 
         // Process all transactions in this block
