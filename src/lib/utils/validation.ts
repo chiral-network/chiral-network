@@ -64,6 +64,61 @@ export function validatePrivateKeyFormat(privateKey: string): {
 }
 
 /**
+ * Validates a storage path to ensure it's a valid absolute path
+ *
+ * This prevents security issues where relative paths or tilde expansion
+ * on Windows could create directories in unexpected locations.
+ *
+ * Rules:
+ * - Path must be absolute (starts with / on Unix or drive letter on Windows)
+ * - Path cannot be empty
+ * - On Windows, tilde (~) is not expanded and is invalid
+ * - Relative paths are not allowed
+ *
+ * Note: For platform-specific validation (e.g., checking if drive exists on Windows,
+ * rejecting Unix paths on Windows), use the backend validate_storage_path command.
+ *
+ * Used in: src/pages/Settings.svelte (storage path input validation)
+ *
+ * @param path - The storage path to validate
+ * @returns Object with isValid boolean and optional error message
+ */
+export function validateStoragePath(path: string): {
+  isValid: boolean;
+  error?: string;
+} {
+  if (!path || !path.trim()) {
+    return { isValid: false, error: 'Storage path cannot be empty' };
+  }
+
+  const trimmed = path.trim();
+
+  // Detect platform - in browser environment, we can't reliably detect OS
+  // So we'll accept both Windows and Unix absolute paths
+  // Windows absolute paths must have drive letter, separator, and at least one character
+  const isWindowsAbsolute = /^[a-zA-Z]:[\\\/].+/.test(trimmed);
+  const isUnixAbsolute = trimmed.startsWith('/');
+
+  // Check if path starts with tilde (should use Tauri dialog instead)
+  if (trimmed.startsWith('~')) {
+    return {
+      isValid: false,
+      error: 'Please use the folder picker button or enter an absolute path (e.g., C:\\Users\\...) instead of using ~',
+    };
+  }
+
+  // Path must be absolute
+  if (!isWindowsAbsolute && !isUnixAbsolute) {
+    return {
+      isValid: false,
+      error: 'Storage path must be an absolute path (e.g., C:\\Users\\... on Windows or /home/... on Unix)',
+    };
+  }
+
+  return { isValid: true };
+}
+
+/**
  * Rate limiter for sensitive operations
  *
  * Source: OWASP Authentication Cheat Sheet
