@@ -504,10 +504,7 @@
   async function checkIfSeeding(metadata: FileMetadata): Promise<boolean> {
     try {
       const currentPeerId = await dhtService.getPeerId();
-      if (currentPeerId) {
-        return metadata.seeders?.includes(currentPeerId) || false;
-      }
-      return false;
+      return currentPeerId ? metadata.seeders?.includes(currentPeerId) || false : false;
     } catch (error) {
       console.warn('Failed to check seeding status:', error);
       return false;
@@ -843,35 +840,12 @@
     if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap' || selectedProtocol === 'bittorrent') {
       // P2P download flow (WebRTC, Bitswap, BitTorrent)
       
-      // For WebRTC: Check if the user is the seeder (will use local copy)
-      let isLocalSeeder = false;
-      if (selectedProtocol === 'webrtc' && selectedPeers.length > 0) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          const localPeerId = await invoke<string>('get_dht_peer_id');
-          
-          // Check if we're in the seeders list
-          isLocalSeeder = selectedPeers.includes(localPeerId);
-          
-          // Filter out self from selected peers for actual WebRTC transfer
-          const remotePeers = selectedPeers.filter(peerId => peerId !== localPeerId);
-          
-          if (remotePeers.length === 0 && isLocalSeeder) {
-            // We're the only seeder - will use local copy
-            console.log('We are the only seeder - will use local copy for WebRTC download');
-          }
-        } catch (err) {
-          console.warn('Could not check local peer ID:', err);
-          // Continue anyway - backend will handle it
-        }
-      }
 
-      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string; isLocalSeeder?: boolean } = {
+      const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {
         ...selectedFile,
         seeders: selectedPeers,  // Override with selected peers
         peerAllocation,
-        selectedProtocol: selectedProtocol,  // Pass the user's protocol selection
-        isLocalSeeder  // Flag to indicate we should use local copy
+        selectedProtocol: selectedProtocol  // Pass the user's protocol selection
       };
 
       // Dispatch to parent (Download.svelte)

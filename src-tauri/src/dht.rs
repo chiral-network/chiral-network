@@ -10,6 +10,34 @@ use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
 use x25519_dalek::PublicKey;
 
+/// Helper function to deserialize CIDs from JSON values that may be strings or Cid objects.
+/// This handles the transition from Cid objects to string serialization.
+fn deserialize_cids_from_json(value: &serde_json::Value) -> Option<Vec<Cid>> {
+    // First try to deserialize as Vec<String> (new format)
+    if let Ok(strings) = serde_json::from_value::<Option<Vec<String>>>(value.clone()) {
+        if let Some(cid_strings) = strings {
+            let mut cids = Vec::new();
+            for cid_str in cid_strings {
+                match cid_str.parse::<Cid>() {
+                    Ok(cid) => cids.push(cid),
+                    Err(e) => {
+                        warn!("Failed to parse CID from string '{}': {}", cid_str, e);
+                        continue;
+                    }
+                }
+            }
+            return Some(cids);
+        }
+    }
+
+    // Fallback: try to deserialize as Vec<Cid> (old format, if it still exists)
+    if let Ok(cids) = serde_json::from_value::<Option<Vec<Cid>>>(value.clone()) {
+        return cids;
+    }
+
+    None
+}
+
 /// Merges two FileMetadata instances for the same file uploaded via different protocols.
 /// This preserves all protocol-specific information while keeping the most recent common fields.
 fn merge_file_metadata(
@@ -698,10 +726,7 @@ fn construct_file_metadata_from_json_simple(
             .get("parentHash")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        cids: metadata_json.get("cids").and_then(|v| {
-            serde_json::from_value::<Option<Vec<Cid>>>(v.clone())
-                .unwrap_or(None)
-        }),
+        cids: metadata_json.get("cids").and_then(|v| deserialize_cids_from_json(v)),
         encrypted_key_bundle: metadata_json
             .get("encryptedKeyBundle")
             .and_then(|v| {
@@ -1547,7 +1572,7 @@ async fn run_dht_node(
                                                 key_fingerprint: json_val.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
 
                                                 parent_hash: json_val.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                                cids: json_val.get("cids").and_then(|v| Some(deserialize_cids_from_json(v))).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
                                                 info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
@@ -1993,26 +2018,65 @@ async fn run_dht_node(
                                     Ok(cid) => cid.clone(),
                                     Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
                                 };
-                                let Some(first_seeder) = file_metadata.seeders.get(0) else {
+                                if file_metadata.seeders.is_empty() {
                                     let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
                                     return;
-                                };
+                                }
 
-                                let peer_id = match PeerId::from_str(first_seeder) {
-                                    Ok(id) => id.clone(),
-                                    Err(e) => {
-                                        let _ = event_tx.send(DhtEvent::Error(e.to_string())).await;
-                                        return;
-                                    }
-                                };
+                                // Try multiple seeders for initial connection/parsing reliability
+                                // IPFS Bitswap will handle peer discovery and distribution automatically,
+                                // but we want to ensure we start with a valid, reachable seeder
+                                let max_attempts = std::cmp::min(3, file_metadata.seeders.len());
+                                let mut tried_seeders: Vec<String> = Vec::new();
 
-                                // Request the root block which contains the CIDs
-                                let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+                                let mut successful_start = false;
 
-                                file_metadata.download_path = Some(download_path);
-                                // Store the root query ID to handle when we get the root block
-                                info!("INSERTING INTO ROOT QUERY MAPPING");
-                                root_query_mapping.lock().await.insert(root_query_id, file_metadata);
+                                for attempt in 0..max_attempts {
+                                    // Select next seeder (prefer earlier ones but skip tried ones)
+                                    let seeder_to_try = file_metadata.seeders
+                                        .iter()
+                                        .find(|s| !tried_seeders.contains(s))
+                                        .cloned();
+
+                                    let Some(seeder) = seeder_to_try else {
+                                        warn!("All {} seeders tried for file {} - none were valid",
+                                              file_metadata.seeders.len(), file_metadata.merkle_root);
+                                        break;
+                                    };
+
+                                    tried_seeders.push(seeder.clone());
+
+                                    let peer_id = match PeerId::from_str(&seeder) {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            warn!("Invalid seeder peer ID {} (attempt {}/{}): {}",
+                                                  seeder, attempt + 1, max_attempts, e);
+                                            continue;
+                                        }
+                                    };
+
+                                    info!("Attempting IPFS download from seeder {} (attempt {}/{}): {}",
+                                          seeder, attempt + 1, max_attempts, file_metadata.file_name);
+
+                                    // Request the root block which contains the CIDs
+                                    let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+
+                                    file_metadata.download_path = Some(download_path.clone());
+
+                                    // Store the root query ID to handle when we get the root block
+                                    info!("Started IPFS download attempt with seeder {}", seeder);
+                                    root_query_mapping.lock().await.insert(root_query_id, file_metadata.clone());
+
+                                    successful_start = true;
+                                    break; // Start with first valid seeder, let IPFS handle the rest
+                                }
+
+                                if !successful_start {
+                                    let _ = event_tx.send(DhtEvent::Error(format!(
+                                        "Failed to start IPFS download after trying {} seeders - all had invalid peer IDs",
+                                        tried_seeders.len()
+                                    ))).await;
+                                }
                             }
                             Some(DhtCommand::StopPublish(file_hash)) => {
                                 let key = kad::RecordKey::new(&file_hash);
@@ -3539,7 +3603,7 @@ async fn run_dht_node(
                                                 key_fingerprint: json_val.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
 
                                                 parent_hash: json_val.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                cids: json_val.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                                cids: json_val.get("cids").and_then(|v| Some(deserialize_cids_from_json(v))).unwrap_or(None),
                                                 encrypted_key_bundle: json_val.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
                                                 info_hash: json_val.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                 trackers: json_val.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
@@ -4690,10 +4754,7 @@ async fn handle_kademlia_event(
                                         .get("parentHash")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
-                                    cids: metadata_json.get("cids").and_then(|v| {
-                                        serde_json::from_value::<Option<Vec<Cid>>>(v.clone())
-                                            .unwrap_or(None)
-                                    }),
+                                    cids: metadata_json.get("cids").and_then(|v| deserialize_cids_from_json(v)),
                                     encrypted_key_bundle: metadata_json
                                         .get("encryptedKeyBundle")
                                         .and_then(|v| {
@@ -5076,7 +5137,7 @@ async fn handle_kademlia_event(
                                                     encryption_method: metadata_json.get("encryptionMethod").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     key_fingerprint: metadata_json.get("keyFingerprint").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     parent_hash: metadata_json.get("parentHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                    cids: metadata_json.get("cids").and_then(|v| serde_json::from_value::<Option<Vec<Cid>>>(v.clone()).ok()).unwrap_or(None),
+                                                    cids: metadata_json.get("cids").and_then(|v| Some(deserialize_cids_from_json(v))).unwrap_or(None),
                                                     encrypted_key_bundle: metadata_json.get("encryptedKeyBundle").and_then(|v| serde_json::from_value::<Option<crate::encryption::EncryptedAesKeyBundle>>(v.clone()).ok()).unwrap_or(None),
                                                     info_hash: metadata_json.get("infoHash").and_then(|v| v.as_str()).map(|s| s.to_string()),
                                                     trackers: metadata_json.get("trackers").and_then(|v| serde_json::from_value::<Option<Vec<String>>>(v.clone()).ok()).unwrap_or(None),
@@ -6952,8 +7013,8 @@ impl DhtService {
         let file_hash = metadata.merkle_root.clone();
         // The root CID is the CID of the list of block CIDs.
         // This needs to be computed before calling the command.
-        let block_cids: Vec<Cid> = blocks.iter().map(|(cid, _)| cid.clone()).collect();
-        let root_block_data = serde_json::to_vec(&block_cids).map_err(|e| e.to_string())?;
+        let block_cid_strings: Vec<String> = blocks.iter().map(|(cid, _)| cid.to_string()).collect();
+        let root_block_data = serde_json::to_vec(&block_cid_strings).map_err(|e| e.to_string())?;
         let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
 
         self.cmd_tx

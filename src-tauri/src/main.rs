@@ -4634,47 +4634,6 @@ async fn download_file_from_network(
                         metadata.file_name, metadata.file_size
                     );
 
-                    // Check if we are the seeder - if so, use local copy instead of WebRTC
-                    let local_peer_id = dht_service.get_peer_id().await;
-                    let is_local_seeder = metadata.seeders.contains(&local_peer_id);
-                    
-                    if is_local_seeder {
-                        info!("We are a seeder for this file - using local copy instead of WebRTC");
-                        
-                        // Get file data from local storage
-                        let ft = {
-                            let ft_guard = state.file_transfer.lock().await;
-                            ft_guard.as_ref().cloned()
-                        };
-                        
-                        if let Some(file_transfer) = ft {
-                            match file_transfer.get_file_data(&metadata.merkle_root).await {
-                                Some(file_data) => {
-                                    // Get unique output path to avoid overwriting existing files
-                                    let unique_output_path = get_unique_filepath(Path::new(&output_path));
-                                    let final_output_path = unique_output_path.to_string_lossy().to_string();
-                                    
-                                    // Write to output path
-                                    use std::io::Write;
-                                    let mut file = std::fs::File::create(&final_output_path)
-                                        .map_err(|e| format!("Failed to create output file: {}", e))?;
-                                    file.write_all(&file_data)
-                                        .map_err(|e| format!("Failed to write file data: {}", e))?;
-                                    
-                                    info!("Local copy completed: {} -> {}", metadata.file_name, final_output_path);
-                                    return Ok(format!(
-                                        "Download completed (local copy): {} ({} bytes)",
-                                        metadata.file_name, file_data.len()
-                                    ));
-                                }
-                                None => {
-                                    warn!("Failed to get local file data - file not found in local storage");
-                                    // Fall through to try WebRTC with other peers
-                                }
-                            }
-                        }
-                    }
-
                     // Implement peer discovery for file chunks
                     info!(
                         "Discovering peers for file: {} with {} known seeders",
@@ -8933,8 +8892,6 @@ fn get_default_storage_directory() -> String {
         // Use home directory with tilde expansion
         return "~/Downloads/Chiral-Network-Storage".to_string();
     }
-    // Fallback for other platforms
-    "~/Downloads/Chiral-Network-Storage".to_string()
 }
 
 /// Event pump for DHT events, moved out of start_dht_node

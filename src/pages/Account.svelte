@@ -602,7 +602,7 @@
 
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
-
+    
   onMount(() => {
     // Initialize wallet service asynchronously
     walletService.initialize().then(async () => {
