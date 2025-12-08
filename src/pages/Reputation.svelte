@@ -176,9 +176,6 @@
         
         console.log(`📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}`);
         
-        // TEMPORARILY DISABLED: Verdict fetching overwhelms DHT with concurrent searches
-        // Will re-enable once verdict storage is fixed and we add rate limiting
-        /*
         // Try to get reputation verdicts to augment interaction count AND score
         try {
           console.log(`🔍 Fetching verdicts for peer: ${m.peer_id}`);
@@ -209,7 +206,6 @@
         } catch (err) {
           console.error(`❌ Failed to fetch verdicts for ${m.peer_id}:`, err);
         }
-        */
         
         const trustLevel = score >= 0.8 ? TrustLevel.Trusted :
                           score >= 0.6 ? TrustLevel.High :
