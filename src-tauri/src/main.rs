@@ -8377,7 +8377,7 @@ fn main() {
                         let state_manager = bittorrent_handler::TorrentStateManager::new(torrent_state_path);
                         
                         // Call get_all() to get Vec<PersistentTorrent>
-                        let persistent_torrents = state_manager.get_all();
+                        let persistent_torrents = state_manager.await.get_all();
                         
                         // Set the app_handle on the BitTorrent handler so it can emit events
                         let bittorrent_handler = state.bittorrent_handler.clone();

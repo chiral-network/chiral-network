@@ -1,6 +1,7 @@
 use crate::protocols::SimpleProtocolHandler;
 use crate::transfer_events::{
-    TransferEventBus, TransferProgressEvent,
+    TransferEventBus, TransferProgressEvent, TransferPausedEvent, 
+    TransferResumedEvent, PauseReason,
     current_timestamp_ms, calculate_progress, calculate_eta,
 };
 use async_trait::async_trait;
@@ -426,7 +427,7 @@ pub struct BitTorrentHandler {
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
     app_handle: Arc<tokio::sync::Mutex<Option<AppHandle>>>,
     event_bus: Arc<tokio::sync::Mutex<Option<Arc<TransferEventBus>>>>,
-    state_manager: Option<Arc<tokio::sync::Mutex<TorrentStateManager>>>, // NEW: State manager for persistence
+    state_manager: Option<Arc<tokio::sync::Mutex<TorrentStateManager>>>,
     state_file_path: std::path::PathBuf,
 }
 
@@ -588,6 +589,7 @@ pub async fn new_with_state(
         app_handle: Arc::new(tokio::sync::Mutex::new(app_handle)),
         event_bus: Arc::new(tokio::sync::Mutex::new(event_bus)),
         state_manager: state_manager_arc.clone(),
+        state_file_path: download_directory.join("torrents_state.json"),
     };
     
     // Spawn the background task for statistics polling.
@@ -1033,6 +1035,27 @@ pub async fn new_with_state(
         Ok(handle)
     }
 
+    async fn save_torrent_to_state(
+        &self,
+        info_hash: &str,
+        torrent: PersistentTorrent,
+    ) -> Result<(), BitTorrentError> {
+        if let Some(state_manager) = &self.state_manager {
+            let mut sm = state_manager.lock().await;
+            sm.add_torrent(torrent).await.map_err(|e| {
+                error!("Failed to save torrent {} to state: {}", info_hash, e);
+                BitTorrentError::ConfigError {
+                    message: format!("Failed to save torrent state: {}", e),
+                }
+            })?;
+            info!("Saved torrent {} to persistent state", info_hash);
+            Ok(())
+        } else {
+            warn!("No state manager available, torrent {} will not be persisted", info_hash);
+            Ok(())
+        }
+    }
+
     /// Check if a torrent exists in the active session or persistent state.
     pub async fn has_torrent(&self, info_hash: &str) -> bool {
         // Check active torrents first
@@ -1045,53 +1068,75 @@ pub async fn new_with_state(
 
     /// Get all persistent torrents from state
     pub async fn get_persistent_torrents(&self) -> BTreeMap<String, PersistentTorrent> {
-        let state_manager = self.state_manager.lock().await;
-        state_manager.get_all_torrents().clone()
+        if let Some(state_manager) = &self.state_manager {
+            let state_manager = state_manager.lock().await;
+            state_manager.get_all_torrents().clone()
+        } else {
+            BTreeMap::new()
+        }
     }
 
     /// Get persistent torrents by mode (Download or Seed)
     pub async fn get_persistent_torrents_by_mode(&self, mode: PersistentTorrentStatus) -> Vec<PersistentTorrent> {
-        let state_manager = self.state_manager.lock().await;
-        state_manager.get_all_torrents().values().filter(|t| t.status == mode).cloned().collect()
+        if let Some(state_manager) = &self.state_manager {
+            let state_manager = state_manager.lock().await;
+            state_manager.get_all_torrents().values().filter(|t| t.status == mode).cloned().collect()
+        } else {
+            Vec::new()
+        }
     }
 
     /// Check if a torrent exists in persistent state
     pub async fn has_persistent_torrent(&self, info_hash: &str) -> bool {
-        let state_manager = self.state_manager.lock().await;
-        state_manager.get_torrent(info_hash).is_some()
+        if let Some(state_manager) = &self.state_manager {
+            let state_manager = state_manager.lock().await;
+            state_manager.get_torrent(info_hash).is_some()
+        } else {
+            false
+        }
     }
 
     /// Get count of persistent torrents
     pub async fn get_persistent_torrent_count(&self) -> usize {
-        let state_manager = self.state_manager.lock().await;
-        state_manager.state.torrents.len()
+        if let Some(state_manager) = &self.state_manager {
+            let state_manager = state_manager.lock().await;
+            state_manager.state.torrents.len()
+        } else {
+            0
+        }
     }
 
     /// Update torrent metadata in persistent state (e.g., name, size when available)
     pub async fn update_torrent_metadata(&self, info_hash: &str, name: Option<String>, size: Option<u64>) -> Result<(), BitTorrentError> {
-        let mut state_manager = self.state_manager.lock().await;
-        
-        if let Some(mut persistent_torrent) = state_manager.get_torrent(info_hash).cloned() {
-            // Update metadata
-            if name.is_some() {
-                persistent_torrent.name = name;
-            }
-            if size.is_some() {
-                persistent_torrent.size = size;
-            }
+        if let Some(state_manager_arc) = &self.state_manager {
+            let mut state_manager = state_manager_arc.lock().await;
             
-            state_manager.update_torrent(info_hash, persistent_torrent).await.map_err(|e| {
-                error!("Failed to update torrent metadata for {}: {}", info_hash, e);
-                BitTorrentError::ConfigError {
-                    message: format!("Failed to update torrent metadata: {}", e),
+            if let Some(mut persistent_torrent) = state_manager.get_torrent(info_hash).cloned() {
+                // Update metadata
+                if name.is_some() {
+                    persistent_torrent.name = name;
                 }
-            })?;
-            
-            info!("Updated metadata for torrent: {}", info_hash);
-            Ok(())
+                if size.is_some() {
+                    persistent_torrent.size = size;
+                }
+                
+                state_manager.update_torrent(info_hash, persistent_torrent).await.map_err(|e| {
+                    error!("Failed to update torrent metadata for {}: {}", info_hash, e);
+                    BitTorrentError::ConfigError {
+                        message: format!("Failed to update torrent metadata: {}", e),
+                    }
+                })?;
+                
+                info!("Updated metadata for torrent: {}", info_hash);
+                Ok(())
+            } else {
+                Err(BitTorrentError::TorrentNotFound {
+                    info_hash: info_hash.to_string(),
+                })
+            }
         } else {
-            Err(BitTorrentError::TorrentNotFound {
-                info_hash: info_hash.to_string(),
+            Err(BitTorrentError::ConfigError {
+                message: "State manager not available".to_string(),
             })
         }
     }
@@ -1115,155 +1160,18 @@ pub async fn new_with_state(
         }
         
         // Clear any remaining state (in case some torrents weren't active)
-        let mut state_manager = self.state_manager.lock().await;
-        state_manager.state.torrents.clear();
-        state_manager.save().await.map_err(|e| {
-            error!("Failed to clear persistent state: {}", e);
-            BitTorrentError::ConfigError {
-                message: format!("Failed to clear persistent state: {}", e),
-            }
-        })?;
-        
+        if let Some(state_manager_arc) = &self.state_manager {
+            let mut state_manager = state_manager_arc.lock().await;
+            state_manager.state.torrents.clear();
+            state_manager.save().await.map_err(|e| {
+                error!("Failed to clear persistent state: {}", e);
+                BitTorrentError::ConfigError {
+                    message: format!("Failed to clear persistent state: {}", e),
+                }
+            })?;
+        }
         info!("Cleared all torrents from session and persistent state");
         Ok(())
-    }
-
-    /// Pause a torrent by info hash
-    pub async fn pause_torrent(&self, info_hash: &str) -> Result<(), BitTorrentError> {
-        info!("Pausing torrent: {}", info_hash);
-
-        let torrents = self.active_torrents.lock().await;
-        if let Some(handle) = torrents.get(info_hash) {
-            self.rqbit_session
-                .pause(handle)
-                .await
-                .map_err(|e| BitTorrentError::ProtocolSpecific {
-                    message: format!("Failed to pause torrent: {}", e),
-                })?;
-
-            info!("Successfully paused torrent: {}", info_hash);
-            Ok(())
-        } else {
-            BitTorrentError::Unknown { message: error_msg }
-        }
-    }
-
-    
-}
-
-/// Helper to convert a libp2p Multiaddr to a standard SocketAddr.
-/// This is a simplified conversion that only handles TCP/IP.
-fn multiaddr_to_socket_addr(multiaddr: &Multiaddr) -> Result<std::net::SocketAddr, &'static str> {
-    use libp2p::multiaddr::Protocol;
-
-    let mut iter = multiaddr.iter();
-    let proto1 = iter.next().ok_or("Empty Multiaddr")?;
-    let proto2 = iter.next().ok_or("Multiaddr needs at least two protocols")?;
-    
-    match (proto1, proto2) {
-        (Protocol::Ip4(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
-        (Protocol::Ip6(ip), Protocol::Tcp(port)) => Ok(std::net::SocketAddr::new(ip.into(), port)),
-        _ => Err("Multiaddr format not supported (expected IP/TCP)"),
-    }
-}
-
-#[async_trait]
-impl SimpleProtocolHandler for BitTorrentHandler {
-    fn name(&self) -> &'static str {
-        "bittorrent"
-    }
-
-    fn supports(&self, identifier: &str) -> bool {
-        identifier.starts_with("magnet:") || identifier.ends_with(".torrent")
-    }
-
-    #[instrument(skip(self), fields(protocol = "bittorrent"))]
-    async fn download(&self, identifier: &str) -> Result<(), String> {
-        let handle = self.start_download(identifier).await?;
-        let self_arc = Arc::new(self.clone());
-        let (tx, mut rx) = mpsc::channel(10);
-        tokio::spawn(async move {
-            self_arc.monitor_download(handle, tx).await;
-        });
-
-        while let Some(event) = rx.recv().await {
-            match event {
-                BitTorrentEvent::Completed => return Ok(()),
-                BitTorrentEvent::Failed(e) => return Err(e.into()),
-                _ => {}
-            }
-        }
-        // If the loop exits, it means the channel was closed without a final event.
-        Err("Monitoring channel closed unexpectedly.".to_string())
-    }
-
-    #[instrument(skip(self), fields(protocol = "bittorrent"))]
-    async fn seed(&self, file_path: &str) -> Result<String, String> {
-        let path = Path::new(file_path);
-        if !path.exists() {
-            let error = BitTorrentError::FileSystemError {
-                message: format!("File does not exist: {}", file_path),
-            };
-            error!("Seeding failed: {}", error);
-            return Err(error.into());
-        }
-
-        if !path.is_file() {
-            let error = BitTorrentError::FileSystemError {
-                message: format!("Path is not a file: {}", file_path),
-            };
-            error!("Seeding failed: {}", error);
-            return Err(error.into());
-        }
-
-        // Create a torrent from the file
-        let torrent = create_torrent(path, CreateTorrentOptions::default()).await.map_err(|e| {
-            let error = BitTorrentError::SeedingError {
-                message: format!("Failed to create torrent from file {}: {}", file_path, e),
-            };
-            error!("Torrent creation failed: {}", e);
-            error!("Seeding failed: {}", error);
-            String::from(error)
-        })?;
-
-        // Convert the torrent to bytes and create AddTorrent
-        let torrent_bytes = torrent.as_bytes().map_err(|e| {
-            let error = BitTorrentError::SeedingError {
-                message: format!("Failed to serialize torrent for {}: {}", file_path, e),
-            };
-            error!("Torrent serialization failed: {}", e);
-            error!("Seeding failed: {}", error);
-            String::from(error)
-        })?;
-
-        let add_torrent = AddTorrent::from_bytes(torrent_bytes.clone());
-
-        // For seeding, we need to allow overwriting existing files
-        let options = AddTorrentOptions {
-            overwrite: true,
-            ..Default::default()
-        };
-
-        let handle = self
-            .rqbit_session
-            .add_torrent(add_torrent, Some(options))
-            .await
-            .map_err(|e| {
-                let error = BitTorrentError::SeedingError {
-                    message: format!("Failed to add torrent for seeding: {}", e),
-                };
-                error!("Failed to add torrent to session: {}", e);
-                error!("Seeding failed: {}", error);
-                String::from(error)
-            })?
-            .into_handle()
-            .ok_or_else(|| String::from(BitTorrentError::HandleUnavailable))?;
-
-        // Get the info hash and construct a magnet link
-        let info_hash = handle.info_hash();
-        let magnet_link = format!("magnet:?xt=urn:btih:{}", hex::encode(info_hash.0));
-
-        Ok(magnet_link)
     }
 }
 
@@ -1310,6 +1218,7 @@ impl BitTorrentHandler {
 
         let torrents = self.active_torrents.lock().await;
         if let Some(handle) = torrents.get(info_hash) {
+            let stats = handle.stats(); // ADD THIS LINE
             self.rqbit_session
                 .unpause(handle)
                 .await
@@ -1543,7 +1452,7 @@ impl BitTorrentHandler {
     pub async fn monitor_download(
         &self,
         handle: Arc<ManagedTorrent>,
-        mut tx: mpsc::Sender<BitTorrentEvent>,
+        tx: mpsc::Sender<BitTorrentEvent>,
     ) {
         let mut interval = time::interval(Duration::from_secs(1));
         let mut no_progress_count: u32 = 0;
@@ -2133,7 +2042,7 @@ mod torrent_state_manager_tests {
         
         // Manager should initialize with an empty list if file doesn't exist
         let manager = TorrentStateManager::new(state_file_path.clone()).await;
-        assert!(manager.torrents.is_empty());
+        assert!(manager.state.torrents.is_empty());
         assert!(!state_file_path.exists()); // File should not be created on new if empty
     }
 
@@ -2165,8 +2074,8 @@ mod torrent_state_manager_tests {
             priority: 1,
         };
 
-        manager.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
-        manager.torrents.insert(torrent2.info_hash.clone(), torrent2.clone());
+        manager.state.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
+        manager.state.torrents.insert(torrent2.info_hash.clone(), torrent2.clone());
 
         // Save the state
         manager.save().await.unwrap();
@@ -2181,9 +2090,9 @@ mod torrent_state_manager_tests {
 
         // Create a new manager and load the state (note: new() now loads automatically)
         let loaded_manager = TorrentStateManager::new(state_file_path.clone()).await;
-        assert_eq!(loaded_manager.torrents.len(), 2);
-        assert_eq!(loaded_manager.torrents.get("hash1").unwrap(), &torrent1);
-        assert_eq!(loaded_manager.torrents.get("hash2").unwrap(), &torrent2);
+        assert_eq!(loaded_manager.state.torrents.len(), 2);
+        assert_eq!(loaded_manager.state.torrents.get("hash1").unwrap(), &torrent1);
+        assert_eq!(loaded_manager.state.torrents.get("hash2").unwrap(), &torrent2);
     }
 
     #[tokio::test]
