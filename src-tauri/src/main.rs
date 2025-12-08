@@ -7534,7 +7534,7 @@ fn main() {
     // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
 
-    let (bittorrent_handler_arc, ftp_server_arc, protocol_manager_arc) = runtime.block_on(async move {
+    let (bittorrent_handler_arc, ftp_server_arc, protocol_manager_arc, ftp_event_bus_holder) = runtime.block_on(async move {
         // Use the instance_id and instance_suffix from above for BitTorrent paths
         let download_dir =
             directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
@@ -7589,10 +7589,10 @@ fn main() {
         let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
         manager.register(Box::new(ed2k_handler));
 
-        let ftp_handler = protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
+        let (ftp_handler, ftp_event_bus_holder) = protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
         manager.register(Box::new(ftp_handler));
 
-        (bittorrent_handler_arc, ftp_server, Arc::new(manager))
+        (bittorrent_handler_arc, ftp_server, Arc::new(manager), ftp_event_bus_holder)
     });
 
     // Reputation system Tauri commands
@@ -7659,6 +7659,9 @@ fn main() {
         );
         Ok(verdicts)
     }
+
+    // Clone the FTP event bus holder so it can be moved into setup()
+    let ftp_event_bus_holder_for_setup = ftp_event_bus_holder.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -7996,7 +7999,13 @@ fn main() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
+            // Initialize FTP event bus now that we have the app handle
+            protocols::ftp::FtpProtocolHandler::set_event_bus_from_holder(
+                &ftp_event_bus_holder_for_setup,
+                app.handle().clone(),
+            );
+
             // Load settings from disk
             let settings = load_settings_from_file(&app.handle());
 
