@@ -238,9 +238,7 @@
         if (autoRelayEnabled && dhtIsRunning && hasRelays) {
           try {
             const result = await relayErrorService.connectToRelay();
-            if (result.success) {
-              console.log('Successfully connected to relay via error service');
-            } else {
+            if (!result.success) {
               console.warn('Failed to connect to relay:', result.error);
             }
           } catch (error) {
