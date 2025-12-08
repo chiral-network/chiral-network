@@ -80,6 +80,10 @@
   let searchQuery = "";
   let debouncedSearchQuery = ""; // Debounced version for filtering
   let isLoading = true;
+  
+  // Cache peer scores to prevent fluctuations during refreshes
+  const peerScoreCache = new Map<string, { score: number; trustLevel: TrustLevel; timestamp: number }>();
+  const SCORE_CACHE_TTL = 5000; // 5 seconds
   let showAnalytics = persistedToggles.showAnalytics;
   let showRelayLeaderboard = persistedToggles.showRelayLeaderboard;
   let currentPage = 1;
@@ -187,6 +191,7 @@
 
   // Map backend metrics to UI PeerReputation[] and analytics
   async function loadPeersFromBackend() {
+    console.log('🔄 loadPeersFromBackend() called');
     try {
       // Use the new method that gets metrics for ALL connected DHT peers
       // This ensures we show all peers, even those without transfer history
@@ -210,22 +215,42 @@
 
       for (let i = 0; i < metrics.length; i++) {
         const m = metrics[i];
-        let score = PeerSelectionService.compositeScoreFromMetrics(m);
+        
+        // Check cache first to prevent score fluctuations
+        const now = Date.now();
+        const cached = peerScoreCache.get(m.peer_id);
+        let score: number;
+        let trustLevel: TrustLevel;
+        
+        if (cached && (now - cached.timestamp) < SCORE_CACHE_TTL) {
+          // Use cached score if recent (within 5 seconds)
+          score = cached.score;
+          trustLevel = cached.trustLevel;
+        } else {
+          // Recalculate score
+          score = PeerSelectionService.compositeScoreFromMetrics(m);
+          
+          // Determine trust level based on score
+          trustLevel = score >= 0.75 ? TrustLevel.Trusted :  // 2+ successful transfers
+                      score >= 0.6 ? TrustLevel.High :
+                      score >= 0.4 ? TrustLevel.Medium :
+                      score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
+          
+          console.log(`🎯 Peer ${m.peer_id.substring(0,15)}... score: ${score.toFixed(3)} (${(score*5).toFixed(1)}/5.0) -> ${trustLevel}`);
+          
+          // Cache the score
+          peerScoreCache.set(m.peer_id, { score, trustLevel, timestamp: now });
+        }
+        
         let totalInteractions = Math.max(1, m.transfer_count);
         let successfulInteractions = Math.min(totalInteractions, m.successful_transfers);
 
         console.log(
           `📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}, ` +
           `success_rate: ${m.success_rate.toFixed(2)}, reliability: ${m.reliability_score.toFixed(2)}, ` +
-          `composite: ${score.toFixed(2)}, stars: ${(score * 5).toFixed(1)}/5.0`
+          `composite: ${score.toFixed(2)}, stars: ${(score * 5).toFixed(1)}/5.0, ` +
+          `cached: ${cached ? 'yes' : 'no'}`
         );
-
-        // Determine trust level based on score
-        
-        const trustLevel = score >= 0.75 ? TrustLevel.Trusted :  // 2+ successful transfers
-                          score >= 0.6 ? TrustLevel.High :
-                          score >= 0.4 ? TrustLevel.Medium :
-                          score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
 
         mappedPeers.push({
           peerId: m.peer_id,

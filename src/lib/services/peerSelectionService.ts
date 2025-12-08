@@ -401,12 +401,24 @@ export class PeerSelectionService {
       }
     }
 
+    // For new peers with no transfer history, return exactly 0.7 (3.5 stars, "High" trust level)
+    // Once they have transfers, use the weighted calculation
+    if (p.transfer_count === 0) {
+      console.log(`✨ New peer ${p.peer_id.substring(0,15)}... has 0 transfers, returning 0.7 score (High trust)`);
+      return 0.7; // Exactly 3.5/5.0 stars for new peers
+    }
+    
+    console.log(`📈 Existing peer ${p.peer_id.substring(0,15)}... has ${p.transfer_count} transfers (${p.successful_transfers} success, ${p.failed_transfers} failed)`);
+
+    
     // Use backend success_rate directly (more accurate than frontend Beta distribution)
-    const repScore = p.success_rate; // This is calculated from actual transfers in backend
+    const repScore = p.success_rate;
     
     const freshScore = (() => {
+      // Since we just called noteSeen(), this peer is fresh right now
+      // Use the backend's last_seen time to calculate staleness
       const nowSec = Date.now() / 1000;
-      const ageSec = Math.max(0, nowSec - (p.last_seen || 0));
+      const ageSec = Math.max(0, nowSec - (p.last_seen || nowSec));
       if (ageSec <= 60) return 1;
       if (ageSec >= 86400) return 0;
       return 1 - (ageSec - 60) / (86400 - 60);
