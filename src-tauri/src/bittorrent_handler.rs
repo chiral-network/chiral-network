@@ -784,7 +784,7 @@ pub async fn new_with_state(
     async fn start_download_with_options(
         &self,
         identifier: &str,
-        add_opts: AddTorrentOptions,
+        mut add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
