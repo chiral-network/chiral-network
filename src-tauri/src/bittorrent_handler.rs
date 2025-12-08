@@ -375,6 +375,12 @@ impl BitTorrentHandler {
         info!("AppHandle set on BitTorrentHandler - stats polling will now emit events");
     }
 
+    /// Get a reference to the rqbit session.
+    /// This is useful for accessing torrent metadata.
+    pub fn rqbit_session(&self) -> &Arc<Session> {
+        &self.rqbit_session
+    }
+
     /// Creates a new BitTorrentHandler with the specified download directory.
     pub async fn new(
         download_directory: std::path::PathBuf,
@@ -741,8 +747,9 @@ pub async fn new_with_state(
 
         // Emit torrent_event Added event to notify the frontend
         if let Some(app) = &*self.app_handle.lock().await {
-            // Use info_hash as name since we don't have easy access to the actual name
+            // Use a placeholder name initially - the actual name will be updated once metadata is fetched
             let torrent_name = format!("Torrent {}", &hash_hex[..8]);
+
             let added_event = serde_json::json!({
                 "Added": {
                     "info_hash": hash_hex.clone(),

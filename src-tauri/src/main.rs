@@ -515,14 +515,42 @@ async fn download_torrent_from_bytes(bytes: Vec<u8>, state: State<'_, AppState>,
     let handler = state.bittorrent_handler.clone();
 
     // Start the download from bytes
-    let managed_torrent = handler.start_download_from_bytes(bytes)
+    // Note: start_download_from_bytes already emits the torrent_event Added event with the actual torrent name
+    let _managed_torrent = handler.start_download_from_bytes(bytes)
         .await
         .map_err(|e| format!("Failed to download torrent from bytes: {}", e))?;
 
+    Ok(())
+}
+
+/// Tauri command to download a torrent from a magnet link.
+#[tauri::command]
+async fn download_torrent_from_magnet(magnet_link: String, state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    println!("Received download_torrent_from_magnet command: {}", magnet_link);
+
+    // Get the BitTorrent handler from the state
+    let handler = state.bittorrent_handler.clone();
+
+    // Start the download from magnet link
+    let managed_torrent = handler.start_download(&magnet_link)
+        .await
+        .map_err(|e| format!("Failed to download torrent from magnet: {}", e))?;
+
     // Emit torrent_event Added event
     let info_hash = hex::encode(managed_torrent.info_hash().0);
-    // Use info_hash as name since we don't have easy access to the actual name
-    let torrent_name = format!("Torrent {}", &info_hash[..8]);
+
+    // Try to extract display name from magnet link, otherwise use placeholder
+    let torrent_name = magnet_link
+        .split('?')
+        .nth(1)
+        .and_then(|query| {
+            query.split('&')
+                .find(|param| param.starts_with("dn="))
+                .map(|dn| dn.trim_start_matches("dn="))
+        })
+        .map(|name| urlencoding::decode(name).unwrap_or_else(|_| name.into()).to_string())
+        .unwrap_or_else(|| format!("Torrent {}", &info_hash[..8]));
+
     let added_event = serde_json::json!({
         "Added": {
             "info_hash": info_hash,
@@ -7841,6 +7869,7 @@ fn main() {
             get_power_consumption,
             download,
             download_torrent_from_bytes,
+            download_torrent_from_magnet,
             open_torrent_folder,
             seed,
             create_and_seed_torrent,

@@ -1772,6 +1772,12 @@ async function loadAndResumeDownloads() {
       return;
     }
 
+    // Skip BitTorrent downloads - they are handled by the BitTorrent backend
+    if (fileToDownload.protocol === 'BitTorrent' || fileToDownload.id?.startsWith('torrent-')) {
+      activeSimulations.delete(fileId);
+      return;
+    }
+
       // Get download path from settings
       try {
         const { join } = await import('@tauri-apps/api/path');
