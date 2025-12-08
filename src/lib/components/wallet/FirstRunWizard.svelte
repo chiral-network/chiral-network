@@ -13,8 +13,7 @@
   export let onComplete: () => void
 
   let showMnemonicWizard = false
-  let mode: 'welcome' | 'mnemonic' = 'welcome'
-  let activeCard: 'create' | 'import' = 'create'
+  let mode: 'welcome' | 'mnemonic' | 'import' = 'welcome'
   let importPrivateKey = ''
   let isImportingAccount = false
   let importedSnapshot: any = null
@@ -177,7 +176,7 @@
       importPrivateKey = ''
       importedSnapshot = null
       showToast(msg('account.firstRun.importSuccess', 'Wallet imported successfully'), 'success')
-      activeCard = 'create'
+      mode = 'welcome'
       onComplete()
     } catch (error) {
       console.error('Failed to import wallet', error)
@@ -188,135 +187,128 @@
   }
 </script>
 
-
-
 {#if mode === 'welcome'}
   <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-    <div class="wizard-card-wrapper">
-      <div class="wizard-card-inner" class:is-flipped={activeCard === 'import'}>
-        <div class="wizard-card-face wizard-card-front" aria-hidden={activeCard !== 'create'}>
-          <Card class="wizard-card-content w-full max-w-2xl p-8 space-y-6">
-            <div class="space-y-2">
-              <h2 class="text-3xl font-bold text-center">{$t('account.firstRun.welcome')}</h2>
-              <p class="text-center text-muted-foreground">
-                {$t('account.firstRun.description')}
-              </p>
-            </div>
-
-            <div class="space-y-4">
-              <div class="p-4 border rounded-lg space-y-2">
-                <h3 class="font-semibold text-lg">{$t('account.firstRun.whyAccount')}</h3>
-                <ul class="list-disc list-inside space-y-1 text-sm text-muted-foreground">
-                  <li>{$t('account.firstRun.reason1')}</li>
-                  <li>{$t('account.firstRun.reason2')}</li>
-                  <li>{$t('account.firstRun.reason3')}</li>
-                </ul>
-              </div>
-
-              <div class="flex flex-col gap-3">
-                <Button on:click={handleCreateNewWallet} class="w-full py-6 text-lg">
-                  {$t('account.firstRun.createWallet')}
-                </Button>
-                
-                <div class="relative">
-                  <div class="absolute inset-0 flex items-center">
-                    <span class="w-full border-t border-muted"></span>
-                  </div>
-                  <div class="relative flex justify-center text-xs uppercase">
-                    <span class="bg-background px-2 text-muted-foreground">For Testing Only</span>
-                  </div>
-                </div>
-
-                <Button 
-                  on:click={handleCreateTestWallet} 
-                  variant="outline" 
-                  class="w-full py-4 border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-                >
-                  Create Test Wallet - For Testing Only
-                </Button>
-              </div>
-
-              <p class="text-sm text-center text-muted-foreground">
-                {$t('account.firstRun.requiresWallet')}
-              </p>
-
-              <button
-                class="block w-full text-center text-xs font-semibold text-primary underline underline-offset-4 decoration-dotted px-4 py-2 rounded-full transition-colors hover:text-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                type="button"
-                on:click={() => activeCard = 'import'}
-              >
-                {$t('account.firstRun.importPrompt') === 'account.firstRun.importPrompt'
-                  ? 'Already have a wallet? Import it'
-                  : $t('account.firstRun.importPrompt')}
-              </button>
-            </div>
-          </Card>
-        </div>
-
-        <div class="wizard-card-face wizard-card-back" aria-hidden={activeCard !== 'import'}>
-          <Card class="wizard-card-content w-full max-w-2xl p-8 space-y-6">
-            <div class="space-y-2">
-              <h2 class="text-3xl font-bold text-center">
-                {$t('account.firstRun.importTitle') === 'account.firstRun.importTitle'
-                  ? 'Import Existing Wallet'
-                  : $t('account.firstRun.importTitle')}
-              </h2>
-              <p class="text-center text-muted-foreground">
-                {$t('account.firstRun.importDescription') === 'account.firstRun.importDescription'
-                  ? 'Paste your private key or load an exported wallet file to restore access.'
-                  : $t('account.firstRun.importDescription')}
-              </p>
-            </div>
-
-            <div class="space-y-4">
-              <div class="flex flex-col gap-2">
-                <Input
-                  class="flex-1"
-                  placeholder="0x..."
-                  bind:value={importPrivateKey}
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-                <Button variant="outline" on:click={loadPrivateKeyFromFile}>
-                  {$t('account.firstRun.loadFromFile') === 'account.firstRun.loadFromFile'
-                    ? 'Load from file'
-                    : $t('account.firstRun.loadFromFile')}
-                </Button>
-              </div>
-
-              <Button
-                class="w-full"
-                on:click={handleImportExistingWallet}
-                disabled={!importPrivateKey || isImportingAccount}
-              >
-                {isImportingAccount
-                  ? ($t('account.firstRun.importing') === 'account.firstRun.importing'
-                    ? 'Importing...'
-                    : $t('account.firstRun.importing'))
-                  : ($t('account.firstRun.importWallet') === 'account.firstRun.importWallet'
-                    ? 'Import Wallet'
-                    : $t('account.firstRun.importWallet'))}
-              </Button>
-
-              <button
-                class="block w-full text-center text-xs font-semibold text-primary underline underline-offset-4 decoration-dotted px-4 py-2 rounded-full transition-colors hover:text-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                type="button"
-                on:click={() => {
-                  activeCard = 'create'
-                  importPrivateKey = ''
-                }}
-              >
-                {$t('account.firstRun.backToCreate') === 'account.firstRun.backToCreate'
-                  ? 'New here? Create a wallet'
-                  : $t('account.firstRun.backToCreate')}
-              </button>
-            </div>
-          </Card>
-        </div>
+    <Card class="w-full max-w-3xl p-8 space-y-6">
+      <div class="space-y-2">
+        <h2 class="text-3xl font-bold text-center">{$t('account.firstRun.welcome')}</h2>
+        <p class="text-center text-muted-foreground">
+          {$t('account.firstRun.description')}
+        </p>
       </div>
-    </div>
+
+      <div class="space-y-4">
+        <div class="p-4 border rounded-lg space-y-2">
+          <h3 class="font-semibold text-lg">{$t('account.firstRun.whyAccount')}</h3>
+          <ul class="list-disc list-inside space-y-1 text-sm text-muted-foreground">
+            <li>{$t('account.firstRun.reason1')}</li>
+            <li>{$t('account.firstRun.reason2')}</li>
+            <li>{$t('account.firstRun.reason3')}</li>
+          </ul>
+        </div>
+
+        <div class="flex flex-col gap-3">
+          <Button on:click={handleCreateNewWallet} class="w-full py-6 text-lg">
+            {$t('account.firstRun.createWallet')}
+          </Button>
+
+          <Button on:click={() => mode = 'import'} variant="outline" class="w-full py-6 text-lg">
+            {$t('account.firstRun.importWallet') === 'account.firstRun.importWallet'
+                ? 'Import Existing Wallet'
+                : $t('account.firstRun.importWallet')}
+          </Button>
+          
+          {#if import.meta.env.DEV}
+            <div class="relative">
+              <div class="absolute inset-0 flex items-center">
+                <span class="w-full border-t border-muted"></span>
+              </div>
+              <div class="relative flex justify-center text-xs uppercase">
+                <span class="bg-background px-2 text-muted-foreground">For Testing Only</span>
+              </div>
+            </div>
+
+            <Button 
+              on:click={handleCreateTestWallet} 
+              variant="outline" 
+              class="w-full py-4 border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+            >
+              Create Test Wallet
+            </Button>
+          {/if}
+        </div>
+
+        <p class="text-sm text-center text-muted-foreground">
+          {$t('account.firstRun.requiresWallet')}
+        </p>
+      </div>
+    </Card>
   </div>
 {/if}
+
+{#if mode === 'import'}
+  <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <Card class="w-full max-w-2xl p-8 space-y-6">
+      <div class="space-y-2">
+        <h2 class="text-3xl font-bold text-center">
+          {$t('account.firstRun.importTitle') === 'account.firstRun.importTitle'
+            ? 'Import Existing Wallet'
+            : $t('account.firstRun.importTitle')}
+        </h2>
+        <p class="text-center text-muted-foreground">
+          {$t('account.firstRun.importDescription') === 'account.firstRun.importDescription'
+            ? 'Paste your private key or load an exported wallet file to restore access.'
+            : $t('account.firstRun.importDescription')}
+        </p>
+      </div>
+
+      <div class="space-y-4">
+        <div class="flex flex-col gap-2">
+          <Input
+            class="flex-1"
+            placeholder="0x..."
+            bind:value={importPrivateKey}
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <Button variant="outline" on:click={loadPrivateKeyFromFile}>
+            {$t('account.firstRun.loadFromFile') === 'account.firstRun.loadFromFile'
+              ? 'Load from file'
+              : $t('account.firstRun.loadFromFile')}
+          </Button>
+        </div>
+
+        <Button
+          class="w-full"
+          on:click={handleImportExistingWallet}
+          disabled={!importPrivateKey || isImportingAccount}
+        >
+          {isImportingAccount
+            ? ($t('account.firstRun.importing') === 'account.firstRun.importing'
+              ? 'Importing...'
+              : $t('account.firstRun.importing'))
+            : ($t('account.firstRun.importWallet') === 'account.firstRun.importWallet'
+              ? 'Import Wallet'
+              : $t('account.firstRun.importWallet'))}
+        </Button>
+
+        <button
+          class="block w-full text-center text-xs font-semibold text-primary underline underline-offset-4 decoration-dotted px-4 py-2 rounded-full transition-colors hover:text-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          type="button"
+          on:click={() => {
+            mode = 'welcome'
+            importPrivateKey = ''
+          }}
+        >
+          {$t('account.firstRun.backToCreate') === 'account.firstRun.backToCreate'
+            ? 'Back to Welcome'
+            : $t('account.firstRun.backToCreate')}
+        </button>
+      </div>
+    </Card>
+  </div>
+{/if}
+
 {#if showMnemonicWizard}
   <MnemonicWizard
     mode="create"
@@ -326,36 +318,4 @@
 {/if}
 
 <style>
-  .wizard-card-wrapper {
-    width: min(42rem, 100%);
-    perspective: 1600px;
-    position: relative;
-  }
-
-  .wizard-card-inner {
-    position: relative;
-    width: 100%;
-    min-height: 32rem;
-    transform-style: preserve-3d;
-    transition: transform 600ms cubic-bezier(0.22, 0.61, 0.36, 1);
-  }
-
-  .wizard-card-inner.is-flipped {
-    transform: rotateY(180deg);
-  }
-
-  .wizard-card-face {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: stretch;
-    justify-content: center;
-    backface-visibility: hidden;
-    transform-style: preserve-3d;
-  }
-
-  .wizard-card-back {
-    transform: rotateY(180deg);
-  }
-
 </style>

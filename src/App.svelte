@@ -973,23 +973,24 @@ function handleFirstRunComplete() {
 
         <!-- Sidebar Nav Items -->
         {#each menuItems as item}
-          {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
+          {@const requiresGeth = item.id === 'blockchain' || item.id === 'mining'}
+          {@const isBlocked = requiresGeth && $gethStatus !== 'running'}
           <button
             on:click={() => {
-              if (isBlockchainDisabled) return;
+              if (isBlocked) return;
               navigateTo(item.id, `/${item.id}`);
             }}
-            class="w-full group {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : ''}"
+            class="w-full group {isBlocked ? 'cursor-not-allowed opacity-60' : ''}"
             aria-current={currentPage === item.id ? "page" : undefined}
-            disabled={isBlockchainDisabled}
-            title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
+            disabled={isBlocked}
+            title={isBlocked ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
           >
             <div
               class="flex items-center {sidebarCollapsed
                 ? 'justify-center'
                 : ''} rounded {currentPage === item.id
                 ? 'bg-gray-200'
-                : isBlockchainDisabled ? '' : 'group-hover:bg-gray-100'}"
+                : isBlocked ? '' : 'group-hover:bg-gray-100'}"
             >
               <span
                 class="flex items-center justify-center rounded w-10 h-10 relative"
@@ -1069,17 +1070,18 @@ function handleFirstRunComplete() {
         <!-- Sidebar Nav Items -->
         <nav class="flex-1 p-4 space-y-2">
           {#each menuItems as item}
-            {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
+            {@const requiresGeth = item.id === 'blockchain' || item.id === 'mining'}
+            {@const isBlocked = requiresGeth && $gethStatus !== 'running'}
             <button
               on:click={() => {
-                if (isBlockchainDisabled) return;
+                if (isBlocked) return;
                 navigateTo(item.id, `/${item.id}`);
                 sidebarMenuOpen = false;
               }}
-              class="w-full flex items-center rounded px-4 py-3 text-lg {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-gray-100'}"
+              class="w-full flex items-center rounded px-4 py-3 text-lg {isBlocked ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-100'}"
               aria-current={currentPage === item.id ? "page" : undefined}
-              disabled={isBlockchainDisabled}
-              title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
+              disabled={isBlocked}
+              title={isBlocked ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
             >
               <svelte:component this={item.icon} class="h-5 w-5 mr-3" />
               {item.label}
