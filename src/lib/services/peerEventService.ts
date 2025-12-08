@@ -32,21 +32,35 @@ function sortDiscoveries(entries: PeerDiscovery[]): PeerDiscovery[] {
     .slice(0, 200);
 }
 
-function mergeDiscovery(peerId: string, addresses: string[]) {
+function mergeDiscovery(peerId: string, addresses: string[] | null | undefined) {
+  // Validate peerId before processing
+  if (!peerId || typeof peerId !== 'string' || peerId.trim().length === 0) {
+    return;
+  }
+
   const now = Date.now();
-  const normalized = addresses
-    .filter((addr) => typeof addr === "string")
-    .map((addr) => addr.trim())
-    .filter((addr) => addr.length > 0);
+  
+  // Guard against non-array addresses (handles null, undefined, string, etc.)
+  const safeAddresses = Array.isArray(addresses) ? addresses : [];
+  
+  // Deduplicate addresses within the incoming array
+  const normalized = Array.from(new Set(
+    safeAddresses
+      .filter((addr) => typeof addr === "string")
+      .map((addr) => addr.trim())
+      .filter((addr) => addr.length > 0)
+  ));
 
   discoveredPeersStore.update((entries) => {
     const idx = entries.findIndex((entry) => entry.peerId === peerId);
+    
     if (idx >= 0) {
+      // Updating existing entry
       const current = entries[idx];
       const mergedAddresses =
         normalized.length > 0
           ? Array.from(new Set([...current.addresses, ...normalized]))
-          : current.addresses;
+          : current.addresses; // Keep existing addresses if no new ones
       const next = entries.slice();
       next[idx] = {
         peerId,
@@ -56,6 +70,9 @@ function mergeDiscovery(peerId: string, addresses: string[]) {
       return sortDiscoveries(next);
     }
 
+    // Creating new entry
+    // Always create the entry (even with empty addresses) if we have valid peerId
+    // This is intentional - we want to track discovered peers even if we don't have addresses yet
     const entry: PeerDiscovery = {
       peerId,
       addresses: normalized,
@@ -66,6 +83,11 @@ function mergeDiscovery(peerId: string, addresses: string[]) {
 }
 
 function upsertPeerRecord(peerId: string, address?: string | null) {
+  // FIX BUG #3: Validate peerId
+  if (!peerId || typeof peerId !== 'string' || peerId.trim().length === 0) {
+    return;
+  }
+
   const now = new Date();
   const normalizedAddress = address?.trim();
 
@@ -115,6 +137,11 @@ function upsertPeerRecord(peerId: string, address?: string | null) {
 }
 
 function markPeerOffline(peerId: string) {
+  // FIX BUG #4: Validate peerId
+  if (!peerId || typeof peerId !== 'string' || peerId.trim().length === 0) {
+    return;
+  }
+
   const now = new Date();
   peers.update((list) => {
     const idx = list.findIndex(
@@ -137,6 +164,13 @@ export const peerDiscoveryStore = {
   subscribe: discoveredPeersStore.subscribe,
 };
 
+// FIX BUG #5: Export reset function for testing
+export function __resetDiscoveryStore() {
+  if (process.env.NODE_ENV === 'test' || import.meta.env?.MODE === 'test') {
+    discoveredPeersStore.set([]);
+  }
+}
+
 export async function startPeerEventStream(): Promise<() => void> {
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
     return () => {};
@@ -147,16 +181,22 @@ export async function startPeerEventStream(): Promise<() => void> {
   try {
     unlistenFns.push(
       await listen<PeerDiscoveredPayload>("dht_peer_discovered", (event) => {
-        const payload = event.payload;
-        if (!payload || !payload.peerId) return;
+        // FIX BUG #6: Validate payload structure
+        const payload = event?.payload;
+        if (!payload || typeof payload !== 'object') return;
+        if (!payload.peerId) return;
+        
         mergeDiscovery(payload.peerId, payload.addresses ?? []);
       })
     );
 
     unlistenFns.push(
       await listen<PeerConnectedPayload>("dht_peer_connected", (event) => {
-        const payload = event.payload;
-        if (!payload || !payload.peerId) return;
+        // FIX BUG #7: Validate payload structure
+        const payload = event?.payload;
+        if (!payload || typeof payload !== 'object') return;
+        if (!payload.peerId) return;
+        
         const addresses = payload.address ? [payload.address] : [];
         mergeDiscovery(payload.peerId, addresses);
         upsertPeerRecord(payload.peerId, payload.address ?? null);
@@ -167,8 +207,11 @@ export async function startPeerEventStream(): Promise<() => void> {
       await listen<PeerDisconnectedPayload>(
         "dht_peer_disconnected",
         (event) => {
-          const payload = event.payload;
-          if (!payload || !payload.peerId) return;
+          // FIX BUG #8: Validate payload structure
+          const payload = event?.payload;
+          if (!payload || typeof payload !== 'object') return;
+          if (!payload.peerId) return;
+          
           mergeDiscovery(payload.peerId, []);
           markPeerOffline(payload.peerId);
         }

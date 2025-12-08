@@ -179,19 +179,18 @@ describe("DownloadHistoryService", () => {
       });
 
       it("should handle file with both encrypted and isEncrypted properties", () => {
-        // Bug: Code checks both file.encrypted || file.isEncrypted
-        // What if they conflict?
+        // isEncrypted takes precedence when both fields exist
         const file1 = createMockFileItem({ 
           hash: "enc1",
           encrypted: true, 
-          isEncrypted: false // Conflicting!
+          isEncrypted: false // Conflicting! isEncrypted should win
         } as any);
         
         downloadHistoryService.addToHistory(file1);
         
         const history = downloadHistoryService.getHistory();
-        // Current code does OR, so true wins
-        expect(history[0].encrypted).toBe(true);
+        // isEncrypted takes precedence, so false wins
+        expect(history[0].encrypted).toBe(false);
       });
 
       it("should preserve downloadDate when updating existing entry", () => {

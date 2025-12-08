@@ -93,42 +93,14 @@ export class FileService {
    * @returns The full path to the downloaded file.
    */
   async downloadFile(hash: string, fileName: string): Promise<string> {
-    // ✅ GET AND VALIDATE SETTINGS PATH
-    const stored = localStorage.getItem("chiralSettings");
-    if (!stored) {
-      throw new Error(
-        "Please configure a download path in Settings before downloading files."
-      );
-    }
+    // Get the canonical download directory from backend (single source of truth)
+    const downloadDir = await invoke<string>("get_download_directory");
 
-    const settings = JSON.parse(stored);
-    let storagePath = settings.storagePath;
-
-    if (!storagePath || storagePath === ".") {
-      throw new Error(
-        "Please set a valid download path in Settings before downloading files."
-      );
-    }
-
-    // Expand ~ to home directory if needed
-    if (storagePath.startsWith("~")) {
-      const { homeDir } = await import("@tauri-apps/api/path");
-      const home = await homeDir();
-      storagePath = storagePath.replace("~", home);
-    }
-
-    // Validate directory exists
-    const dirExists = await invoke<boolean>("check_directory_exists", {
-      path: storagePath,
-    });
-    if (!dirExists) {
-      throw new Error(
-        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`
-      );
-    }
+    // Ensure directory exists (create it if it doesn't)
+    await invoke("ensure_directory_exists", { path: downloadDir });
 
     // Construct full file path using join for proper path handling
-    const outputPath = await join(storagePath, fileName);
+    const outputPath = await join(downloadDir, fileName);
 
     console.log("✅ Starting download to:", outputPath);
 

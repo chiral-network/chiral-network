@@ -53,7 +53,7 @@ async fn test_extract_ftp_sources_from_metadata() {
         http_sources: None,
         is_root: true,
         download_path: None,
-        price: None,
+        price: 0.0,
         uploader_address: None,
         info_hash: None,
         trackers: None,

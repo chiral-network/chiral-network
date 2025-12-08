@@ -23,6 +23,8 @@
   "privacy.proxyHint": "SOCKS5 프록시 주소를 입력하세요 (예: Tor의 경우 127.0.0.1:9050)",
   "privacy.anonymousMode": "익명 모드 (모든 식별 정보 숨기기)",
   "privacy.shareAnalytics": "익명 사용 분석 공유",
+  "privacy.autoLockWallet": "Auto-lock wallet after inactivity",
+  "privacy.autoLockWalletHint": "Logs you out automatically after one hour without activity.",
   "storage.locationPick": "저장 위치 선택",
   "storage.selectLocationTitle": "저장 위치 선택",
   "storage.enterPathPrompt": "저장 경로를 입력하세요",
@@ -156,6 +158,9 @@
         "title": "릴레이 상태",
         "enabled": "자동 릴레이 활성화됨",
         "disabled": "자동 릴레이 비활성화됨",
+        "timeline": "자동 릴레이 타임라인",
+        "enabledAt": "마지막 활성화",
+        "disabledAt": "마지막 비활성화",
         "noPeer": "릴레이에 연결되지 않음",
         "activePeer": "활성 릴레이",
         "status": "상태",
@@ -164,6 +169,8 @@
         "renewals": "예약 갱신",
         "evictions": "예약 제거",
         "never": "없음",
+        "neverEnabled": "활성화된 적 없음",
+        "neverDisabled": "비활성화된 적 없음",
         "noEvictions": "제거 없음",
         "accepted": "예약 수락됨",
         "pending": "대기 중",
@@ -259,6 +266,10 @@
     "enableUpnp": "UPnP 활성화",
     "enableNat": "NAT 포트 매핑 활성화",
     "enableDht": "DHT 활성화",
+    "autoStartNode": "시작 시 DHT 노드 자동 시작",
+    "autoStartNodeDescription": "애플리케이션 시작 시 DHT 파일 공유 노드를 자동으로 시작합니다",
+    "autoStartGeth": "시작 시 블록체인 노드 자동 시작",
+    "autoStartGethDescription": "애플리케이션 시작 시 Geth 블록체인 노드를 자동으로 시작합니다(지갑 및 채굴 활성화)",
     "geoDistribution": {
       "title": "지리 분포",
       "subtitle": "{peers}개의 피어 위치를 추적 중",
@@ -408,6 +419,7 @@
     "balance": "잔액",
     "totalEarned": "총 수익",
     "totalSpent": "총 지출",
+    "totalReceived": "총 수신",
     "address": "카이럴 주소",
     "qrModal": {
       "title": "나의 카이럴 주소",
@@ -452,6 +464,23 @@
       "noDetails": "표시할 보류 중 트랜잭션이 없습니다.",
       "count": "보류 중 {count}건",
       "none": "보류 중 트랜잭션"
+    },
+    "fees": {
+      "low": "낮음",
+      "market": "시장",
+      "fast": "빠름",
+      "estimated": "예상 수수료"
+    },
+    "gas": {
+      "label": "트랜잭션 속도",
+      "loading": "예상 중...",
+      "estimateError": "기본값 사용",
+      "slow": "경제적",
+      "standard": "표준",
+      "fast": "우선",
+      "estimatedFee": "예상 수수료",
+      "totalCost": "총 비용",
+      "networkCongestion": "네트워크"
     }
   },
   "transactions": {
@@ -464,6 +493,19 @@
     "item": {
       "from": "보낸 사람",
       "to": "받는 사람"
+    },
+    "receipt": {
+      "title": "트랜잭션 영수증",
+      "from": "보낸 사람",
+      "to": "받는 사람",
+      "hash": "트랜잭션 해시",
+      "blockNumber": "블록 번호",
+      "gasInfo": "가스 정보",
+      "gasUsed": "가스 사용량",
+      "gasPrice": "가스 가격",
+      "fee": "트랜잭션 수수료",
+      "timestamp": "타임스탬프",
+      "close": "영수증 닫기"
     },
     "searchPlaceholder": "주소, 설명 또는 ID로 검색..."
   },
@@ -625,7 +667,8 @@
       "invalid": "0보다 큰 올바른 금액을 입력하세요.",
       "min": "금액은 최소 {min} Chiral이어야 합니다.",
       "insufficient": "잔액이 부족합니다 — {more} Chiral이 더 필요합니다.",
-      "insufficientWithFee": "자금이 부족합니다. 총 {total} Chiral (금액 + 수수료)이 잔액 {balance} Chiral을 초과합니다."
+      "insufficientWithFee": "자금이 부족합니다. 총 {total} Chiral (금액 + 수수료)이 잔액 {balance} Chiral을 초과합니다.",
+      "insufficientWithGas": "잔액이 부족합니다 (가스 포함) - {more} Chiral이 더 필요합니다."
     },
     "exportFailed": "내보내기에 실패했습니다. 다시 시도하세요.",
     "createAccount": "계정 생성 실패: {error}"
@@ -1411,6 +1454,14 @@
     "blocks": {
       "latest": "최신 블록",
       "noBlocks": "블록을 찾을 수 없습니다"
+    },
+    "sync": {
+      "syncing": "동기화 중",
+      "current": "현재 블록",
+      "highest": "최고 블록",
+      "remaining": "남음",
+      "eta": "예상 시간",
+      "complete": "동기화 완료"
     },
     "search": {
       "title": "블록체인 검색",

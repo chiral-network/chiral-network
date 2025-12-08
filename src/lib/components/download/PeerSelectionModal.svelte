@@ -16,7 +16,7 @@
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
-  import { Server, Zap, TrendingUp, DollarSign, Clock, X, Download, Globe, Wifi } from 'lucide-svelte';
+  import { Server, Zap, TrendingUp, Clock, X, Download, Globe, Wifi } from 'lucide-svelte';
   import { toHumanReadableSize } from '$lib/utils';
 
   export let show = false;
@@ -24,9 +24,13 @@
   export let fileSize: number;
   export let peers: PeerInfo[];
   export let mode: 'auto' | 'manual' = 'auto';
-  export let autoSelectionInfo: Array<{peerId: string; score: number; metrics: any}> | null = null;
-  export let protocol: 'http' | 'webrtc' | 'bitswap' = 'http'; 
+  export let protocol: 'http' | 'webrtc' | 'bitswap' | 'bittorrent' | 'ed2k' | 'ftp' = 'http';
   export let isTorrent = false; // Flag to indicate torrent download (no peer selection needed)
+  export let availableProtocols: Array<{id: string, name: string, description: string, available: boolean}> = [];
+  export let isSeeding = false; // Flag to indicate if user is seeding this file
+
+  // Filter to only available protocols for display
+  $: validProtocols = availableProtocols.filter(p => p.available);
 
   const dispatch = createEventDispatcher<{
     confirm: void;
@@ -135,130 +139,66 @@
         <!-- Protocol Selection -->
         <div class="space-y-2">
           <div class="text-sm font-semibold text-foreground/90">Transfer Protocol</div>
+          <div class="flex gap-2 flex-wrap">
+            {#each validProtocols as proto}
+              <Button
+                variant={protocol === proto.id ? 'default' : 'outline'}
+                size="sm"
+                on:click={() => protocol = proto.id as any}
+              >
+                {#if proto.id === 'http'}
+                  <Globe class="h-4 w-4 mr-2" />
+                {:else if proto.id === 'webrtc'}
+                  <Wifi class="h-4 w-4 mr-2" />
+                {:else if proto.id === 'bitswap'}
+                  <Zap class="h-4 w-4 mr-2" />
+                {:else if proto.id === 'bittorrent'}
+                  <Server class="h-4 w-4 mr-2" />
+                {:else}
+                  <Server class="h-4 w-4 mr-2" />
+                {/if}
+                {proto.name}
+              </Button>
+            {/each}
+          </div>
+          {#if validProtocols.length === 0}
+            <p class="text-xs text-destructive">No download protocols available for this file.</p>
+          {:else}
+            <p class="text-xs text-muted-foreground">
+              {validProtocols.find(p => p.id === protocol)?.description || ''}
+            </p>
+          {/if}
+        </div>
+
+        <!-- Peer Selection Mode -->
+        <div class="space-y-2">
+          <div class="text-sm font-semibold text-foreground/90">Peer Selection Mode</div>
           <div class="flex gap-2">
             <Button
-              variant={protocol === 'http' ? 'default' : 'outline'}
+              variant={mode === 'auto' ? 'default' : 'outline'}
               size="sm"
-              on:click={() => protocol = 'http'}
-            >
-              <Globe class="h-4 w-4 mr-2" />
-              HTTP
-            </Button>
-            <Button
-              variant={protocol === 'webrtc' ? 'default' : 'outline'}
-              size="sm"
-              on:click={() => protocol = 'webrtc'}
-            >
-              <Wifi class="h-4 w-4 mr-2" />
-              WebRTC
-            </Button>
-            <Button
-              variant={protocol === 'bitswap' ? 'default' : 'outline'}
-              size="sm"
-              on:click={() => protocol = 'bitswap'}
+              on:click={() => { mode = 'auto'; peers.forEach(p => p.selected = true); }}
             >
               <Zap class="h-4 w-4 mr-2" />
-              Bitswap
+              Auto-select Peers (Recommended)
+            </Button>
+            <Button
+              variant={mode === 'manual' ? 'default' : 'outline'}
+              size="sm"
+              on:click={() => { mode = 'manual'; rebalancePercentages(); }}
+            >
+              <Server class="h-4 w-4 mr-2" />
+              Manual Peer Selection
             </Button>
           </div>
           <p class="text-xs text-muted-foreground">
-            {#if protocol === 'http'}
-              HTTP: Simple and fast for nodes with public IP addresses
-            {:else if protocol === 'webrtc'}
-              WebRTC: Peer-to-peer with NAT traversal (works behind firewalls)
-            {:else if protocol === 'bitswap'}
-              Bitswap: A peer-to-peer data exchange protocol for content-addressed data.
+            {#if mode === 'auto'}
+              Automatically selects the best peers based on speed, reliability, and cost.
+            {:else}
+              Manually choose which peers to download from and set bandwidth allocation.
             {/if}
           </p>
         </div>
-
-        <!-- Mode Toggle -->
-        <div class="flex gap-2">
-          <Button
-            variant={mode === 'auto' ? 'default' : 'outline'}
-            size="sm"
-            on:click={() => { mode = 'auto'; peers.forEach(p => p.selected = true); }}
-          >
-            <Zap class="h-4 w-4 mr-2" />
-            Auto-select (Recommended)
-          </Button>
-          <Button
-            variant={mode === 'manual' ? 'default' : 'outline'}
-            size="sm"
-            on:click={() => { mode = 'manual'; rebalancePercentages(); }}
-          >
-            Manual Selection
-          </Button>
-        </div>
-
-        <!-- Auto Mode Description -->
-        {#if mode === 'auto'}
-          <div class="bg-muted/30 p-4 rounded-lg border space-y-3">
-            <p class="text-sm">
-              <span class="font-semibold">Smart Selection:</span> The system automatically chose the best peers
-              based on speed, reliability, and cost.
-            </p>
-
-            {#if autoSelectionInfo && autoSelectionInfo.length > 0}
-              <div class="space-y-2">
-                <p class="text-xs font-semibold text-foreground/70 uppercase tracking-wide">
-                  Selection Reasoning:
-                </p>
-                {#each autoSelectionInfo as info, index}
-                  {@const peer = peers.find(p => p.peerId === info.peerId)}
-                  {#if peer}
-                    <div class="bg-card p-3 rounded-md border">
-                      <div class="flex items-center justify-between mb-2">
-                        <div class="flex items-center gap-2">
-                          <Badge variant="default" class="text-xs">
-                            Peer {index + 1}
-                          </Badge>
-                          <code class="text-xs font-mono text-muted-foreground">{info.peerId.slice(0, 12)}...</code>
-                        </div>
-                        <div class="text-xs font-semibold">
-                          Score: {info.score.toFixed(3)}
-                        </div>
-                      </div>
-
-                      <div class="grid grid-cols-2 gap-2 text-xs">
-                        <div class="flex items-center gap-1">
-                          <TrendingUp class="h-3 w-3 text-muted-foreground" />
-                          <span class="text-muted-foreground">Speed:</span>
-                          <span class="font-medium">{formatSpeed(peer.bandwidth_kbps)}</span>
-                        </div>
-                        <div class="flex items-center gap-1">
-                          <Clock class="h-3 w-3 text-muted-foreground" />
-                          <span class="text-muted-foreground">Latency:</span>
-                          <span class="font-medium">{peer.latency_ms ? `${peer.latency_ms}ms` : 'Unknown'}</span>
-                        </div>
-                        <div>
-                          <span class="text-muted-foreground">Reputation:</span>
-                          <span class="text-yellow-500 ml-1">{getStars(peer.reliability_score)}</span>
-                        </div>
-                        <div class="flex items-center gap-1">
-                          <DollarSign class="h-3 w-3 text-muted-foreground" />
-                          <span class="text-muted-foreground">Price:</span>
-                          <span class="font-medium">${peer.price_per_mb.toFixed(4)}/MB</span>
-                        </div>
-                      </div>
-
-                      <div class="mt-2 pt-2 border-t">
-                        <div class="flex items-center justify-between text-xs">
-                          <span class="text-muted-foreground">Target Allocation:</span>
-                          <span class="font-bold">{peer.percentage}%</span>
-                        </div>
-                      </div>
-                    </div>
-                  {/if}
-                {/each}
-              </div>
-
-              <p class="text-xs text-muted-foreground mt-2">
-                💡 Allocation percentages are weighted by peer quality scores. Better peers receive higher allocations.
-              </p>
-            {/if}
-          </div>
-        {/if}
 
         <!-- Peer Table -->
         <div class="border rounded-lg overflow-hidden">
@@ -319,8 +259,7 @@
                     </td>
                     <td class="p-3">
                       <div class="flex items-center gap-1 text-sm">
-                        <DollarSign class="h-3.5 w-3.5 text-muted-foreground" />
-                        {peer.price_per_mb.toFixed(4)}
+                        {peer.price_per_mb.toFixed(4)} Chiral
                       </div>
                     </td>
                     {#if mode === 'manual'}
@@ -366,7 +305,11 @@
           <div class="flex justify-between items-center">
             <span class="font-medium text-sm">Estimated Cost:</span>
             <span class="text-green-600 dark:text-green-400 font-bold">
-              ${totalCost.toFixed(4)} CHR
+              {#if isSeeding}
+                Free
+              {:else}
+                {Math.max(totalCost, 0.0001).toFixed(4)} Chiral
+              {/if}
             </span>
           </div>
           {#if mode === 'manual'}

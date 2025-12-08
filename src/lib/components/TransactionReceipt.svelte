@@ -34,10 +34,13 @@
   onMount(async () => {
     try {
       if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-        currentBlockNumber = await invoke<number>('get_current_block');
+        // Check if Geth is running before trying to query blockchain
+        const isRunning = await invoke<boolean>('is_geth_running');
+        if (isRunning) {
+          currentBlockNumber = await invoke<number>('get_current_block');
+        }
       }
     } catch (error) {
-      console.error('Failed to get current block:', error);
     }
   });
 
@@ -371,7 +374,6 @@
             </div>
           </div>
         </div>
-
         <!-- Gas Information -->
         <div class="space-y-6">
           <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center">
@@ -493,7 +495,7 @@
               on:click={onClose}
               class="px-6 py-2"
             >
-              {tr('common.close')}
+              {tr('transactions.receipt.close')}
             </Button>
             <Button
               on:click={() => {

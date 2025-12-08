@@ -6,30 +6,39 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
-  import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
+  import { files, downloadQueue, activeTransfers, wallet, type FileItem } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
+  import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
   import { toHumanReadableSize } from '$lib/utils'
-  import { buildSaveDialogOptions } from '$lib/utils/saveDialog'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
   import PeerSelectionService from '$lib/services/peerSelectionService'
   import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
   import { showToast } from '$lib/toast'
-
+  import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
+  import DownloadRestartControls from '$lib/components/download/DownloadRestartControls.svelte'
+  // Import transfer events store for centralized transfer state management
+  import {
+    transferStore,
+    activeTransfers as storeActiveTransfers,
+    subscribeToTransferEvents,
+    unsubscribeFromTransferEvents,
+    type Transfer
+  } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
-  import { homeDir } from '@tauri-apps/api/path'
+  import { homeDir, join } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
  // Auto-detect protocol based on file metadata
-  let detectedProtocol: 'WebRTC' | 'Bitswap' | null = null
+  let detectedProtocol: 'WebRTC' | 'Bitswap' | undefined = undefined
   let torrentDownloads = new Map<string, any>();
   onMount(() => {
     // Initialize payment service to load persisted wallet and transactions
@@ -37,12 +46,16 @@
 
     initDownloadTelemetry()
 
+    // Subscribe to transfer events from backend (FTP, HTTP, etc.)
+    subscribeToTransferEvents().catch(err => {
+      console.error('Failed to subscribe to transfer events:', err);
+    });
+
     // Listen for multi-source download events
     const setupEventListeners = async () => {
       // Listen for BitTorrent events
       const unlistenTorrentEvent = await listen('torrent_event', (event) => {
         const payload = event.payload as any;
-        console.log('Received torrent event:', payload);
 
         if (payload.Progress) {
           const { info_hash, downloaded, total, speed, peers, eta_seconds } = payload.Progress;
@@ -63,7 +76,7 @@
           if (existing) {
             torrentDownloads.set(info_hash, { ...existing, status: 'completed', progress: 100 });
             torrentDownloads = new Map(torrentDownloads);
-            showNotification(`Torrent download complete: ${name}`, 'success');
+            showToast(`Torrent download complete: ${name}`, 'success');
           }
         } else if (payload.Added) {
             const { info_hash, name } = payload.Added;
@@ -78,34 +91,33 @@
                 size: 0,
             });
             torrentDownloads = new Map(torrentDownloads);
-            showNotification(`Torrent added: ${name}`, 'info');
+            showToast(`Torrent added: ${name}`, 'info');
         } else if (payload.Removed) {
             const { info_hash } = payload.Removed;
             if (torrentDownloads.has(info_hash)) {
                 const name = torrentDownloads.get(info_hash)?.name || 'Unknown';
                 torrentDownloads.delete(info_hash);
                 torrentDownloads = new Map(torrentDownloads);
-                showNotification(`Torrent removed: ${name}`, 'warning');
+                showToast(`Torrent removed: ${name}`, 'warning');
             }
         }
       });
 
-      // Cleanup torrent listener
-      onDestroy(() => {
-        unlistenTorrentEvent();
-      });
       try {
         const unlistenProgress = await listen('multi_source_progress_update', (event) => {
           const progress = event.payload as MultiSourceProgress
 
           // Find the corresponding file and update its progress
+          // Only update files that are actively downloading, not seeding files with the same hash
           files.update(f => f.map(file => {
-            if (file.hash === progress.fileHash) {
+            if (file.hash === progress.fileHash && file.status === 'downloading') {
               const percentage = MultiSourceDownloadService.getCompletionPercentage(progress);
+              // If download is complete (100%), set status to completed
+              const isComplete = percentage >= 100;
               return {
                 ...file,
                 progress: percentage,
-                status: 'downloading' as const,
+                status: isComplete ? 'completed' as const : 'downloading' as const,
                 speed: MultiSourceDownloadService.formatSpeed(progress.downloadSpeedBps),
                 eta: MultiSourceDownloadService.formatETA(progress.etaSeconds)
               };
@@ -120,9 +132,10 @@
         const unlistenCompleted = await listen('multi_source_download_completed', (event) => {
           const data = event.payload as any
 
-          // Update file status to completed
+          // Update file status to completed - only update files that are actively downloading
+          // to avoid overwriting seeding files with the same hash
           files.update(f => f.map(file => {
-            if (file.hash === data.file_hash) {
+            if (file.hash === data.file_hash && file.status === 'downloading') {
               return {
                 ...file,
                 status: 'completed' as const,
@@ -135,20 +148,21 @@
 
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
-          showNotification(`Multi-source download completed: ${data.file_name}`, 'success')
+          showToast(`Multi-source download completed: ${data.file_name}`, 'success')
         })
 
         const unlistenStarted = await listen('multi_source_download_started', (event) => {
           const data = event.payload as any
-          showNotification(`Multi-source download started with ${data.total_peers} peers`, 'info')
+          showToast(`Multi-source download started with ${data.total_peers} peers`, 'info')
         })
 
         const unlistenFailed = await listen('multi_source_download_failed', (event) => {
           const data = event.payload as any
 
-          // Update file status to failed
+          // Update file status to failed - only update files that are actively downloading
+          // to avoid overwriting seeding files with the same hash
           files.update(f => f.map(file => {
-            if (file.hash === data.file_hash) {
+            if (file.hash === data.file_hash && file.status === 'downloading') {
               return {
                 ...file,
                 status: 'failed' as const
@@ -159,7 +173,7 @@
 
           multiSourceProgress.delete(data.file_hash)
           multiSourceProgress = multiSourceProgress
-          showNotification(`Multi-source download failed: ${data.error}`, 'error')
+          showToast(`Multi-source download failed: ${data.error}`, 'error')
         })
 
         const unlistenBitswapProgress = await listen('bitswap_chunk_downloaded', (event) => {
@@ -170,8 +184,25 @@
                 chunkSize: number;
             };
 
-            files.update(f => f.map(file => {
-                if (file.hash === progress.fileHash) {
+            console.log('📦 Bitswap chunk received:', {
+                fileHash: progress.fileHash,
+                chunkIndex: progress.chunkIndex,
+                totalChunks: progress.totalChunks,
+                chunkSize: progress.chunkSize
+            });
+
+            // Only update files that are actively downloading, not seeding files with the same hash
+            files.update(f => {
+                // Log all downloading files to help debug hash matching
+                const downloadingFiles = f.filter(file => file.status === 'downloading');
+                console.log('📦 Currently downloading files:', downloadingFiles.map(file => ({
+                    name: file.name,
+                    hash: file.hash,
+                    hashMatch: file.hash === progress.fileHash
+                })));
+                
+                return f.map(file => {
+                if (file.hash === progress.fileHash && file.status === 'downloading') {
                     const downloadedChunks = new Set(file.downloadedChunks || []);
                     
                     if (downloadedChunks.has(progress.chunkIndex)) {
@@ -218,11 +249,13 @@
                     }
                     
                     const percentage = (newSize / progress.totalChunks) * 100;
-                    
+                    // If download is complete (100% progress), set status to completed
+                    const isComplete = percentage >= 100;
+
                     return {
                         ...file,
                         progress: percentage,
-                        status: 'downloading' as const,
+                        status: isComplete ? 'completed' as const : 'downloading' as const,
                         downloadedChunks: Array.from(downloadedChunks),
                         totalChunks: progress.totalChunks,
                         downloadStartTime: bitswapStartTime,
@@ -231,38 +264,38 @@
                     };
                 }
                 return file;
-            }));
+            });
+            });
         });
 
         const unlistenDownloadCompleted = await listen('file_content', async (event) => {
             const metadata = event.payload as any;
+            diagnosticLogger.info('Download', 'Received file_content event', {
+                merkleRoot: metadata.merkleRoot,
+                downloadPath: metadata.downloadPath,
+                fileName: metadata.file_name
+            });
 
             // Find the file that just completed
             const completedFile = $files.find(f => f.hash === metadata.merkleRoot);
 
             if (completedFile && !paidFiles.has(completedFile.hash)) {
                 // Process payment for Bitswap download (only once per file)
-                console.log('💰 Bitswap download completed, processing payment...');
+                diagnosticLogger.info('Download', 'Bitswap download completed, processing payment', { fileName: completedFile.name });
                 const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
                 
-                // Skip payment check for free files (price = 0)
-                if (paymentAmount === 0) {
-                    console.log('Free file, skipping payment');
-                    paidFiles.add(completedFile.hash);
-                    showNotification(`Download complete! "${completedFile.name}" (Free)`, 'success');
-                    return;
-                }
+                // Payment is always required (minimum 0.0001 Chiral enforced by paymentService)
 
 
                 const seederPeerId = completedFile.seederAddresses?.[0];
                 const seederWalletAddress = paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
                   ? completedFile.seederAddresses?.[0]!
                   : null;                if (!seederWalletAddress) {
-                  console.warn('Skipping Bitswap payment due to missing or invalid uploader wallet address', {
+                  diagnosticLogger.warn('Download', 'Skipping Bitswap payment due to missing or invalid uploader wallet address', {
                       file: completedFile.name,
                       seederAddresses: completedFile.seederAddresses
                   });
-                  showNotification('Payment skipped: missing uploader wallet address', 'warning');
+                  showToast('Payment skipped: missing uploader wallet address', 'warning');
               } else {
                     try {
                         const paymentResult = await paymentService.processDownloadPayment(
@@ -275,25 +308,73 @@
 
                         if (paymentResult.success) {
                             paidFiles.add(completedFile.hash); // Mark as paid
-                            console.log(`✅ Bitswap payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
-                            showNotification(
+                            
+                            // Update reputation for the seeder peer after successful payment
+                            if (seederPeerId) {
+                              try {
+                                await invoke('record_transfer_success', {
+                                  peerId: seederPeerId,
+                                  bytes: completedFile.size,
+                                  durationMs: 0, // Bitswap doesn't track duration here
+                                });
+                                // Also update frontend reputation store for immediate UI feedback
+                                PeerSelectionService.notePeerSuccess(seederPeerId);
+                                console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after Bitswap download (+${completedFile.size} bytes)`);
+                              } catch (repError) {
+                                console.error('Failed to update seeder reputation:', repError);
+                              }
+                            }
+                            
+                            diagnosticLogger.info('Download', 'Bitswap payment processed', { 
+                              amount: paymentAmount.toFixed(6), 
+                              seederWalletAddress, 
+                              seederPeerId 
+                            });
+                            showToast(
                                 `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
                                 'success'
                             );
                         } else {
-                            console.error('Bitswap payment failed:', paymentResult.error);
-                            showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                            errorLogger.fileOperationError('Bitswap payment', paymentResult.error || 'Unknown error');
+                            showToast(`Payment failed: ${paymentResult.error}`, 'warning');
                         }
                     } catch (error) {
-                        console.error('Error processing Bitswap payment:', error);
-                        showNotification(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'warning');
+                        errorLogger.fileOperationError('Bitswap payment processing', error instanceof Error ? error.message : String(error));
+                        showToast(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'warning');
                     }
                 }
             }
 
-            // Update file status
+            // Update file status - update files that are actively downloading OR might be stuck
+            // Allow completion for downloading, paused, or queued files to handle edge cases
+            // Also update completed files that don't have downloadPath set yet
             files.update(f => f.map(file => {
-                if (file.hash === metadata.merkleRoot) {
+                const hashMatches = file.hash === metadata.merkleRoot;
+                const isActiveDownload = ['downloading', 'paused', 'queued'].includes(file.status);
+                const isStuck = file.status === 'downloading' && file.progress === 0;
+                const isCompletedWithoutPath = file.status === 'completed' && !file.downloadPath;
+
+                diagnosticLogger.info('Download', 'Checking file for completion update', {
+                    fileName: file.name,
+                    fileHash: file.hash,
+                    fileStatus: file.status,
+                    fileProgress: file.progress,
+                    hashMatches,
+                    isActiveDownload,
+                    isStuck,
+                    isCompletedWithoutPath,
+                    willUpdate: hashMatches && (isActiveDownload || isStuck || isCompletedWithoutPath)
+                });
+
+                if (file.hash === metadata.merkleRoot && (isActiveDownload || isStuck || isCompletedWithoutPath)) {
+                    const reason = isStuck ? 'stuck download recovery' :
+                                   isCompletedWithoutPath ? 'setting download path for completed file' :
+                                   'normal completion';
+                    diagnosticLogger.info('Download', 'Updating file', {
+                        fileName: file.name,
+                        downloadPath: metadata.downloadPath,
+                        reason
+                    });
                     return {
                         ...file,
                         status: 'completed' as const,
@@ -310,17 +391,16 @@
           const eventStr = event.payload as string;
           if (eventStr.startsWith('error:')) {
             const errorMsg = eventStr.substring(6); // Remove 'error:' prefix
-            console.error('DHT Error:', errorMsg);
+            errorLogger.dhtInitError(errorMsg);
 
             // Try to match error to a download in progress
             if (errorMsg.includes('No root CID found')) {
               // Find downloading files and mark them as failed
               files.update(f => f.map(file => {
                 if (file.status === 'downloading' && (!file.cids || file.cids.length === 0)) {
-                  showNotification(
+                  showToast(
                     `Download failed for "${file.name}": ${errorMsg}`,
-                    'error',
-                    6000
+                    'error'
                   )
                   return { ...file, status: 'failed' as const }
                 }
@@ -330,6 +410,26 @@
           }
         });
 
+
+        // Listen for WebRTC download progress
+        const unlistenWebRTCProgress = await listen('webrtc_download_progress', (event) => {
+          const data = event.payload as {
+            fileHash: string;
+            progress: number;
+            chunksReceived: number;
+            totalChunks: number;
+            bytesReceived: number;
+            totalBytes: number;
+          };
+
+          // Update file progress (FileItem uses 'hash' property)
+          // Only update files that are actively downloading, not seeding files with the same hash
+          files.update(f => f.map(file =>
+            file.hash === data.fileHash && file.status === 'downloading'
+              ? { ...file, status: data.progress >= 100 ? 'completed' : 'downloading', progress: data.progress }
+              : file
+          ));
+        });
 
         // Listen for WebRTC download completion
 const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (event) => {
@@ -344,39 +444,38 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     // ✅ GET SETTINGS PATH
     const stored = localStorage.getItem("chiralSettings");
     if (!stored) {
-      showNotification(
+      showToast(
         'Please configure a download path in Settings before downloading files.',
-        'error',
-        8000
+        'error'
       );
       return;
     }
-    
-    const settings = JSON.parse(stored);
-    let storagePath = settings.storagePath;
-    
-    if (!storagePath || storagePath === '.') {
-      showNotification(
-        'Please set a valid download path in Settings.',
-        'error',
-        8000
+
+    // Get canonical download directory from backend (single source of truth)
+    let storagePath: string;
+    try {
+      storagePath = await invoke('get_download_directory');
+    } catch (error) {
+      showToast(
+        'Failed to resolve download directory. Please check your settings.',
+        'error'
       );
+      // Only update files that are actively downloading, not seeding files with the same hash
+      files.update(f => f.map(file =>
+        file.hash === data.fileHash && file.status === 'downloading'
+          ? { ...file, status: 'failed' }
+          : file
+      ));
       return;
     }
     
-    // Expand ~ to home directory if needed
-    if (storagePath.startsWith("~")) {
-      const home = await homeDir();
-      storagePath = storagePath.replace("~", home);
-    }
-    
-    // Validate directory exists
-    const dirExists = await invoke('check_directory_exists', { path: storagePath });
-    if (!dirExists) {
-      showNotification(
-        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
-        'error',
-        8000
+    // Ensure directory exists (create it if it doesn't)
+    try {
+      await invoke('ensure_directory_exists', { path: storagePath });
+    } catch (error) {
+      showToast(
+        `Failed to create download directory: ${error instanceof Error ? error.message : String(error)}`,
+        'error'
       );
       return;
     }
@@ -385,31 +484,123 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     const { join } = await import('@tauri-apps/api/path');
     const outputPath = await join(storagePath, data.fileName);
     
-    console.log(`✅ Saving WebRTC file to: ${outputPath}`);
+    fileLogger.downloadStarted(data.fileName);
 
     // Write the file to disk
     const { writeFile } = await import('@tauri-apps/plugin-fs');
     const fileData = new Uint8Array(data.data);
     await writeFile(outputPath, fileData);
 
-    console.log(`✅ File saved successfully: ${outputPath}`);
+    fileLogger.downloadCompleted(data.fileName);
 
     // Update status to completed
+    // Only update files that are actively downloading, not seeding files with the same hash
     files.update(f => f.map(file => 
-      file.hash === data.fileHash
+      file.hash === data.fileHash && file.status === 'downloading'
         ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
         : file
     ));
 
-    showNotification(`Successfully saved "${data.fileName}"`, 'success');
+    // Process payment for WebRTC download (only once per file)
+    const completedFile = $files.find(f => f.hash === data.fileHash);
+    
+    if (completedFile && !paidFiles.has(completedFile.hash)) {
+      diagnosticLogger.info('Download', 'WebRTC download completed, processing payment', { fileName: completedFile.name });
+      const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
+      
+      // Get seeder information from file metadata
+      const seederPeerId = completedFile.seederAddresses?.[0];
+      const seederWalletAddress = completedFile.uploaderAddress || 
+                                   (paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
+                                     ? completedFile.seederAddresses?.[0]!
+                                     : null);
+      
+      if (!seederWalletAddress) {
+        diagnosticLogger.warn('Download', 'Skipping WebRTC payment due to missing or invalid uploader wallet address', {
+          file: completedFile.name,
+          seederAddresses: completedFile.seederAddresses,
+          uploaderAddress: completedFile.uploaderAddress
+        });
+        showToast('Payment skipped: missing uploader wallet address', 'warning');
+      } else {
+        try {
+          const paymentResult = await paymentService.processDownloadPayment(
+            completedFile.hash,
+            completedFile.name,
+            completedFile.size,
+            seederWalletAddress,
+            seederPeerId
+          );
+
+          if (paymentResult.success) {
+            paidFiles.add(completedFile.hash); // Mark as paid
+
+            // Update reputation for the seeder peer after successful payment
+            if (seederPeerId) {
+              try {
+                await invoke('record_transfer_success', {
+                  peerId: seederPeerId,
+                  bytes: completedFile.size,
+                  durationMs: 0, // WebRTC doesn't track duration here
+                });
+                // Also update frontend reputation store for immediate UI feedback
+                PeerSelectionService.notePeerSuccess(seederPeerId);
+                console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (+${completedFile.size} bytes)`);
+              } catch (repError) {
+                console.error('Failed to update seeder reputation:', repError);
+              }
+            }
+ 
+            diagnosticLogger.info('Download', 'WebRTC payment processed', { 
+              amount: paymentAmount.toFixed(6), 
+              seederWalletAddress, 
+              seederPeerId 
+            });
+            showToast(
+              `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
+              'success'
+            );
+          } else {
+            errorLogger.fileOperationError('WebRTC payment', paymentResult.error || 'Unknown error');
+            showToast(`Payment failed: ${paymentResult.error}`, 'warning');
+          }
+        } catch (error) {
+          errorLogger.fileOperationError('WebRTC payment processing', error instanceof Error ? error.message : String(error));
+          showToast(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'warning');
+        }
+      }
+    } else if (completedFile) {
+
+      // File already paid for or free - still update reputation for successful transfer
+      const seederPeerId = completedFile.seederAddresses?.[0];
+      if (seederPeerId) {
+        try {
+          await invoke('record_transfer_success', {
+            peerId: seederPeerId,
+            bytes: completedFile.size,
+            durationMs: 0,
+          });
+          // Also update frontend reputation store for immediate UI feedback
+          PeerSelectionService.notePeerSuccess(seederPeerId);
+          console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (already paid)`);
+        } catch (repError) {
+          console.error('Failed to update seeder reputation:', repError);
+        }
+      }
+
+      showToast(`Successfully saved "${data.fileName}"`, 'success');
+    } else {
+      showToast(`Successfully saved "${data.fileName}"`, 'success');
+    }
     
   } catch (error) {
-    console.error('Failed to save WebRTC file:', error);
+    errorLogger.fileOperationError('Save WebRTC file', error instanceof Error ? error.message : String(error));
     const errorMessage = error instanceof Error ? error.message : String(error);
-    showNotification(`Failed to save file: ${errorMessage}`, 'error');
+    showToast(`Failed to save file: ${errorMessage}`, 'error');
 
+    // Only update files that are actively downloading, not seeding files with the same hash
     files.update(f => f.map(file =>
-      file.hash === data.fileHash
+      file.hash === data.fileHash && file.status === 'downloading'
         ? { ...file, status: 'failed' }
         : file
     ));
@@ -425,11 +616,12 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           unlistenBitswapProgress()
           unlistenDownloadCompleted()
           unlistenDhtError()
+          unlistenWebRTCProgress()
           unlistenWebRTCComplete()
           unlistenTorrentEvent()
         }
       } catch (error) {
-        console.error('Failed to setup event listeners:', error)
+        errorLogger.fileOperationError('Setup event listeners', error instanceof Error ? error.message : String(error));
         return () => {} // Return empty cleanup function
       }
     }
@@ -442,23 +634,92 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   onDestroy(() => {
     disposeDownloadTelemetry()
+    // Unsubscribe from transfer events
+    unsubscribeFromTransferEvents()
   })
 
+  // Load saved download page settings
+  const loadDownloadSettings = () => {
+    try {
+      const saved = localStorage.getItem('downloadPageSettings')
+      if (saved) {
+        return JSON.parse(saved)
+      }
+    } catch (error) {
+      console.error('Failed to load download settings:', error)
+    }
+    return {
+      autoStartQueue: true,
+      maxConcurrentDownloads: 3,
+      autoClearCompleted: false,
+      filterStatus: 'all',
+      multiSourceEnabled: true,
+      maxPeersPerDownload: 3
+    }
+  }
+
+  const savedSettings = loadDownloadSettings()
+
   let searchFilter = ''  // For searching existing downloads
-  let maxConcurrentDownloads: string | number = 3
+  let maxConcurrentDownloads: string | number = savedSettings.maxConcurrentDownloads
   let lastValidMaxConcurrent = 3 // Store the last valid value
-  let autoStartQueue = true
-  let autoClearCompleted = false // New setting for auto-clearing
-  let filterStatus = 'all' // 'all', 'active', 'paused', 'queued', 'completed', 'failed'
+  let autoStartQueue = savedSettings.autoStartQueue
+  let autoClearCompleted = savedSettings.autoClearCompleted
+  let filterStatus = savedSettings.filterStatus
   let activeSimulations = new Set<string>() // Track files with active progress simulations
 
   // Multi-source download state
   let multiSourceProgress = new Map<string, MultiSourceProgress>()
-  let multiSourceEnabled = true
-  let maxPeersPerDownload = 3
+  let multiSourceEnabled = savedSettings.multiSourceEnabled
+  let maxPeersPerDownload = savedSettings.maxPeersPerDownload
 
-  // Add notification related variables
-  let currentNotification: HTMLElement | null = null
+  // Sync transfer events store with local state
+  // This reactive block updates the multiSourceProgress map when transfer events come in
+  $: {
+    // Update multiSourceProgress from transferEventsStore for active transfers
+    for (const transfer of $storeActiveTransfers) {
+      if (!multiSourceProgress.has(transfer.fileHash)) {
+        // Create a compatible MultiSourceProgress object from the transfer event
+        const progress: MultiSourceProgress = {
+          fileHash: transfer.fileHash,
+          fileName: transfer.fileName,
+          totalSize: transfer.fileSize,
+          downloadedSize: transfer.downloadedBytes,
+          totalChunks: transfer.totalChunks,
+          completedChunks: transfer.completedChunks,
+          activeSources: transfer.activeSources,
+          downloadSpeedBps: transfer.downloadSpeedBps,
+          etaSeconds: transfer.etaSeconds,
+          sourceAssignments: []
+        };
+        multiSourceProgress.set(transfer.fileHash, progress);
+        multiSourceProgress = multiSourceProgress; // Trigger reactivity
+      } else {
+        // Update existing progress
+        const existing = multiSourceProgress.get(transfer.fileHash);
+        if (existing) {
+          existing.downloadedSize = transfer.downloadedBytes;
+          existing.completedChunks = transfer.completedChunks;
+          existing.downloadSpeedBps = transfer.downloadSpeedBps;
+          existing.etaSeconds = transfer.etaSeconds;
+          existing.activeSources = transfer.activeSources;
+          multiSourceProgress = multiSourceProgress; // Trigger reactivity
+        }
+      }
+    }
+
+    // Log transfer events store activity for debugging
+    if ($transferStore.lastEventTimestamp > 0 && import.meta.env.DEV) {
+      console.log('📦 Transfer store update:', {
+        active: $transferStore.activeCount,
+        queued: $transferStore.queuedCount,
+        completed: $transferStore.completedCount,
+        failed: $transferStore.failedCount,
+        totalDownloadSpeed: MultiSourceDownloadService.formatSpeed($transferStore.totalDownloadSpeed)
+      });
+    }
+  }
+
   let showSettings = false // Toggle for settings panel
 
   // Smart Resume: Track resumed downloads
@@ -467,11 +728,13 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   // Track which files have already had payment processed
   let paidFiles = new Set<string>()
 
+
   // Download History state
   let showHistory = false
   let downloadHistory: DownloadHistoryEntry[] = []
   let historySearchQuery = ''
   let historyFilter: 'all' | 'completed' | 'failed' | 'canceled' = 'all'
+  let statistics = downloadHistoryService.getStatistics()
 
   // Load history on mount
   $: downloadHistory = downloadHistoryService.getFilteredHistory(
@@ -479,91 +742,25 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     historySearchQuery
   )
 
+  $: if (downloadHistory) {
+    statistics = downloadHistoryService.getStatistics()
+  }
+
+
   // Track files to add to history when they complete/fail
   $: {
     for (const file of $files) {
       if (['completed', 'failed', 'canceled'].includes(file.status)) {
         downloadHistoryService.addToHistory(file)
+        //Refeshing history to keep it most updated
+        downloadHistory = downloadHistoryService.getFilteredHistory(
+          historyFilter === 'all' ? undefined : historyFilter,
+          historySearchQuery
+      )
       }
     }
   }
 
-  // Show notification function
-  function showNotification(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success', duration = 4000) {
-    // Remove existing notification
-    if (currentNotification) {
-      currentNotification.remove()
-      currentNotification = null
-    }
-
-    const colors = {
-      success: '#22c55e',
-      error: '#ef4444',
-      info: '#3b82f6',
-      warning: '#f59e0b'
-    }
-
-    const notification = document.createElement('div')
-    notification.style.cssText = `
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      background: ${colors[type]};
-      color: white;
-      padding: 12px 16px;
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      z-index: 10000;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 14px;
-      font-weight: 500;
-      max-width: 320px;
-      animation: slideInRight 0.3s ease-out;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    `
-
-    // Add CSS animation styles
-    if (!document.querySelector('#download-notification-styles')) {
-      const style = document.createElement('style')
-      style.id = 'download-notification-styles'
-      style.textContent = `
-        @keyframes slideInRight {
-          from { transform: translateX(100%); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-      `
-      document.head.appendChild(style)
-    }
-
-    notification.innerHTML = `
-      <span>${message}</span>
-      <button onclick="this.parentElement.remove()" style="
-        background: none;
-        border: none;
-        color: white;
-        font-size: 18px;
-        cursor: pointer;
-        padding: 0;
-        margin-left: 8px;
-        opacity: 0.8;
-      ">×</button>
-    `
-
-    document.body.appendChild(notification)
-    currentNotification = notification
-
-    // Auto remove
-    setTimeout(() => {
-      if (notification.parentNode) {
-        notification.remove()
-        if (currentNotification === notification) {
-          currentNotification = null
-        }
-      }
-    }, duration)
-  }
 
   function getFileIcon(fileName: string) {
     const extension = fileName.split('.').pop()?.toLowerCase() || '';
@@ -640,11 +837,10 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   //     if (filePath) {
   //       const { writeFile } = await import('@tauri-apps/plugin-fs');
   //       await writeFile(filePath, new Uint8Array(data));
-  //       showNotification(`Successfully saved "${fileName}"`, 'success');
+  //       showToast(`Successfully saved "${fileName}"`, 'success');
   //     }
   //   } catch (error) {
-  //     console.error('Failed to save file:', error);
-  //     showNotification(`Error saving "${fileName}"`, 'error');
+  //     showToast(`Error saving "${fileName}"`, 'error');
   //   }
   // }
 
@@ -687,80 +883,131 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         timestamp: Date.now()
       }))
     } catch (error) {
-      console.error('Failed to save download state:', error)
+      errorLogger.fileOperationError('Save download state', error instanceof Error ? error.message : String(error));
     }
   }
 
   // Smart Resume: Load and resume interrupted downloads
-  async function loadAndResumeDownloads() {
-    try {
-      const saved = localStorage.getItem('pendingDownloads')
-      if (!saved) return
-
-      const { active, queued, timestamp } = JSON.parse(saved)
-      
-      // Only auto-resume if less than 24 hours old
-      const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
-      if (hoursSinceLastSave > 24) {
-        console.log('Saved downloads are too old (>24h), skipping auto-resume')
-        localStorage.removeItem('pendingDownloads')
-        return
-      }
-
-      let resumeCount = 0
-
-      // Restore queued downloads
-      if (queued && queued.length > 0) {
-        downloadQueue.set(queued)
-        resumeCount += queued.length
-      }
-
-      // Restore active downloads (mark as paused, user can resume manually)
-      if (active && active.length > 0) {
-        const restoredFiles = active.map((file: any) => ({
-          ...file,
-          status: 'paused' as const, // Don't auto-start, let user resume
-          speed: '0 B/s',
-          eta: 'N/A'
-        }))
-        
-        files.update(f => [...f, ...restoredFiles])
-        
-        // Track which downloads were resumed
-        active.forEach((file: any) => resumedDownloads.add(file.id))
-        resumeCount += active.length
-      }
-
-      if (resumeCount > 0) {
-        const message = resumeCount === 1 
-          ? `Restored 1 interrupted download. Resume it from the Downloads page.`
-          : `Restored ${resumeCount} interrupted downloads. Resume them from the Downloads page.`
-        showNotification(message, 'info', 6000)
-      }
-
-      // Clear saved state after successful restore
-      localStorage.removeItem('pendingDownloads')
-    } catch (error) {
-      console.error('Failed to load download state:', error)
-      localStorage.removeItem('pendingDownloads')
+async function loadAndResumeDownloads() {
+  try {
+    // Check if we've already restored in this session
+    if (sessionStorage.getItem('downloadsRestored') === 'true') {
+      return
     }
+
+    const saved = localStorage.getItem('pendingDownloads')
+    if (!saved) {
+      sessionStorage.setItem('downloadsRestored', 'true')
+      return
+    }
+
+    const { active, queued, timestamp } = JSON.parse(saved)
+
+    // Only auto-resume if less than 24 hours old
+    const hoursSinceLastSave = (Date.now() - timestamp) / (1000 * 60 * 60)
+    if (hoursSinceLastSave > 24) {
+      localStorage.removeItem('pendingDownloads')
+      sessionStorage.setItem('downloadsRestored', 'true')
+      return
+    }
+
+    let resumeCount = 0
+
+    // Restore queued downloads
+    if (queued && queued.length > 0) {
+      downloadQueue.set(queued)
+      resumeCount += queued.length
+    }
+
+    // Restore active downloads - dedupe by id/hash/name+size before adding
+    if (active && active.length > 0) {
+      const restoredFiles = active.map((file: any) => ({
+        ...file,
+        status: 'paused' as const,
+        speed: '0 B/s',
+        eta: 'N/A'
+      }))
+
+      let addedRestored: typeof restoredFiles = []
+
+      files.update(existing => {
+        const existingKeys = new Set(
+          existing.map(file => file.id ?? file.hash ?? `${file.name}-${file.size}`)
+        )
+
+        const deduped = restoredFiles.filter((file: any) => {
+          const key = file.id ?? file.hash ?? `${file.name}-${file.size}`
+          if (existingKeys.has(key)) {
+            return false
+          }
+          existingKeys.add(key)
+          return true
+        })
+
+        addedRestored = deduped
+        return deduped.length > 0 ? [...existing, ...deduped] : existing
+      })
+
+      if (addedRestored.length > 0) {
+        addedRestored.forEach((file: any) => {
+          if (file.id) {
+            resumedDownloads.add(file.id)
+          } else if (file.hash) {
+            resumedDownloads.add(file.hash)
+          }
+        })
+        resumeCount += addedRestored.length
+      }
+    }
+
+    if (resumeCount > 0) {
+      const message = resumeCount === 1
+        ? `Restored 1 interrupted download. Resume it from the Downloads page.`
+        : `Restored ${resumeCount} interrupted downloads. Resume them from the Downloads page.`
+      showToast(message, 'info')
+    }
+
+    localStorage.removeItem('pendingDownloads')
+    sessionStorage.setItem('downloadsRestored', 'true')
+  } catch (error) {
+    errorLogger.fileOperationError('Load download state', error instanceof Error ? error.message : String(error));
+    localStorage.removeItem('pendingDownloads')
+    sessionStorage.setItem('downloadsRestored', 'true')
   }
+}
+
 
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
-    const { message, type = 'info', duration = 4000 } = event.detail
-    showNotification(message, type, duration)
+    const { message, type = 'info' } = event.detail
+    showToast(message, type)
   }
 
-  async function handleSearchDownload(metadata: FileMetadata) {
-    console.log('🔍 handleSearchDownload called with metadata:', metadata)
+  async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
+    console.log('📥 handleSearchDownload called:', {
+      fileName: metadata.fileName,
+      selectedProtocol: metadata.selectedProtocol,
+      seeders: metadata.seeders?.length,
+      cids: metadata.cids?.length
+    });
 
-    // Auto-detect protocol based on file metadata
-    const hasCids = metadata.cids && metadata.cids.length > 0
-    detectedProtocol = hasCids ? 'Bitswap' : 'WebRTC'
-    
-    console.log(`🔍 Auto-detected protocol: ${detectedProtocol} (hasCids: ${hasCids})`)
+    // Use user's protocol selection if provided, otherwise auto-detect
+    if (metadata.selectedProtocol) {
+      detectedProtocol = metadata.selectedProtocol === 'webrtc' ? 'WebRTC' : 'Bitswap';
+      console.log('📥 Protocol explicitly set:', detectedProtocol);
+    } else {
+      // Auto-detect protocol based on file metadata
+      // BitSwap files have CIDs, WebRTC files have seeders but NO CIDs
+      const hasCids = metadata.cids && metadata.cids.length > 0
+      const hasSeeders = metadata.seeders && metadata.seeders.length > 0
+      // WebRTC is only valid if uploaded via WebRTC (seeders exist but no CIDs)
+      const isWebRTCUpload = hasSeeders && !hasCids && !metadata.infoHash && 
+                            !metadata.httpSources?.length && !metadata.ftpSources?.length && !metadata.ed2kSources?.length
+      detectedProtocol = isWebRTCUpload ? 'WebRTC' : (hasCids ? 'Bitswap' : undefined)
+    }
 
-    const allFiles = [...$downloadQueue]
+    // Check both download queue and files store for duplicates
+    // This ensures we detect if user tries to download a file they're already seeding
+    const allFiles = [...$downloadQueue, ...$files]
     const existingFile = allFiles.find((file) => file.hash === metadata.fileHash)
 
     if (existingFile) {
@@ -779,21 +1026,33 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           statusMessage = tr('download.search.queue.status.queued')
           break
         case 'failed':
-          statusMessage = tr('download.search.queue.status.failed')
-          break
+        case 'canceled':
         case 'seeding':
         case 'uploaded':
-          statusMessage = tr('download.search.queue.status.seeding')
+          // Don't show warning for these statuses - user can re-download failed/canceled files
+          // or intentionally download their own seeding files
           break
         default:
           statusMessage = tr('download.search.queue.status.other', { values: { status: existingFile.status } })
       }
 
-      showNotification(statusMessage, 'warning', 4000)
+      // Show warning toast only for active statuses (completed, downloading, paused, queued)
+      if (statusMessage) {
+        showToast(statusMessage, 'warning')
+      }
 
-      if (existingFile.status !== 'failed' && existingFile.status !== 'canceled') {
+      // Allow downloading if status is failed, canceled, or seeding (user may want to re-download/test)
+      if (existingFile.status !== 'failed' && existingFile.status !== 'canceled' && existingFile.status !== 'seeding') {
         return
       }
+    }
+
+    // If no valid P2P protocol detected, check for other protocols (HTTP, FTP, etc.)
+    // handled by DownloadSearchSection, but for direct queue additions we need to check
+    if (!detectedProtocol && !metadata.httpSources?.length && !metadata.ftpSources?.length && 
+        !metadata.ed2kSources?.length && !metadata.infoHash) {
+      showToast(`Cannot download "${metadata.fileName}": No valid download protocol available for this file.`, 'error');
+      return;
     }
 
     const newFile = {
@@ -809,16 +1068,15 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       // Pass encryption info to the download item
       isEncrypted: metadata.isEncrypted,
       manifest: metadata.manifest ? JSON.parse(metadata.manifest) : null,
-      cids: metadata.cids // IMPORTANT: Pass CIDs for Bitswap downloads
+      cids: metadata.cids, // IMPORTANT: Pass CIDs for Bitswap downloads
+      protocol: detectedProtocol, // Store the selected protocol with the file
+      uploaderAddress: metadata.uploaderAddress // Wallet address for payment
     }
 
-    console.log('📦 Created new file for queue:', newFile)
     downloadQueue.update((queue) => [...queue, newFile])
-    showNotification(tr('download.search.status.addedToQueue', { values: { name: metadata.fileName } }), 'success')
+    showToast(tr('download.search.status.addedToQueue', { values: { name: metadata.fileName } }), 'success')
 
-    console.log('⏭️ autoStartQueue:', autoStartQueue)
     if (autoStartQueue) {
-      console.log('▶️ Calling processQueue...')
       await processQueue()
     }
   }
@@ -869,9 +1127,51 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     }
   }
 
+  // Helper function to convert Transfer (from transferStore) to FileItem format
+  function transferToFileItem(transfer: Transfer): FileItem {
+    // Map transfer status to FileItem status
+    const statusMap: Record<string, FileItem['status']> = {
+      'queued': 'queued',
+      'starting': 'downloading',
+      'downloading': 'downloading',
+      'paused': 'paused',
+      'completed': 'completed',
+      'failed': 'failed',
+      'canceled': 'canceled'
+    }
+
+    return {
+      id: transfer.transferId,
+      name: transfer.fileName,
+      hash: transfer.fileHash,
+      size: transfer.fileSize,
+      status: statusMap[transfer.status] || 'downloading',
+      progress: transfer.progressPercentage,
+      downloadPath: transfer.outputPath,
+      speed: transfer.downloadSpeedBps > 0 
+        ? `${(transfer.downloadSpeedBps / 1024).toFixed(1)} KB/s` 
+        : undefined,
+      eta: transfer.etaSeconds 
+        ? `${Math.round(transfer.etaSeconds)}s` 
+        : undefined,
+      downloadedChunks: Array.from({ length: transfer.completedChunks }, (_, i) => i),
+      totalChunks: transfer.totalChunks,
+      price: 0, // FTP downloads are free
+      protocol: 'FTP' as const
+    }
+  }
+
   // Combine all files and queue into single list with stable sorting
   $: allDownloads = (() => {
-    const combined = [...$files, ...$downloadQueue]
+    // Get transfers from the transferStore and convert to FileItem format
+    const transferFileItems: FileItem[] = Array.from($transferStore.transfers.values())
+      .map(transferToFileItem)
+
+    // Filter out any transfers that already exist in $files or $downloadQueue (by id)
+    const existingIds = new Set([...$files.map(f => f.id), ...$downloadQueue.map(f => f.id)])
+    const uniqueTransfers = transferFileItems.filter(t => !existingIds.has(t.id))
+
+    const combined = [...$files, ...$downloadQueue, ...uniqueTransfers]
 
     // Normal sorting by status
     const statusOrder = {
@@ -939,12 +1239,19 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   $: completedCount = allFilteredDownloads.filter(f => f.status === 'completed').length
   $: failedCount = allFilteredDownloads.filter(f => f.status === 'failed').length
 
+
   // Start progress simulation for any downloading files when component mounts
+  // NOTE: Bitswap and WebRTC downloads are handled by the backend via events,
+  // so we don't need to call simulateDownloadProgress for those protocols.
+  // This reactive block is only for legacy/fallback P2P downloads.
   $: if ($files.length > 0) {
     $files.forEach(file => {
       if (file.status === 'downloading' && !activeSimulations.has(file.id)) {
-    // Start simulation only if not already active
-        if (detectedProtocol!=='Bitswap')
+        // Skip if file is using Bitswap or WebRTC - those are handled by backend events
+        const fileProtocol = (file as any).protocol;
+        if (fileProtocol === 'Bitswap' || fileProtocol === 'WebRTC') {
+          return; // Backend handles these via events
+        }
         simulateDownloadProgress(file.id)
       }
     })
@@ -978,6 +1285,19 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     files.update(f => f.filter(file => file.status !== 'completed'))
   }
 
+  // Persist download page settings
+  $: {
+    const settings = {
+      autoStartQueue,
+      maxConcurrentDownloads: typeof maxConcurrentDownloads === 'number' ? maxConcurrentDownloads : parseInt(maxConcurrentDownloads as string) || 3,
+      autoClearCompleted,
+      filterStatus,
+      multiSourceEnabled,
+      maxPeersPerDownload
+    }
+    localStorage.setItem('downloadPageSettings', JSON.stringify(settings))
+  }
+
   // Smart Resume: Auto-save download state when files or queue changes
   $: if ($files || $downloadQueue) {
     saveDownloadState()
@@ -985,26 +1305,29 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   // New function to download from search results
   async function processQueue() {
-    console.log('📋 processQueue called')
     // Only prevent starting new downloads if we've reached the max concurrent limit
     const activeDownloads = $files.filter(f => f.status === 'downloading').length
     // Handle case where maxConcurrentDownloads might be empty during typing
     const maxConcurrent = Math.max(1, Number(maxConcurrentDownloads) || 3)
-    console.log(`  Active downloads: ${activeDownloads}, Max: ${maxConcurrent}`)
     if (activeDownloads >= maxConcurrent) {
-      console.log('  ⏸️ Max concurrent downloads reached, waiting...')
       return
     }
 
     const nextFile = $downloadQueue[0]
     if (!nextFile) {
-      console.log('  ℹ️ Queue is empty')
       return
     }
-    console.log('  📄 Next file from queue:', nextFile)
+    
+    console.log('📦 processQueue: Processing file:', {
+      name: nextFile.name,
+      protocol: nextFile.protocol,
+      hash: nextFile.hash?.slice(0, 12)
+    });
+    
     downloadQueue.update(q => q.filter(f => f.id !== nextFile.id))
     const downloadingFile = {
       ...nextFile,
+      hash: nextFile.hash, // Use hash property from FileItem
       status: 'downloading' as const,
       progress: 0,
       speed: '0 B/s', // Ensure speed property exists
@@ -1013,53 +1336,65 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       downloadedChunks: [], // Track downloaded chunks for Bitswap
       totalChunks: 0 // Will be set when first chunk arrives
     }
-    console.log('  ✏️ Created downloadingFile object:', downloadingFile)
     files.update(f => [...f, downloadingFile])
-    console.log('  ✅ Added file to files store, detected protocol:', detectedProtocol)
 
-    if (detectedProtocol === "Bitswap"){
-  console.log('  🔍 Starting Bitswap download for:', downloadingFile.name)
+    // Use the protocol stored with the file, or fall back to global detectedProtocol
+    const fileProtocol = downloadingFile.protocol || detectedProtocol;
+    console.log('📦 processQueue: Resolved protocol:', fileProtocol, 'detectedProtocol:', detectedProtocol);
+
+    // Validate protocol before attempting P2P download
+    if (!fileProtocol) {
+      errorLogger.fileOperationError('Download', 'No valid P2P protocol for this file');
+      files.update(f => f.map(file =>
+        file.id === downloadingFile.id
+          ? { ...file, status: 'failed' }
+          : file
+      ));
+      showToast(
+        `Cannot download "${downloadingFile.name}": No valid download protocol. File may have been uploaded via a different protocol.`,
+        'error'
+      );
+      return;
+    }
+
+    if (fileProtocol === "Bitswap") {
 
   // CRITICAL: Bitswap requires CIDs to download
   if (!downloadingFile.cids || downloadingFile.cids.length === 0) {
-    console.error('  ❌ No CIDs found for Bitswap download')
+    errorLogger.fileOperationError('Bitswap download', 'No CIDs found for Bitswap download');
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
         : file
     ))
-    showNotification(
-      `Cannot download "${downloadingFile.name}": This file was not uploaded via Bitswap and has no CIDs. Please use WebRTC protocol instead.`,
-      'error',
-      8000
+    showToast(
+      `Cannot download "${downloadingFile.name}": File metadata is missing CIDs required for Bitswap download.`,
+      'error'
     )
     return
   }
 
   // Verify seeders are available
   if (!downloadingFile.seederAddresses || downloadingFile.seederAddresses.length === 0) {
-    console.error('  ❌ No seeders found for download')
+    errorLogger.fileOperationError('Download', 'No seeders found for download');
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
         : file
     ))
-    showNotification(
+    showToast(
       `Cannot download "${downloadingFile.name}": No seeders are currently online for this file.`,
-      'error',
-      6000
+      'error'
     )
     return
   }
 
-  // ✅ VALIDATE SETTINGS PATH BEFORE DOWNLOADING
   try {
     const stored = localStorage.getItem("chiralSettings");
     if (!stored) {
-      showNotification(
+      showToast(
         'Please configure a download path in Settings before downloading files.',
-        'error',
-        8000
+        'error'
       );
       files.update(f => f.map(file =>
         file.id === downloadingFile.id
@@ -1069,14 +1404,14 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       return;
     }
     
-    const settings = JSON.parse(stored);
-    let storagePath = settings.storagePath;
-    
-    if (!storagePath || storagePath === '.') {
-      showNotification(
-        'Please set a valid download path in Settings before downloading files.',
-        'error',
-        8000
+    // Get canonical download directory from backend (single source of truth)
+    let storagePath: string;
+    try {
+      storagePath = await invoke('get_download_directory');
+    } catch (error) {
+      showToast(
+        'Failed to resolve download directory. Please check your settings.',
+        'error'
       );
       files.update(f => f.map(file =>
         file.id === downloadingFile.id
@@ -1086,19 +1421,13 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       return;
     }
     
-    // Expand ~ to home directory if needed
-    if (storagePath.startsWith("~")) {
-      const home = await homeDir();
-      storagePath = storagePath.replace("~", home);
-    }
-    
-    // Validate directory exists using Tauri command
-    const dirExists = await invoke('check_directory_exists', { path: storagePath });
-    if (!dirExists) {
-      showNotification(
-        `Download path "${settings.storagePath}" does not exist. Please update it in Settings.`,
-        'error',
-        8000
+    // Ensure directory exists (create it if it doesn't)
+    try {
+      await invoke('ensure_directory_exists', { path: storagePath });
+    } catch (error) {
+      showToast(
+        `Failed to create download directory: ${error instanceof Error ? error.message : String(error)}`,
+        'error'
       );
       files.update(f => f.map(file =>
         file.id === downloadingFile.id
@@ -1109,9 +1438,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     }
 
     // Construct full file path: directory + filename
-    const fullPath = `${storagePath}/${downloadingFile.name}`;
-    
-    console.log('✅ Using settings download path:', fullPath);
+    const fullPath = await join(storagePath, downloadingFile.name);
 
     // Now start the actual Bitswap download
     const metadata = {
@@ -1123,22 +1450,25 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       isEncrypted: downloadingFile.isEncrypted || false,
       manifest: downloadingFile.manifest ? JSON.stringify(downloadingFile.manifest) : undefined,
       cids: downloadingFile.cids,
-      downloadPath: fullPath  // Pass the full path
+      downloadPath: fullPath,  // Pass the full path
+      price: downloadingFile.price ?? 0  // Add price field
     }
-    
-    console.log('  📤 Calling dhtService.downloadFile with metadata:', metadata)
-    console.log('  📦 CIDs:', downloadingFile.cids)
-    console.log('  👥 Seeders:', downloadingFile.seederAddresses)
-    console.log('  💾 Download path:', fullPath)
+
+    console.log('📦 Bitswap download starting:', {
+      fileHash: metadata.fileHash,
+      fileName: metadata.fileName,
+      fileSize: metadata.fileSize,
+      cidsCount: metadata.cids?.length,
+      seedersCount: metadata.seeders?.length
+    });
 
     // Start the download asynchronously
     dhtService.downloadFile(metadata)
-      .then((result) => {
-        console.log('  ✅ Bitswap download completed for:', downloadingFile.name, result)
-        showNotification(`Successfully downloaded "${downloadingFile.name}"`, 'success')
+      .then((_result) => {
+        showToast(`Successfully downloaded "${downloadingFile.name}"`, 'success')
       })
       .catch((error) => {
-        console.error('  ❌ Bitswap download failed:', error)
+        errorLogger.fileOperationError('Bitswap download', error instanceof Error ? error.message : String(error));
         const errorMessage = error instanceof Error ? error.message : String(error)
 
         files.update(f => f.map(file =>
@@ -1147,26 +1477,106 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             : file
         ))
 
-        showNotification(
+        showToast(
           `Download failed for "${downloadingFile.name}": ${errorMessage}`,
-          'error',
-          6000
+          'error'
         )
       })
   } catch (error) {
-    console.error('Path validation error:', error);
+    errorLogger.fileOperationError('Download settings validation', error instanceof Error ? error.message : String(error));
     files.update(f => f.map(file =>
       file.id === downloadingFile.id
         ? { ...file, status: 'failed' }
         : file
-    ))
-    showNotification('Failed to validate download path', 'error', 6000);
+    ));
+    showToast(
+      `Download failed: ${error instanceof Error ? error.message : String(error)}`,
+      'error'
+    );
     return;
   }
-} 
-    else {
-      console.log('  🎬 Simulating download')
-      simulateDownloadProgress(downloadingFile.id)
+} else if (fileProtocol === "WebRTC") {
+    // WebRTC download path - Use backend Rust WebRTC (works in Tauri)
+    console.log('🌐 WebRTC download path triggered for:', downloadingFile.name);
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { join } = await import('@tauri-apps/api/path');
+
+        // Get canonical download directory from backend (single source of truth)
+        let storagePath: string;
+        try {
+          storagePath = await invoke('get_download_directory');
+        } catch (error) {
+          showToast(
+            'Failed to resolve download directory. Please check your settings.',
+            'error'
+          );
+          files.update(f => f.map(file =>
+            file.id === downloadingFile.id
+              ? { ...file, status: 'failed' }
+              : file
+          ));
+          return;
+        }
+
+        // Ensure directory exists (create it if it doesn't)
+        try {
+          await invoke('ensure_directory_exists', { path: storagePath });
+        } catch (error) {
+          showToast(
+            `Failed to create download directory: ${error instanceof Error ? error.message : String(error)}`,
+            'error'
+          );
+          files.update(f => f.map(file =>
+            file.id === downloadingFile.id
+              ? { ...file, status: 'failed' }
+              : file
+          ));
+          return;
+        }
+
+        // Construct full file path: directory + filename
+        const outputPath = await join(storagePath, downloadingFile.name);
+
+        console.log('🌐 Calling download_file_from_network:', {
+          fileHash: downloadingFile.hash,
+          outputPath: outputPath
+        });
+
+        // Call backend Rust WebRTC via Tauri command
+        // This uses the WebRTCService with webrtc-rs crate (works in Tauri)
+        const result = await invoke('download_file_from_network', {
+          fileHash: downloadingFile.hash,
+          outputPath: outputPath
+        });
+
+        console.log('🌐 download_file_from_network result:', result);
+
+        // WebRTC download initiated - update status to downloading
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? {
+                ...file,
+                status: 'downloading',
+                progress: 0,
+                downloadPath: outputPath
+              }
+            : file
+        ));
+        showToast(`Download started for "${downloadingFile.name}"`, 'success');
+
+      } catch (error) {
+        errorLogger.fileOperationError('WebRTC download', error instanceof Error ? error.message : String(error));
+        files.update(f => f.map(file =>
+          file.id === downloadingFile.id
+            ? { ...file, status: 'failed' }
+            : file
+        ));
+        showToast(
+          `WebRTC download failed: ${error instanceof Error ? error.message : String(error)}`,
+          'error'
+        );
+      }
     }
   }
 
@@ -1239,37 +1649,18 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       return;
     }
 
-      // Proceed directly to file dialog
+      // Get download path from settings
       try {
-        console.log("🔍 DEBUG: Starting download for file:", fileToDownload.name);
-        const { save } = await import('@tauri-apps/plugin-dialog');
+        const { join } = await import('@tauri-apps/api/path');
 
-        // Show file save dialog
-        console.log("🔍 DEBUG: Opening file save dialog...");
-        const outputPath = await save(buildSaveDialogOptions(fileToDownload.name));
-        console.log("✅ DEBUG: File save dialog result:", outputPath);
-
-        if (!outputPath) {
-          // User cancelled the save dialog
-          activeSimulations.delete(fileId);
-          files.update(f => f.map(file =>
-            file.id === fileId
-              ? { ...file, status: 'canceled' }
-              : file
-          ));
-          return;
-        }
-
-        // PAYMENT PROCESSING: Calculate and deduct payment before download
-        const paymentAmount = await paymentService.calculateDownloadCost(fileToDownload.size);
-        console.log(`💰 Payment required: ${paymentAmount.toFixed(6)} Chiral for ${fileToDownload.name}`);
-
-        // Check if user has sufficient balance
-        if (paymentAmount > 0 && !paymentService.hasSufficientBalance(paymentAmount)) {
-          showNotification(
-            `Insufficient balance. Need ${paymentAmount.toFixed(4)} Chiral, have ${$wallet.balance.toFixed(4)} Chiral`,
-            'error',
-            6000
+        // Get canonical download directory from backend (single source of truth)
+        let storagePath: string;
+        try {
+          storagePath = await invoke('get_download_directory');
+        } catch (error) {
+          showToast(
+            'Failed to resolve download directory. Please check your settings.',
+            'error'
           );
           activeSimulations.delete(fileId);
           files.update(f => f.map(file =>
@@ -1280,114 +1671,58 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           return;
         }
 
-      // Determine seeders, prefer local seeder when available
-        let seeders = (fileToDownload.seederAddresses || []).slice();
+        // Ensure directory exists (create it if it doesn't)
         try {
-          const localPeerId = dhtService.getPeerId ? dhtService.getPeerId() : null;
-          if ((!seeders || seeders.length === 0) && fileToDownload.status === 'seeding') {
-            if (localPeerId) seeders.unshift(localPeerId)
-            else seeders.unshift('local_peer')
-          }
-        } catch (e) {
-          // ignore
+          await invoke('ensure_directory_exists', { path: storagePath });
+        } catch (error) {
+          showToast(
+            `Failed to create download directory: ${error instanceof Error ? error.message : String(error)}`,
+            'error'
+          );
+          activeSimulations.delete(fileId);
+          files.update(f => f.map(file =>
+            file.id === fileId
+              ? { ...file, status: 'failed' }
+              : file
+          ));
+          return;
         }
 
-        // If the local copy is available and we're running in Tauri, copy directly to outputPath
-        const localPeerIdNow = dhtService.getPeerId ? dhtService.getPeerId() : null;
+        // Construct full file path: directory + filename
+        const outputPath = await join(storagePath, fileToDownload.name);
 
-        if (outputPath && (localPeerIdNow || seeders.includes('local_peer'))) {
-          try {
+        // PAYMENT PROCESSING: Calculate and deduct payment before download
+        const paymentAmount = await paymentService.calculateDownloadCost(fileToDownload.size);
+        diagnosticLogger.info('Download', 'Payment required', { 
+          fileName: fileToDownload.name, 
+          amount: paymentAmount.toFixed(6) 
+        });
 
-            let hash = fileToDownload.hash
-            console.log("🔍 DEBUG: Attempting to get file data for hash:", hash);
-            const base64Data = await invoke('get_file_data', { fileHash: hash }) as string;
-            console.log("✅ DEBUG: Retrieved base64 data length:", base64Data.length);
-
-            // Convert base64 to Uint8Array
-            let data_ = new Uint8Array(0); // Default empty array
-            if (base64Data && base64Data.length > 0) {
-              const binaryStr = atob(base64Data);
-              data_ = new Uint8Array(binaryStr.length);
-              for (let i = 0; i < binaryStr.length; i++) {
-                data_[i] = binaryStr.charCodeAt(i);
-              }
-              console.log("Converted to Uint8Array with length:", data_.length);
-            } else {
-              console.warn("No file data found for hash:", hash);
-            }
-
-            console.log("Final data array length:", data_.length);
-
-            // Ensure the directory exists before writing
-            await invoke('ensure_directory_exists', { path: outputPath });
-            
-            // Write the file data to the output path
-            console.log("🔍 DEBUG: About to write file to:", outputPath);
-            const { writeFile } = await import('@tauri-apps/plugin-fs');
-            await writeFile(outputPath, data_);
-            console.log("✅ DEBUG: File written successfully to:", outputPath);
-
-            // Process payment for local download (only if not already paid)
-            if (!paidFiles.has(fileToDownload.hash)) {
-              const seederPeerId = localPeerIdNow || seeders[0];
-              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
-                ? fileToDownload.seederAddresses?.[0]!
-                : null;
-
-              if (!seederWalletAddress) {
-                console.warn('Skipping local copy payment due to missing or invalid uploader wallet address', {
-                  file: fileToDownload.name,
-                  seederAddresses: fileToDownload.seederAddresses
-                });
-                showNotification('Payment skipped: missing uploader wallet address', 'warning');
-              } else {
-                const paymentResult = await paymentService.processDownloadPayment(
-                  fileToDownload.hash,
-                  fileToDownload.name,
-                  fileToDownload.size,
-                  seederWalletAddress,
-                  seederPeerId
-                );
-
-                if (paymentResult.success) {
-                  paidFiles.add(fileToDownload.hash); // Mark as paid
-                  console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
-                  showNotification(
-                    `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
-                    'success'
-                  );
-                } else {
-                  console.error('Payment failed:', paymentResult.error);
-                  showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
-                }
-              }
-            }
-
-            files.update(f => f.map(file => file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file));
-            activeSimulations.delete(fileId);
-            console.log("Done with downloading file")
-            return;
-          } catch (e) {
-            console.error('❌ DEBUG: Local copy fallback failed:', e);
-            console.error('❌ DEBUG: Error details:', e);
-            showNotification(`Download failed: ${e}`, 'error');
-            activeSimulations.delete(fileId);
-            files.update(f => f.map(file =>
-              file.id === fileId
-                ? { ...file, status: 'failed' }
-                : file
-            ));
-            return; // Don't continue to P2P download
-          }
+        // Check if user has sufficient balance
+        if (paymentAmount > 0 && !paymentService.hasSufficientBalance(paymentAmount)) {
+          showToast(
+            `Insufficient balance. Need ${paymentAmount.toFixed(4)} Chiral, have ${$wallet.balance.toFixed(4)} Chiral`,
+            'error'
+          );
+          activeSimulations.delete(fileId);
+          files.update(f => f.map(file =>
+            file.id === fileId
+              ? { ...file, status: 'failed' }
+              : file
+          ));
+          return;
         }
+
+      // Determine seeders for the download
+        let seeders = (fileToDownload.seederAddresses || []).slice();
 
       // Show "automatically started" message now that download is proceeding
-      showNotification(tr('download.notifications.autostart'), 'info');
+      showToast(tr('download.notifications.autostart'), 'info');
 
        if (fileToDownload.isEncrypted && fileToDownload.manifest) {
         // 1. Download all the required encrypted chunks using the P2P service.
         //    This new function will handle fetching multiple chunks in parallel.
-        showNotification(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
+        showToast(`Downloading encrypted chunks for "${fileToDownload.name}"...`, 'info');
 
         const { p2pFileTransferService } = await import('$lib/services/p2pFileTransfer');
 
@@ -1403,7 +1738,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         );
 
         // 2. Once all chunks are downloaded, call the backend to decrypt.
-        showNotification(`All chunks received. Decrypting file...`, 'info');
+        showToast(`All chunks received. Decrypting file...`, 'info');
         const { encryptionService } = await import('$lib/services/encryption');
         await encryptionService.decryptFile(fileToDownload.manifest, outputPath);
 
@@ -1415,11 +1750,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             : null;
 
           if (!seederWalletAddress) {
-            console.warn('Skipping encrypted download payment due to missing or invalid uploader wallet address', {
+            diagnosticLogger.warn('Download', 'Skipping encrypted download payment due to missing or invalid uploader wallet address', {
               file: fileToDownload.name,
               seederAddresses: fileToDownload.seederAddresses
             });
-            showNotification('Payment skipped: missing uploader wallet address', 'warning');
+            showToast('Payment skipped: missing uploader wallet address', 'warning');
           } else {
             const paymentResult = await paymentService.processDownloadPayment(
               fileToDownload.hash,
@@ -1431,10 +1766,14 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
             if (paymentResult.success) {
               paidFiles.add(fileToDownload.hash); // Mark as paid
-              console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
+              diagnosticLogger.info('Download', 'Payment processed', { 
+                amount: paymentAmount.toFixed(6), 
+                seederWalletAddress, 
+                seederPeerId 
+              });
             } else {
-              console.error('Payment failed:', paymentResult.error);
-              showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+              errorLogger.fileOperationError('Payment', paymentResult.error || 'Unknown error');
+              showToast(`Payment failed: ${paymentResult.error}`, 'warning');
             }
           }
         }
@@ -1443,7 +1782,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         files.update(f => f.map(file =>
           file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file
         ));
-        showNotification(`Successfully decrypted and saved "${fileToDownload.name}"! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
+        showToast(`Successfully decrypted and saved "${fileToDownload.name}"! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
         activeSimulations.delete(fileId);
 
       } else {
@@ -1454,7 +1793,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           // Use multi-source download for files > 1MB with multiple seeders
           const downloadStartTime = Date.now();
           try {
-            showNotification(`Starting multi-source download from ${seeders.length} peers...`, 'info');
+            showToast(`Starting multi-source download from ${seeders.length} peers...`, 'info');
 
             if (!outputPath) {
               throw new Error('Output path is required for download');
@@ -1481,11 +1820,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                 : null;
 
               if (!seederWalletAddress) {
-                console.warn('Skipping multi-source payment due to missing or invalid uploader wallet address', {
+                diagnosticLogger.warn('Download', 'Skipping multi-source payment due to missing or invalid uploader wallet address', {
                   file: fileToDownload.name,
                   seederAddresses: fileToDownload.seederAddresses
                 });
-                showNotification('Payment skipped: missing uploader wallet address', 'warning');
+                showToast('Payment skipped: missing uploader wallet address', 'warning');
               } else {
                 const paymentResult = await paymentService.processDownloadPayment(
                   fileToDownload.hash,
@@ -1497,11 +1836,15 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
                 if (paymentResult.success) {
                   paidFiles.add(fileToDownload.hash); // Mark as paid
-                  console.log(`✅ Multi-source payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
-                  showNotification(`Multi-source download completed! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
+                  diagnosticLogger.info('Download', 'Multi-source payment processed', { 
+                    amount: paymentAmount.toFixed(6), 
+                    seederWalletAddress, 
+                    seederPeerId 
+                  });
+                  showToast(`Multi-source download completed! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
                 } else {
-                  console.error('Multi-source payment failed:', paymentResult.error);
-                  showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                  errorLogger.fileOperationError('Multi-source payment', paymentResult.error || 'Unknown error');
+                  showToast(`Payment failed: ${paymentResult.error}`, 'warning');
                 }
               }
             }
@@ -1516,12 +1859,12 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                   downloadDuration
                 );
               } catch (error) {
-                console.error(`Failed to record success for peer ${peerId}:`, error);
+                errorLogger.networkError(`Failed to record success for peer ${peerId}: ${error instanceof Error ? error.message : String(error)}`);
               }
             }
 
           } catch (error) {
-            console.error('Multi-source download failed, falling back to P2P:', error);
+            errorLogger.fileOperationError('Multi-source download', error instanceof Error ? error.message : String(error));
 
             // Record transfer failures for each peer
             for (const peerId of seeders) {
@@ -1531,7 +1874,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                   error instanceof Error ? error.message : 'Multi-source download failed'
                 );
               } catch (recordError) {
-                console.error(`Failed to record failure for peer ${peerId}:`, recordError);
+                errorLogger.networkError(`Failed to record failure for peer ${peerId}: ${recordError instanceof Error ? recordError.message : String(recordError)}`);
               }
             }
 
@@ -1558,7 +1901,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               fileSize: fileToDownload.size,
               seeders: seeders,
               createdAt: Date.now(),
-              isEncrypted: false
+              isEncrypted: false,
+              price: fileToDownload.price ?? 0  // Add price field
             } : null;
 
             if (!fileMetadata) {
@@ -1575,14 +1919,33 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               outputPath || undefined,
               async (transfer) => {
                 // Update UI with transfer progress
+                diagnosticLogger.info('P2P Download', 'Transfer status update', {
+                  fileId,
+                  transferStatus: transfer.status,
+                  progress: transfer.progress,
+                  speed: transfer.speed,
+                  outputPath: transfer.outputPath
+                });
+
                 files.update(f => f.map(file => {
                   if (file.id === fileId) {
+                    const newStatus = transfer.status === 'completed' ? 'completed' :
+                                    transfer.status === 'failed' ? 'failed' :
+                                    transfer.status === 'transferring' ? 'downloading' : file.status;
+
+                    if (newStatus !== file.status) {
+                      diagnosticLogger.info('P2P Download', 'Status changed', {
+                        fileId,
+                        oldStatus: file.status,
+                        newStatus,
+                        progress: transfer.progress
+                      });
+                    }
+
                     return {
                       ...file,
                       progress: transfer.progress,
-                      status: transfer.status === 'completed' ? 'completed' :
-                            transfer.status === 'failed' ? 'failed' :
-                            transfer.status === 'transferring' ? 'downloading' : file.status,
+                      status: newStatus,
                       speed: `${Math.round(transfer.speed / 1024)} KB/s`,
                       eta: transfer.eta ? `${Math.round(transfer.eta)}s` : 'N/A',
                       downloadPath: transfer.outputPath // Store the download path
@@ -1601,11 +1964,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                       : null;
 
                     if (!seederWalletAddress) {
-                      console.warn('Skipping P2P payment due to missing or invalid uploader wallet address', {
+                      diagnosticLogger.warn('Download', 'Skipping P2P payment due to missing or invalid uploader wallet address', {
                         file: fileToDownload.name,
                         seederAddresses: fileToDownload.seederAddresses
                       });
-                      showNotification('Payment skipped: missing uploader wallet address', 'warning');
+                      showToast('Payment skipped: missing uploader wallet address', 'warning');
                     } else {
                       const paymentResult = await paymentService.processDownloadPayment(
                         fileToDownload.hash,
@@ -1617,15 +1980,19 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
                       if (paymentResult.success) {
                         paidFiles.add(fileToDownload.hash); // Mark as paid
-                        console.log(`✅ Payment processed: ${paymentAmount.toFixed(6)} Chiral to ${seederWalletAddress} (peer: ${seederPeerId})`);
-                        showNotification(
+                        diagnosticLogger.info('Download', 'Payment processed', { 
+                          amount: paymentAmount.toFixed(6), 
+                          seederWalletAddress, 
+                          seederPeerId 
+                        });
+                        showToast(
                           `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
                           'success'
                         );
                       } else {
-                        console.error('Payment failed:', paymentResult.error);
-                        showNotification(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
-                        showNotification(`Payment failed: ${paymentResult.error}`, 'warning');
+                        errorLogger.fileOperationError('Payment', paymentResult.error || 'Unknown error');
+                        showToast(tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } }), 'success');
+                        showToast(`Payment failed: ${paymentResult.error}`, 'warning');
                       }
                     }
                   }
@@ -1636,18 +2003,18 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                     try {
                       await PeerSelectionService.recordTransferSuccess(peerId, fileToDownload.size, duration);
                     } catch (error) {
-                      console.error(`Failed to record P2P success for peer ${peerId}:`, error);
+                      errorLogger.networkError(`Failed to record P2P success for peer ${peerId}: ${error instanceof Error ? error.message : String(error)}`);
                     }
                   }
                 } else if (transfer.status === 'failed' && fileToDownload) {
-                  showNotification(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
+                  showToast(tr('download.notifications.downloadFailed', { values: { name: fileToDownload.name } }), 'error');
 
                   // Record failure metrics for each peer
                   for (const peerId of seeders) {
                     try {
                       await PeerSelectionService.recordTransferFailure(peerId, 'P2P download failed');
                     } catch (error) {
-                      console.error(`Failed to record P2P failure for peer ${peerId}:`, error);
+                      errorLogger.networkError(`Failed to record P2P failure for peer ${peerId}: ${error instanceof Error ? error.message : String(error)}`);
                     }
                   }
                 }
@@ -1663,9 +2030,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             activeSimulations.delete(fileId);
 
           } catch (error) {
-            console.error('P2P download failed:', error);
+            errorLogger.fileOperationError('P2P download', error instanceof Error ? error.message : String(error));
             const errorMessage = error instanceof Error ? error.message : String(error);
-            showNotification(`P2P download failed: ${errorMessage}`, 'error');
+            showToast(`P2P download failed: ${errorMessage}`, 'error');
             activeSimulations.delete(fileId);
             files.update(f => f.map(file =>
               file.id === fileId
@@ -1678,7 +2045,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     } catch (error) {
       // Download failed
       const errorMessage = error instanceof Error ? error.message : String(error);
-      showNotification(`Download failed: ${errorMessage}`, 'error');
+      showToast(`Download failed: ${errorMessage}`, 'error');
       activeSimulations.delete(fileId);
 
       files.update(f => f.map(file =>
@@ -1688,8 +2055,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       ));
 
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error('Download failed:', error, fileToDownload);
-      showNotification(
+      errorLogger.fileOperationError('Download', error instanceof Error ? error.message : String(error));
+      showToast(
         tr('download.notifications.downloadFailed', { values: { name: fileToDownload?.name || 'Unknown file' } }) + (errorMsg ? `: ${errorMsg}` : ''),
         'error'
       );
@@ -1701,16 +2068,15 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     ))
   }
 
-  async function showInFolder(fileId: string) {
-    const file = $files.find(f => f.id === fileId);
-    if (file && file.downloadPath) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('show_in_folder', { path: file.downloadPath });
-      } catch (error) {
-        console.error('Failed to show file in folder:', error);
-        showNotification('Failed to open file location', 'error');
-      }
+  async function showInFolder(_fileId: string) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      // Always open the storage directory set by user in Settings
+      const storagePath = await invoke('get_download_directory');
+      await invoke('show_in_folder', { path: storagePath });
+    } catch (error) {
+      errorLogger.fileOperationError('Show storage folder', error instanceof Error ? error.message : String(error));
+      showToast('Failed to open storage folder', 'error');
     }
   }
 
@@ -1746,22 +2112,65 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       eta: 'N/A'      // Ensure eta property exists
     };
     downloadQueue.update(q => [...q, newFile]);
-    showNotification(`Retrying download for "${newFile.name}"`, 'info');
+    showToast(`Retrying download for "${newFile.name}"`, 'info');
   }
 
-  function moveInQueue(fileId: string, direction: 'up' | 'down') {
+  async function moveInQueue(fileId: string, direction: 'up' | 'down' | 'drop', targetId?: string) {
     downloadQueue.update(queue => {
-      const index = queue.findIndex(f => f.id === fileId)
-      if (index === -1) return queue
+      const fromIndex = queue.findIndex(f => f.id === fileId);
+      if (fromIndex === -1) return queue;
 
-      const newIndex = direction === 'up' ? Math.max(0, index - 1) : Math.min(queue.length - 1, index + 1)
-      if (index === newIndex) return queue
+      const newQueue = [...queue];
+      const [removed] = newQueue.splice(fromIndex, 1);
 
-      const newQueue = [...queue]
-      const [removed] = newQueue.splice(index, 1)
-      newQueue.splice(newIndex, 0, removed)
-      return newQueue
+      if (direction === 'drop' && targetId) {
+        const toIndex = queue.findIndex(f => f.id === targetId);
+        if (toIndex !== -1) {
+          newQueue.splice(toIndex, 0, removed);
+        } else {
+          return queue; // Target not found, abort
+        }
+      } else {
+        const newIndex = direction === 'up' ? Math.max(0, fromIndex - 1) : Math.min(queue.length - 1, fromIndex + 1);
+        newQueue.splice(newIndex, 0, removed);
+      }
+
+      return newQueue;
     })
+
+    // After any reordering, persist the new priority to the backend.
+    const newQueue = get(downloadQueue);
+    const orderedInfoHashes = newQueue.map(f => f.hash);
+    await invoke('update_download_priorities', { orderedInfoHashes });
+    showToast('Download queue order updated', 'success');
+  }
+
+  // Drag and Drop state
+  let draggedItemId: string | null = null;
+  let dropTargetId: string | null = null;
+
+  function handleDragStart(event: DragEvent, fileId: string) {
+    draggedItemId = fileId;
+    event.dataTransfer!.effectAllowed = 'move';
+  }
+
+  function handleDragOver(event: DragEvent, fileId:string) {
+    event.preventDefault();
+    if (fileId !== draggedItemId) {
+      dropTargetId = fileId;
+    }
+  }
+
+  function handleDragLeave() {
+    dropTargetId = null;
+  }
+
+  async function handleDrop(event: DragEvent, targetFileId: string) {
+    event.preventDefault();
+    if (!draggedItemId || draggedItemId === targetFileId) return;
+
+    // Reorder the queue and persist the changes
+    await moveInQueue(draggedItemId, 'drop', targetFileId);
   }
 
   // Download History functions
@@ -1804,19 +2213,27 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     input.click()
   }
 
-  function clearAllHistory() {
-    if (confirm(tr('downloadHistory.confirmClear'))) {
-      downloadHistoryService.clearHistory()
+  async function clearAllHistory() {
+    if (await confirm(tr('downloadHistory.confirmClear'))) {
+      await downloadHistoryService.clearHistory()
       downloadHistory = []
       showToast(tr('downloadHistory.messages.historyCleared'), 'success')
     }
   }
 
-  function clearFailedHistory() {
-    if (confirm(tr('downloadHistory.confirmClearFailed'))) {
-      downloadHistoryService.clearFailedDownloads()
+  async function clearFailedHistory() {
+    if (await confirm(tr('downloadHistory.confirmClearFailed'))) {
+      await downloadHistoryService.clearFailedDownloads()
       downloadHistory = downloadHistoryService.getFilteredHistory()
       showToast(tr('downloadHistory.messages.failedCleared'), 'success')
+    }
+  }
+
+  async function clearCanceledHistory() {
+    if (await confirm(tr('downloadHistory.confirmClearCanceled'))) {
+      await downloadHistoryService.clearCanceledDownloads()
+      downloadHistory = downloadHistoryService.getFilteredHistory()
+      showToast(tr('downloadHistory.messages.canceledCleared'), 'success')
     }
   }
 
@@ -1848,6 +2265,36 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   const formatFileSize = toHumanReadableSize
 
+  // Restartable HTTP download controls
+  let showRestartSection = false
+  let restartDownloadId = ''
+  let restartSourceUrl = ''
+  let restartDestinationPath = ''
+  let restartSha256 = ''
+
+  async function chooseRestartDestination() {
+    try {
+      const defaultDir = await homeDir()
+      const suggestedPath =
+        restartDestinationPath || `${defaultDir.replace(/\/$/, '')}/Downloads/restart-download.bin`
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const selection = await save({
+        defaultPath: suggestedPath,
+        filters: [
+          {
+            name: 'All Files',
+            extensions: ['*']
+          }
+        ]
+      })
+      if (selection) {
+        restartDestinationPath = selection
+      }
+    } catch (error) {
+      console.error('Failed to choose destination path', error)
+      showToast('Failed to choose destination path', 'error')
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -1856,8 +2303,12 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
 
+  <!-- DEV ONLY: Protocol Test Panel - Remove before production -->
+  <!-- File: src/lib/components/ProtocolTestPanel.svelte -->
+  <ProtocolTestPanel />
+
   <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
-  <Card class="overflow-hidden">
+  <Card class="">
     <!-- Chiral DHT Search Section with integrated BitTorrent -->
     <div class="border-b">
       <DownloadSearchSection
@@ -2162,20 +2613,30 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         {/if}
       </p>
     {:else}
-      <div class="space-y-3">
+      <div class="space-y-3" role="list">
         {#each filteredDownloads as file, index}
-          <div class="p-3 bg-muted/60 rounded-lg hover:bg-muted/80 transition-colors">
+          <div
+            role="listitem"
+            class="p-3 bg-muted/60 rounded-lg hover:bg-muted/80 transition-colors"
+            draggable={file.status === 'queued'}
+            on:dragstart={(e) => handleDragStart(e, file.id)}
+            on:dragover={(e) => handleDragOver(e, file.id)}
+            on:dragleave={handleDragLeave}
+            on:drop={(e) => handleDrop(e, file.id)}
+            class:cursor-move={file.status === 'queued'}
+            class:border-primary={dropTargetId === file.id}
+            class:border-2={dropTargetId === file.id}
+          >
             <!-- File Header -->
             <div class="pb-2">
               <div class="flex items-start justify-between gap-4">
                 <div class="flex items-start gap-3 flex-1 min-w-0">
-                  <!-- Queue Controls -->
                   {#if file.status === 'queued'}
                     <div class="flex flex-col gap-1 mt-1">
                       <Button
                         size="sm"
                         variant="ghost"
-                        on:click={() => moveInQueue(file.id, 'up')}
+                        on:click={async () => await moveInQueue(file.id, 'up')}
                         disabled={index === 0}
                         class="h-6 w-6 p-0 hover:bg-muted"
                       >
@@ -2184,7 +2645,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                       <Button
                         size="sm"
                         variant="ghost"
-                        on:click={() => moveInQueue(file.id, 'down')}
+                        on:click={async () => await moveInQueue(file.id, 'down')}
                         disabled={index === filteredDownloads.filter(f => f.status === 'queued').length - 1}
                         class="h-6 w-6 p-0 hover:bg-muted"
                       >
@@ -2397,13 +2858,92 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     {/if}
   </Card>
 
+  <!-- Restartable HTTP Download Section -->
+  <Card class="p-6">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <div class="flex items-center gap-2">
+          <DownloadIcon class="h-5 w-5" />
+          <h2 class="text-lg font-semibold">Restartable HTTP Download (Beta)</h2>
+        </div>
+        <p class="text-sm text-muted-foreground mt-1">
+          Download any HTTP resource with pause/resume support powered by the restartable engine.
+        </p>
+      </div>
+      <Button size="sm" variant="outline" on:click={() => (showRestartSection = !showRestartSection)}>
+        {showRestartSection ? 'Hide Controls' : 'Show Controls'}
+      </Button>
+    </div>
+
+    {#if showRestartSection}
+      <div class="mt-6 space-y-5">
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="space-y-2">
+            <Label for="restart-url">HTTP Source URL</Label>
+            <Input
+              id="restart-url"
+              type="url"
+              placeholder="https://example.com/file.bin"
+              bind:value={restartSourceUrl}
+            />
+          </div>
+          <div class="space-y-2">
+            <Label for="restart-hash">Expected SHA-256 (optional)</Label>
+            <Input
+              id="restart-hash"
+              placeholder="64-character hex"
+              bind:value={restartSha256}
+            />
+          </div>
+          <div class="space-y-2">
+            <Label for="restart-id">Download ID (optional)</Label>
+            <Input
+              id="restart-id"
+              placeholder="Leave blank to auto-generate"
+              bind:value={restartDownloadId}
+            />
+          </div>
+        </div>
+        <div class="space-y-2">
+          <Label for="restart-dest">Destination Path</Label>
+          <div class="flex flex-col gap-2 md:flex-row">
+            <Input
+              id="restart-dest"
+              placeholder="/home/user/Downloads/file.bin"
+              bind:value={restartDestinationPath}
+              class="flex-1"
+            />
+            <Button type="button" variant="outline" on:click={chooseRestartDestination}>
+              Choose Path
+            </Button>
+          </div>
+        </div>
+
+        <div class="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+          <p>
+            Enter a direct HTTP URL and destination path, then use the controls below to start,
+            pause, or resume the transfer. Metadata is stored next to the destination as
+            <code>.filename.chiral.meta.json</code> so progress survives restarts.
+          </p>
+        </div>
+
+        <DownloadRestartControls
+          bind:downloadId={restartDownloadId}
+          sourceUrl={restartSourceUrl}
+          destinationPath={restartDestinationPath}
+          expectedSha256={restartSha256 ? restartSha256 : null}
+        />
+      </div>
+    {/if}
+  </Card>
+
   <!-- Download History Section -->
   <Card class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
         <History class="h-5 w-5" />
         <h2 class="text-lg font-semibold">{$t('downloadHistory.title')}</h2>
-        <Badge variant="secondary">{downloadHistoryService.getStatistics().total}</Badge>
+        <Badge variant="secondary">{statistics.total}</Badge>
       </div>
       <Button
         size="sm"
@@ -2439,21 +2979,28 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               variant={historyFilter === 'all' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'all'}
             >
-              {$t('downloadHistory.filterAll')} ({downloadHistoryService.getStatistics().total})
+              {$t('downloadHistory.filterAll')} ({statistics.total})
             </Button>
             <Button
               size="sm"
               variant={historyFilter === 'completed' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'completed'}
             >
-              {$t('downloadHistory.filterCompleted')} ({downloadHistoryService.getStatistics().completed})
+              {$t('downloadHistory.filterCompleted')} ({statistics.completed})
             </Button>
             <Button
               size="sm"
               variant={historyFilter === 'failed' ? 'default' : 'outline'}
               on:click={() => historyFilter = 'failed'}
             >
-              {$t('downloadHistory.filterFailed')} ({downloadHistoryService.getStatistics().failed})
+              {$t('downloadHistory.filterFailed')} ({statistics.failed})
+            </Button>
+            <Button
+              size="sm"
+              variant={historyFilter === 'canceled' ? 'default' : 'outline'}
+              on:click={() => historyFilter = 'canceled'}
+            >
+              {$t('downloadHistory.filterCanceled')} ({statistics.canceled})
             </Button>
           </div>
         </div>
@@ -2476,7 +3023,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             <DownloadIcon class="h-3 w-3 mr-1" />
             {$t('downloadHistory.importHistory')}
           </Button>
-          {#if downloadHistoryService.getStatistics().failed > 0}
+          {#if statistics.failed > 0}
             <Button
               size="sm"
               variant="outline"
@@ -2485,6 +3032,17 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
             >
               <Trash2 class="h-3 w-3 mr-1" />
               {$t('downloadHistory.clearFailed')}
+            </Button>
+          {/if}
+          {#if statistics.canceled > 0}
+            <Button
+              size="sm"
+              variant="outline"
+              on:click={clearCanceledHistory}
+              class="text-orange-600 border-orange-600 hover:bg-orange-50"
+            >
+              <Trash2 class="h-3 w-3 mr-1" />
+              {$t('downloadHistory.clearCanceled')}
             </Button>
           {/if}
           {#if downloadHistory.length > 0}

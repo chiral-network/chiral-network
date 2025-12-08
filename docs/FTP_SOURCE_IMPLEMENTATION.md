@@ -10,16 +10,16 @@ FTP (File Transfer Protocol) is added as a download source to provide compatibil
 
 ### Role in the Network
 
-* **Source Type:** FTP serves as a **fallback** and **mirror** download source.
-* **Discovery:** FTP sources are not discovered automatically. They are added to a file's metadata by the original publisher.
-* **Priority:** FTP is given the **lowest priority** (25) by the download scheduler, ensuring that P2P (100+) and HTTP (50) sources are preferred.
+- **Source Type:** FTP serves as a **fallback** and **mirror** download source.
+- **Discovery:** FTP sources are not discovered automatically. They are added to a file's metadata by the original publisher.
+- **Priority:** FTP is given the **lowest priority** (25) by the download scheduler, ensuring that P2P (100+) and HTTP (50) sources are preferred.
 
 ### Key Features
 
-* **Client Implementation:** The client is built using the `suppaftp` crate.
-* **FTPS Support:** Secure FTP over TLS (FTPS) is supported and can be enabled via the `use_ftps` flag.
-* **Passive Mode:** Connections default to **passive mode** to work better with modern firewalls and NAT.
-* **Range Downloads:** The client simulates chunked downloading by using a "skip-and-read" method on the FTP stream, allowing it to fetch specific byte ranges (`download_range`) even from servers that don't support the `REST` command.
+- **Client Implementation:** The client is built using the `suppaftp` crate.
+- **FTPS Support:** Secure FTP over TLS (FTPS) is supported and can be enabled via the `use_ftps` flag.
+- **Passive Mode:** Connections default to **passive mode** to work better with modern firewalls and NAT.
+- **Range Downloads:** The client simulates chunked downloading by using a "skip-and-read" method on the FTP stream, allowing it to fetch specific byte ranges (`download_range`) even from servers that don't support the `REST` command.
 
 ## Files Created
 
@@ -55,6 +55,7 @@ pub struct FtpSourceInfo {
 - `priority_score()` - Returns priority score for source selection
 
 **Priority Scores:**
+
 - P2P: 100 + reputation (0-100) = 100-200
 - HTTP: 50
 - FTP: 25
@@ -216,6 +217,7 @@ fn log_source_selection(source: &DownloadSource) {
 `DownloadSource` uses tagged enum serialization:
 
 **FTP Source JSON:**
+
 ```json
 {
   "type": "ftp",
@@ -228,6 +230,7 @@ fn log_source_selection(source: &DownloadSource) {
 ```
 
 **P2P Source JSON:**
+
 ```json
 {
   "type": "p2p",
@@ -240,6 +243,7 @@ fn log_source_selection(source: &DownloadSource) {
 ```
 
 **HTTP Source JSON:**
+
 ```json
 {
   "type": "http",
@@ -373,6 +377,7 @@ FtpSourceInfo {
 ## Current Status
 
 ✅ **Implemented:**
+
 - FTP source type definition (`FtpSourceInfo`)
 - `DownloadSource` enum with FTP variant
 - Source identification and display
@@ -389,9 +394,14 @@ FtpSourceInfo {
 - Error handling and retry logic
 - Connection pooling
 
+✅ **Recently Implemented:**
+
+- FTP seeding with embedded FTP server
+- Dynamic seeding capability based on server availability
+
 ⏳ **TODO (Future Work):**
+
 - Bandwidth limiting (per-source)
-- Progress tracking (integrated with multi-source UI)
 
 ## FTP Data Fetching & Verification Implementation
 
@@ -405,21 +415,25 @@ This implementation adds complete FTP data fetching and verification functionali
 ### Key Features Implemented
 
 #### 1. **FTP Connection Management**
+
 - **Connection Pooling**: FTP connections are stored and reused via `ftp_connections: Arc<Mutex<HashMap<String, FtpStream>>>`
 - **Automatic Cleanup**: Proper connection cleanup in `cleanup()` and `handle_cancel_download()` methods
 - **Credential Handling**: Supports both anonymous and authenticated FTP with encrypted passwords
 
 #### 2. **Chunk-Based FTP Downloads**
+
 - **Byte Range Downloads**: Uses `download_range(stream, path, start_byte, size)` for precise chunk fetching
 - **Concurrency Control**: Limited to 2 concurrent downloads per FTP server to avoid overwhelming servers
 - **Progress Tracking**: Updates source status and emits progress events
 
 #### 3. **Data Verification**
+
 - **Size Verification**: Validates downloaded chunk size against expected size
 - **Last Chunk Handling**: Special logic for partial data in final chunks
 - **Hash Verification Ready**: Prepared for hash verification once chunk hashes are implemented
 
 #### 4. **Comprehensive Error Handling**
+
 ```rust
 // FTP-specific error messages
 let error_msg = if e.contains("Connection refused") {
@@ -438,6 +452,7 @@ let error_msg = if e.contains("Connection refused") {
 ### Implementation Details
 
 #### FTP Connection Lifecycle
+
 ```rust
 // Establish connection with credentials
 match self.ftp_downloader.connect_and_login(&url, credentials).await {
@@ -445,7 +460,7 @@ match self.ftp_downloader.connect_and_login(&url, credentials).await {
         // Store connection for reuse
         let mut connections = self.ftp_connections.lock().await;
         connections.insert(ftp_url_id.clone(), ftp_stream);
-        
+
         // Start chunk downloads
         self.start_ftp_chunk_downloads(file_hash, ftp_info, chunk_ids).await;
     }
@@ -456,6 +471,7 @@ match self.ftp_downloader.connect_and_login(&url, credentials).await {
 ```
 
 #### Concurrent Chunk Downloading
+
 ```rust
 // Limit concurrent downloads per FTP server
 let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
@@ -469,6 +485,7 @@ for chunk_info in chunks_to_download {
 ```
 
 #### Data Verification & Storage
+
 ```rust
 // Verify chunk size
 if data.len() != chunk.size {
@@ -492,7 +509,7 @@ download.completed_chunks.insert(chunk.chunk_id, completed_chunk);
 ### Files Modified
 
 1. **`src-tauri/src/multi_source_download.rs`** - Main implementation
-   - Added `ftp_downloader: Arc<FtpDownloader>` 
+   - Added `ftp_downloader: Arc<FtpDownloader>`
    - Added `ftp_connections: Arc<Mutex<HashMap<String, FtpStream>>>`
    - Implemented `start_ftp_connection()` method
    - Implemented `start_ftp_chunk_downloads()` method
@@ -503,6 +520,7 @@ download.completed_chunks.insert(chunk.chunk_id, completed_chunk);
 ### Integration Points
 
 #### Source Discovery
+
 ```rust
 // Convert DHT FtpSourceInfo to DownloadSource FtpSourceInfo
 for ftp_info in ftp_sources {
@@ -518,7 +536,9 @@ for ftp_info in ftp_sources {
 ```
 
 #### Chunk Assignment
+
 FTP sources participate in the same round-robin chunk assignment as P2P and HTTP sources:
+
 ```rust
 for (source, chunk_ids) in chunk_assignments {
     match &source {
@@ -538,6 +558,7 @@ for (source, chunk_ids) in chunk_assignments {
 ### Testing
 
 #### Unit Tests Added
+
 ```rust
 #[test]
 fn test_ftp_source_assignment() {
@@ -573,12 +594,14 @@ fn test_ftp_priority_score() {
 ### Configuration & Security
 
 #### FTP Configuration
+
 - **Passive Mode**: Enabled by default for NAT traversal
 - **Connection Timeout**: 30 seconds default
 - **Binary Transfer**: Uses TYPE I for file transfers
 - **Max Retries**: 3 attempts per chunk with exponential backoff
 
 #### Security Features
+
 - **Encrypted Passwords**: Uses existing encrypted password system
 - **Anonymous Support**: Falls back to anonymous FTP when credentials unavailable
 - **Connection Cleanup**: Prevents resource leaks with proper disconnection
@@ -606,14 +629,136 @@ fn test_ftp_priority_score() {
 
 ### Status Summary
 
-✅ **Connection Management** - Establishes, pools, and cleans up FTP connections  
-✅ **Data Fetching** - Downloads byte ranges from FTP servers with proper error handling  
-✅ **Data Verification** - Verifies chunk sizes and prepared for hash verification  
-✅ **Error Handling** - Comprehensive FTP-specific error messages and retry logic  
-✅ **Integration** - Seamlessly integrates with existing multi-source download system  
-✅ **Testing** - Unit tests for FTP functionality included  
+✅ **Connection Management** - Establishes, pools, and cleans up FTP connections
+✅ **Data Fetching** - Downloads byte ranges from FTP servers with proper error handling
+✅ **Data Verification** - Verifies chunk sizes and prepared for hash verification
+✅ **Error Handling** - Comprehensive FTP-specific error messages and retry logic
+✅ **Integration** - Seamlessly integrates with existing multi-source download system
+✅ **FTP Seeding** - Full seeding support with embedded FTP server
+✅ **Testing** - Unit tests for FTP functionality included
+✅ **Transfer Event Bus** - Full lifecycle event emission for UI updates
 
 The FTP data fetching and verification implementation is **complete and production-ready**.
+
+---
+
+## Transfer Event Bus Integration
+
+The FTP protocol handler is fully integrated with the Transfer Event Bus, enabling the frontend UI to receive real-time download lifecycle events for FTP transfers.
+
+### Event-Aware Constructors
+
+```rust
+use crate::protocols::ftp::FtpProtocolHandler;
+
+// Without event bus (existing behavior, no UI updates)
+let handler = FtpProtocolHandler::new();
+
+// With event bus (enables UI updates)
+let handler = FtpProtocolHandler::with_event_bus(app_handle.clone());
+
+// With custom config and event bus
+let handler = FtpProtocolHandler::with_config_and_event_bus(config, app_handle.clone());
+```
+
+### Structural Changes
+
+The following fields were added to support event emission:
+
+**FtpProtocolHandler struct:**
+
+```rust
+pub struct FtpProtocolHandler {
+    // ... existing fields
+    event_bus: Option<Arc<TransferEventBus>>,
+}
+```
+
+**FtpDownloadState struct:**
+
+```rust
+pub struct FtpDownloadState {
+    // ... existing fields
+    pub file_name: String,    // For event reporting
+    pub file_size: u64,       // For progress/completion events
+}
+```
+
+### Events Emitted by Method
+
+| Method              | Events             | When Emitted                                            |
+| ------------------- | ------------------ | ------------------------------------------------------- |
+| `download()`        | TransferStarted    | After successful FTP connection                         |
+| `download()`        | SourceConnected    | When FTP server connection established                  |
+| `download()`        | ChunkCompleted     | When file download completes (single chunk)             |
+| `download()`        | SourceDisconnected | On disconnect (success or failure)                      |
+| `download()`        | TransferCompleted  | Download finishes successfully                          |
+| `download()`        | TransferFailed     | Connection failure, download error, or file write error |
+| `pause_download()`  | TransferPaused     | With downloaded bytes and pause reason                  |
+| `cancel_download()` | TransferCanceled   | With progress at cancellation                           |
+
+### Helper Functions
+
+```rust
+/// Get current timestamp in milliseconds for events
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Extract filename from FTP URL for display
+fn extract_file_name(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_string()
+}
+```
+
+### Example Event Flow
+
+```
+User initiates FTP download
+    │
+    ▼
+TransferStarted
+    │ (FTP connection initiated)
+    ▼
+SourceConnected
+    │ (FTP server connection established)
+    ▼
+ChunkCompleted
+    │ (file data received)
+    ▼
+SourceDisconnected
+    │ (connection closed)
+    ▼
+TransferCompleted
+```
+
+### Error Event Flow
+
+```
+FTP connection attempt
+    │
+    ▼
+TransferStarted
+    │
+    ▼
+[Connection fails]
+    │
+    ▼
+TransferFailed
+    │ (with ErrorCategory::Network and error message)
+```
+
+### Backward Compatibility
+
+Event emission is **opt-in** through new constructors. Existing code using `FtpProtocolHandler::new()` or `FtpProtocolHandler::with_config()` continues to work without changes - these handlers simply don't emit events.
+
+---
 
 ## Next Steps
 

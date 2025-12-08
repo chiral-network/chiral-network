@@ -158,6 +158,34 @@ The network uses a multi-layered approach to ensure connectivity:
 ### 1. Direct Connection (fastest)
 For publicly reachable peers with no NAT or firewall restrictions.
 
+#### Automatic Port Forwarding (UPnP)
+Modern routers support automatic port forwarding protocols that enable NAT'd peers to become publicly reachable without manual configuration:
+
+- **UPnP (Universal Plug and Play)**: Industry-standard protocol for automatic port mapping
+  - **Built-in libp2p feature**: libp2p provides core UPnP functionality
+  - Discovers IGD (Internet Gateway Device) on the local network via SSDP multicast
+  - Requests external port mappings through SOAP/XML API
+  - Router exposes internal service on its public IP address
+  - Widely supported on consumer routers (check router settings: "UPnP" or "UPnP IGD")
+
+**Benefits**:
+- Transforms NAT'd nodes into publicly reachable peers automatically
+- Eliminates need for manual port forwarding configuration
+- Improves network performance by enabling direct P2P connections
+- Reduces relay bandwidth usage
+
+**Fallback Strategy**:
+- If UPnP fails (unsupported router, disabled, or restrictive firewall)
+- Automatically proceeds to Hole Punching (DCUtR)
+- Circuit Relay used as final fallback
+
+**Connection Priority**:
+```
+1. Try UPnP → Direct connection if successful
+2. If failed → Hole Punching (DCUtR)
+3. If failed → Circuit Relay
+```
+
 ### 2. Hole Punching (DCUtR)
 For symmetric NAT traversal using Direct Connection Upgrade through Relay protocol.
 

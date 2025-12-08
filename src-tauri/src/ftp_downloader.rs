@@ -126,10 +126,14 @@ impl FtpDownloader {
             // Create timeout duration
             let timeout = Duration::from_secs(config.timeout_secs);
 
-            // Resolve address
-            let addr = format!("{}:{}", host_clone, port)
-                .parse::<std::net::SocketAddr>()
-                .map_err(|e| format!("Failed to parse address: {}", e))?;
+            // Resolve address - use ToSocketAddrs to handle both hostnames and IP addresses
+            use std::net::ToSocketAddrs;
+            let addr_str = format!("{}:{}", host_clone, port);
+            let addr = addr_str
+                .to_socket_addrs()
+                .map_err(|e| format!("Failed to resolve address '{}': {}", addr_str, e))?
+                .next()
+                .ok_or_else(|| format!("Could not resolve hostname: {}", host_clone))?;
 
             // Connect to FTP server with timeout
             let mut ftp_stream = FtpStream::connect_timeout(addr, timeout)

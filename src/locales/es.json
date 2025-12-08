@@ -151,6 +151,9 @@
         "title": "Estado del Relay",
         "enabled": "AutoRelay Activado",
         "disabled": "AutoRelay Desactivado",
+        "timeline": "AutoRelay timeline",
+        "enabledAt": "Last enabled",
+        "disabledAt": "Last disabled",
         "noPeer": "No conectado al relay",
         "activePeer": "Relay Activo",
         "status": "Estado",
@@ -159,6 +162,8 @@
         "renewals": "Reservas renovadas",
         "evictions": "Reservas desalojadas",
         "never": "Nunca",
+        "neverEnabled": "Never enabled",
+        "neverDisabled": "Never disabled",
         "noEvictions": "Sin desalojos",
         "accepted": "Reserva aceptada",
         "pending": "Pendiente",
@@ -254,6 +259,10 @@
     "enableUpnp": "Habilitar UPnP",
     "enableNat": "Habilitar mapeo de puertos NAT",
     "enableDht": "Habilitar DHT",
+    "autoStartNode": "Iniciar nodo DHT automáticamente al abrir",
+    "autoStartNodeDescription": "Iniciar automáticamente el nodo DHT para compartir archivos cuando se inicie la aplicación",
+    "autoStartGeth": "Iniciar nodo blockchain automáticamente al abrir",
+    "autoStartGethDescription": "Iniciar automáticamente el nodo blockchain Geth cuando se inicie la aplicación (habilita billetera y minería)",
     "geoDistribution": {
       "title": "Distribución geográfica",
       "subtitle": "Mapeando {peers} pares observados",
@@ -338,6 +347,8 @@
   "privacy.proxyHint": "Ingresa la dirección del proxy SOCKS5 (ej. Tor en 127.0.0.1:9050)",
   "privacy.anonymousMode": "Modo anónimo (ocultar toda información identificativa)",
   "privacy.shareAnalytics": "Compartir analíticas de uso anónimas",
+  "privacy.autoLockWallet": "Bloquear automáticamente la wallet tras inactividad",
+  "privacy.autoLockWalletHint": "Cierra sesión automáticamente tras una hora sin actividad.",
   "notifications.title": "Notificaciones",
   "notifications.enable": "Habilitar notificaciones de escritorio",
   "notifications.notifyComplete": "Notificar cuando finalicen las descargas",
@@ -408,6 +419,7 @@
     "balance": "Saldo",
     "totalEarned": "Total ganado",
     "totalSpent": "Total gastado",
+    "totalReceived": "Total recibido",
     "address": "Dirección Chiral",
     "qrModal": {
       "title": "Tu dirección Chiral",
@@ -452,6 +464,23 @@
       "noDetails": "No hay detalles de transacciones pendientes disponibles.",
       "count": "{count} transacción{count !== 1 ? 'es' : ''} pendiente{count !== 1 ? 's' : ''}",
       "none": "Transacciones pendientes"
+    },
+    "fees": {
+      "low": "Baja",
+      "market": "Mercado",
+      "fast": "Rápida",
+      "estimated": "Tarifa estimada"
+    },
+    "gas": {
+      "label": "Velocidad de transacción",
+      "loading": "Estimando...",
+      "estimateError": "Usando valores predeterminados",
+      "slow": "Económico",
+      "standard": "Estándar",
+      "fast": "Prioritario",
+      "estimatedFee": "Tarifa estimada",
+      "totalCost": "Costo total",
+      "networkCongestion": "Red"
     }
   },
   "transactions": {
@@ -464,6 +493,19 @@
     "item": {
       "from": "De",
       "to": "Para"
+    },
+    "receipt": {
+      "title": "Recibo de transacción",
+      "from": "De",
+      "to": "Para",
+      "hash": "Hash de transacción",
+      "blockNumber": "Número de bloque",
+      "gasInfo": "Información de gas",
+      "gasUsed": "Gas usado",
+      "gasPrice": "Precio del gas",
+      "fee": "Tarifa de transacción",
+      "timestamp": "Marca de tiempo",
+      "close": "Cerrar recibo"
     },
     "searchPlaceholder": "Buscar por dirección, descripción o ID..."
   },
@@ -640,7 +682,8 @@
       "invalid": "Introduce una cantidad válida mayor que 0.",
       "min": "La cantidad debe ser al menos {min} Chiral.",
       "insufficient": "Saldo insuficiente: faltan {more} Chiral.",
-      "insufficientWithFee": "Fondos insuficientes. El total de {total} Chiral (cantidad + tarifa) excede su saldo de {balance} Chiral."
+      "insufficientWithFee": "Fondos insuficientes. El total de {total} Chiral (cantidad + tarifa) excede su saldo de {balance} Chiral.",
+      "insufficientWithGas": "Saldo insuficiente (incluyendo gas) - Faltan {more} Chiral."
     },
     "exportFailed": "La exportación falló. Inténtalo de nuevo.",
     "createAccount": "No se pudo crear la cuenta: {error}"
@@ -1424,6 +1467,14 @@
     "blocks": {
       "latest": "Bloques recientes",
       "noBlocks": "No se encontraron bloques"
+    },
+    "sync": {
+      "syncing": "Sincronizando",
+      "current": "Bloque actual",
+      "highest": "Bloque más alto",
+      "remaining": "Restante",
+      "eta": "ETA",
+      "complete": "Sincronización completa"
     },
     "search": {
       "title": "Buscar en la blockchain",

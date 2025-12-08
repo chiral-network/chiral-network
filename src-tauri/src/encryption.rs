@@ -65,6 +65,42 @@ impl FileEncryption {
         hex::encode(&hash[..8]) // Use first 8 bytes as fingerprint
     }
 
+    /// Decrypt a Base64-encoded AES-256-GCM encrypted string
+    /// 
+    /// The encrypted data format is: nonce (12 bytes) + ciphertext
+    /// 
+    /// # Arguments
+    /// * `encrypted_base64` - Base64-encoded encrypted data
+    /// * `key` - 32-byte AES-256 key
+    /// 
+    /// # Returns
+    /// Decrypted string
+    pub fn decrypt_string(encrypted_base64: &str, key: &[u8; 32]) -> Result<String, String> {
+        // Decode base64
+        let encrypted_data = general_purpose::STANDARD
+            .decode(encrypted_base64)
+            .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+        if encrypted_data.len() < 12 {
+            return Err("Encrypted data too short (missing nonce)".to_string());
+        }
+
+        // Extract nonce (first 12 bytes) and ciphertext (rest)
+        let (nonce_bytes, ciphertext) = encrypted_data.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+
+        // Create cipher and decrypt
+        let key = Key::<Aes256Gcm>::from_slice(key);
+        let cipher = Aes256Gcm::new(key);
+
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+
+        String::from_utf8(plaintext)
+            .map_err(|e| format!("Invalid UTF-8 in decrypted data: {}", e))
+    }
+
     /// Encrypt a file using AES-256-GCM
     pub async fn encrypt_file(
         input_path: &Path,

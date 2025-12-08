@@ -2,9 +2,11 @@
 // This module provides Geth RPC interaction with developer-friendly error enrichment
 
 use crate::ethereum::{NETWORK_CONFIG, HTTP_CLIENT, get_balance, get_block_number};
-use rlp::Rlp;
+use rlp::{Rlp, RlpStream};
+use secp256k1::{ecdsa::RecoverableSignature, ecdsa::RecoveryId, Message, Secp256k1};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha3::{Digest, Keccak256};
 
 // ============================================================================
 // Data Structures
@@ -208,13 +210,80 @@ pub fn decode_transaction(signed_tx_hex: &str) -> Result<DecodedTransaction, Str
     })
 }
 
-/// Recover sender address from transaction signature (simplified)
-/// NOTE: This is a placeholder - in production, use proper ECDSA recovery
-fn recover_sender(_tx_bytes: &[u8], _v: u64, _r: &[u8; 32], _s: &[u8; 32]) -> Result<String, String> {
-    // TODO: Implement proper ECDSA recovery using secp256k1
-    // For now, return placeholder - actual recovery would use the transaction hash
-    // and signature to recover the public key, then derive the address
-    Ok("0x0000000000000000000000000000000000000000".to_string())
+/// Recover sender address from transaction signature using ECDSA recovery
+/// 
+/// This implements proper Ethereum signature recovery:
+/// 1. Reconstructs the unsigned transaction and hashes it with Keccak256
+/// 2. Uses secp256k1 ECDSA recovery to get the public key
+/// 3. Derives the Ethereum address from the public key
+fn recover_sender(tx_bytes: &[u8], v: u64, r: &[u8; 32], s: &[u8; 32]) -> Result<String, String> {
+    let rlp = Rlp::new(tx_bytes);
+    
+    // Extract transaction fields for re-encoding
+    let nonce: u64 = rlp.val_at(0).map_err(|e| format!("Invalid nonce: {}", e))?;
+    let gas_price: u128 = rlp.val_at(1).map_err(|e| format!("Invalid gas price: {}", e))?;
+    let gas_limit: u64 = rlp.val_at(2).map_err(|e| format!("Invalid gas limit: {}", e))?;
+    let to: Vec<u8> = rlp.val_at(3).map_err(|e| format!("Invalid to: {}", e))?;
+    let value: u128 = rlp.val_at(4).map_err(|e| format!("Invalid value: {}", e))?;
+    let data: Vec<u8> = rlp.val_at(5).map_err(|e| format!("Invalid data: {}", e))?;
+    
+    // Determine chain_id and recovery_id from v
+    // EIP-155: v = chain_id * 2 + 35 or chain_id * 2 + 36
+    // Legacy: v = 27 or 28
+    let (chain_id, recovery_id) = if v >= 35 {
+        // EIP-155 transaction
+        let chain_id = (v - 35) / 2;
+        let recovery_id = ((v - 35) % 2) as i32;
+        (Some(chain_id), recovery_id)
+    } else if v == 27 || v == 28 {
+        // Legacy transaction
+        (None, (v - 27) as i32)
+    } else {
+        return Err(format!("Invalid v value: {}", v));
+    };
+    
+    // Build the unsigned transaction RLP for hashing
+    let mut stream = RlpStream::new_list(if chain_id.is_some() { 9 } else { 6 });
+    stream.append(&nonce);
+    stream.append(&gas_price);
+    stream.append(&gas_limit);
+    stream.append(&to);
+    stream.append(&value);
+    stream.append(&data);
+    
+    // For EIP-155, append chain_id, 0, 0
+    if let Some(cid) = chain_id {
+        stream.append(&cid);
+        stream.append(&0u8);
+        stream.append(&0u8);
+    }
+    
+    let unsigned_tx = stream.out();
+    let msg_hash = Keccak256::digest(&unsigned_tx);
+    
+    // Create the signature for recovery
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes[..32].copy_from_slice(r);
+    sig_bytes[32..].copy_from_slice(s);
+    
+    let secp = Secp256k1::new();
+    let recovery_id = RecoveryId::from_i32(recovery_id)
+        .map_err(|e| format!("Invalid recovery id: {}", e))?;
+    let recoverable_sig = RecoverableSignature::from_compact(&sig_bytes, recovery_id)
+        .map_err(|e| format!("Invalid signature: {}", e))?;
+    
+    let message = Message::from_slice(&msg_hash)
+        .map_err(|e| format!("Invalid message hash: {}", e))?;
+    
+    let public_key = secp.recover_ecdsa(&message, &recoverable_sig)
+        .map_err(|e| format!("Failed to recover public key: {}", e))?;
+    
+    // Derive address from public key (last 20 bytes of keccak256 of uncompressed pubkey without prefix)
+    let pubkey_bytes = public_key.serialize_uncompressed();
+    let pubkey_hash = Keccak256::digest(&pubkey_bytes[1..]); // Skip 0x04 prefix
+    let address = format!("0x{}", hex::encode(&pubkey_hash[12..])); // Last 20 bytes
+    
+    Ok(address)
 }
 
 // ============================================================================

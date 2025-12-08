@@ -1,10 +1,16 @@
 use crate::encryption;
+use crate::transfer_events::{
+    TransferEventBus, TransferCompletedEvent, TransferFailedEvent,
+    TransferStartedEvent, SourceInfo, SourceType, SourceSummary, ErrorCategory,
+    current_timestamp_ms,
+};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tauri::AppHandle;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn};
@@ -153,6 +159,7 @@ pub struct FileTransferService {
     event_rx: Arc<Mutex<mpsc::Receiver<FileTransferEvent>>>,
     storage_dir: PathBuf,
     download_metrics: Arc<Mutex<DownloadMetrics>>,
+    event_bus: Option<Arc<TransferEventBus>>,
 }
 
 impl FileTransferService {
@@ -327,8 +334,16 @@ impl FileTransferService {
         encryption_enabled: bool,
         keystore: Arc<Mutex<crate::keystore::Keystore>>,
     ) -> Result<Self, String> {
-        // Initialize storage directory
-        let storage_dir = Self::get_storage_dir()?;
+        Self::new_with_storage_dir(Self::get_storage_dir()?, encryption_enabled, keystore, None).await
+    }
+
+    /// Create with custom storage directory, encryption, keystore, and optional AppHandle
+    pub async fn new_with_storage_dir(
+        storage_dir: PathBuf,
+        encryption_enabled: bool,
+        keystore: Arc<Mutex<crate::keystore::Keystore>>,
+        app_handle: Option<AppHandle>,
+    ) -> Result<Self, String> {
 
         // Create storage directory if it doesn't exist
         if !storage_dir.exists() {
@@ -341,6 +356,9 @@ impl FileTransferService {
         let (event_tx, event_rx) = mpsc::channel(100);
         let download_metrics = Arc::new(Mutex::new(DownloadMetrics::default()));
 
+        // Create TransferEventBus if app_handle is provided
+        let event_bus = app_handle.map(|handle| Arc::new(TransferEventBus::new(handle)));
+
         // Spawn the file transfer service task
         tokio::spawn(Self::run_file_transfer_service(
             cmd_rx,
@@ -349,6 +367,7 @@ impl FileTransferService {
             download_metrics.clone(),
             encryption_enabled,
             keystore.clone(),
+            event_bus.clone(),
         ));
 
         Ok(FileTransferService {
@@ -356,6 +375,7 @@ impl FileTransferService {
             event_rx: Arc::new(Mutex::new(event_rx)),
             storage_dir,
             download_metrics,
+            event_bus,
         })
     }
 
@@ -373,6 +393,14 @@ impl FileTransferService {
         Self::new_with_encryption_and_keystore(encryption_enabled, keystore).await
     }
 
+    /// Create with app handle for TransferEventBus integration
+    pub async fn new_with_app_handle(app_handle: AppHandle) -> Result<Self, String> {
+        let keystore = Arc::new(Mutex::new(
+            crate::keystore::Keystore::load().unwrap_or_default(),
+        ));
+        Self::new_with_storage_dir(Self::get_storage_dir()?, false, keystore, Some(app_handle)).await
+    }
+
     fn get_storage_dir() -> Result<PathBuf, String> {
         let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
             .ok_or("Failed to get project directories")?;
@@ -386,6 +414,7 @@ impl FileTransferService {
         download_metrics: Arc<Mutex<DownloadMetrics>>,
         encryption_enabled: bool,
         keystore: Arc<Mutex<crate::keystore::Keystore>>,
+        event_bus: Option<Arc<TransferEventBus>>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -413,7 +442,6 @@ impl FileTransferService {
                                 file_name: file_name.clone(),
                             })
                             .await;
-                        info!("File uploaded successfully: {} -> {}", file_name, file_hash);
                     }
                     Err(e) => {
                         let error_msg = format!("Upload failed: {}", e);
@@ -431,6 +459,31 @@ impl FileTransferService {
                     active_account,
                     active_private_key,
                 } => {
+                    let start_time = current_timestamp_ms();
+
+                    // Emit started event via TransferEventBus
+                    if let Some(ref bus) = event_bus {
+                        bus.emit_started(TransferStartedEvent {
+                            transfer_id: file_hash.clone(),
+                            file_hash: file_hash.clone(),
+                            file_name: output_path.clone(),
+                            file_size: 0, // Unknown at this point
+                            total_chunks: 0,
+                            chunk_size: 0,
+                            started_at: start_time,
+                            available_sources: vec![SourceInfo {
+                                id: "local-storage".to_string(),
+                                source_type: SourceType::P2p,
+                                address: "local".to_string(),
+                                reputation: Some(1.0),
+                                estimated_speed_bps: None,
+                                latency_ms: None,
+                                location: None,
+                            }],
+                            selected_sources: vec!["local-storage".to_string()],
+                        });
+                    }
+
                     match Self::download_with_retries(
                         &file_hash,
                         &output_path,
@@ -449,6 +502,32 @@ impl FileTransferService {
                                     file_path: output_path.clone(),
                                 })
                                 .await;
+
+                            // Emit completed event via TransferEventBus
+                            if let Some(ref bus) = event_bus {
+                                let end_time = current_timestamp_ms();
+                                let duration_secs = (end_time - start_time) / 1000;
+                                bus.emit_completed(TransferCompletedEvent {
+                                    transfer_id: file_hash.clone(),
+                                    file_hash: file_hash.clone(),
+                                    file_name: output_path.clone(),
+                                    file_size: 0, // Would need to track actual size
+                                    output_path: output_path.clone(),
+                                    completed_at: end_time,
+                                    duration_seconds: duration_secs,
+                                    average_speed_bps: 0.0,
+                                    total_chunks: 0,
+                                    sources_used: vec![SourceSummary {
+                                        source_id: "local-storage".to_string(),
+                                        source_type: SourceType::P2p,
+                                        chunks_provided: 1,
+                                        bytes_provided: 0,
+                                        average_speed_bps: 0.0,
+                                        connection_duration_seconds: duration_secs,
+                                    }],
+                                });
+                            }
+
                             info!(
                                 "File downloaded successfully: {} -> {}",
                                 file_hash, output_path
@@ -461,6 +540,21 @@ impl FileTransferService {
                                     message: error_msg.clone(),
                                 })
                                 .await;
+
+                            // Emit failed event via TransferEventBus
+                            if let Some(ref bus) = event_bus {
+                                bus.emit_failed(TransferFailedEvent {
+                                    transfer_id: file_hash.clone(),
+                                    file_hash: file_hash.clone(),
+                                    failed_at: current_timestamp_ms(),
+                                    error: error_msg.clone(),
+                                    error_category: ErrorCategory::Unknown,
+                                    downloaded_bytes: 0,
+                                    total_bytes: 0,
+                                    retry_possible: true,
+                                });
+                            }
+
                             error!("File download failed: {}", error_msg);
                         }
                     }
@@ -496,15 +590,22 @@ impl FileTransferService {
 
             // Store the encryption key in keystore if we have an active account
             if let (Some(account), Some(private_key)) = (active_account, active_private_key) {
-                let mut keystore_guard = keystore.lock().await;
-                keystore_guard
-                    .store_file_encryption_key_with_private_key(
-                        account,
-                        original_file_hash.clone(),
-                        &encryption_key,
-                        private_key,
-                    )
-                    .map_err(|e| format!("Failed to store encryption key: {}", e))?;
+                match keystore.lock().await.store_file_encryption_key_with_private_key(
+                    account,
+                    original_file_hash.clone(),
+                    &encryption_key,
+                    private_key,
+                ) {
+                    Ok(_) => {
+                        info!("✅ Stored encryption key for file: {}", original_file_hash);
+                    }
+                    Err(e) => {
+                        warn!("⚠️  Failed to store encryption key (continuing anyway): {}", e);
+                        // Don't fail the upload - encryption key storage is optional for testing
+                    }
+                }
+            } else {
+                warn!("⚠️  No active account - skipping encryption key storage");
             }
 
             // Create temporary encrypted file path

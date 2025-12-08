@@ -25,7 +25,7 @@ tauri-plugin-os = "2.0"
 tauri-plugin-shell = "2.0"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
-secp256k1 = { version = "0.24", features = ["serde", "rand-std"] }
+secp256k1 = { version = "0.24", features = ["serde", "rand-std", "recovery"] }
 rand = { version = "0.8", features = ["std_rng"] }
 totp-rs = { version = "5.7.0", features = ["otpauth"] }
 ethers = { version = "2.0", features = ["ws", "rustls"] }
@@ -42,7 +42,7 @@ aes = "0.8"
 ctr = "0.9"
 hmac = "0.12"
 directories = "5.0"
-reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 url = "2.5"
 urlencoding = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -54,7 +54,7 @@ futures = "0.3"
 futures-util = "0.3"
 sysinfo = "0.31"
 sys-locale = "0.3"
-libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "macros", "tokio", "request-response", "relay", "ping", "autonat", "dcutr"] }
+libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "macros", "tokio", "request-response", "relay", "quic", "ping", "autonat", "dcutr", "upnp"] }
 if-addrs = "0.10"
 async-std = { version = "1.12", features = ["attributes"] }
 async-trait = "0.1"
@@ -71,8 +71,12 @@ tokio-socks = "0.5"
 
 # FTP client for FTP download support (sync API)
 # Using 5.3 for compatibility with connect_secure_implicit() method
-suppaftp = { version = "5.3", features = ["native-tls", "secure", "deprecated"] }
+suppaftp = { version = "5.4", features = ["native-tls", "secure", "deprecated"] }
 native-tls = "0.2"
+
+# FTP server for serving uploaded files
+unftp-sbe-fs = "0.2"
+libunftp = "0.20"
 
 # Bitswap and related dependencies
 beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "new" }
@@ -88,7 +92,6 @@ thiserror = "1.0"
 
 # WebRTC dependencies for P2P file transfers
 webrtc = "0.10"
-tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 tauri-plugin-fs = "2"
 ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
@@ -102,7 +105,7 @@ librqbit = "8.1.1"
 # HTTP server dependencies
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.5"
-tower-http = { version = "0.5", features = ["cors"] }
+tower-http = { version = "0.5.2", features = ["cors"] }
 
 
 [dev-dependencies]
@@ -119,12 +122,17 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [profile.dev]
 incremental = true
-opt-level = 1
+opt-level = 0
 debug = 1
 overflow-checks = false
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
 
 [profile.release]
-lto = true
+lto = "thin"
 opt-level = "z"
 codegen-units = 1
 panic = "abort"

@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   validatePrivateKeyFormat,
   RateLimiter,
+  validateStoragePath,
 } from '../src/lib/utils/validation';
 
 describe('validatePrivateKeyFormat', () => {
@@ -251,3 +252,159 @@ describe('RateLimiter', () => {
     expect(limiter.checkLimit('test')).toBe(false);
   });
 });
+
+describe('validateStoragePath', () => {
+  /**
+   * Test: Valid Windows absolute paths
+   * Based on: Windows file system path format
+   * Verifies: Accepts paths with drive letters (C:, D:, etc.)
+   */
+  describe('valid absolute paths', () => {
+    it('should accept Windows absolute paths with drive letters', () => {
+      const paths = [
+        'C:\\Users\\John\\Documents',
+        'D:\\Data\\Storage',
+        'E:/Downloads/Files',  // Forward slash is also valid on Windows
+        'C:\\Program Files\\App',
+      ];
+
+      paths.forEach(path => {
+        const result = validateStoragePath(path);
+        expect(result.isValid).toBe(true);
+        expect(result.error).toBeUndefined();
+      });
+    });
+
+    /**
+     * Test: Valid Unix absolute paths
+     * Based on: Unix/Linux file system path format
+     * Verifies: Accepts paths starting with /
+     */
+    it('should accept Unix absolute paths starting with /', () => {
+      const paths = [
+        '/home/user/downloads',
+        '/var/data/storage',
+        '/mnt/storage/files',
+        '/tmp/chiral',
+      ];
+
+      paths.forEach(path => {
+        const result = validateStoragePath(path);
+        expect(result.isValid).toBe(true);
+        expect(result.error).toBeUndefined();
+      });
+    });
+  });
+
+  /**
+   * Test: Invalid paths that should be rejected
+   * Based on: Security requirement to prevent ambiguous paths
+   * Verifies: Rejects relative paths, tilde expansion, and empty paths
+   */
+  describe('invalid paths', () => {
+    it('should reject empty paths', () => {
+      const result = validateStoragePath('');
+      expect(result.isValid).toBe(false);
+      expect(result.error).toBe('Storage path cannot be empty');
+    });
+
+    it('should reject whitespace-only paths', () => {
+      const result = validateStoragePath('   ');
+      expect(result.isValid).toBe(false);
+      expect(result.error).toBe('Storage path cannot be empty');
+    });
+
+    /**
+     * Test: Reject tilde paths (main issue case)
+     * Based on: GitHub issue - prevents "~/chiral network" creating "~" folder
+     * Verifies: User is guided to use absolute paths or folder picker
+     */
+    it('should reject paths starting with tilde', () => {
+      const paths = [
+        '~/Downloads',
+        '~/Documents/Files',
+        '~',
+        '~/chiral network',  // The exact case from the GitHub issue
+      ];
+
+      paths.forEach(path => {
+        const result = validateStoragePath(path);
+        expect(result.isValid).toBe(false);
+        expect(result.error).toContain('folder picker');
+        expect(result.error).toContain('absolute path');
+      });
+    });
+
+    it('should reject relative paths', () => {
+      const paths = [
+        'Downloads',
+        './downloads',
+        '../storage',
+        'data/files',
+        '.\\Downloads',  // Windows relative path
+        '..\\storage',   // Windows relative path
+      ];
+
+      paths.forEach(path => {
+        const result = validateStoragePath(path);
+        expect(result.isValid).toBe(false);
+        expect(result.error).toContain('absolute path');
+      });
+    });
+
+    it('should reject paths with only a drive letter (no directory)', () => {
+      const paths = [
+        'C:',
+        'D:',
+      ];
+
+      paths.forEach(path => {
+        const result = validateStoragePath(path);
+        expect(result.isValid).toBe(false);
+        expect(result.error).toContain('absolute path');
+      });
+    });
+  });
+
+  /**
+   * Test: Edge cases and special scenarios
+   * Based on: Real-world usage patterns
+   * Verifies: Handles spaces, trimming, and special characters correctly
+   */
+  describe('edge cases', () => {
+    it('should handle paths with spaces correctly', () => {
+      // Absolute paths with spaces should be valid
+      const validPaths = [
+        'C:\\Program Files\\My App',
+        '/home/user/my documents',
+      ];
+
+      validPaths.forEach(path => {
+        const result = validateStoragePath(path);
+        expect(result.isValid).toBe(true);
+      });
+    });
+
+    it('should trim whitespace from paths before validation', () => {
+      const result = validateStoragePath('  C:\\Users\\Test  ');
+      expect(result.isValid).toBe(true);
+    });
+  });
+
+  /**
+   * Test: Cross-platform compatibility
+   * Based on: Application runs on both Windows and Unix systems
+   * Verifies: Both path formats are accepted regardless of platform
+   */
+  describe('cross-platform compatibility', () => {
+    it('should accept both Unix and Windows paths regardless of platform', () => {
+      // The validation should work in both environments
+      const windowsPath = validateStoragePath('C:\\Users\\Test');
+      const unixPath = validateStoragePath('/home/test');
+
+      expect(windowsPath.isValid).toBe(true);
+      expect(unixPath.isValid).toBe(true);
+    });
+  });
+});
+

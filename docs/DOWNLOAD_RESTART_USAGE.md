@@ -25,6 +25,7 @@ Add the download restart control component to any Svelte page:
 ```
 
 The component will:
+
 - ✅ Show start/pause/resume buttons based on state
 - ✅ Display real-time progress
 - ✅ Show banners for restart scenarios
@@ -38,31 +39,31 @@ The component will:
 From your frontend TypeScript/JavaScript:
 
 ```typescript
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 // Start a download
-const downloadId = await invoke<string>('start_download_restart', {
+const downloadId = await invoke<string>("start_download_restart", {
   request: {
     download_id: null, // Auto-generate UUID
-    source_url: 'http://localhost:8080/file.bin',
-    destination_path: '/Users/you/Downloads/file.bin',
-    expected_sha256: 'abc123...' // Optional
-  }
-})
+    source_url: "http://localhost:8080/file.bin",
+    destination_path: "/Users/you/Downloads/file.bin",
+    expected_sha256: "abc123...", // Optional
+  },
+});
 
 // Pause download
-await invoke('pause_download_restart', { downloadId })
+await invoke("pause_download_restart", { downloadId });
 
 // Resume download
-await invoke('resume_download_restart', { downloadId })
+await invoke("resume_download_restart", { downloadId });
 
 // Get current status
-const status = await invoke('get_download_status_restart', { downloadId })
+const status = await invoke("get_download_status_restart", { downloadId });
 
 // Listen for real-time updates
-const unlisten = await listen('download_status', (event) => {
-  console.log('Download status:', event.payload)
+const unlisten = await listen("download_status", (event) => {
+  console.log("Download status:", event.payload);
   // {
   //   download_id: "...",
   //   state: "Downloading",
@@ -72,7 +73,7 @@ const unlisten = await listen('download_status', (event) => {
   //   lease_exp: 1704067200,
   //   last_error: null
   // }
-})
+});
 ```
 
 ---
@@ -88,17 +89,20 @@ The download progresses through these states:
 ```
 
 **Pause Path:**
+
 ```
 [Downloading] → [Paused] → (user action) → [AwaitingResume] →
 [PreparingHead] → [Downloading]
 ```
 
 **Failure Path:**
+
 ```
 [any state] → [Failed] → (user retry) → [AwaitingResume]
 ```
 
 **Restart Scenarios:**
+
 - `Restarting`: Server changed (weak ETag, size mismatch, etc.)
 - `LeaseExpired`: Download lease expired, requesting new lease
 
@@ -108,14 +112,15 @@ The download progresses through these states:
 
 All errors are mapped to human-readable messages:
 
-| Error Code | UI Message |
-|-----------|-----------|
-| `DOWNLOAD_NOT_FOUND` | "Download not found. It may have been removed." |
-| `STORAGE_EXHAUSTED` | "Insufficient disk space. Please free up space and try again." |
-| `DOWNLOAD_SOURCE_ERROR` | "Download source error: {details}" |
-| `IO_ERROR` | "File system error: {details}" |
+| Error Code              | UI Message                                                     |
+| ----------------------- | -------------------------------------------------------------- |
+| `DOWNLOAD_NOT_FOUND`    | "Download not found. It may have been removed."                |
+| `STORAGE_EXHAUSTED`     | "Insufficient disk space. Please free up space and try again." |
+| `DOWNLOAD_SOURCE_ERROR` | "Download source error: {details}"                             |
+| `IO_ERROR`              | "File system error: {details}"                                 |
 
 **Restart Banners:**
+
 - **Weak ETag:** Yellow warning banner
 - **Range Unsupported:** Yellow warning banner
 - **HTTP 416:** Yellow warning banner
@@ -134,6 +139,7 @@ cd demo
 ```
 
 **What it does:**
+
 1. Creates a 10 MB test file
 2. Starts HTTP server (Node A)
 3. Downloads 50% of file (Node B)
@@ -142,6 +148,7 @@ cd demo
 6. Verifies SHA-256 hash matches
 
 **Expected output:**
+
 ```
 [DEMO] Step 1: Creating test file (10485760 bytes)...
 ✓ Test file created
@@ -159,17 +166,20 @@ cd demo
 ### 6. Running Tests
 
 **Snapshot Tests:**
+
 ```bash
 cd src-tauri
 cargo test download_restart -- --nocapture
 ```
 
 **All Tests:**
+
 ```bash
 cargo test
 ```
 
 **Review Snapshots (after changes):**
+
 ```bash
 cargo insta review
 ```
@@ -179,6 +189,7 @@ cargo insta review
 ### 7. CI Integration
 
 The download restart demo runs automatically on:
+
 - Push to `main` (when relevant files change)
 - Pull requests
 - Manual workflow dispatch
@@ -186,6 +197,7 @@ The download restart demo runs automatically on:
 **Workflow:** `.github/workflows/download-restart-demo.yml`
 
 **What CI tests:**
+
 - ✅ Demo script execution
 - ✅ Metadata file creation
 - ✅ File size verification
@@ -206,7 +218,7 @@ When Matt implements the DHT handshake, integrate like this:
 pub async fn start_download(&self, request: StartDownloadRequest) -> Result<DownloadId, DownloadError> {
     // ... existing code ...
 
-    // TODO: Integrate Matt's handshake
+    // Request lease from DHT handshake
     let handshake_response = dht_service.request_lease(file_id, download_id).await?;
 
     task.status.etag = Some(handshake_response.etag);
@@ -316,22 +328,27 @@ async fn persist_metadata(&self, download_id: &str) -> Result<(), DownloadError>
 ## Troubleshooting
 
 ### Download doesn't start
+
 - **Check:** Is the source URL reachable?
 - **Check:** Does the destination directory exist?
 - **Check:** Is there sufficient disk space?
 
 ### Pause button disabled
+
 - Download must be in `Downloading` or `PersistingProgress` state
 
 ### Resume doesn't work
+
 - Download must be in `Paused` or `AwaitingResume` state
 - Check console for error messages
 
 ### Events not received
+
 - Ensure you're listening for `download_status` events
 - Check that `downloadId` matches the event payload
 
 ### Demo script fails
+
 - Python 3 must be installed
 - Port 8080 must be available
 - Check demo logs in console output
@@ -340,15 +357,15 @@ async fn persist_metadata(&self, download_id: &str) -> Result<(), DownloadError>
 
 ## File Locations
 
-| Component | Path |
-|-----------|------|
-| Backend Service | `src-tauri/src/download_restart.rs` |
-| UI Component | `src/lib/components/download/DownloadRestartControls.svelte` |
-| Tests | `src-tauri/tests/download_restart_test.rs` |
-| Demo Script | `demo/http-transfer.sh` |
-| CI Workflow | `.github/workflows/download-restart-demo.yml` |
-| Documentation | `docs/download-restart.md` |
-| Implementation Summary | `IMPLEMENTATION_SUMMARY.md` |
+| Component              | Path                                                         |
+| ---------------------- | ------------------------------------------------------------ |
+| Backend Service        | `src-tauri/src/download_restart.rs`                          |
+| UI Component           | `src/lib/components/download/DownloadRestartControls.svelte` |
+| Tests                  | `src-tauri/tests/download_restart_test.rs`                   |
+| Demo Script            | `demo/http-transfer.sh`                                      |
+| CI Workflow            | `.github/workflows/download-restart-demo.yml`                |
+| Documentation          | `docs/download-restart.md`                                   |
+| Implementation Summary | `IMPLEMENTATION_SUMMARY.md`                                  |
 
 ---
 

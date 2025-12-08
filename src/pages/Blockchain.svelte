@@ -9,6 +9,7 @@
   import Input from '$lib/components/ui/input.svelte';
   import Label from '$lib/components/ui/label.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
+  import Progress from '$lib/components/ui/progress.svelte';
   import {
     Search,
     Database,
@@ -20,11 +21,10 @@
     Activity,
     ChevronRight,
     Copy,
-    ExternalLink,
     AlertCircle
   } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
-  import { gethStatus } from '$lib/services/gethService';
+  import { gethStatus, gethSyncStatus } from '$lib/services/gethService';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params);
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
@@ -71,6 +71,14 @@
   async function fetchLatestBlocks() {
     isLoadingBlocks = true;
     try {
+      // Check if Geth is running before making blockchain calls
+      const gethRunning = await invoke<boolean>('is_geth_running');
+      if (!gethRunning) {
+        console.log('Geth is not running, skipping blockchain queries');
+        latestBlocks = [];
+        return;
+      }
+
       // Get current block number
       console.log('Fetching current block number...');
       currentBlockNumber = await invoke<number>('get_current_block');
@@ -257,6 +265,14 @@
     showToast(tr('blockchain.copied'), 'success');
   }
 
+  // Format time remaining
+  function formatTimeRemaining(seconds: number | null): string {
+    if (seconds === null || seconds === 0) return 'Complete';
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  }
+
   // Refresh data
   async function refreshAll() {
     await Promise.all([
@@ -283,14 +299,14 @@
   });
 </script>
 
-<div class="flex flex-col h-full gap-6 p-6 overflow-auto">
+<div class="space-y-6">
   <!-- Header -->
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold text-black">
+      <h1 class="text-3xl font-bold">
         {tr('blockchain.title')}
       </h1>
-      <p class="text-gray-700 mt-1">
+      <p class="text-muted-foreground mt-2">
         {tr('blockchain.subtitle')}
       </p>
     </div>
@@ -312,18 +328,51 @@
     </div>
   {/if}
 
+  <!-- Blockchain Sync Status -->
+  {#if $gethSyncStatus?.syncing}
+    <div class="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
+      <div class="space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <RefreshCw class="h-4 w-4 text-blue-500 animate-spin" />
+            <span class="text-sm font-medium text-blue-600">{tr('blockchain.sync.syncing')}</span>
+          </div>
+          <span class="text-xs text-blue-600">{$gethSyncStatus.progress_percent.toFixed(1)}%</span>
+        </div>
+        <Progress value={$gethSyncStatus.progress_percent} max={100} class="h-2 [&>div]:bg-blue-500" />
+        <div class="grid grid-cols-2 gap-4 text-xs text-blue-600">
+          <div>
+            <span class="text-muted-foreground">{tr('blockchain.sync.current')}:</span> #{$gethSyncStatus.current_block.toLocaleString()}
+          </div>
+          <div>
+            <span class="text-muted-foreground">{tr('blockchain.sync.highest')}:</span> #{$gethSyncStatus.highest_block.toLocaleString()}
+          </div>
+          <div>
+            <span class="text-muted-foreground">{tr('blockchain.sync.remaining')}:</span> {$gethSyncStatus.blocks_remaining.toLocaleString()} blocks
+          </div>
+          <div>
+            <span class="text-muted-foreground">{tr('blockchain.sync.eta')}:</span> {formatTimeRemaining($gethSyncStatus.estimated_seconds_remaining)}
+          </div>
+        </div>
+        <p class="text-xs text-blue-600 mt-2">
+          ⏳ {tr('blockchain.sync.complete')}
+        </p>
+      </div>
+    </div>
+  {/if}
+
   <!-- Network Stats Cards -->
-  <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
     <Card class="p-4">
       <div class="flex items-center gap-3">
-        <div class="p-3 bg-blue-100 rounded-lg">
+        <div class="p-3 bg-blue-100 rounded-lg flex-shrink-0">
           <Database class="w-6 h-6 text-blue-600" />
         </div>
-        <div>
-          <p class="text-sm text-gray-700">
+        <div class="min-w-0 flex-1">
+          <p class="text-sm text-gray-700 truncate">
             {tr('blockchain.stats.totalBlocks')}
           </p>
-          <p class="text-2xl font-bold text-black">
+          <p class="text-2xl font-bold text-black break-words">
             {networkStats.totalBlocks.toLocaleString()}
           </p>
         </div>
@@ -332,14 +381,14 @@
 
     <Card class="p-4">
       <div class="flex items-center gap-3">
-        <div class="p-3 bg-green-100 rounded-lg">
+        <div class="p-3 bg-green-100 rounded-lg flex-shrink-0">
           <Activity class="w-6 h-6 text-green-600" />
         </div>
-        <div>
-          <p class="text-sm text-gray-700">
+        <div class="min-w-0 flex-1">
+          <p class="text-sm text-gray-700 truncate">
             {tr('blockchain.stats.hashrate')}
           </p>
-          <p class="text-2xl font-bold text-black">
+          <p class="text-2xl font-bold text-black break-words">
             {networkStats.networkHashrate}
           </p>
         </div>
@@ -348,14 +397,14 @@
 
     <Card class="p-4">
       <div class="flex items-center gap-3">
-        <div class="p-3 bg-purple-100 rounded-lg">
+        <div class="p-3 bg-purple-100 rounded-lg flex-shrink-0">
           <Coins class="w-6 h-6 text-purple-600" />
         </div>
-        <div>
-          <p class="text-sm text-gray-700">
+        <div class="min-w-0 flex-1">
+          <p class="text-sm text-gray-700 truncate">
             {tr('blockchain.stats.difficulty')}
           </p>
-          <p class="text-xl font-bold text-black truncate">
+          <p class="text-2xl font-bold text-black break-words">
             {networkStats.difficulty}
           </p>
         </div>
@@ -364,14 +413,14 @@
 
     <Card class="p-4">
       <div class="flex items-center gap-3">
-        <div class="p-3 bg-orange-100 rounded-lg">
+        <div class="p-3 bg-orange-100 rounded-lg flex-shrink-0">
           <Activity class="w-6 h-6 text-orange-600" />
         </div>
-        <div>
-          <p class="text-sm text-gray-700">
+        <div class="min-w-0 flex-1">
+          <p class="text-sm text-gray-700 truncate">
             {tr('blockchain.stats.peers')}
           </p>
-          <p class="text-2xl font-bold text-black">
+          <p class="text-2xl font-bold text-black break-words">
             {networkStats.peerCount}
           </p>
         </div>
@@ -527,7 +576,7 @@
                   ? '0x...'
                   : 'Block number'}
               class="flex-1"
-              on:keypress={(e) => e.key === 'Enter' && performSearch()}
+              on:keydown={(e) => { const ev = (e as unknown as KeyboardEvent); if (ev.key === 'Enter') performSearch(); }}
             />
             <Button on:click={performSearch} disabled={isSearching}>
               {#if isSearching}
@@ -655,7 +704,7 @@
                 bind:value={balanceAddress}
                 placeholder="0x..."
                 class="flex-1"
-                on:keypress={(e) => e.key === 'Enter' && checkBalance()}
+                on:keydown={(e) => { const ev = (e as unknown as KeyboardEvent); if (ev.key === 'Enter') checkBalance(); }}
               />
               <Button on:click={checkBalance} disabled={isCheckingBalance}>
                 {#if isCheckingBalance}
