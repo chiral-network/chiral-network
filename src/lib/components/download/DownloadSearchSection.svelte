@@ -21,10 +21,7 @@
   const dispatch = createEventDispatcher<{ download: FileMetadata; message: ToastPayload }>();
   const tr = (key: string, params?: Record<string, unknown>) => (get(t) as any)(key, params);
 
-  // 40 second timeout gives backend (35s) enough time, which gives Kademlia (30s) enough time
-  // Timeout hierarchy: Frontend (40s) > Backend (35s) > Kademlia (30s) + Provider delay (3-5s)
-  // This prevents premature timeouts that would kill queries that would eventually succeed
-  const SEARCH_TIMEOUT_MS = 40_000;
+  const SEARCH_TIMEOUT_MS = 10_000;
 
   let searchHash = '';
   let searchMode = 'merkle_hash'; // 'merkle_hash', 'magnet', 'torrent', 'ed2k', 'ftp'
@@ -46,6 +43,7 @@
   // Peer selection modal state
   let showPeerSelectionModal = false;
   let selectedFile: FileMetadata | null = null;
+  let selectedFileIsSeeding = false;
   let peerSelectionMode: 'auto' | 'manual' = 'auto';
   let selectedProtocol: 'http' | 'webrtc' | 'bitswap' | 'bittorrent' | 'ed2k' | 'ftp' = 'http';
   let availablePeers: PeerInfo[] = [];
@@ -357,10 +355,10 @@
         dhtSearchHistory.updateEntry(entry.id, {
           status: 'not_found',
           metadata: undefined,
-          errorMessage: undefined,
+          errorMessage: 'File not found in the network. This may be due to network connectivity issues or the file not being fully propagated yet.',
           elapsedMs: elapsed,
         });
-        pushMessage(tr('download.search.status.notFoundNotification'), 'warning', 6000);
+        pushMessage('File not found. If you just uploaded this file, try waiting a few minutes for it to propagate through the network, or check your network connectivity.', 'warning', 8000);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : tr('download.search.status.unknownError');
@@ -455,16 +453,19 @@
     const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
     const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
     
-    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs)
-    // If CIDs exist, file was uploaded via BitSwap and must be downloaded via BitSwap
+    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs or other protocol indicators)
+    // Files uploaded via Bitswap have CIDs and must be downloaded via Bitswap, not WebRTC
     const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
+    
+    // Bitswap is available if there are CIDs (content identifiers for IPFS blocks) AND seeders
+    const isBitswapAvailable = hasCids && hasSeeders;
     
     return [
       {
         id: 'bitswap',
         name: 'Bitswap',
         description: 'IPFS Bitswap protocol',
-        available: hasCids && hasSeeders
+        available: isBitswapAvailable
       },
       {
         id: 'webrtc',
@@ -499,8 +500,22 @@
     ];
   }
 
+  // Check if current user is seeding this file
+  async function checkIfSeeding(metadata: FileMetadata): Promise<boolean> {
+    try {
+      const currentPeerId = await dhtService.getPeerId();
+      return currentPeerId ? metadata.seeders?.includes(currentPeerId) || false : false;
+    } catch (error) {
+      console.warn('Failed to check seeding status:', error);
+      return false;
+    }
+  }
+
   // Handle file download - show protocol selection modal first if multiple protocols available
   async function handleFileDownload(metadata: FileMetadata) {
+    // Check if user is seeding this file
+    selectedFileIsSeeding = await checkIfSeeding(metadata);
+
     // Handle BitTorrent downloads (magnet/torrent) - skip protocol selection, go directly to peer selection
     if (pendingTorrentType && pendingTorrentIdentifier) {
       selectedFile = metadata;
@@ -529,10 +544,44 @@
 
   // Proceed with download using selected protocol
   async function proceedWithProtocolSelection(metadata: FileMetadata, protocolId: string) {
-    // Handle protocols that don't need peer selection (direct downloads)
-    if (protocolId === 'http' || protocolId === 'ftp' || protocolId === 'ed2k') {
-      // For HTTP, FTP, ED2K - proceed directly to download
+    // Handle HTTP and ED2K direct downloads (no peer selection)
+    if (protocolId === 'http' || protocolId === 'ed2k') {
       await startDirectDownload(metadata, protocolId);
+      return;
+    }
+
+    // Handle FTP - show source selection modal
+    if (protocolId === 'ftp') {
+      if (!metadata.ftpSources || metadata.ftpSources.length === 0) {
+        pushMessage('No FTP sources available for this file', 'warning');
+        return;
+      }
+
+      selectedFile = metadata;
+      selectedProtocol = 'ftp';
+      
+      // Create "peers" from FTP sources
+      availablePeers = metadata.ftpSources.map((source, index) => {
+        // Extract host from FTP URL
+        let host = 'FTP Server';
+        try {
+          const url = new URL(source.url);
+          host = url.hostname;
+        } catch {}
+        
+        return {
+          peerId: source.url, // Use URL as the ID
+          location: host,
+          latency_ms: undefined,
+          bandwidth_kbps: undefined,
+          reliability_score: source.isAvailable ? 1.0 : 0.0,
+          price_per_mb: 0, // FTP is free
+          selected: index === 0, // Select first by default
+          percentage: index === 0 ? 100 : 0
+        };
+      });
+
+      showPeerSelectionModal = true;
       return;
     }
 
@@ -563,10 +612,13 @@
         });
         pushMessage('HTTP download started', 'success');
       } else if (protocolId === 'ftp' && metadata.ftpSources && metadata.ftpSources.length > 0) {
-        await invoke('download_ftp', { url: metadata.ftpSources[0] });
+        await invoke('download_ftp', { url: metadata.ftpSources[0].url });
         pushMessage('FTP download started', 'success');
       } else if (protocolId === 'ed2k' && metadata.ed2kSources && metadata.ed2kSources.length > 0) {
-        await invoke('download_ed2k', { link: metadata.ed2kSources[0] });
+        // Construct ED2K file link from source info: ed2k://|file|name|size|hash|/
+        const ed2kSource = metadata.ed2kSources[0];
+        const ed2kLink = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`;
+        await invoke('download_ed2k', { link: ed2kLink });
         pushMessage('ED2K download started', 'success');
       } else {
         pushMessage(`No ${protocolId.toUpperCase()} sources available`, 'warning');
@@ -691,8 +743,30 @@
   async function confirmPeerSelection() {
     if (!selectedFile) return;
 
-    // Handle direct downloads (HTTP, FTP, ED2K) that skip peer selection
-    if (selectedProtocol === 'http' || selectedProtocol === 'ftp' || selectedProtocol === 'ed2k') {
+    // Handle FTP downloads from peer selection modal
+    if (selectedProtocol === 'ftp') {
+      const selectedSource = availablePeers.find(p => p.selected);
+      if (!selectedSource) {
+        pushMessage('Please select an FTP source', 'warning');
+        return;
+      }
+
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke('download_ftp', { url: selectedSource.peerId }); // peerId is the FTP URL
+        
+        showPeerSelectionModal = false;
+        selectedFile = null;
+        pushMessage('FTP download started', 'success');
+      } catch (error) {
+        console.error('Failed to start FTP download:', error);
+        pushMessage(`Failed to start FTP download: ${String(error)}`, 'error');
+      }
+      return;
+    }
+
+    // Handle direct downloads (HTTP, ED2K) that skip peer selection
+    if (selectedProtocol === 'http' || selectedProtocol === 'ed2k') {
       // This shouldn't happen since direct downloads bypass peer selection
       return;
     }
@@ -701,17 +775,35 @@
     if ((pendingTorrentType && pendingTorrentIdentifier) || selectedProtocol === 'bittorrent') {
       try {
         const { invoke } = await import("@tauri-apps/api/core")
+        let infoHash: string | undefined;
+        let fileName: string;
 
         if (pendingTorrentType === 'file' && pendingTorrentBytes) {
           // For torrent files, pass the file bytes
           await invoke('download_torrent_from_bytes', { bytes: pendingTorrentBytes })
+          fileName = torrentFileName || 'Torrent Download';
+          // We can't easily get the infohash on the frontend from a torrent file
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
         } else if (pendingTorrentType === 'magnet') {
           // For magnet links
-          await invoke('download_torrent', { identifier: pendingTorrentIdentifier })
+          await invoke('download', { identifier: pendingTorrentIdentifier })
+          const urlParams = new URLSearchParams(pendingTorrentIdentifier.split('?')[1]);
+          infoHash = urlParams.get('xt')?.replace('urn:btih:', '');
+          fileName = urlParams.get('dn') || 'Magnet Link Download';
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
         } else {
-          // For BitTorrent from metadata
-          await invoke('download_torrent', { identifier: selectedFile?.infoHash })
+          // For BitTorrent from metadata (already on the network)
+          await invoke('download', { identifier: selectedFile?.infoHash })
+          infoHash = selectedFile?.infoHash;
+          fileName = selectedFile?.fileName || 'BitTorrent Download';
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
         }
+
+        // Note: We don't dispatch the download event for BitTorrent downloads
+        // The torrent_event listener in Download.svelte will handle showing the download progress
 
         // Clear state
         searchHash = ''
@@ -765,6 +857,7 @@
     // Route download based on selected protocol
     if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap' || selectedProtocol === 'bittorrent') {
       // P2P download flow (WebRTC, Bitswap, BitTorrent)
+      
 
       const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {
         ...selectedFile,
@@ -1001,6 +1094,7 @@
   bind:protocol={selectedProtocol}
   isTorrent={pendingTorrentType !== null}
   {availableProtocols}
+  isSeeding={selectedFileIsSeeding}
   on:confirm={confirmPeerSelection}
   on:cancel={cancelPeerSelection}
 />

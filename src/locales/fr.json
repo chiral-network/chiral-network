@@ -596,6 +596,17 @@
       "market": "Marché",
       "fast": "Rapide",
       "estimated": "Frais estimés"
+    },
+    "gas": {
+      "label": "Vitesse de transaction",
+      "loading": "Estimation...",
+      "estimateError": "Utilisation des valeurs par défaut",
+      "slow": "Économique",
+      "standard": "Standard",
+      "fast": "Prioritaire",
+      "estimatedFee": "Frais estimés",
+      "totalCost": "Coût total",
+      "networkCongestion": "Réseau"
     }
   },
   "transactions": {
@@ -797,7 +808,8 @@
       "invalid": "Veuillez saisir un montant valide supérieur à 0.",
       "min": "Le montant doit être d’au moins {min} Chiral.",
       "insufficient": "Solde insuffisant – il manque {more} Chiral.",
-      "insufficientWithFee": "Fonds insuffisants. Le total de {total} Chiral (montant + frais) dépasse votre solde de {balance} Chiral."
+      "insufficientWithFee": "Fonds insuffisants. Le total de {total} Chiral (montant + frais) dépasse votre solde de {balance} Chiral.",
+      "insufficientWithGas": "Solde insuffisant (gaz inclus) – il manque {more} Chiral."
     },
     "exportFailed": "Échec de l’exportation. Veuillez réessayer.",
     "createAccount": "Échec de la création du compte : {error}"
