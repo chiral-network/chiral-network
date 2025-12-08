@@ -1105,8 +1105,9 @@ pub async fn get_sync_status() -> Result<SyncStatus, String> {
         Some(0)
     };
 
-    // Consider synced if progress is 100% or no blocks remaining
-    let is_still_syncing = blocks_remaining > 0 && progress_percent < 100.0;
+    // Consider synced if close to 100% (99.5%+) or very few blocks remaining (<10)
+    // This prevents the sync banner from showing when displaying "100.0%" but internally at 99.97%
+    let is_still_syncing = blocks_remaining >= 10 && progress_percent < 99.5;
 
     Ok(SyncStatus {
         syncing: is_still_syncing,

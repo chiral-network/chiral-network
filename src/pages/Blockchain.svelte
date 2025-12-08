@@ -79,10 +79,17 @@
         return;
       }
 
-      // Get current block number
+      // Get current block number - prefer sync status if available since it's more reliable
       console.log('Fetching current block number...');
-      currentBlockNumber = await invoke<number>('get_current_block');
-      console.log('Current block number:', currentBlockNumber);
+      if ($gethSyncStatus && $gethSyncStatus.current_block > 0) {
+        // Use sync status data if available - more reliable during sync
+        currentBlockNumber = $gethSyncStatus.current_block;
+        console.log('Using block number from sync status:', currentBlockNumber);
+      } else {
+        // Fall back to direct RPC query
+        currentBlockNumber = await invoke<number>('get_current_block');
+        console.log('Current block number from RPC:', currentBlockNumber);
+      }
       networkStats.totalBlocks = currentBlockNumber;
 
       if (currentBlockNumber === 0) {
