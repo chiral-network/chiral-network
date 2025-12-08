@@ -73,6 +73,7 @@ fn create_rtc_configuration() -> RTCConfiguration {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WebRTCFileRequest {
     pub file_hash: String,
     pub file_name: String,
@@ -83,18 +84,21 @@ pub struct WebRTCFileRequest {
 
 /// Sent by a downloader to request the full file manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WebRTCManifestRequest {
     pub file_hash: String, // The Merkle Root
 }
 
 /// Sent by a seeder in response to a manifest request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WebRTCManifestResponse {
     pub file_hash: String,     // The Merkle Root, to match the request
     pub manifest_json: String, // The full FileManifest, serialized to JSON
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileChunk {
     pub file_hash: String,
     pub file_name: String, // Add file_name field to preserve original filename
@@ -106,6 +110,7 @@ pub struct FileChunk {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransferProgress {
     pub file_hash: String,
     pub bytes_transferred: u64,
@@ -242,6 +247,7 @@ pub enum WebRTCEvent {
 
 /// ACK message sent by downloader to confirm chunk receipt
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChunkAck {
     pub file_hash: String,
     pub chunk_index: u32,
@@ -249,13 +255,19 @@ pub struct ChunkAck {
 }
 
 /// A new enum to wrap different message types for clarity.
+/// Note: The tag is case-insensitive for matching frontend messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum WebRTCMessage {
+    #[serde(alias = "file_request", alias = "FileRequest")]
     FileRequest(WebRTCFileRequest),
+    #[serde(alias = "ManifestRequest")]
     ManifestRequest(WebRTCManifestRequest),
+    #[serde(alias = "ManifestResponse")]
     ManifestResponse(WebRTCManifestResponse),
+    #[serde(alias = "FileChunk")]
     FileChunk(FileChunk),
+    #[serde(alias = "ChunkAck")]
     ChunkAck(ChunkAck),
 }
 
@@ -1001,8 +1013,8 @@ impl WebRTCService {
         bandwidth: &Arc<BandwidthController>,
     ) {
         info!(
-            "📥 Handling file request from peer {}: {}",
-            peer_id, request.file_hash
+            "📥 Handling file request from peer {}: {} (file_name: {})",
+            peer_id, request.file_hash, request.file_name
         );
 
         // Check if we have the file locally
@@ -1010,9 +1022,14 @@ impl WebRTCService {
             .get_stored_files()
             .await
             .unwrap_or_default();
+        
+        info!("📂 Checking {} stored files for hash {}", stored_files.len(), request.file_hash);
+        
         let has_file = stored_files
             .iter()
             .any(|(hash, _)| hash == &request.file_hash);
+
+        info!("📂 File {} found: {}", request.file_hash, has_file);
 
         if has_file {
             // Spawn file transfer as a separate task so the message handler
@@ -1054,6 +1071,11 @@ impl WebRTCService {
                 }
             });
         } else {
+            error!("❌ File {} not found locally - cannot fulfill request from peer {}", request.file_hash, peer_id);
+            // Log available files for debugging
+            let available_hashes: Vec<_> = stored_files.iter().map(|(h, _)| h.clone()).collect();
+            info!("📂 Available file hashes: {:?}", available_hashes);
+            
             let _ = event_tx
                 .send(WebRTCEvent::TransferFailed {
                     peer_id: peer_id.to_string(),
@@ -1210,7 +1232,11 @@ impl WebRTCService {
     ) {
         debug!("📩 Data channel message received from peer {}: {} bytes", peer_id, msg.data.len());
         if let Ok(text) = std::str::from_utf8(&msg.data) {
-            // Try to parse as FileChunk
+            // Log first 500 chars of message for debugging
+            let preview = if text.len() > 500 { &text[..500] } else { text };
+            debug!("📝 Message preview from {}: {}", peer_id, preview);
+            
+            // Try to parse as FileChunk first (most common)
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
                 info!("📦 Received chunk {}/{} for file {} from peer {}", 
                     chunk.chunk_index + 1, chunk.total_chunks, chunk.file_hash, peer_id);
@@ -1422,7 +1448,14 @@ impl WebRTCService {
                         }
                     }
                 }
+            } else {
+                // None of the parsing attempts succeeded - log for debugging
+                warn!("⚠️ Failed to parse data channel message from peer {}. Message preview: {}", 
+                      peer_id, 
+                      if text.len() > 200 { &text[..200] } else { text });
             }
+        } else {
+            warn!("⚠️ Received non-UTF8 data from peer {} ({} bytes)", peer_id, msg.data.len());
         }
     }
 
@@ -1435,6 +1468,51 @@ impl WebRTCService {
         keystore: &Arc<Mutex<Keystore>>,
         bandwidth: &Arc<BandwidthController>,
     ) -> Result<(), String> {
+        // Wait for data channel to be available (race condition fix)
+        // The on_data_channel callback stores the channel in a spawned task,
+        // so it may not be available immediately when this function is called.
+        use webrtc::data_channel::data_channel_state::RTCDataChannelState;
+        let start = Instant::now();
+        let timeout = Duration::from_secs(10);
+        
+        loop {
+            let dc_state = {
+                let conns = connections.lock().await;
+                if let Some(connection) = conns.get(peer_id) {
+                    connection.data_channel.as_ref().map(|dc| dc.ready_state())
+                } else {
+                    return Err(format!("Peer {} not found in connections at start of file transfer", peer_id));
+                }
+            };
+            
+            match dc_state {
+                Some(RTCDataChannelState::Open) => {
+                    info!("✅ Data channel ready for file transfer to peer {}", peer_id);
+                    break;
+                }
+                Some(RTCDataChannelState::Closed) | Some(RTCDataChannelState::Closing) => {
+                    error!("❌ Data channel closed/closing for peer {} before file transfer started", peer_id);
+                    return Err(format!("Data channel closed for peer {}", peer_id));
+                }
+                Some(state) => {
+                    if start.elapsed() > timeout {
+                        error!("❌ Timeout waiting for data channel to open (state: {:?}) for peer {}", state, peer_id);
+                        return Err(format!("Data channel timeout (state: {:?})", state));
+                    }
+                    debug!("⏳ Waiting for data channel to open (state: {:?}) for peer {}", state, peer_id);
+                }
+                None => {
+                    if start.elapsed() > timeout {
+                        error!("❌ Timeout waiting for data channel to be assigned for peer {}", peer_id);
+                        return Err("Data channel not assigned".to_string());
+                    }
+                    debug!("⏳ Waiting for data channel to be assigned for peer {}", peer_id);
+                }
+            }
+            
+            sleep(Duration::from_millis(50)).await;
+        }
+        
         // Get file data from local storage
         let file_data = match file_transfer_service
             .get_file_data(&request.file_hash)

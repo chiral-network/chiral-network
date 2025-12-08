@@ -74,6 +74,10 @@ tokio-socks = "0.5"
 suppaftp = { version = "5.4", features = ["native-tls", "secure", "deprecated"] }
 native-tls = "0.2"
 
+# FTP server for serving uploaded files
+unftp-sbe-fs = "0.2"
+libunftp = "0.20"
+
 # Bitswap and related dependencies
 beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "new" }
 once_cell = "1.19"

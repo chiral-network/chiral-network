@@ -68,6 +68,7 @@ export class WalletService {
   private isRestoringAccount = false; // Flag to prevent sync during account restoration
   private progressiveLoadHandle: ReturnType<typeof setTimeout> | null = null;
   private isProgressiveLoading = false;
+  private blockMinedUnsubscribe?: () => void;
 
   constructor() {
     this.isTauri =
@@ -94,6 +95,7 @@ export class WalletService {
         );
       }
 
+      await this.bindBlockMinedEvents();
       await this.syncFromBackend();
       if (options?.autoStartPolling !== false) {
         this.startPolling();
@@ -127,6 +129,14 @@ export class WalletService {
       this.unsubscribeAccount = undefined;
     }
     this.stopProgressiveLoading();
+    if (this.blockMinedUnsubscribe) {
+      try {
+        this.blockMinedUnsubscribe();
+      } catch (error) {
+        console.warn("Failed to unsubscribe block_mined listener", error);
+      }
+      this.blockMinedUnsubscribe = undefined;
+    }
     this.initialized = false;
     this.seenHashes.clear();
   }
@@ -291,6 +301,9 @@ export class WalletService {
       // Get current block number to track pagination
       const currentBlock = await invoke<number>("get_current_block");
 
+      // Check pending transactions and update their status
+      await this.updatePendingTransactions();
+
       // Get data in parallel: mining blocks AND transaction history
       const [blocks, totalBlockCount, txHistory] = await Promise.all([
         invoke("get_recent_mined_blocks_pub", {
@@ -355,17 +368,11 @@ export class WalletService {
       // During active mining, don't override - the backend counter is the source of truth
       // The backend counter is initialized from accurateTotals and incremented when new blocks are mined
       const reward = get(blockReward);
-      const currentMiningState = get(miningState);
-
-      if (!currentMiningState.isMining) {
-        // Use the backend counter (totalBlockCount from get_blocks_mined) as the source of truth
-        // This counter is initialized from accurateTotals and incremented during mining
-        miningState.update((state) => ({
-          ...state,
-          blocksFound: totalBlockCount,
-          totalRewards: totalBlockCount * reward,
-        }));
-      }
+      miningState.update((state) => ({
+        ...state,
+        blocksFound: totalBlockCount,
+        totalRewards: totalBlockCount * reward,
+      }));
 
       // Process mining rewards
       for (const block of blocks) {
@@ -509,8 +516,81 @@ export class WalletService {
     }
   }
 
+  private async bindBlockMinedEvents(): Promise<void> {
+    if (!this.isTauri || this.blockMinedUnsubscribe) {
+      return;
+    }
+
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      this.blockMinedUnsubscribe = await listen("block_mined", async () => {
+        try {
+          await this.refreshTransactions();
+          await this.refreshBalance();
+        } catch (error) {
+          console.error("[WalletService] Failed to refresh after block_mined", error);
+        }
+      });
+    } catch (error) {
+      console.warn("[WalletService] Could not bind block_mined listener:", error);
+    }
+  }
+
+  async updatePendingTransactions(): Promise<void> {
+    const currentTransactions = get(transactions);
+    const pendingTransactions = currentTransactions.filter(
+      (tx) => tx.status === "pending" && tx.txHash
+    );
+
+    if (pendingTransactions.length === 0) {
+      return;
+    }
+
+    // Check each pending transaction
+    for (const tx of pendingTransactions) {
+      try {
+        const receipt = await invoke<any>("get_transaction_receipt", {
+          txHash: tx.txHash,
+        });
+
+        // If receipt exists and is not null, transaction has been mined
+        if (receipt) {
+          const success = receipt.status === "0x1" || receipt.status === 1;
+
+          transactions.update((txs) =>
+            txs.map((t) =>
+              t.txHash === tx.txHash
+                ? {
+                    ...t,
+                    status: success
+                      ? ("success" as const)
+                      : ("failed" as const),
+                  }
+                : t
+            )
+          );
+
+          // Update pending count
+          if (tx.type === "sent") {
+            wallet.update((w) => ({
+              ...w,
+              pendingTransactions: Math.max(
+                0,
+                (w.pendingTransactions ?? 0) - 1
+              ),
+            }));
+          }
+        }
+      } catch (error) {
+        // Transaction receipt not available yet or RPC error
+        console.log(`Could not get receipt for ${tx.txHash}:`, error);
+      }
+    }
+  }
+
   async refreshBalance(): Promise<void> {
     if (!this.isTauri) {
+      console.log("[refreshBalance] Not in Tauri, skipping");
       return;
     }
 
@@ -523,9 +603,11 @@ export class WalletService {
     try {
       const isRunning = await invoke<boolean>("is_geth_running");
       if (!isRunning) {
+        console.log("[refreshBalance] Geth not running, skipping");
         return; // Silently skip if Geth is not running
       }
     } catch (error) {
+      console.log("[refreshBalance] Could not check Geth status:", error);
       return; // Can't check Geth status, skip
     }
 
@@ -534,7 +616,7 @@ export class WalletService {
     try {
       accountAddress = await invoke<string>("get_active_account_address");
     } catch (error) {
-      // No active account
+      console.log("[refreshBalance] No active account:", error);
       return;
     }
 
@@ -547,7 +629,14 @@ export class WalletService {
         })) as string;
         realBalance = parseFloat(balanceStr);
       } catch (e) {
-        // Expected when Geth is not running
+        const errorMsg = String(e);
+        // Only log if it's not a known blockchain state issue
+        if (
+          !errorMsg.includes("missing trie node") &&
+          !errorMsg.includes("not available")
+        ) {
+          console.log("[refreshBalance] Could not get balance from geth:", e);
+        }
       }
 
       const prevWallet = get(wallet);
@@ -1292,6 +1381,18 @@ export class WalletService {
     isCalculatingAccurateTotals.set(true);
     accurateTotalsProgress.set(null);
 
+    // Capture session counter BEFORE starting the scan
+    // This tells us how many blocks were mined before the scan started
+    // Any blocks in this counter might already be on the blockchain and included in the scan
+    let sessionCounterAtStart = 0;
+    try {
+      sessionCounterAtStart = await invoke<number>("get_blocks_mined", {
+        address: accountAddress,
+      });
+    } catch (e) {
+      // Ignore - assume 0
+    }
+
     // Listen for progress events
     const { listen } = await import("@tauri-apps/api/event");
     const unlisten = await listen<{
@@ -1316,7 +1417,7 @@ export class WalletService {
       });
 
       // Store the results
-      console.log("[Accurate Totals] Updating store with:", {
+      console.debug("[Accurate Totals] Updating store with:", {
         blocksMined: result.blocks_mined,
         totalReceived: result.total_received,
         totalSent: result.total_sent,
@@ -1327,27 +1428,51 @@ export class WalletService {
         totalSent: result.total_sent,
       });
 
-      // Initialize the backend session counter with the accurate blockchain count
-      // This ensures "mined rewards" display matches the actual blockchain data
+      // Initialize the backend counter with accurate count + blocks mined during scan
+      // - sessionCounterAtStart: blocks mined before scan (might be included in scan result)
+      // - sessionCounterAtEnd: blocks mined before + during scan
+      // - blocksDuringCalc = sessionCounterAtEnd - sessionCounterAtStart (blocks mined DURING scan)
+      // - These blocks are NOT in scan result (scan captured current_block at start)
+      // - Total = scan result + blocks mined during scan
       try {
+        // Get current session counter (after scan completed)
+        const sessionCounterAtEnd = await invoke<number>("get_blocks_mined", {
+          address: accountAddress,
+        });
+
+        // Blocks mined DURING the scan are not included in the scan result
+        // (because scan only goes up to current_block captured at start)
+        const blocksDuringCalc = sessionCounterAtEnd - sessionCounterAtStart;
+
+        // Total = historical (from scan) + blocks mined during scan
+        // This avoids double-counting:
+        // - Blocks before scan start might be in scan result (we don't add them again)
+        // - Blocks during scan are definitely NOT in scan result (we add them)
+        const totalCount = result.blocks_mined + blocksDuringCalc;
+
         await invoke("initialize_mined_blocks_count", {
           address: accountAddress,
-          count: result.blocks_mined,
+          count: totalCount,
         });
-        console.log(`[Accurate Totals] Initialized backend blocks count to: ${result.blocks_mined}`);
-        
-        // Also update the mining state store to reflect accurate totals
+        console.debug(
+          `[Accurate Totals] Initialized backend blocks count to: ${totalCount} (scan: ${result.blocks_mined}, during calc: ${blocksDuringCalc}, session start: ${sessionCounterAtStart}, session end: ${sessionCounterAtEnd})`
+        );
+
+        // Update the mining state store
         const reward = get(blockReward);
         miningState.update((state) => ({
           ...state,
-          blocksFound: result.blocks_mined,
-          totalRewards: result.blocks_mined * reward,
+          blocksFound: totalCount,
+          totalRewards: totalCount * reward,
         }));
       } catch (initError) {
-        console.warn("[Accurate Totals] Failed to initialize backend counter:", initError);
+        console.warn(
+          "[Accurate Totals] Failed to initialize backend counter:",
+          initError
+        );
       }
 
-      console.log(`[Accurate Totals] Complete!`, result);
+      console.debug(`[Accurate Totals] Complete!`, result);
     } catch (error) {
       console.error("Failed to calculate accurate totals:", error);
       throw error;

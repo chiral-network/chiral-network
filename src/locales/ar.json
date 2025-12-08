@@ -619,6 +619,17 @@
       "market": "سوق",
       "fast": "سريع",
       "estimated": "الرسوم المقدرة"
+    },
+    "gas": {
+      "label": "سرعة المعاملة",
+      "loading": "جارٍ التقدير...",
+      "estimateError": "استخدام القيم الافتراضية",
+      "slow": "اقتصادي",
+      "standard": "قياسي",
+      "fast": "أولوية",
+      "estimatedFee": "الرسوم المقدرة",
+      "totalCost": "التكلفة الإجمالية",
+      "networkCongestion": "الشبكة"
     }
   },
   "transactions": {
@@ -820,7 +831,8 @@
       "invalid": "يرجى إدخال مبلغ صالح أكبر من 0.",
       "min": "يجب أن يكون المبلغ على الأقل {min} Chiral.",
       "insufficient": "رصيد غير كافٍ - تحتاج إلى {more} Chiral إضافية.",
-      "insufficientWithFee": "رصيد غير كافٍ. إجمالي {total} Chiral (المبلغ + الرسوم) يتجاوز رصيدك البالغ {balance} Chiral."
+      "insufficientWithFee": "رصيد غير كافٍ. إجمالي {total} Chiral (المبلغ + الرسوم) يتجاوز رصيدك البالغ {balance} Chiral.",
+      "insufficientWithGas": "رصيد غير كافٍ (بما في ذلك الغاز) - تحتاج إلى {more} Chiral إضافية."
     },
     "exportFailed": "فشل التصدير. يرجى المحاولة مرة أخرى.",
     "createAccount": "فشل إنشاء الحساب: {error}"

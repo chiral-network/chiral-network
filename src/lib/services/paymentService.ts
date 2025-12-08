@@ -72,9 +72,6 @@ function loadTransactionsFromStorage(): Transaction[] {
       date: new Date(tx.date),
     }));
 
-    console.log(
-      `📬 Loaded ${transactions.length} transactions from localStorage`
-    );
     return transactions;
   } catch (error) {
     console.error("Failed to load transactions from localStorage:", error);

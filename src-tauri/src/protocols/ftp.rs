@@ -16,6 +16,7 @@ use crate::transfer_events::{
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -23,6 +24,17 @@ use tauri::AppHandle;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 use url::Url;
+
+/// Get the local IP address by connecting to an external address
+/// This works by creating a UDP socket and checking what local address it uses
+fn get_local_ip() -> Option<String> {
+    // Try to get the local IP by creating a UDP socket to an external address
+    // We don't actually send any data, just check what local address would be used
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let local_addr = socket.local_addr().ok()?;
+    Some(local_addr.ip().to_string())
+}
 
 /// FTP protocol handler implementing the enhanced ProtocolHandler trait
 pub struct FtpProtocolHandler {
@@ -451,13 +463,19 @@ impl ProtocolHandler for FtpProtocolHandler {
 
         // FTP "seeding" would mean uploading to an FTP server
         // This requires server configuration which we don't have here
-        warn!("FTP seeding requires an FTP server to be configured");
+        warn!("FTP seeding requires an FTP server to be configured. The generated URL will only work if you have an FTP server running.");
 
-        // Return a placeholder - in a real implementation, this would upload to a configured server
+        // Try to get the local IP address for more useful URLs
+        let host = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+        
+        let file_name = file_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
+
+        // Return a URL that would work if an FTP server is running on the local machine
+        // Note: For this to work, the user must have an FTP server running and serving files from the appropriate directory
         Ok(SeedingInfo {
-            identifier: format!("ftp://chiral-node/{}", file_path.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "file".to_string())),
+            identifier: format!("ftp://{}/{}", host, file_name),
             file_path,
             protocol: "ftp".to_string(),
             active_peers: 0,

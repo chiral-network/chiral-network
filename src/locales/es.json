@@ -470,6 +470,17 @@
       "market": "Mercado",
       "fast": "Rápida",
       "estimated": "Tarifa estimada"
+    },
+    "gas": {
+      "label": "Velocidad de transacción",
+      "loading": "Estimando...",
+      "estimateError": "Usando valores predeterminados",
+      "slow": "Económico",
+      "standard": "Estándar",
+      "fast": "Prioritario",
+      "estimatedFee": "Tarifa estimada",
+      "totalCost": "Costo total",
+      "networkCongestion": "Red"
     }
   },
   "transactions": {
@@ -671,7 +682,8 @@
       "invalid": "Introduce una cantidad válida mayor que 0.",
       "min": "La cantidad debe ser al menos {min} Chiral.",
       "insufficient": "Saldo insuficiente: faltan {more} Chiral.",
-      "insufficientWithFee": "Fondos insuficientes. El total de {total} Chiral (cantidad + tarifa) excede su saldo de {balance} Chiral."
+      "insufficientWithFee": "Fondos insuficientes. El total de {total} Chiral (cantidad + tarifa) excede su saldo de {balance} Chiral.",
+      "insufficientWithGas": "Saldo insuficiente (incluyendo gas) - Faltan {more} Chiral."
     },
     "exportFailed": "La exportación falló. Inténtalo de nuevo.",
     "createAccount": "No se pudo crear la cuenta: {error}"

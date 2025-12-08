@@ -609,6 +609,17 @@
       "market": "Market",
       "fast": "Fast",
       "estimated": "Estimated fee"
+    },
+    "gas": {
+      "label": "Transaction Speed",
+      "loading": "Estimating...",
+      "estimateError": "Using defaults",
+      "slow": "Economy",
+      "standard": "Standard",
+      "fast": "Priority",
+      "estimatedFee": "Estimated Fee",
+      "totalCost": "Total Cost",
+      "networkCongestion": "Network"
     }
   },
   "transactions": {
@@ -812,7 +823,8 @@
       "invalid": "Please enter a valid amount greater than 0.",
       "min": "Amount must be at least {min} Chiral.",
       "insufficient": "Insufficient balance - Need {more} more Chiral.",
-      "insufficientWithFee": "Insufficient funds. Total of {total} Chiral (amount + fee) exceeds your balance of {balance} Chiral."
+      "insufficientWithFee": "Insufficient funds. Total of {total} Chiral (amount + fee) exceeds your balance of {balance} Chiral.",
+      "insufficientWithGas": "Insufficient balance (including gas) - Need {more} more Chiral."
     },
     "exportFailed": "Export failed. Please try again.",
     "createAccount": "Failed to create account: {error}"
@@ -1404,12 +1416,14 @@
     "encryption": {
       "title": "Encrypted Sharing",
       "subtitle": "Share files encrypted for specific recipients",
-      "enableForRecipient": "Enable encrypted sharing for specific recipient",
-      "recipientPublicKey": "Recipient's Public Key",
+      "enableForRecipient": "Enable encrypted sharing",
+      "recipientPublicKey": "Recipient Public Key",
       "publicKeyPlaceholder": "Enter recipient's X25519 public key (64 hex characters)",
       "publicKeyHint": "Enter the recipient's X25519 public key (hex format, 64 characters). The file will be encrypted so only they can decrypt it. Leave empty to encrypt for yourself.",
       "invalidPublicKey": "⚠️ Invalid public key format. Must be 64 hexadecimal characters.",
-      "encryptedBadge": "Encrypted"
+      "encryptedBadge": "Encrypted",
+      "recipientsList": "Recipients List",
+      "numberOfRecipientsAdded": "recipient(s) added"
     },
     "currentProtocol": "Current Protocol",
     "changeProtocol": "Change Protocol",

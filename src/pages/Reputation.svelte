@@ -185,6 +185,8 @@
         // DISABLED: DHT verdict queries cause disconnections
         // TODO: Move to background/lazy loading or cache locally
         // Skip DHT queries for now and rely solely on backend metrics
+        // TEMPORARILY DISABLED: Verdict fetching overwhelms DHT with concurrent searches
+        // Will re-enable once verdict storage is fixed and we add rate limiting
         /*
         // Try to get reputation verdicts to augment interaction count AND score
         try {

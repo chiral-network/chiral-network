@@ -9,11 +9,6 @@
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
 
-  // Event payload types for mining events
-  interface MiningScanProgressPayload {
-    address: string;
-    blocks_found_in_batch: number;
-  }
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { getVersion } from "@tauri-apps/api/app";
@@ -114,9 +109,11 @@
 
   // Re-fetch blocks count from backend when accurateTotals is calculated
   // This ensures the Mining page picks up the initialized backend counter
+  // Note: We only sync if NOT actively mining, to avoid interrupting live updates
   $: if ($accurateTotals && !hasSyncedWithAccurateTotals && !$miningState.isMining && isTauri) {
     hasSyncedWithAccurateTotals = true;
     // Re-fetch from backend to get the initialized count
+    // The backend counter is now properly initialized with historical + session blocks
     (async () => {
       try {
         const currentWallet = get(wallet);
@@ -514,23 +511,13 @@
           }, 500); // Wait only 500ms since we know the exact block
         });
 
-        // Listen for mining scan progress events (real-time incremental updates)
-        const unlistenScanProgress = await listen('mining_scan_progress', (event: { payload: MiningScanProgressPayload }) => {
-          // Update mining stats incrementally as blocks are discovered during scanning
-          // Only apply during non-mining periods to avoid interfering with real-time counter
-          const currentWallet = get(wallet);
-          if (event.payload.address === currentWallet?.address && !$miningState.isMining) {
-            miningState.update((state) => ({
-              ...state,
-              blocksFound: state.blocksFound + (event.payload.blocks_found_in_batch || 0),
-              totalRewards: (state.blocksFound + (event.payload.blocks_found_in_batch || 0)) * (get(blockReward) || 2)
-            }));
-          }
-        });
+        // Note: mining_scan_progress events are no longer used for UI updates
+        // We now rely on get_blocks_mined (backend counter) as the single source of truth
+        // This avoids double-counting issues between the scan counter and the mined blocks counter
 
         // Store unlisten functions for cleanup
         miningMonitorUnlisten = unlistenBlockMined;
-        scanProgressUnlisten = unlistenScanProgress;
+        scanProgressUnlisten = null;
       } catch (error) {
         console.error('[Mining Page] ❌ FAILED to start mining monitor:', error);
       }

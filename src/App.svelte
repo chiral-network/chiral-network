@@ -590,7 +590,7 @@ function handleFirstRunComplete() {
             const isGethRunning = await invoke<boolean>('is_geth_running').catch(() => false);
             
             if (isGethRunning) {
-              console.log("✅ Geth blockchain node already running (detected on startup)");
+              // Geth already running
             } else {
               // Check if Geth is installed
               const isGethInstalled = await invoke<boolean>('check_geth_binary').catch(() => false);
@@ -622,12 +622,9 @@ function handleFirstRunComplete() {
                   throw downloadError; // Don't try to start if download failed
                 }
               }
-              
-              console.log("🚀 Auto-starting Geth blockchain node...");
-              
+
               try {
                 await invoke('start_geth_node', { dataDir: './bin/geth-data' });
-                console.log("✅ Geth blockchain node auto-started successfully");
                 
                 // Update geth status
                 const { gethStatus } = await import('./lib/services/gethService');
@@ -976,23 +973,24 @@ function handleFirstRunComplete() {
 
         <!-- Sidebar Nav Items -->
         {#each menuItems as item}
-          {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
+          {@const requiresGeth = item.id === 'blockchain' || item.id === 'mining'}
+          {@const isBlocked = requiresGeth && $gethStatus !== 'running'}
           <button
             on:click={() => {
-              if (isBlockchainDisabled) return;
+              if (isBlocked) return;
               navigateTo(item.id, `/${item.id}`);
             }}
-            class="w-full group {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : ''}"
+            class="w-full group {isBlocked ? 'cursor-not-allowed opacity-60' : ''}"
             aria-current={currentPage === item.id ? "page" : undefined}
-            disabled={isBlockchainDisabled}
-            title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
+            disabled={isBlocked}
+            title={isBlocked ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
           >
             <div
               class="flex items-center {sidebarCollapsed
                 ? 'justify-center'
                 : ''} rounded {currentPage === item.id
                 ? 'bg-gray-200'
-                : isBlockchainDisabled ? '' : 'group-hover:bg-gray-100'}"
+                : isBlocked ? '' : 'group-hover:bg-gray-100'}"
             >
               <span
                 class="flex items-center justify-center rounded w-10 h-10 relative"
@@ -1072,17 +1070,18 @@ function handleFirstRunComplete() {
         <!-- Sidebar Nav Items -->
         <nav class="flex-1 p-4 space-y-2">
           {#each menuItems as item}
-            {@const isBlockchainDisabled = item.id === 'blockchain' && $gethStatus !== 'running'}
+            {@const requiresGeth = item.id === 'blockchain' || item.id === 'mining'}
+            {@const isBlocked = requiresGeth && $gethStatus !== 'running'}
             <button
               on:click={() => {
-                if (isBlockchainDisabled) return;
+                if (isBlocked) return;
                 navigateTo(item.id, `/${item.id}`);
                 sidebarMenuOpen = false;
               }}
-              class="w-full flex items-center rounded px-4 py-3 text-lg {isBlockchainDisabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-gray-100'}"
+              class="w-full flex items-center rounded px-4 py-3 text-lg {isBlocked ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-100'}"
               aria-current={currentPage === item.id ? "page" : undefined}
-              disabled={isBlockchainDisabled}
-              title={isBlockchainDisabled ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
+              disabled={isBlocked}
+              title={isBlocked ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
             >
               <svelte:component this={item.icon} class="h-5 w-5 mr-3" />
               {item.label}

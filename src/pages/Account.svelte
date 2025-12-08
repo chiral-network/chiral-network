@@ -139,6 +139,27 @@
   let countdown = 0
   let intervalId: number | null = null
 
+  // Gas options state
+  type GasOption = 'slow' | 'standard' | 'fast';
+  interface GasPriceInfo {
+    gwei: number;
+    fee: number;
+    time: string;
+  }
+  interface GasEstimate {
+    gasLimit: number;
+    gasPrices: {
+      slow: GasPriceInfo;
+      standard: GasPriceInfo;
+      fast: GasPriceInfo;
+    };
+    networkCongestion: string;
+  }
+  let selectedGasOption: GasOption = 'standard';
+  let gasEstimate: GasEstimate | null = null;
+  let isLoadingGas = false;
+  let gasError = '';
+
   // Derive Geth running status from store
   $: isGethRunning = $gethStatus === 'running';
 
@@ -249,7 +270,7 @@
     }
   }
 
-  // Amount validation
+  // Amount validation (accounts for gas fees)
   $: {
     if (rawAmountInput === '') {
       validationWarning = '';
@@ -257,6 +278,8 @@
       sendAmount = 0;
     } else {
       const inputValue = parseFloat(rawAmountInput);
+      const currentGasFee = gasEstimate?.gasPrices[selectedGasOption]?.fee ?? 0;
+      const totalCost = inputValue + currentGasFee;
 
       if (isNaN(inputValue) || inputValue <= 0) {
         validationWarning = tr('errors.amount.invalid');
@@ -266,8 +289,9 @@
         validationWarning = tr('errors.amount.min', { min: '0.01' });
         isAmountValid = false;
         sendAmount = 0;
-      } else if (inputValue > $wallet.balance) {
-        validationWarning = tr('errors.amount.insufficient', { values: { more: (inputValue - $wallet.balance).toFixed(4) } });
+      } else if (totalCost > $wallet.balance) {
+        const shortage = (totalCost - $wallet.balance).toFixed(4);
+        validationWarning = tr('errors.amount.insufficientWithGas', { values: { more: shortage } });
         isAmountValid = false;
         sendAmount = 0;
       } else {
@@ -415,12 +439,29 @@
         const snapshot = await walletService.exportSnapshot({ includePrivateKey: true });
         const dataStr = JSON.stringify(snapshot, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const fileName = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+
+        if (isTauri) {
+          try {
+            const storagePath = await invoke<string>('get_download_directory');
+            await invoke('ensure_directory_exists', { path: storagePath });
+            const { join } = await import('@tauri-apps/api/path');
+            const exportPath = await join(storagePath, fileName);
+            const { writeFile } = await import('@tauri-apps/plugin-fs');
+            await writeFile(exportPath, new TextEncoder().encode(dataStr));
+            exportMessage = tr('wallet.exportSuccess');
+            setTimeout(() => exportMessage = '', 3000);
+            return;
+          } catch (error) {
+            console.error('Tauri export failed, falling back to browser flow:', error);
+          }
+        }
         
         // Check if the File System Access API is supported
         if ('showSaveFilePicker' in window) {
           try {
             const fileHandle = await (window as any).showSaveFilePicker({
-              suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
+              suggestedName: fileName,
               types: [{
                 description: 'JSON files',
                 accept: {
@@ -446,7 +487,7 @@
           const url = URL.createObjectURL(dataBlob);
           const link = document.createElement('a');
           link.href = url;
-          link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+          link.download = fileName;
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
@@ -516,6 +557,17 @@
       
       // showToast('Transaction submitted!', 'success')
       showToast(tr('toasts.account.transaction.submitted'), 'success')
+      
+      // Refresh balance after a delay to allow transaction to be mined
+      // Poll every 2 seconds for 30 seconds to catch the confirmation
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        await fetchBalance();
+        if (pollCount >= 15) {
+          clearInterval(pollInterval);
+        }
+      }, 2000);
       
     } catch (error) {
       console.error('Transaction failed:', error)
@@ -593,7 +645,7 @@
   async function calculateAccurateTotals() {
     try {
       await walletService.calculateAccurateTotals();
-      console.log('Accurate totals calculated successfully');
+      console.debug('Accurate totals calculated successfully');
     } catch (error) {
       console.error('Failed to calculate accurate totals:', error);
     }
@@ -1340,8 +1392,70 @@
   }
 
   // Helper function to set max amount
-  function setMaxAmount() {
-    rawAmountInput = $wallet.balance.toFixed(4);
+  async function setMaxAmount() {
+    // If we don't have a gas estimate yet, fetch it first
+    if (!gasEstimate && isGethRunning) {
+      await fetchGasEstimate();
+    }
+    
+    // Calculate max amount accounting for gas fee
+    const currentGasFee = gasEstimate?.gasPrices?.[selectedGasOption]?.fee ?? 0;
+    const maxAmount = Math.max(0, $wallet.balance - currentGasFee);
+    
+    // Round DOWN to 4 decimal places to ensure we don't exceed available balance
+    // Using floor instead of round to be safe
+    const roundedMax = Math.floor(maxAmount * 10000) / 10000;
+    
+    rawAmountInput = roundedMax.toFixed(4);
+  }
+
+  // Fetch gas estimate for transaction
+  async function fetchGasEstimate() {
+    if (!isTauri || !$etcAccount || !isGethRunning) {
+      gasError = '';
+      return;
+    }
+    
+    isLoadingGas = true;
+    gasError = '';
+    
+    try {
+      // Use a placeholder address if no recipient yet
+      const toAddress = recipientAddress || '0x0000000000000000000000000000000000000000';
+      const amount = sendAmount > 0 ? sendAmount : 0.001;
+      
+      const result = await invoke<GasEstimate>('estimate_transaction_gas', {
+        from: $etcAccount.address,
+        to: toAddress,
+        value: amount
+      });
+      
+      gasEstimate = result;
+    } catch (error) {
+      const errorMsg = String(error);
+      // Only show error if it's not insufficient funds (which is expected for empty accounts)
+      if (!errorMsg.includes('insufficient funds')) {
+        console.error('Failed to fetch gas estimate:', error);
+      }
+      gasError = errorMsg;
+      // Set default values if gas estimation fails
+      gasEstimate = {
+        gasLimit: 21000,
+        gasPrices: {
+          slow: { gwei: 1, fee: 0.000021, time: '~2 minutes' },
+          standard: { gwei: 1.25, fee: 0.00002625, time: '~1 minute' },
+          fast: { gwei: 1.5, fee: 0.0000315, time: '~30 seconds' }
+        },
+        networkCongestion: 'unknown'
+      };
+    } finally {
+      isLoadingGas = false;
+    }
+  }
+
+  // Refresh gas estimate when recipient or amount changes, or when geth starts
+  $: if (isGethRunning && $etcAccount) {
+    fetchGasEstimate();
   }
 
   // async function handleLogout() {
@@ -1412,8 +1526,16 @@
 
       // Clear any stored session data from both localStorage and sessionStorage
       if (typeof localStorage !== 'undefined') {
-        localStorage.removeItem('lastAccount');
-        localStorage.removeItem('miningSession');
+        const walletKeys = [
+          'lastAccount',
+          'miningSession',
+          'chiral_wallet',
+          'chiral_transactions',
+          'transactionPagination',
+          'miningPagination',
+          'chiral_keystore_passwords',
+        ];
+        walletKeys.forEach(key => localStorage.removeItem(key));
         // Clear all sessionStorage data for security
         sessionStorage.clear();
       }
@@ -1439,7 +1561,7 @@
     if(!address) return;
     try{
       qrCodeDataUrl = await QRCode.toDataURL(address, {
-        errorCorrectionLevel: 'H',
+        errorCorrectionLevel: 'high',
         type: 'image/png',
         width: 200,
         margin: 2,
@@ -1930,6 +2052,98 @@
           </div>
           
         
+        </div>
+
+        <!-- Gas Options Section -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <Label>{$t('transfer.gas.label')}</Label>
+            {#if isLoadingGas}
+              <span class="text-xs text-muted-foreground flex items-center gap-1">
+                <RefreshCw class="h-3 w-3 animate-spin" />
+                {$t('transfer.gas.loading')}
+              </span>
+            {:else if gasError}
+              <span class="text-xs text-amber-500">{$t('transfer.gas.estimateError')}</span>
+            {/if}
+          </div>
+          
+          <div class="grid grid-cols-3 gap-2">
+            <!-- Slow Option -->
+            <button
+              type="button"
+              class="p-3 rounded-lg border-2 transition-all text-left {selectedGasOption === 'slow' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}"
+              on:click={() => selectedGasOption = 'slow'}
+            >
+              <div class="flex items-center gap-1 mb-1">
+                <span class="text-lg">🐢</span>
+                <span class="text-sm font-medium">{$t('transfer.gas.slow')}</span>
+              </div>
+              {#if gasEstimate}
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.slow.gwei.toFixed(2)} Gwei</p>
+                <p class="text-xs font-medium text-green-600">{gasEstimate.gasPrices.slow.fee.toFixed(6)} CHR</p>
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.slow.time}</p>
+              {:else}
+                <p class="text-xs text-muted-foreground">--</p>
+              {/if}
+            </button>
+
+            <!-- Standard Option -->
+            <button
+              type="button"
+              class="p-3 rounded-lg border-2 transition-all text-left {selectedGasOption === 'standard' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}"
+              on:click={() => selectedGasOption = 'standard'}
+            >
+              <div class="flex items-center gap-1 mb-1">
+                <span class="text-lg">⚡</span>
+                <span class="text-sm font-medium">{$t('transfer.gas.standard')}</span>
+              </div>
+              {#if gasEstimate}
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.standard.gwei.toFixed(2)} Gwei</p>
+                <p class="text-xs font-medium text-blue-600">{gasEstimate.gasPrices.standard.fee.toFixed(6)} CHR</p>
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.standard.time}</p>
+              {:else}
+                <p class="text-xs text-muted-foreground">--</p>
+              {/if}
+            </button>
+
+            <!-- Fast Option -->
+            <button
+              type="button"
+              class="p-3 rounded-lg border-2 transition-all text-left {selectedGasOption === 'fast' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}"
+              on:click={() => selectedGasOption = 'fast'}
+            >
+              <div class="flex items-center gap-1 mb-1">
+                <span class="text-lg">🚀</span>
+                <span class="text-sm font-medium">{$t('transfer.gas.fast')}</span>
+              </div>
+              {#if gasEstimate}
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.fast.gwei.toFixed(2)} Gwei</p>
+                <p class="text-xs font-medium text-orange-600">{gasEstimate.gasPrices.fast.fee.toFixed(6)} CHR</p>
+                <p class="text-xs text-muted-foreground">{gasEstimate.gasPrices.fast.time}</p>
+              {:else}
+                <p class="text-xs text-muted-foreground">--</p>
+              {/if}
+            </button>
+          </div>
+
+          <!-- Estimated Fee Summary -->
+          {#if gasEstimate}
+            <div class="flex items-center justify-between p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-700">
+              <span class="text-sm text-gray-700 dark:text-gray-200">{$t('transfer.gas.estimatedFee')}</span>
+              <span class="text-sm font-medium text-gray-900 dark:text-white">
+                {gasEstimate.gasPrices[selectedGasOption].fee.toFixed(6)} CHR
+              </span>
+            </div>
+            {#if sendAmount > 0}
+              <div class="flex items-center justify-between p-2 bg-green-50 dark:bg-green-900/30 rounded-lg border border-green-200 dark:border-green-700">
+                <span class="text-sm text-gray-700 dark:text-gray-200">{$t('transfer.gas.totalCost')}</span>
+                <span class="text-sm font-bold text-gray-900 dark:text-white">
+                  {(sendAmount + gasEstimate.gasPrices[selectedGasOption].fee).toFixed(6)} CHR
+                </span>
+              </div>
+            {/if}
+          {/if}
         </div>
 
         <Button

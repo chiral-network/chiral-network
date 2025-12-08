@@ -199,12 +199,12 @@ impl GethProcess {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
 
-        // Force kill any remaining geth processes
+        // Gracefully kill any remaining geth processes (SIGTERM allows clean shutdown)
         #[cfg(unix)]
         {
             // Kill by name pattern
             let _ = Command::new("pkill")
-                .arg("-9") // Force kill
+                .arg("-15") // SIGTERM - graceful shutdown
                 .arg("-f")
                 .arg("geth.*--datadir.*geth-data")
                 .output();
@@ -212,11 +212,11 @@ impl GethProcess {
             // Also try to kill by port usage (macOS compatible)
             let _ = Command::new("sh")
                 .arg("-c")
-                .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
+                .arg("lsof -ti:8545,30303 | xargs kill -15 2>/dev/null || true")
                 .output();
 
-            // Give it a moment to clean up
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            // Give Geth time to gracefully shut down and flush database
+            std::thread::sleep(std::time::Duration::from_secs(3));
         }
 
         // Final check - if still running, we have a problem
@@ -296,12 +296,11 @@ impl GethProcess {
                         .collect();
                     let lines: Vec<String> = all_lines.iter().rev().take(50).cloned().collect();
 
-                    // Look for signs of blockchain corruption
+                    // Look for signs of ACTUAL blockchain corruption (not normal operations)
                     for line in &lines {
-                        if line.contains("Truncating ancient chain")
-                            || line.contains("ERROR") && line.contains("ancient")
-                            || line.contains("Rewinding blockchain")
-                            || line.contains("database corruption") {
+                        if line.contains("database corruption")
+                            || line.contains("FATAL") && line.contains("chaindata")
+                            || line.contains("corrupted") && line.contains("database") {
                             eprintln!("⚠️  Detected corrupted blockchain, will reinitialize...");
                             needs_reinit = true;
                             break;
@@ -370,13 +369,11 @@ impl GethProcess {
             .arg("--http.port")
             .arg("8545")
             .arg("--http.api")
-            .arg("eth,net,web3,personal,debug,miner,admin")
+            .arg("eth,net,web3,personal,debug,miner,admin,txpool")
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
             .arg("snap")
-            .arg("--gcmode")
-            .arg("full")
             .arg("--maxpeers")
             .arg("50")
             // P2P discovery settings
@@ -384,7 +381,28 @@ impl GethProcess {
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
-            .arg("any");
+            .arg("any")
+            // Enable transaction pool gossip to propagate transactions across network
+            .arg("--txpool.globalslots")
+            .arg("16384") // Increase tx pool size for network-wide transactions
+            .arg("--txpool.globalqueue")
+            .arg("4096")
+            // Txpool settings to ensure transactions are included
+            .arg("--txpool.accountslots")
+            .arg("64") // Allow more pending txs per account
+            .arg("--txpool.accountqueue")
+            .arg("128")
+            .arg("--txpool.pricebump")
+            .arg("0") // Don't require price bump for replacement
+            .arg("--txpool.pricelimit")
+            .arg("0") // Accept transactions with 0 gas price
+            // Set minimum gas price to 0 to accept all transactions
+            // This is important for a private network where we want all transactions to be mined
+            .arg("--miner.gasprice")
+            .arg("0")
+            // Recommend transactions for mining (include pending txs)
+            .arg("--miner.recommit")
+            .arg("500ms"); // Re-create the mining block every 500ms to include new transactions faster
 
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
@@ -466,9 +484,9 @@ impl GethProcess {
         // This handles orphaned processes
         #[cfg(unix)]
         {
-            // Kill by process name
+            // Kill by process name with SIGTERM for graceful shutdown
             let result = Command::new("pkill")
-                .arg("-9")
+                .arg("-15")
                 .arg("-f")
                 .arg("geth.*--datadir.*geth-data")
                 .output();
@@ -485,10 +503,11 @@ impl GethProcess {
             // Also kill by port usage
             let _ = Command::new("sh")
                 .arg("-c")
-                .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
+                .arg("lsof -ti:8545,30303 | xargs kill -15 2>/dev/null || true")
                 .output();
 
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            // Give Geth time to gracefully shut down
+            std::thread::sleep(std::time::Duration::from_secs(2));
         }
 
         Ok(())
@@ -763,6 +782,8 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
 
     // Convert wei to ether (1 ether = 10^18 wei)
     let balance_ether = balance_wei as f64 / 1e18;
+    
+    tracing::debug!("💰 Balance for {}: {} (raw: {})", address, balance_ether, balance_hex);
 
     Ok(format!("{:.6}", balance_ether))
 }
@@ -802,6 +823,42 @@ pub async fn get_peer_count() -> Result<u32, String> {
     Ok(peer_count)
 }
 
+/// Get the chain ID from the running Geth node via RPC
+pub async fn get_chain_id() -> Result<u64, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_chainId",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    let chain_id_hex = json_response["result"]
+        .as_str()
+        .ok_or("Invalid chain ID response")?;
+
+    // Convert hex to decimal (strip 0x prefix)
+    let chain_id = u64::from_str_radix(&chain_id_hex[2..], 16)
+        .map_err(|e| format!("Failed to parse chain ID: {}", e))?;
+
+    Ok(chain_id)
+}
+
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
     // First, ensure geth is ready to accept RPC calls
     let mut attempts = 0;
@@ -839,6 +896,8 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
+    tracing::info!("🔧 Setting up mining with etherbase: {}", miner_address);
+    
     // First try to set the etherbase using miner_setEtherbase
     let set_etherbase = json!({
         "jsonrpc": "2.0",
@@ -888,6 +947,18 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
 
     if let Some(error) = json_response.get("error") {
         return Err(format!("{}", error));
+    }
+
+    // Log the actual coinbase being used
+    match get_coinbase().await {
+        Ok(coinbase) => {
+            tracing::info!("⛏️ Mining started! Rewards will go to: {}", coinbase);
+            if coinbase.to_lowercase() != miner_address.to_lowercase() {
+                tracing::warn!("⚠️ WARNING: Coinbase {} does not match requested miner address {}!", 
+                    coinbase, miner_address);
+            }
+        },
+        Err(e) => tracing::warn!("Could not verify coinbase: {}", e),
     }
 
     Ok(())
@@ -2448,6 +2519,18 @@ pub async fn send_transaction(
         ));
     }
 
+    // Debug network connectivity before sending
+    tracing::info!("=== NETWORK DEBUG BEFORE SENDING ===");
+    match get_peer_count().await {
+        Ok(count) => {
+            tracing::info!("   Peer count: {}", count);
+            if count == 0 {
+                tracing::warn!("   ⚠️ NO PEERS CONNECTED - transaction will not propagate!");
+            }
+        },
+        Err(e) => tracing::error!("   Failed to get peer count: {}", e),
+    }
+
     let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
         .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
 
@@ -2466,24 +2549,60 @@ pub async fn send_transaction(
         .parse()
         .map_err(|e| format!("Invalid from address: {}", e))?;
 
+    // Get both confirmed and pending nonces for debugging
+    let confirmed_nonce = provider
+        .get_transaction_count(from_addr, Some(BlockNumber::Latest.into()))
+        .await
+        .map_err(|e| format!("Failed to get confirmed nonce: {}", e))?;
+    
     let nonce = provider
         .get_transaction_count(from_addr, Some(BlockNumber::Pending.into()))
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
+    
+    tracing::info!("   Confirmed nonce: {}, Pending nonce: {}", confirmed_nonce, nonce);
+    if nonce > confirmed_nonce {
+        tracing::warn!("   ⚠️ There are {} pending transactions for this address!", nonce - confirmed_nonce);
+    }
 
+    // Get the actual gas price to be used in the transaction
+
+    let base_fee = match provider.get_block(BlockNumber::Latest).await {
+        Ok(Some(block)) => block.base_fee_per_gas.unwrap_or(U256::from(1)),
+        _ => U256::from(1), // Fallback to minimal fee
+    };
+
+    // Set max fee to 2x base fee to handle fee fluctuations, priority fee to 1 wei
+    let max_fee = base_fee * 2;
+    let priority_fee = U256::from(1u64);
+    let gas_limit = U256::from(21000u64);
+    
     let gas_price = provider
         .get_gas_price()
         .await
         .map_err(|e| format!("Failed to get gas price: {}", e))?;
+    let gas_cost = gas_price * gas_limit;
+    let total_cost = amount_wei + gas_cost;
 
-    // Increase gas price by 10% to ensure it's not underpriced
-    let gas_price_adjusted = gas_price * 110 / 100;
+    // Check sender's balance
+
+    let sender_balance = provider.get_balance(from_addr, None).await.map_err(|e| format!("Failed to get sender balance: {}", e))?;
+    tracing::info!("   Sender balance: {} wei", sender_balance);
+    tracing::info!("   Amount to send: {} wei, Gas cost: {} wei, Total needed: {} wei", amount_wei, gas_cost, total_cost);
+
+    if sender_balance < total_cost {
+        return Err(format!(
+            "Insufficient balance. Have: {} wei, Need: {} wei (amount: {} + gas: {})",
+            sender_balance, total_cost, amount_wei, gas_cost
+        ));
+    }
+    tracing::info!("   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei, Gas price: {} wei", base_fee, max_fee, priority_fee, gas_price);
 
     let tx = TransactionRequest::new()
         .to(to)
         .value(amount_wei)
         .gas(21000)
-        .gas_price(gas_price_adjusted)
+        .gas_price(gas_price)
         .nonce(nonce);
 
     let pending_tx = client
@@ -2493,7 +2612,283 @@ pub async fn send_transaction(
 
     let tx_hash = format!("{:?}", pending_tx.tx_hash());
 
+    tracing::info!("✅ Transaction sent: {} from {} to {} amount {} CHIRAL", 
+        tx_hash, from_address, to_address, amount_chiral);
+    tracing::info!("   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000, Chain ID: {}", 
+        nonce, gas_price, NETWORK_CONFIG.chain_id);
+    
+    // Verify the transaction was added to the local txpool
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    
+    // Check txpool status and content
+    if let Ok(status) = get_txpool_status().await {
+        let pending_count = status.get("pending").and_then(|v| v.as_str()).unwrap_or("?");
+        let queued_count = status.get("queued").and_then(|v| v.as_str()).unwrap_or("?");
+        tracing::info!("   TxPool Status: pending={}, queued={}", pending_count, queued_count);
+        
+        // If there are pending transactions, log their details
+        if pending_count != "0x0" && pending_count != "?" {
+            if let Ok(content) = get_txpool_content().await {
+                if let Some(pending) = content.get("pending") {
+                    tracing::info!("   TxPool PENDING content:");
+                    if let Some(obj) = pending.as_object() {
+                        for (addr, nonces) in obj {
+                            tracing::info!("      Address: {}", addr);
+                            if let Some(nonces_obj) = nonces.as_object() {
+                                for (nonce, tx_data) in nonces_obj {
+                                    let hash = tx_data.get("hash").and_then(|h| h.as_str()).unwrap_or("?");
+                                    let to_addr = tx_data.get("to").and_then(|t| t.as_str()).unwrap_or("?");
+                                    let value = tx_data.get("value").and_then(|v| v.as_str()).unwrap_or("?");
+                                    tracing::info!("         Nonce {}: hash={}, to={}, value={}", nonce, hash, to_addr, value);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Log connected peers to verify network propagation
+    match get_peer_info().await {
+        Ok(peers) => {
+            if let Some(peers_array) = peers.as_array() {
+                if peers_array.is_empty() {
+                    tracing::warn!("   ⚠️ NO PEERS - Transaction cannot propagate to other nodes!");
+                } else {
+                    tracing::info!("   Connected to {} peer(s) - transaction should propagate", peers_array.len());
+                    for peer in peers_array.iter().take(3) {  // Show first 3 peers
+                        let remote_addr = peer.get("network")
+                            .and_then(|n| n.get("remoteAddress"))
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("?");
+                        tracing::info!("      Peer: {}", remote_addr);
+                    }
+                }
+            }
+        },
+        Err(e) => tracing::warn!("   Could not get peer info: {}", e),
+    }
+    
+    // Try to get the transaction back to verify it's in the pool
+    match get_transaction_by_hash(tx_hash.clone()).await {
+        Ok(Some(tx_data)) => {
+            tracing::info!("✅ Transaction confirmed in local txpool: {}", tx_hash);
+            // Log the blockNumber - if it's null, tx is still pending
+            if let Some(block) = tx_data.get("blockNumber") {
+                if block.is_null() {
+                    tracing::info!("   Transaction is PENDING (not yet mined)");
+                    
+                    // Spawn a background task to monitor the transaction
+                    let tx_hash_clone = tx_hash.clone();
+                    let from_clone = from_address.to_string();
+                    let to_clone = to_address.to_string();
+                    let amount_clone = amount_chiral;
+                    tokio::spawn(async move {
+                        tracing::info!("🔍 Monitoring transaction {} for mining...", tx_hash_clone);
+                        for attempt in 1..=60 {  // Monitor for up to 60 seconds
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            
+                            match get_transaction_receipt(tx_hash_clone.clone()).await {
+                                Ok(Some(receipt)) => {
+                                    let block_num = receipt.get("blockNumber")
+                                        .and_then(|b| b.as_str())
+                                        .unwrap_or("?");
+                                    let status = receipt.get("status")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("?");
+                                    let gas_used = receipt.get("gasUsed")
+                                        .and_then(|g| g.as_str())
+                                        .unwrap_or("?");
+                                    
+                                    if status == "0x1" {
+                                        tracing::info!("🎉 TRANSACTION MINED SUCCESSFULLY!");
+                                        tracing::info!("   Hash: {}", tx_hash_clone);
+                                        tracing::info!("   Block: {}", block_num);
+                                        tracing::info!("   From: {} -> To: {}", from_clone, to_clone);
+                                        tracing::info!("   Amount: {} CHIRAL", amount_clone);
+                                        tracing::info!("   Gas Used: {}", gas_used);
+                                        tracing::info!("   Status: SUCCESS ✅");
+                                        
+                                        // Check balances after mining to verify transfer
+                                        if let Ok(sender_balance) = get_balance(&from_clone).await {
+                                            tracing::info!("   Sender balance after: {} CHIRAL", sender_balance);
+                                        }
+                                        if let Ok(receiver_balance) = get_balance(&to_clone).await {
+                                            tracing::info!("   Receiver balance after: {} CHIRAL", receiver_balance);
+                                        }
+                                    } else {
+                                        tracing::error!("❌ TRANSACTION MINED BUT FAILED!");
+                                        tracing::error!("   Hash: {}", tx_hash_clone);
+                                        tracing::error!("   Block: {}", block_num);
+                                        tracing::error!("   Status: {} (0x0 = failed, 0x1 = success)", status);
+                                        tracing::error!("   Gas Used: {}", gas_used);
+                                        tracing::error!("   Full receipt: {:?}", receipt);
+                                    }
+                                    return;
+                                },
+                                Ok(None) => {
+                                    if attempt % 10 == 0 {
+                                        tracing::info!("   Still waiting for tx {} to be mined... ({}s)", tx_hash_clone, attempt);
+                                    }
+                                },
+                                Err(e) => {
+                                    tracing::warn!("   Error checking receipt: {}", e);
+                                }
+                            }
+                        }
+                        tracing::warn!("⚠️ Transaction {} still not mined after 60 seconds", tx_hash_clone);
+                    });
+                } else {
+                    tracing::info!("   Transaction is in block: {}", block);
+                    // Check receipt for success/failure
+                    if let Ok(Some(receipt)) = get_transaction_receipt(tx_hash.clone()).await {
+                        if let Some(status) = receipt.get("status") {
+                            let status_str = status.as_str().unwrap_or("");
+                            if status_str == "0x1" {
+                                tracing::info!("   ✅ Transaction SUCCEEDED");
+                            } else {
+                                tracing::error!("   ❌ Transaction FAILED (status: {})", status_str);
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        Ok(None) => {
+            tracing::warn!("⚠️  Transaction NOT found in local txpool: {}", tx_hash);
+        },
+        Err(e) => {
+            tracing::error!("❌ Failed to verify transaction in txpool: {}", e);
+        }
+    }
+
     Ok(tx_hash)
+}
+
+/// Gets the transaction receipt to check if a transaction has been mined
+pub async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionReceipt",
+        "params": [tx_hash],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get transaction receipt: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse receipt response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    // If result is null, transaction hasn't been mined yet
+    if json_response["result"].is_null() {
+        return Ok(None);
+    }
+
+    Ok(Some(json_response["result"].clone()))
+}
+
+/// Gets transaction details by hash to check if it exists in the pool
+#[tauri::command]
+pub async fn get_transaction_by_hash(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionByHash",
+        "params": [tx_hash],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get transaction: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse transaction response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    // If result is null, transaction doesn't exist
+    if json_response["result"].is_null() {
+        return Ok(None);
+    }
+
+    Ok(Some(json_response["result"].clone()))
+}
+
+/// Gets the pending transaction pool content to debug transaction issues
+#[tauri::command]
+pub async fn get_txpool_status() -> Result<serde_json::Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "txpool_status",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get txpool status: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse txpool response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    Ok(json_response["result"].clone())
+}
+
+/// Gets detailed pending transaction pool content for debugging
+#[tauri::command]
+pub async fn get_txpool_content() -> Result<serde_json::Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "txpool_content",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get txpool content: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse txpool content response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    Ok(json_response["result"].clone())
 }
 
 /// Fetches the full details of a block by its number.
@@ -2527,6 +2922,132 @@ pub async fn get_block_details_by_number(
 
     Ok(json_response["result"].clone().into())
 }
+
+/// Gets connected peer information for debugging network connectivity
+#[tauri::command]
+pub async fn get_peer_info() -> Result<serde_json::Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "admin_peers",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get peer info: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse peer info response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    let peers = &json_response["result"];
+    if let Some(peers_array) = peers.as_array() {
+        tracing::info!("Connected peers: {}", peers_array.len());
+        for peer in peers_array {
+            let name = peer.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+            let remote_addr = peer.get("network").and_then(|n| n.get("remoteAddress")).and_then(|a| a.as_str()).unwrap_or("?");
+            tracing::info!("  Peer: {} at {}", name, remote_addr);
+        }
+    }
+
+    Ok(json_response["result"].clone())
+}
+
+/// Debug function to check why transactions aren't being mined across network
+#[tauri::command]
+pub async fn debug_network_tx() -> Result<String, String> {
+    let mut report = String::new();
+    
+    // 1. Check peer count
+    match get_peer_count().await {
+        Ok(count) => {
+            report.push_str(&format!("Peer count: {}\n", count));
+            if count == 0 {
+                report.push_str("⚠️ WARNING: No peers connected! Transactions cannot propagate.\n");
+            }
+        },
+        Err(e) => report.push_str(&format!("Failed to get peer count: {}\n", e)),
+    }
+    
+    // 2. Check txpool
+    match get_txpool_status().await {
+        Ok(status) => {
+            let pending = status.get("pending").and_then(|v| v.as_str()).unwrap_or("?");
+            let queued = status.get("queued").and_then(|v| v.as_str()).unwrap_or("?");
+            report.push_str(&format!("TxPool: pending={}, queued={}\n", pending, queued));
+        },
+        Err(e) => report.push_str(&format!("Failed to get txpool: {}\n", e)),
+    }
+    
+    // 3. Check chain ID
+    match get_chain_id().await {
+        Ok(id) => report.push_str(&format!("Chain ID: {}\n", id)),
+        Err(e) => report.push_str(&format!("Failed to get chain ID: {}\n", e)),
+    }
+    
+    // 4. Get peer details
+    match get_peer_info().await {
+        Ok(peers) => {
+            if let Some(peers_array) = peers.as_array() {
+                report.push_str(&format!("Connected peers details ({}):\n", peers_array.len()));
+                for peer in peers_array {
+                    let name = peer.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                    let remote_addr = peer.get("network")
+                        .and_then(|n| n.get("remoteAddress"))
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("?");
+                    report.push_str(&format!("  - {} at {}\n", name, remote_addr));
+                }
+            }
+        },
+        Err(e) => report.push_str(&format!("Failed to get peer info: {}\n", e)),
+    }
+    
+    tracing::info!("Network debug report:\n{}", report);
+    Ok(report)
+}
+
+/// Gets the current coinbase (etherbase) address used for mining rewards
+pub async fn get_coinbase() -> Result<String, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_coinbase",
+        "params": [],
+        "id": 1
+    });
+
+    let response = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get coinbase: {}", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse coinbase response: {}", e))?;
+
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    let coinbase = json_response["result"]
+        .as_str()
+        .ok_or("Invalid coinbase response")?;
+
+    Ok(coinbase.to_string())
+}
+
 
 // ============================================================================
 // Transaction History Scanning

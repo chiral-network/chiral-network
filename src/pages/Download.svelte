@@ -6,7 +6,7 @@
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
   import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
-  import { files, downloadQueue, activeTransfers, wallet } from '$lib/stores'
+  import { files, downloadQueue, activeTransfers, wallet, type FileItem } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
@@ -27,7 +27,10 @@
   // Import transfer events store for centralized transfer state management
   import {
     transferStore,
-    activeTransfers as storeActiveTransfers
+    activeTransfers as storeActiveTransfers,
+    subscribeToTransferEvents,
+    unsubscribeFromTransferEvents,
+    type Transfer
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
   import { homeDir, join } from '@tauri-apps/api/path'
@@ -44,6 +47,11 @@
     initDownloadTelemetry()
     
     console.log('📡 Download page mounted, setting up event listeners...');
+
+    // Subscribe to transfer events from backend (FTP, HTTP, etc.)
+    subscribeToTransferEvents().catch(err => {
+      console.error('Failed to subscribe to transfer events:', err);
+    });
 
     // Listen for multi-source download events
     const setupEventListeners = async () => {
@@ -662,6 +670,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
   onDestroy(() => {
     disposeDownloadTelemetry()
+    // Unsubscribe from transfer events
+    unsubscribeFromTransferEvents()
   })
 
   // Load saved download page settings
@@ -1153,9 +1163,51 @@ async function loadAndResumeDownloads() {
     }
   }
 
+  // Helper function to convert Transfer (from transferStore) to FileItem format
+  function transferToFileItem(transfer: Transfer): FileItem {
+    // Map transfer status to FileItem status
+    const statusMap: Record<string, FileItem['status']> = {
+      'queued': 'queued',
+      'starting': 'downloading',
+      'downloading': 'downloading',
+      'paused': 'paused',
+      'completed': 'completed',
+      'failed': 'failed',
+      'canceled': 'canceled'
+    }
+
+    return {
+      id: transfer.transferId,
+      name: transfer.fileName,
+      hash: transfer.fileHash,
+      size: transfer.fileSize,
+      status: statusMap[transfer.status] || 'downloading',
+      progress: transfer.progressPercentage,
+      downloadPath: transfer.outputPath,
+      speed: transfer.downloadSpeedBps > 0 
+        ? `${(transfer.downloadSpeedBps / 1024).toFixed(1)} KB/s` 
+        : undefined,
+      eta: transfer.etaSeconds 
+        ? `${Math.round(transfer.etaSeconds)}s` 
+        : undefined,
+      downloadedChunks: Array.from({ length: transfer.completedChunks }, (_, i) => i),
+      totalChunks: transfer.totalChunks,
+      price: 0, // FTP downloads are free
+      protocol: 'FTP' as const
+    }
+  }
+
   // Combine all files and queue into single list with stable sorting
   $: allDownloads = (() => {
-    const combined = [...$files, ...$downloadQueue]
+    // Get transfers from the transferStore and convert to FileItem format
+    const transferFileItems: FileItem[] = Array.from($transferStore.transfers.values())
+      .map(transferToFileItem)
+
+    // Filter out any transfers that already exist in $files or $downloadQueue (by id)
+    const existingIds = new Set([...$files.map(f => f.id), ...$downloadQueue.map(f => f.id)])
+    const uniqueTransfers = transferFileItems.filter(t => !existingIds.has(t.id))
+
+    const combined = [...$files, ...$downloadQueue, ...uniqueTransfers]
 
     // Normal sorting by status
     const statusOrder = {
@@ -2115,19 +2167,62 @@ async function loadAndResumeDownloads() {
     showToast(`Retrying download for "${newFile.name}"`, 'info');
   }
 
-  function moveInQueue(fileId: string, direction: 'up' | 'down') {
+  async function moveInQueue(fileId: string, direction: 'up' | 'down' | 'drop', targetId?: string) {
     downloadQueue.update(queue => {
-      const index = queue.findIndex(f => f.id === fileId)
-      if (index === -1) return queue
+      const fromIndex = queue.findIndex(f => f.id === fileId);
+      if (fromIndex === -1) return queue;
 
-      const newIndex = direction === 'up' ? Math.max(0, index - 1) : Math.min(queue.length - 1, index + 1)
-      if (index === newIndex) return queue
+      const newQueue = [...queue];
+      const [removed] = newQueue.splice(fromIndex, 1);
 
-      const newQueue = [...queue]
-      const [removed] = newQueue.splice(index, 1)
-      newQueue.splice(newIndex, 0, removed)
-      return newQueue
+      if (direction === 'drop' && targetId) {
+        const toIndex = queue.findIndex(f => f.id === targetId);
+        if (toIndex !== -1) {
+          newQueue.splice(toIndex, 0, removed);
+        } else {
+          return queue; // Target not found, abort
+        }
+      } else {
+        const newIndex = direction === 'up' ? Math.max(0, fromIndex - 1) : Math.min(queue.length - 1, fromIndex + 1);
+        newQueue.splice(newIndex, 0, removed);
+      }
+
+      return newQueue;
     })
+
+    // After any reordering, persist the new priority to the backend.
+    const newQueue = get(downloadQueue);
+    const orderedInfoHashes = newQueue.map(f => f.hash);
+    await invoke('update_download_priorities', { orderedInfoHashes });
+    showToast('Download queue order updated', 'success');
+  }
+
+  // Drag and Drop state
+  let draggedItemId: string | null = null;
+  let dropTargetId: string | null = null;
+
+  function handleDragStart(event: DragEvent, fileId: string) {
+    draggedItemId = fileId;
+    event.dataTransfer!.effectAllowed = 'move';
+  }
+
+  function handleDragOver(event: DragEvent, fileId:string) {
+    event.preventDefault();
+    if (fileId !== draggedItemId) {
+      dropTargetId = fileId;
+    }
+  }
+
+  function handleDragLeave() {
+    dropTargetId = null;
+  }
+
+  async function handleDrop(event: DragEvent, targetFileId: string) {
+    event.preventDefault();
+    if (!draggedItemId || draggedItemId === targetFileId) return;
+
+    // Reorder the queue and persist the changes
+    await moveInQueue(draggedItemId, 'drop', targetFileId);
   }
 
   // Download History functions
@@ -2265,7 +2360,7 @@ async function loadAndResumeDownloads() {
   <ProtocolTestPanel />
 
   <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
-  <Card class="overflow-hidden">
+  <Card class="">
     <!-- Chiral DHT Search Section with integrated BitTorrent -->
     <div class="border-b">
       <DownloadSearchSection
@@ -2570,20 +2665,30 @@ async function loadAndResumeDownloads() {
         {/if}
       </p>
     {:else}
-      <div class="space-y-3">
+      <div class="space-y-3" role="list">
         {#each filteredDownloads as file, index}
-          <div class="p-3 bg-muted/60 rounded-lg hover:bg-muted/80 transition-colors">
+          <div
+            role="listitem"
+            class="p-3 bg-muted/60 rounded-lg hover:bg-muted/80 transition-colors"
+            draggable={file.status === 'queued'}
+            on:dragstart={(e) => handleDragStart(e, file.id)}
+            on:dragover={(e) => handleDragOver(e, file.id)}
+            on:dragleave={handleDragLeave}
+            on:drop={(e) => handleDrop(e, file.id)}
+            class:cursor-move={file.status === 'queued'}
+            class:border-primary={dropTargetId === file.id}
+            class:border-2={dropTargetId === file.id}
+          >
             <!-- File Header -->
             <div class="pb-2">
               <div class="flex items-start justify-between gap-4">
                 <div class="flex items-start gap-3 flex-1 min-w-0">
-                  <!-- Queue Controls -->
                   {#if file.status === 'queued'}
                     <div class="flex flex-col gap-1 mt-1">
                       <Button
                         size="sm"
                         variant="ghost"
-                        on:click={() => moveInQueue(file.id, 'up')}
+                        on:click={async () => await moveInQueue(file.id, 'up')}
                         disabled={index === 0}
                         class="h-6 w-6 p-0 hover:bg-muted"
                       >
@@ -2592,7 +2697,7 @@ async function loadAndResumeDownloads() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        on:click={() => moveInQueue(file.id, 'down')}
+                        on:click={async () => await moveInQueue(file.id, 'down')}
                         disabled={index === filteredDownloads.filter(f => f.status === 'queued').length - 1}
                         class="h-6 w-6 p-0 hover:bg-muted"
                       >

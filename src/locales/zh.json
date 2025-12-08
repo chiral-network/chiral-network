@@ -470,6 +470,17 @@
       "market": "市场",
       "fast": "快",
       "estimated": "预估费用"
+    },
+    "gas": {
+      "label": "交易速度",
+      "loading": "估算中...",
+      "estimateError": "使用默认值",
+      "slow": "经济",
+      "standard": "标准",
+      "fast": "优先",
+      "estimatedFee": "预估费用",
+      "totalCost": "总费用",
+      "networkCongestion": "网络"
     }
   },
   "transactions": {
@@ -680,7 +691,8 @@
       "invalid": "请输入大于0的有效数量。",
       "min": "数量必须至少为 {min} Chiral。",
       "insufficient": "余额不足：缺少 {more} Chiral。",
-      "insufficientWithFee": "资金不足。总计 {total} Chiral (金额 + 费用) 超过您的余额 {balance} Chiral。"
+      "insufficientWithFee": "资金不足。总计 {total} Chiral (金额 + 费用) 超过您的余额 {balance} Chiral。",
+      "insufficientWithGas": "余额不足（包括 Gas）- 缺少 {more} Chiral。"
     },
     "exportFailed": "导出失败。请重试。",
     "createAccount": "无法创建账户: {error}"
