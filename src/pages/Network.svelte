@@ -1763,10 +1763,13 @@
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <!-- Hole Punching (DCUtR) -->
-          <Card class="p-6">
-            <div class="flex items-center justify-between mb-4">
-                <h3 class="text-lg font-semibold">Hole Punching (DCUtR)</h3>
+          
+          <!-- Left Column: Hole Punching & Geo -->
+          <div class="space-y-6">
+            <!-- Hole Punching (DCUtR) -->
+            <Card class="p-6">
+              <div class="flex items-center justify-between mb-4">
+                  <h3 class="text-lg font-semibold">Hole Punching (DCUtR)</h3>
                 {#if dhtHealth}
                     <Badge variant={dhtHealth.dcutrEnabled ? 'default' : 'secondary'} class={dhtHealth.dcutrEnabled ? 'bg-blue-100 text-blue-800 hover:bg-blue-200' : ''}>
                         {dhtHealth.dcutrEnabled ? 'Enabled' : 'Disabled'}
@@ -1810,6 +1813,10 @@
               </div>
             {/if}
           </Card>
+            
+            <!-- Geographic Distribution -->
+            <GeoDistributionCard />
+          </div>
 
           <!-- Relay Status -->
           <Card class="p-6">
@@ -2104,9 +2111,6 @@
             {/if}
           </div>
         </div>
-
-        <!-- Geographic Distribution -->
-        <GeoDistributionCard />
 
       </div>
     {/if}
