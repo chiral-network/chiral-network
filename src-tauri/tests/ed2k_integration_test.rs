@@ -29,6 +29,7 @@ fn test_ed2k_source_creation() {
         file_name: Some("test_file.txt".to_string()),
         sources: Some(vec!["192.168.1.100:4662".to_string()]),
         timeout_secs: Some(30),
+        chunk_hashes: Some(Vec::new()),
     };
     
     assert_eq!(ed2k_source.server_url, "ed2k://|server|176.103.48.36|4661|/");
@@ -48,6 +49,7 @@ fn test_download_source_ed2k() {
         file_name: Some("test_file.txt".to_string()),
         sources: None,
         timeout_secs: Some(30),
+        chunk_hashes: Some(Vec::new()),
     };
     
     let download_source = DownloadSource::Ed2k(ed2k_info.clone());
@@ -141,6 +143,7 @@ fn test_ed2k_url_validation() {
         file_name: Some("test.txt".to_string()),
         sources: None,
         timeout_secs: Some(60),
+        chunk_hashes: Some(Vec::new()),
     };
     
     assert!(server_info.server_url.starts_with("ed2k://"));
@@ -171,6 +174,7 @@ async fn test_ed2k_integration_readiness() {
         file_name: Some("large_file.bin".to_string()),
         sources: Some(vec!["peer1:4662".to_string(), "peer2:4662".to_string()]),
         timeout_secs: Some(45),
+        chunk_hashes: Some(Vec::new()),
     };
     
     let download_source = DownloadSource::Ed2k(ed2k_info.clone());

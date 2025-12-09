@@ -312,12 +312,21 @@
       } finally {
         checkingBalance = false;
       }
+    } else {
+      // For magnet links or files with no size, skip balance check
+      checkingBalance = false;
+      canAfford = true;
+      currentPrice = 0;
     }
   }
 
   // Trigger balance check when metadata or wallet balance changes
   $: if (metadata.fileSize && metadata.fileSize > 0) {
     checkBalance();
+  } else {
+    checkingBalance = false;
+    canAfford = true;
+    currentPrice = 0;
   }
 
   // Reactive check for affordability when balance changes and we have a current price
@@ -327,7 +336,13 @@
 
   // Check balance when component mounts
   onMount(() => {
-    checkBalance();
+    if (metadata.fileSize > 0) {
+      checkBalance();
+    } else {
+      checkingBalance = false;
+      canAfford = true;
+      currentPrice = 0;
+    }
   });
 </script>
 
@@ -606,19 +621,10 @@
             </p>
           </div>
         </div>
-        {#if isSeeding}
-          <div class="p-3 bg-amber-500/10 rounded-lg border border-amber-500/30">
-            <p class="text-xs text-amber-600 text-center">
-              You're already seeding this file. Downloading will create a decrypted local copy.
-            </p>
-          </div>
-        {/if}
       </div>
 
       <p class="text-sm text-muted-foreground text-center mb-6">
-        {isSeeding
-          ? `Download a local copy for free (you're already seeding this file)`
-          : `You will be charged ${(currentPrice ?? 0.0001).toFixed(4)} Chiral. Continue?`}
+        You will be charged ${(currentPrice ?? 0.0001).toFixed(4)} Chiral. Continue?
       </p>
 
       <div class="flex gap-3">

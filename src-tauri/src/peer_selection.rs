@@ -222,6 +222,7 @@ pub enum SelectionStrategy {
 }
 
 /// Peer selection service for smart routing decisions
+#[derive(Default)]
 pub struct PeerSelectionService {
     metrics: HashMap<String, PeerMetrics>,
     selection_history: HashMap<String, u64>, // peer_id -> last_selected_timestamp
