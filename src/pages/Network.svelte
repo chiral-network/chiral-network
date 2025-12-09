@@ -94,7 +94,7 @@
   let downloadError = ''
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
-  let chainId = 98765 // Default, will be fetched from backend
+  let chainId: number | null = 98765; // Default, will be fetched from backend
   let nodeAddress = ''
   let copiedNodeAddr = false
   
@@ -115,6 +115,7 @@
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
   let cancelConnection = false
+  let isConnecting = false  // Prevent multiple simultaneous connection attempts
 
   // Always preserve connections - no unreliable time-based detection
   
@@ -418,6 +419,25 @@
     }
   }
   
+  // Listen for low peer count warnings from backend
+  let lowPeerCountUnlisten: (() => void) | null = null;
+  
+  async function registerLowPeerCountListener() {
+    if (!isTauri || lowPeerCountUnlisten) return;
+    try {
+      lowPeerCountUnlisten = await listen('dht_low_peer_count', (event) => {
+        const payload = event.payload as { peer_count: number; minimum: number; message: string };
+        if (payload && payload.message) {
+          dhtEvents = [...dhtEvents, `⚠️ ${payload.message}`];
+          showToast(payload.message, 'warning');
+          diagnosticLogger.debug('Network', payload.message, { peerCount: payload.peer_count, minimum: payload.minimum });
+        }
+      });
+    } catch (error) {
+      errorLogger.networkError(`Failed to subscribe to low peer count warnings: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
   async function startDht() {
     if (!isTauri) {
       // Mock DHT connection for web
@@ -434,7 +454,14 @@
       return
     }
     
+    // Prevent multiple simultaneous connection attempts
+    if (isConnecting) {
+      diagnosticLogger.debug('Network', 'Connection attempt already in progress, ignoring');
+      return;
+    }
+    
     try {
+      isConnecting = true;
       dhtError = null
       cancelConnection = false
       
@@ -604,6 +631,8 @@
       
       dhtError = errorMessage
       dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${errorMessage}`]
+    } finally {
+      isConnecting = false;
     }
   }
 
@@ -1284,7 +1313,7 @@
       chainId = await invoke('get_network_chain_id') as number
     } catch (error) {
       console.error('Failed to fetch chain ID:', error)
-      chainId = null
+      // Keep the default value on error
     }
   }
 
@@ -1389,6 +1418,7 @@
         }
         await refreshConnectedPeers();
         await registerNatListener()
+        await registerLowPeerCountListener()
 
         // Listen for download progress updates
         unlistenProgress = await listen('geth-download-progress', (event) => {
@@ -1410,6 +1440,10 @@
       if (natStatusUnlisten) {
         natStatusUnlisten()
         natStatusUnlisten = null
+      }
+      if (lowPeerCountUnlisten) {
+        lowPeerCountUnlisten()
+        lowPeerCountUnlisten = null
       }
       if (stopPeerEvents) {
         stopPeerEvents()
@@ -1436,6 +1470,10 @@
     if (natStatusUnlisten) {
       natStatusUnlisten()
       natStatusUnlisten = null
+    }
+    if (lowPeerCountUnlisten) {
+      lowPeerCountUnlisten()
+      lowPeerCountUnlisten = null
     }
     if (stopPeerEvents) {
       stopPeerEvents()
@@ -1659,12 +1697,12 @@
             </div>
           {/if}
           <div class="flex gap-2 justify-center">
-            <Button on:click={startDht}>
-              <Wifi class="h-4 w-4 mr-2" />
-              {connectionAttempts > 0 ? $t('network.dht.retry') : $t('network.dht.connect')}
+            <Button on:click={startDht} disabled={isConnecting}>
+              <Wifi class="h-4 w-4 mr-2 {isConnecting ? 'animate-pulse' : ''}" />
+              {isConnecting ? $t('network.status.connecting') : connectionAttempts > 0 ? $t('network.dht.retry') : $t('network.dht.connect')}
             </Button>
             {#if dhtPeerId}
-              <Button variant="outline" on:click={stopDht}>
+              <Button variant="outline" on:click={stopDht} disabled={isConnecting}>
                 <Wifi class="h-4 w-4 mr-2" />
                 {$t('network.dht.stop')}
               </Button>

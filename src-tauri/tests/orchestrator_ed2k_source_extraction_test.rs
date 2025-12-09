@@ -52,6 +52,7 @@ fn test_extract_ed2k_sources_from_metadata_single() {
         file_name: Some("ubuntu.iso".to_string()),
         sources: Some(vec!["192.168.1.1:4662".to_string()]),
         timeout: Some(60),
+        chunk_hashes: Some(Vec::new()),
     };
 
     let metadata = FileMetadata {
@@ -99,6 +100,7 @@ fn test_extract_ed2k_sources_from_metadata_multiple() {
         file_name: Some("ubuntu.iso".to_string()),
         sources: Some(vec!["192.168.1.1:4662".to_string()]),
         timeout: Some(60),
+        chunk_hashes: Some(Vec::new()),
     };
 
     let ed2k_info2 = Ed2kSourceInfo {
@@ -108,6 +110,7 @@ fn test_extract_ed2k_sources_from_metadata_multiple() {
         file_name: Some("ubuntu.iso".to_string()),
         sources: None,
         timeout: Some(30),
+        chunk_hashes: Some(Vec::new()),
     };
 
     let metadata = FileMetadata {
@@ -154,6 +157,7 @@ fn test_calculate_chunk_size_with_ed2k_source() {
         file_name: None,
         sources: None,
         timeout: None,
+        chunk_hashes: Some(Vec::new()),
     };
 
     let metadata = FileMetadata {
@@ -247,6 +251,7 @@ fn test_ed2k_chunk_assignment() {
             file_name: None,
             sources: None,
             timeout_secs: Some(30),
+            chunk_hashes: Some(Vec::new()),
         }),
         DownloadSource::Ed2k(DownloadEd2kSourceInfo {
             server_url: "ed2k://|server|1.2.3.4|4661|/".to_string(),
@@ -255,6 +260,7 @@ fn test_ed2k_chunk_assignment() {
             file_name: None,
             sources: None,
             timeout_secs: Some(30),
+            chunk_hashes: Some(Vec::new()),
         }),
     ];
 
@@ -299,6 +305,7 @@ fn test_mixed_source_download() {
             file_name: None,
             sources: None,
             timeout_secs: Some(30),
+            chunk_hashes: Some(Vec::new()),
         }),
         DownloadSource::Ftp(DownloadFtpInfo {
             url: "ftp://ftp.example.com/file.zip".to_string(),
