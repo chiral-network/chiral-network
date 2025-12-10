@@ -38,6 +38,14 @@
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
   import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
+  import { 
+    validateStoragePath, 
+    validatePort, 
+    validateProxyAddress,
+    validateBandwidth,
+    validatePercentage,
+    validateMultiaddr
+  } from "$lib/utils/validation";
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -104,7 +112,6 @@
     enableRelayServer: false,
     anonymousMode: false,
     shareAnalytics: true,
-    enableWalletAutoLock: false,
     customBootstrapNodes: [],
     autoStartDHT: true, // Auto-start DHT by default
     autoStartGeth: true, // Auto-start Geth by default
@@ -166,6 +173,9 @@
   // Logs directory (loaded from backend)
   let logsDirectory: string | null = null;
   let newBootstrapNode = '';
+  
+  // Storage path validation state
+  let storagePathWarning: string | null = null;
 
   const locationOptions = GEO_REGIONS
     .filter((region) => region.id !== UNKNOWN_REGION_ID)
@@ -370,7 +380,16 @@
   // Check for changes
   $: hasChanges = JSON.stringify(localSettings) !== JSON.stringify(savedSettings);
 
+  // Check for validation errors
+  $: hasValidationErrors = Object.values(errors).some(error => error !== null) || !!maxStorageError;
+
   async function saveSettings() {
+    // Prevent saving if there are validation errors
+    if (hasValidationErrors) {
+      showToast("Please fix validation errors before saving", "error");
+      return;
+    }
+
     // Map trustedProxyRelays to preferredRelays for consistency
     if (localSettings.trustedProxyRelays?.length) {
       localSettings.preferredRelays = localSettings.trustedProxyRelays;
@@ -642,7 +661,7 @@
 
   $: {
     // Open Storage section if it has any errors (but don't close it if already open)
-    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold;
+    const hasStorageError = !!maxStorageError || !!errors.maxStorageSize || !!errors.cleanupThreshold || !!errors.storagePath;
     if (hasStorageError) storageSectionOpen = true;
 
     // Open Network section if it has any errors (but don't close it if already open)
@@ -665,8 +684,16 @@
   }
 
   async function handleConfirmReset() {
-    localSettings = { ...defaultSettings }; // Reset local changes
-    settings.set(defaultSettings); // Reset the store
+    // Set platform-specific default storage path
+    // Get platform-specific default storage path from backend
+    let defaultPath = "~/Downloads/Chiral-Network-Storage";
+    try {
+      defaultPath = await invoke("get_default_storage_directory");
+    } catch (e) {
+      errorLogger.fileOperationError('Get default storage directory (reset)', e instanceof Error ? e.message : String(e));
+    }
+    localSettings = { ...defaultSettings, storagePath: defaultPath };
+    settings.set(localSettings); // Reset the store
     await saveSettings(); // Save the reset state
     showResetConfirmModal = false;
   }
@@ -800,10 +827,27 @@
 
   function addBootstrapNode() {
     const trimmed = newBootstrapNode.trim();
-    if (trimmed && !localSettings.customBootstrapNodes.includes(trimmed)) {
-      localSettings.customBootstrapNodes = [...localSettings.customBootstrapNodes, trimmed];
-      newBootstrapNode = '';
+    if (!trimmed) {
+      showToast("Bootstrap node address cannot be empty", "error");
+      return;
     }
+
+    // Validate multiaddress format
+    const validation = validateMultiaddr(trimmed);
+    if (!validation.isValid) {
+      showToast(validation.error || "Invalid multiaddress format", "error");
+      return;
+    }
+
+    // Check for duplicates
+    if (localSettings.customBootstrapNodes.includes(trimmed)) {
+      showToast("This bootstrap node is already added", "warning");
+      return;
+    }
+
+    localSettings.customBootstrapNodes = [...localSettings.customBootstrapNodes, trimmed];
+    newBootstrapNode = '';
+    showToast("Bootstrap node added successfully", "success");
   }
 
   function removeBootstrapNode(index: number) {
@@ -1029,6 +1073,45 @@ selectedLanguage = initial; // Synchronize dropdown display value
         }
     }
 
+    // Validate port number
+    if (localSettings.port) {
+      const portValidation = validatePort(localSettings.port);
+      if (!portValidation.isValid) {
+        next.port = portValidation.error || "Invalid port";
+      }
+    }
+
+    // Validate bandwidth limits
+    if (localSettings.uploadBandwidth !== undefined && localSettings.uploadBandwidth !== 0) {
+      const bwValidation = validateBandwidth(localSettings.uploadBandwidth, 1000000); // Max 1 GB/s
+      if (!bwValidation.isValid) {
+        next.uploadBandwidth = bwValidation.error || "Invalid upload bandwidth";
+      }
+    }
+
+    if (localSettings.downloadBandwidth !== undefined && localSettings.downloadBandwidth !== 0) {
+      const bwValidation = validateBandwidth(localSettings.downloadBandwidth, 1000000); // Max 1 GB/s
+      if (!bwValidation.isValid) {
+        next.downloadBandwidth = bwValidation.error || "Invalid download bandwidth";
+      }
+    }
+
+    // Validate proxy address if proxy is enabled
+    if (localSettings.enableProxy && localSettings.proxyAddress && localSettings.proxyAddress.trim()) {
+      const proxyValidation = validateProxyAddress(localSettings.proxyAddress);
+      if (!proxyValidation.isValid) {
+        next.proxyAddress = proxyValidation.error || "Invalid proxy address";
+      }
+    }
+
+    // Validate cleanup threshold percentage
+    if (localSettings.cleanupThreshold !== undefined) {
+      const percentValidation = validatePercentage(localSettings.cleanupThreshold, 50, 99);
+      if (!percentValidation.isValid) {
+        next.cleanupThreshold = percentValidation.error || "Invalid cleanup threshold";
+      }
+    }
+
     const thresholds = Array.isArray(localSettings.capWarningThresholds)
       ? localSettings.capWarningThresholds
       : [];
@@ -1045,11 +1128,110 @@ selectedLanguage = initial; // Synchronize dropdown display value
       next.capWarningThresholds = null;
     }
 
+    // Validate storage path
+    if (localSettings.storagePath && localSettings.storagePath.trim()) {
+      // First do basic frontend validation
+      const pathValidation = validateStoragePath(localSettings.storagePath);
+      if (!pathValidation.isValid) {
+        next.storagePath = pathValidation.error || "Invalid storage path";
+      } else {
+        // Don't clear the error yet if we have a backend error
+        // This preserves platform-specific validation errors from backend
+        if (!errors.storagePath) {
+          next.storagePath = null;
+        } else {
+          next.storagePath = errors.storagePath;
+        }
+      }
+      
+      // Schedule backend validation (debounced)
+      scheduleBackendValidation(localSettings.storagePath);
+    } else {
+      next.storagePath = null; // Empty is allowed (will use default)
+      storagePathWarning = null; // Clear any warnings when path is empty
+    }
+
     errors = next;
 }
 
+  // Backend validation for storage path with platform-specific checks
+  async function validateStoragePathBackend(path: string) {
+    if (!path || !path.trim()) {
+      storagePathWarning = null;
+      // Also clear any backend errors
+      if (errors.storagePath) {
+        errors = { ...errors, storagePath: null };
+      }
+      return;
+    }
+    
+    // Clear previous warning
+    storagePathWarning = null;
+    
+    try {
+      await invoke("validate_storage_path", { path });
+      // If successful, clear any previous backend errors
+      if (errors.storagePath) {
+        errors = { ...errors, storagePath: null };
+      }
+    } catch (error) {
+      const errorMsg = String(error);
+      // Check if it's a warning (directory doesn't exist)
+      if (errorMsg.startsWith("WARNING:")) {
+        storagePathWarning = errorMsg.substring(9); // Remove "WARNING: " prefix
+        // Warning doesn't block saving, clear error
+        if (errors.storagePath) {
+          errors = { ...errors, storagePath: null };
+        }
+      } else {
+        // It's an actual error, update the errors object
+        errors = { ...errors, storagePath: errorMsg };
+        // Clear warning when there's an error
+        storagePathWarning = null;
+      }
+    }
+  }
+
+
+  // Debounced backend validation to avoid too many calls while typing
+  let backendValidationTimeout: NodeJS.Timeout | null = null;
+  let isTauri = false;
+  async function detectTauri() {
+    try {
+      await getVersion();
+      isTauri = true;
+    } catch {
+      isTauri = false;
+    }
+  }
+  onMount(() => {
+    detectTauri();
+  });
+
+  function scheduleBackendValidation(path: string) {
+    if (backendValidationTimeout) {
+      clearTimeout(backendValidationTimeout);
+    }
+    backendValidationTimeout = setTimeout(() => {
+      console.log('Scheduling backend validation for path:', path);
+      console.log('Is Tauri:', isTauri);
+      if (isTauri) {
+        console.log('Passed check:', path);
+        validateStoragePathBackend(path).catch((err) => {
+          diagnosticLogger.debug('Settings', 'Storage path backend validation error', { error: String(err) });
+        });
+      }
+    }, 500); // Wait 500ms after user stops typing
+  }
+
   // Revalidate whenever settings change
   $: validate(localSettings);
+
+  // Computed CSS class for storage path input
+  $: storagePathInputClass = `flex-1 ${
+    errors.storagePath ? 'border-red-500 focus:border-red-500 ring-red-500' : 
+    storagePathWarning ? 'border-yellow-500 focus:border-yellow-500 ring-yellow-500' : ''
+  }`;
 
   let freeSpaceGB: number | null = null;
   let maxStorageError: string | null = null;
@@ -1242,7 +1424,7 @@ function sectionMatches(section: string, query: string) {
               id="storage-path"
               bind:value={localSettings.storagePath}
               placeholder={storagePathPlaceholder}
-              class="flex-1"
+              class={storagePathInputClass}
             />
             <Button
               variant="outline"
@@ -1252,7 +1434,14 @@ function sectionMatches(section: string, query: string) {
               <FolderOpen class="h-4 w-4" />
             </Button>
           </div>
-
+          {#if errors.storagePath}
+            <p class="mt-1 text-sm text-red-500">{errors.storagePath}</p>
+          {:else if storagePathWarning}
+            <p class="mt-1 text-sm text-yellow-600 flex items-center gap-1">
+              <AlertTriangle class="h-4 w-4" />
+              {storagePathWarning}
+            </p>
+          {/if}
         </div>
 
         <div class="grid grid-cols-2 gap-4">
@@ -1329,7 +1518,7 @@ function sectionMatches(section: string, query: string) {
               bind:value={localSettings.maxConnections}
               min="10"
               max="200"
-              class="mt-2"
+              class="mt-2 {errors.maxConnections ? 'border-red-500 focus:border-red-500' : ''}"
             />
             {#if errors.maxConnections}
               <p class="mt-1 text-sm text-red-500">{errors.maxConnections}</p>
@@ -1344,7 +1533,7 @@ function sectionMatches(section: string, query: string) {
               bind:value={localSettings.port}
               min="1024"
               max="65535"
-              class="mt-2"
+              class="mt-2 {errors.port ? 'border-red-500 focus:border-red-500' : ''}"
             />
             {#if errors.port}
               <p class="mt-1 text-sm text-red-500">{errors.port}</p>
@@ -1360,7 +1549,7 @@ function sectionMatches(section: string, query: string) {
               type="number"
               bind:value={localSettings.uploadBandwidth}
               min="0"
-              class="mt-2"
+              class="mt-2 {errors.uploadBandwidth ? 'border-red-500 focus:border-red-500' : ''}"
             />
             {#if errors.uploadBandwidth}
               <p class="mt-1 text-sm text-red-500">{errors.uploadBandwidth}</p>
@@ -1374,7 +1563,7 @@ function sectionMatches(section: string, query: string) {
               type="number"
               bind:value={localSettings.downloadBandwidth}
               min="0"
-              class="mt-2"
+              class="mt-2 {errors.downloadBandwidth ? 'border-red-500 focus:border-red-500' : ''}"
             />
             {#if errors.downloadBandwidth}
               <p class="mt-1 text-sm text-red-500">{errors.downloadBandwidth}</p>
@@ -1815,9 +2004,12 @@ function sectionMatches(section: string, query: string) {
               id="proxy-address"
               bind:value={localSettings.proxyAddress}
               placeholder="127.0.0.1:9050 (SOCKS5)"
-              class="mt-1"
+              class="mt-1 {errors.proxyAddress ? 'border-red-500 focus:border-red-500' : ''}"
             />
             <p class="text-xs text-muted-foreground mt-1">{$t("privacy.proxyHint")}</p>
+            {#if errors.proxyAddress}
+              <p class="mt-1 text-sm text-red-500">{errors.proxyAddress}</p>
+            {/if}
           </div>
         {/if}
 
@@ -1945,23 +2137,6 @@ function sectionMatches(section: string, query: string) {
           <Label for="share-analytics" class="cursor-pointer">
             {$t("privacy.shareAnalytics")}
           </Label>
-        </div>
-
-        <div class="flex items-start gap-2">
-          <input
-            type="checkbox"
-            id="wallet-auto-lock"
-            bind:checked={localSettings.enableWalletAutoLock}
-            class="mt-1"
-          />
-          <div>
-            <Label for="wallet-auto-lock" class="cursor-pointer">
-              {$t("privacy.autoLockWallet")}
-            </Label>
-            <p class="text-xs text-muted-foreground">
-              {$t("privacy.autoLockWalletHint")}
-            </p>
-          </div>
         </div>
       </div>
     </Expandable>
@@ -2415,9 +2590,9 @@ function sectionMatches(section: string, query: string) {
       <Button
         size="xs"
         on:click={saveSettings}
-        disabled={!hasChanges}
+        disabled={!hasChanges || hasValidationErrors}
 
-        class={`transition-colors duration-200 ${!hasChanges ? "cursor-not-allowed opacity-50" : ""}`}
+        class={`transition-colors duration-200 ${!hasChanges || hasValidationErrors ? "cursor-not-allowed opacity-50" : ""}`}
       >
         <Save class="h-4 w-4 mr-2" />
         {$t("actions.save")}

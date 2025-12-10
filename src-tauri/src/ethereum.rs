@@ -199,12 +199,12 @@ impl GethProcess {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
 
-        // Force kill any remaining geth processes
+        // Gracefully kill any remaining geth processes (SIGTERM allows clean shutdown)
         #[cfg(unix)]
         {
             // Kill by name pattern
             let _ = Command::new("pkill")
-                .arg("-9") // Force kill
+                .arg("-15") // SIGTERM - graceful shutdown
                 .arg("-f")
                 .arg("geth.*--datadir.*geth-data")
                 .output();
@@ -212,11 +212,11 @@ impl GethProcess {
             // Also try to kill by port usage (macOS compatible)
             let _ = Command::new("sh")
                 .arg("-c")
-                .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
+                .arg("lsof -ti:8545,30303 | xargs kill -15 2>/dev/null || true")
                 .output();
 
-            // Give it a moment to clean up
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            // Give Geth time to gracefully shut down and flush database
+            std::thread::sleep(std::time::Duration::from_secs(3));
         }
 
         // Final check - if still running, we have a problem
@@ -296,12 +296,11 @@ impl GethProcess {
                         .collect();
                     let lines: Vec<String> = all_lines.iter().rev().take(50).cloned().collect();
 
-                    // Look for signs of blockchain corruption
+                    // Look for signs of ACTUAL blockchain corruption (not normal operations)
                     for line in &lines {
-                        if line.contains("Truncating ancient chain")
-                            || line.contains("ERROR") && line.contains("ancient")
-                            || line.contains("Rewinding blockchain")
-                            || line.contains("database corruption") {
+                        if line.contains("database corruption")
+                            || line.contains("FATAL") && line.contains("chaindata")
+                            || line.contains("corrupted") && line.contains("database") {
                             eprintln!("⚠️  Detected corrupted blockchain, will reinitialize...");
                             needs_reinit = true;
                             break;
@@ -374,15 +373,28 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg("full")
+            .arg("snap")
+            // Sync performance optimizations
+            .arg("--cache")
+            .arg("2048") // Increase cache to 2GB for faster sync (default is 1024)
+            .arg("--cache.database")
+            .arg("60") // 60% of cache for database
+            .arg("--cache.trie")
+            .arg("30") // 30% for trie cache
+            .arg("--cache.gc")
+            .arg("10") // 10% for garbage collection
             .arg("--maxpeers")
-            .arg("50")
+            .arg("100") // Increase peer connections for faster sync (was 50)
             // P2P discovery settings
             .arg("--port")
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
             .arg("any")
+            // Snapshot sync acceleration
+            .arg("--snapshot")
+            .arg("--state.scheme")
+            .arg("hash") // Use hash-based state scheme for better performance
             // Enable transaction pool gossip to propagate transactions across network
             .arg("--txpool.globalslots")
             .arg("16384") // Increase tx pool size for network-wide transactions
@@ -485,9 +497,9 @@ impl GethProcess {
         // This handles orphaned processes
         #[cfg(unix)]
         {
-            // Kill by process name
+            // Kill by process name with SIGTERM for graceful shutdown
             let result = Command::new("pkill")
-                .arg("-9")
+                .arg("-15")
                 .arg("-f")
                 .arg("geth.*--datadir.*geth-data")
                 .output();
@@ -504,10 +516,11 @@ impl GethProcess {
             // Also kill by port usage
             let _ = Command::new("sh")
                 .arg("-c")
-                .arg("lsof -ti:8545,30303 | xargs kill -9 2>/dev/null || true")
+                .arg("lsof -ti:8545,30303 | xargs kill -15 2>/dev/null || true")
                 .output();
 
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            // Give Geth time to gracefully shut down
+            std::thread::sleep(std::time::Duration::from_secs(2));
         }
 
         Ok(())
@@ -3186,18 +3199,49 @@ pub async fn get_transaction_history(
                     .and_then(|g| g.as_str())
                     .map(|s| s.to_string());
 
-                transactions.push(TransactionHistoryItem {
-                    hash: tx_hash,
-                    from: from.clone(),
-                    to,
-                    value,
-                    block_number: block_num,
-                    timestamp,
-                    status,
-                    tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
-                    gas_used,
-                    gas_price,
-                });
+                // When sending to yourself, create both sent and received transactions
+                if is_from_us && is_to_us {
+                    // Create sent transaction
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash.clone(),
+                        from: from.clone(),
+                        to: to.clone(),
+                        value: value.clone(),
+                        block_number: block_num,
+                        timestamp,
+                        status: status.clone(),
+                        tx_type: "sent".to_string(),
+                        gas_used: gas_used.clone(),
+                        gas_price: gas_price.clone(),
+                    });
+                    // Create received transaction
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash,
+                        from: from.clone(),
+                        to,
+                        value,
+                        block_number: block_num,
+                        timestamp,
+                        status,
+                        tx_type: "received".to_string(),
+                        gas_used,
+                        gas_price,
+                    });
+                } else {
+                    // Normal transaction to/from someone else
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash,
+                        from: from.clone(),
+                        to,
+                        value,
+                        block_number: block_num,
+                        timestamp,
+                        status,
+                        tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
+                        gas_used,
+                        gas_price,
+                    });
+                }
             }
         }
     }

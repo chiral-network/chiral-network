@@ -8,6 +8,7 @@ import {
   transactionPagination,
   miningPagination,
   wallet,
+  blacklist,
   type ETCAccount,
   type Transaction,
   type WalletInfo,
@@ -68,6 +69,7 @@ export class WalletService {
   private isRestoringAccount = false; // Flag to prevent sync during account restoration
   private progressiveLoadHandle: ReturnType<typeof setTimeout> | null = null;
   private isProgressiveLoading = false;
+  private blockMinedUnsubscribe?: () => void;
 
   constructor() {
     this.isTauri =
@@ -94,6 +96,7 @@ export class WalletService {
         );
       }
 
+      await this.bindBlockMinedEvents();
       await this.syncFromBackend();
       if (options?.autoStartPolling !== false) {
         this.startPolling();
@@ -127,6 +130,14 @@ export class WalletService {
       this.unsubscribeAccount = undefined;
     }
     this.stopProgressiveLoading();
+    if (this.blockMinedUnsubscribe) {
+      try {
+        this.blockMinedUnsubscribe();
+      } catch (error) {
+        console.warn("Failed to unsubscribe block_mined listener", error);
+      }
+      this.blockMinedUnsubscribe = undefined;
+    }
     this.initialized = false;
     this.seenHashes.clear();
   }
@@ -358,17 +369,11 @@ export class WalletService {
       // During active mining, don't override - the backend counter is the source of truth
       // The backend counter is initialized from accurateTotals and incremented when new blocks are mined
       const reward = get(blockReward);
-      const currentMiningState = get(miningState);
-
-      if (!currentMiningState.isMining) {
-        // Use the backend counter (totalBlockCount from get_blocks_mined) as the source of truth
-        // This counter is initialized from accurateTotals and incremented during mining
-        miningState.update((state) => ({
-          ...state,
-          blocksFound: totalBlockCount,
-          totalRewards: totalBlockCount * reward,
-        }));
-      }
+      miningState.update((state) => ({
+        ...state,
+        blocksFound: totalBlockCount,
+        totalRewards: totalBlockCount * reward,
+      }));
 
       // Process mining rewards
       for (const block of blocks) {
@@ -509,6 +514,26 @@ export class WalletService {
     } catch (error) {
       // Expected when Geth is not running - silently skip
       console.error("Failed to refresh transactions:", error);
+    }
+  }
+
+  private async bindBlockMinedEvents(): Promise<void> {
+    if (!this.isTauri || this.blockMinedUnsubscribe) {
+      return;
+    }
+
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      this.blockMinedUnsubscribe = await listen("block_mined", async () => {
+        try {
+          await this.refreshTransactions();
+          await this.refreshBalance();
+        } catch (error) {
+          console.error("[WalletService] Failed to refresh after block_mined", error);
+        }
+      });
+    } catch (error) {
+      console.warn("[WalletService] Could not bind block_mined listener:", error);
     }
   }
 
@@ -674,8 +699,22 @@ export class WalletService {
       }
 
       // Calculate pending sent transactions (after reconciliation)
+      // Exclude transactions to blacklisted addresses - they shouldn't reduce available balance
+      const blacklistedAddresses = new Set(
+        get(blacklist).map((entry) => entry.chiral_address.toLowerCase())
+      );
+      
       const pendingSent = get(transactions)
-        .filter((tx) => tx.status === "pending" && tx.type === "sent")
+        .filter((tx) => {
+          if (tx.status !== "pending" || tx.type !== "sent") {
+            return false;
+          }
+          // Exclude pending transactions to blacklisted addresses
+          if (tx.to && blacklistedAddresses.has(tx.to.toLowerCase())) {
+            return false;
+          }
+          return true;
+        })
         .reduce((sum, tx) => sum + tx.amount, 0);
 
       // Use real balance from Geth (no fallback - if Geth says 0, show 0 unless guarded above)
@@ -1242,6 +1281,19 @@ export class WalletService {
     this.setActiveAccount(account);
     await this.syncFromBackend();
     return account;
+  }
+
+  async deleteKeystoreAccount(address: string): Promise<void> {
+    if (!this.isTauri) {
+      throw new Error('Keystore deletion is only available in the desktop app');
+    }
+
+    try {
+      await invoke('remove_account_from_keystore', { address });
+    } catch (error) {
+      console.error('Failed to delete keystore account:', error);
+      throw error;
+    }
   }
 
   async exportSnapshot(options?: {

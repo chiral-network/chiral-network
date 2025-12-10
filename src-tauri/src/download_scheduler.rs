@@ -11,10 +11,16 @@ use crate::ftp_client;
 use crate::http_download::HttpDownloadClient;
 use crate::protocols::ed2k::Ed2kProtocolHandler;
 use crate::protocols::traits::{DownloadOptions, ProtocolHandler};
+use crate::transfer_events::{
+    calculate_eta, calculate_progress, current_timestamp_ms, SourceInfo, SourceType,
+    TransferCompletedEvent, TransferEventBus, TransferFailedEvent, TransferProgressEvent,
+    TransferStartedEvent, ErrorCategory,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
 /// Represents a scheduled download task
@@ -55,6 +61,7 @@ pub enum DownloadTaskStatus {
 pub struct DownloadScheduler {
     tasks: HashMap<String, DownloadTask>,
     file_transfer_service: Option<Arc<FileTransferService>>,
+    event_bus: Option<Arc<TransferEventBus>>,
 }
 
 impl DownloadScheduler {
@@ -62,6 +69,7 @@ impl DownloadScheduler {
         Self {
             tasks: HashMap::new(),
             file_transfer_service: None,
+            event_bus: None,
         }
     }
 
@@ -69,6 +77,26 @@ impl DownloadScheduler {
         Self {
             tasks: HashMap::new(),
             file_transfer_service: Some(file_transfer_service),
+            event_bus: None,
+        }
+    }
+
+    pub fn with_event_bus(event_bus: Arc<TransferEventBus>) -> Self {
+        Self {
+            tasks: HashMap::new(),
+            file_transfer_service: None,
+            event_bus: Some(event_bus),
+        }
+    }
+
+    pub fn with_file_transfer_service_and_event_bus(
+        file_transfer_service: Arc<FileTransferService>,
+        event_bus: Arc<TransferEventBus>
+    ) -> Self {
+        Self {
+            tasks: HashMap::new(),
+            file_transfer_service: Some(file_transfer_service),
+            event_bus: Some(event_bus),
         }
     }
 
@@ -309,7 +337,7 @@ impl DownloadScheduler {
             "Initiating FTP download"
         );
 
-        // Get task to determine output path
+        // Get task to determine output path and file size
         let task = self
             .tasks
             .get(task_id)
@@ -325,13 +353,122 @@ impl DownloadScheduler {
                 .map_err(|e| format!("Failed to create download directory: {}", e))?;
         }
 
-        // Spawn async task to download file
+        // Clone event bus for async task
+        let event_bus = self.event_bus.as_ref()
+            .ok_or_else(|| "TransferEventBus not available".to_string())?
+            .clone();
+
+        // Clone task data for async task
+        let task_id_clone = task_id.to_string();
+        let file_hash_clone = task.file_hash.clone();
+        let file_name_clone = task.file_name.clone();
         let info_clone = info.clone();
         let output_path_clone = output_path.clone();
 
         tokio::spawn(async move {
-            match ftp_client::download_from_ftp(&info_clone, &output_path_clone).await {
+            // Emit started event
+            let started_event = TransferStartedEvent {
+                transfer_id: task_id_clone.clone(),
+                file_hash: file_hash_clone.clone(),
+                file_name: file_name_clone.clone(),
+                file_size: 0, // We'll get this from the download
+                total_chunks: 1, // FTP downloads are treated as single chunk
+                chunk_size: 0,
+                started_at: current_timestamp_ms(),
+                available_sources: vec![SourceInfo {
+                    id: format!("ftp:{}", info_clone.url),
+                    source_type: SourceType::Ftp,
+                    address: info_clone.url.clone(),
+                    reputation: None,
+                    estimated_speed_bps: None,
+                    latency_ms: None,
+                    location: None,
+                }],
+                selected_sources: vec![format!("ftp:{}", info_clone.url)],
+            };
+            event_bus.emit_started(started_event);
+
+            let start_time = Instant::now();
+            let progress_state = Arc::new(std::sync::Mutex::new((start_time, 0u64))); // (last_progress_update, last_downloaded_bytes)
+            let task_id_for_callback = task_id_clone.clone();
+            let event_bus_for_callback = Arc::clone(&event_bus);
+
+            // Create progress callback
+            let progress_state_clone = Arc::clone(&progress_state);
+            let progress_callback: ftp_client::ProgressCallback = Box::new(move |downloaded: u64, total: u64| {
+                let now = Instant::now();
+
+                let mut state = progress_state_clone.lock().unwrap();
+                let (last_progress_update, last_downloaded_bytes) = *state;
+
+                // Throttle progress updates to every 100ms to avoid overwhelming the UI
+                if now.duration_since(last_progress_update).as_millis() >= 100 || downloaded == total {
+                    let elapsed_secs = start_time.elapsed().as_secs_f64();
+                    let speed = if elapsed_secs > 0.0 {
+                        downloaded as f64 / elapsed_secs
+                    } else {
+                        0.0
+                    };
+
+                    let remaining = total.saturating_sub(downloaded);
+                    let eta = calculate_eta(remaining, speed);
+
+                    let progress_event = TransferProgressEvent {
+                        transfer_id: task_id_for_callback.clone(),
+                        downloaded_bytes: downloaded,
+                        total_bytes: total,
+                        completed_chunks: if total > 0 && downloaded >= total { 1 } else { 0 },
+                        total_chunks: 1,
+                        progress_percentage: calculate_progress(downloaded, total),
+                        download_speed_bps: speed,
+                        upload_speed_bps: 0.0,
+                        eta_seconds: eta,
+                        active_sources: 1,
+                        timestamp: current_timestamp_ms(),
+                    };
+
+                    event_bus_for_callback.emit_progress(progress_event);
+
+                    *state = (now, downloaded);
+                }
+            });
+
+            // Perform the download with progress tracking
+            match ftp_client::download_from_ftp_with_progress(
+                &info_clone,
+                &output_path_clone,
+                progress_callback
+            ).await {
                 Ok(bytes) => {
+                    let duration_seconds = start_time.elapsed().as_secs_f64();
+                    let average_speed = if duration_seconds > 0.0 {
+                        bytes as f64 / duration_seconds
+                    } else {
+                        0.0
+                    };
+
+                    // Emit completed event
+                    let completed_event = TransferCompletedEvent {
+                        transfer_id: task_id_clone.clone(),
+                        file_hash: file_hash_clone.clone(),
+                        file_name: file_name_clone.clone(),
+                        file_size: bytes,
+                        output_path: output_path_clone.to_string_lossy().to_string(),
+                        completed_at: current_timestamp_ms(),
+                        duration_seconds: duration_seconds as u64,
+                        average_speed_bps: average_speed,
+                        total_chunks: 1,
+                        sources_used: vec![crate::transfer_events::SourceSummary {
+                            source_id: format!("ftp:{}", info_clone.url),
+                            source_type: SourceType::Ftp,
+                            chunks_provided: 1,
+                            bytes_provided: bytes,
+                            average_speed_bps: average_speed,
+                            connection_duration_seconds: duration_seconds as u64,
+                        }],
+                    };
+                    event_bus.emit_completed(completed_event);
+
                     info!(
                         bytes = bytes,
                         output = ?output_path_clone,
@@ -339,6 +476,22 @@ impl DownloadScheduler {
                     );
                 }
                 Err(e) => {
+                    // Get the last downloaded bytes from the progress state
+                    let downloaded_bytes = progress_state.lock().unwrap().1;
+
+                    // Emit failed event
+                    let failed_event = TransferFailedEvent {
+                        transfer_id: task_id_clone.clone(),
+                        file_hash: file_hash_clone.clone(),
+                        failed_at: current_timestamp_ms(),
+                        error: e.to_string(),
+                        error_category: ErrorCategory::Network,
+                        downloaded_bytes,
+                        total_bytes: 0, // We don't know the total if download failed
+                        retry_possible: true,
+                    };
+                    event_bus.emit_failed(failed_event);
+
                     error!(
                         error = %e,
                         url = %info_clone.url,

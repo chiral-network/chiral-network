@@ -117,7 +117,6 @@ class SettingsBackupService {
       'enableProxy',
       'anonymousMode',
       'shareAnalytics',
-      'enableWalletAutoLock',
     ];
     for (const field of booleanFields) {
       if (field in data.settings && typeof data.settings[field] !== 'boolean') {
