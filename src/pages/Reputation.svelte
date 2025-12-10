@@ -273,35 +273,6 @@
         // No delay needed since we're not querying DHT anymore
       }
 
-        // Build analytics
-        const totalPeers = mappedPeers.length;
-        const trustedPeers = mappedPeers.filter(
-          (p) => p.trustLevel === TrustLevel.Trusted,
-        ).length;
-        const averageScore =
-          totalPeers > 0
-            ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers
-            : 0;
-        const topPerformers = [...mappedPeers]
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 10);
-        // Build trust level distribution deterministically from the known options
-        const trustLevelDistribution = trustLevelOptions.reduce(
-          (acc, level) => {
-            acc[level] = mappedPeers.filter(
-              (p) => p.trustLevel === level,
-            ).length;
-            return acc;
-          },
-          {
-            [TrustLevel.Trusted]: 0,
-            [TrustLevel.High]: 0,
-            [TrustLevel.Medium]: 0,
-            [TrustLevel.Low]: 0,
-            [TrustLevel.Unknown]: 0,
-          } as Record<TrustLevel, number>,
-        );
-
       // Build analytics
       const totalPeers = mappedPeers.length;
       const trustedPeers = mappedPeers.filter(
