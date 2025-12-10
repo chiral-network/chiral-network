@@ -1563,7 +1563,29 @@ async fn start_dht_node(
     }
 
     // AutoNAT disabled by default - users can enable in settings if needed for NAT detection
-    let auto_enabled = enable_autonat.unwrap_or(false);
+    // But if CHIRAL_ENABLE_AUTONAT env var is set, enable it automatically (useful for VM/headless mode)
+    // Also auto-enable if running in cloud VM environment (detected via metadata service)
+    let auto_enabled = if let Ok(env_val) = std::env::var("CHIRAL_ENABLE_AUTONAT") {
+        let env_enabled = env_val == "1" || env_val.to_lowercase() == "true";
+        if env_enabled {
+            tracing::info!("AutoNAT enabled via env CHIRAL_ENABLE_AUTONAT={}", env_val);
+        }
+        env_enabled || enable_autonat.unwrap_or(false)
+    } else {
+        // Check if running in cloud VM environment (Google Cloud, AWS, Azure)
+        // These VMs typically have public IPs and should auto-enable relay server
+        let is_cloud_vm = std::env::var("GOOGLE_CLOUD_PROJECT").is_ok()
+            || std::env::var("AWS_EXECUTION_ENV").is_ok()
+            || std::env::var("WEBSITE_INSTANCE_ID").is_ok() // Azure
+            || std::env::var("CHIRAL_VM_MODE").is_ok(); // Generic VM mode flag
+        
+        if is_cloud_vm && enable_autonat.is_none() {
+            tracing::info!("Cloud VM environment detected - auto-enabling AutoNAT for relay server");
+            true
+        } else {
+            enable_autonat.unwrap_or(false)
+        }
+    };
     info!("AUTONAT {}", auto_enabled);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or(bootstrap_nodes.clone());
