@@ -1,6 +1,6 @@
 <script lang="ts">
   import { get } from 'svelte/store';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { t } from 'svelte-i18n';
   import { settings } from '$lib/stores';
   import type { AppSettings } from '$lib/stores';
@@ -10,7 +10,7 @@
   import Button from '$lib/components/ui/button.svelte';
   import Label from '$lib/components/ui/label.svelte';
   import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte';
-  import { Wifi, WifiOff, Server, Settings as SettingsIcon } from 'lucide-svelte';
+  import { Wifi, WifiOff, Server, Settings as SettingsIcon, RefreshCw } from 'lucide-svelte';
 
   // Relay server status
   let relayServerEnabled = false;
@@ -25,6 +25,9 @@
   let autoRelayEnabled = true;
 
   let settingsUnsubscribe: (() => void) | null = null;
+
+  let healthCheckInterval = 30; // seconds
+  let isHealthCheckRunning = false;
 
   function applySettingsState(source: Partial<AppSettings>) {
     if (typeof source.enableRelayServer === 'boolean') {
@@ -245,6 +248,21 @@
           console.info('AutoRelay enabled but no preferred relays configured; skipping relay connection attempt.');
         }
       }
+
+      // Load saved health check interval
+      try {
+        const saved = localStorage.getItem('relayHealthCheckInterval');
+        if (saved) {
+          healthCheckInterval = parseInt(saved);
+          relayErrorService.setHealthCheckInterval(healthCheckInterval);
+        }
+      } catch (e) {
+        console.warn('Failed to load health check interval:', e);
+      }
+
+      // Start health checks
+      relayErrorService.startHealthChecks();
+      isHealthCheckRunning = true;
     })();
 
     // Cleanup interval on unmount
@@ -256,6 +274,9 @@
         clearInterval(healthPollInterval);
       }
       settingsUnsubscribe?.();
+
+      // Stop health checks
+      relayErrorService.stopHealthChecks();
     };
   });
 
@@ -272,6 +293,33 @@
       }
     } catch (error) {
       console.error('Failed to poll DHT health:', error);
+    }
+  }
+
+  function updateHealthCheckInterval() {
+    if (healthCheckInterval < 10) healthCheckInterval = 10;
+    if (healthCheckInterval > 300) healthCheckInterval = 300;
+    
+    relayErrorService.setHealthCheckInterval(healthCheckInterval);
+    
+    // Save to localStorage
+    try {
+      localStorage.setItem('relayHealthCheckInterval', healthCheckInterval.toString());
+      showToast(`Health check interval updated to ${healthCheckInterval}s`, 'success');
+    } catch (e) {
+      console.warn('Failed to save health check interval:', e);
+    }
+  }
+
+  function toggleHealthChecks() {
+    if (isHealthCheckRunning) {
+      relayErrorService.stopHealthChecks();
+      isHealthCheckRunning = false;
+      showToast('Health checks stopped', 'info');
+    } else {
+      relayErrorService.startHealthChecks();
+      isHealthCheckRunning = true;
+      showToast('Health checks started', 'success');
     }
   }
 </script>
@@ -429,6 +477,69 @@
       </div>
     </Card>
   </div>
+
+  <Card class="p-6">
+    <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+      <RefreshCw class="h-5 w-5" />
+      Health Check Configuration
+    </h3>
+
+    <div class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <Label class="text-sm font-medium">Health Check Status</Label>
+          <p class="text-xs text-muted-foreground mt-1">
+            {isHealthCheckRunning ? 'Automatically checking relay health' : 'Health checks paused'}
+          </p>
+        </div>
+        <button
+          on:click={toggleHealthChecks}
+          class="px-4 py-2 rounded-md text-sm font-medium transition-colors {isHealthCheckRunning
+            ? 'bg-green-100 text-green-700 hover:bg-green-200'
+            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+        >
+          {isHealthCheckRunning ? 'Running' : 'Stopped'}
+        </button>
+      </div>
+
+      <div class="space-y-2">
+        <Label for="health-check-interval" class="text-sm font-medium">
+          Check Interval (seconds)
+        </Label>
+        <div class="flex items-center gap-3">
+          <input
+            id="health-check-interval"
+            type="number"
+            min="10"
+            max="300"
+            step="5"
+            bind:value={healthCheckInterval}
+            class="flex-1 px-3 py-2 border border-input rounded-md text-sm"
+            disabled={!isHealthCheckRunning}
+          />
+          <button
+            on:click={updateHealthCheckInterval}
+            disabled={!isHealthCheckRunning}
+            class="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Apply
+          </button>
+        </div>
+        <p class="text-xs text-muted-foreground">
+          How often to check relay connectivity (10-300 seconds). Lower values detect issues faster but use more resources.
+        </p>
+      </div>
+
+      <div class="pt-4 border-t border-border">
+        <div class="flex items-center justify-between text-sm">
+          <span class="text-muted-foreground">Next check in:</span>
+          <span class="font-medium">
+            {isHealthCheckRunning ? `~${healthCheckInterval}s` : 'N/A'}
+          </span>
+        </div>
+      </div>
+    </div>
+  </Card>
 
   {#if dhtHealth}
     <Card class="p-6">

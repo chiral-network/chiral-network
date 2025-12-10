@@ -95,11 +95,12 @@ export interface RelayErrorConfig {
   maxRetryDelay: number; // Maximum retry delay in ms
   backoffMultiplier: number; // Exponential backoff multiplier
   reservationRenewalThreshold: number; // Renew when X seconds remain
-  healthScoreDecay: number; // Health score reduction per failure
-  errorHistoryLimit: number; // Max errors to track per relay
-  connectionTimeout: number; // Connection timeout in ms
-  autoDiscoverRelays: boolean; // Auto-discover relay nodes via DHT
-  minHealthScore: number; // Minimum health score to attempt connection
+  healthScoreDecay: number;         // Health score reduction per failure
+  errorHistoryLimit: number;        // Max errors to track per relay
+  connectionTimeout: number;        // Connection timeout in ms
+  autoDiscoverRelays: boolean;      // Auto-discover relay nodes via DHT
+  minHealthScore: number;           // Minimum health score to attempt connection
+  healthCheckIntervalSeconds: number; // Configurable interval for periodic health checks (seconds)
 }
 
 const DEFAULT_CONFIG: RelayErrorConfig = {
@@ -113,6 +114,7 @@ const DEFAULT_CONFIG: RelayErrorConfig = {
   connectionTimeout: 10000,
   autoDiscoverRelays: true,
   minHealthScore: 20,
+  healthCheckIntervalSeconds: 30 // Default: check relay health every 30 seconds
 };
 
 /**
@@ -122,6 +124,7 @@ const DEFAULT_CONFIG: RelayErrorConfig = {
 class RelayErrorService {
   private static instance: RelayErrorService | null = null;
   private config: RelayErrorConfig;
+  private healthCheckTimer: ReturnType<typeof setInterval> | null = null; // Timer for periodic health checks
 
   // Relay pool management
   public relayPool = writable<Map<string, RelayNode>>(new Map());
@@ -742,6 +745,95 @@ class RelayErrorService {
 
     const pool = get(this.relayPool);
     this.activeRelay.set(pool.get(peerId) ?? null);
+  }
+
+  /**
+   * Start periodic health checks for all relays
+   */
+  startHealthChecks(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+    }
+
+    const intervalMs = this.config.healthCheckIntervalSeconds * 1000; // Convert seconds to milliseconds
+    console.log(`🏥 Starting relay health checks every ${this.config.healthCheckIntervalSeconds}s`);
+
+    this.healthCheckTimer = setInterval(async () => {
+      await this.performHealthChecks();
+    }, intervalMs);
+  }
+
+  /**
+   * Stop periodic health checks
+   */
+  stopHealthChecks(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+      console.log('🛑 Stopped relay health checks');
+    }
+  }
+
+  /**
+   * Perform health check on all relays in pool
+   */
+  private async performHealthChecks(): Promise<void> {
+    const pool = get(this.relayPool);
+    console.log(`🏥 Running health check on ${pool.size} relays...`);
+
+    for (const relay of pool.values()) {
+      // Skip recently checked relays to avoid spam (5 second cooldown)
+      if (relay.lastAttempt && (Date.now() - relay.lastAttempt) < 5000) {
+        continue;
+      }
+
+      // Ping relay to check connectivity
+      try {
+        const startTime = Date.now();
+        await dhtService.connectPeer(relay.multiaddr);
+        const latency = Date.now() - startTime;
+
+        // Update health based on response time (bonus points for fast relays)
+        const healthBonus = latency < 100 ? 5 : latency < 500 ? 2 : 0;
+        this.updateRelayMetrics(relay.id, {
+          lastAttempt: Date.now(),
+          avgLatency: (relay.avgLatency * 0.7) + (latency * 0.3), // Exponential moving average
+          healthScore: Math.min(relay.healthScore + healthBonus, 100)
+        });
+      } catch (error) {
+        // Health check failed - reduce health score
+        const newHealthScore = Math.max(relay.healthScore - 5, 0);
+        this.updateRelayMetrics(relay.id, {
+          lastAttempt: Date.now(),
+          healthScore: newHealthScore
+        });
+      }
+    }
+  }
+
+  /**
+   * Update health check interval (runtime configuration)
+   */
+  setHealthCheckInterval(seconds: number): void {
+    if (seconds < 10) seconds = 10; // Minimum 10 seconds
+    if (seconds > 300) seconds = 300; // Maximum 5 minutes
+
+    this.config.healthCheckIntervalSeconds = seconds;
+
+    // Restart timer with new interval if health checks are currently running
+    if (this.healthCheckTimer) {
+      this.stopHealthChecks();
+      this.startHealthChecks();
+    }
+
+    console.log(`⏱️ Updated health check interval to ${seconds}s`);
+  }
+
+  /**
+   * Get current health check interval
+   */
+  getHealthCheckInterval(): number {
+    return this.config.healthCheckIntervalSeconds;
   }
 }
 

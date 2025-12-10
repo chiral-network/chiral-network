@@ -327,6 +327,9 @@ pub enum DhtCommand {
         info_hash: String,
         sender: oneshot::Sender<Result<Vec<String>, String>>,
     },
+    DiscoverRelays {
+        sender: oneshot::Sender<Result<Vec<String>, String>>,
+    },
     SearchFile {
         file_hash: String,
         sender: oneshot::Sender<Result<Option<FileMetadata>, String>>,
@@ -1364,7 +1367,8 @@ async fn run_dht_node(
             HashMap<rr::OutboundRequestId, oneshot::Sender<Result<EncryptedAesKeyBundle, String>>>,
         >,
     >,
-    pending_search_queries: Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>>, // <-- Added parameter
+    pending_search_queries: Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>>, 
+    pending_relay_discoveries: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Vec<String>, String>>>>>,
     is_bootstrap: bool,
     enable_autorelay: bool,
     relay_candidates: HashSet<String>,
@@ -1379,6 +1383,13 @@ async fn run_dht_node(
     // fast heartbeat-driven updater: run at FILE_HEARTBEAT_INTERVAL to keep provider records fresh
     let mut heartbeat_maintenance_interval = tokio::time::interval(FILE_HEARTBEAT_INTERVAL);
     heartbeat_maintenance_interval.tick().await;
+    // Periodic relay discovery interval (every 5 minutes if autorelay is enabled)
+    let mut relay_discovery_interval = if enable_autorelay {
+        tokio::time::interval(Duration::from_secs(5 * 60))
+    } else {
+        tokio::time::interval(Duration::from_secs(24 * 60 * 60)) // 24 hours if disabled
+    };
+    relay_discovery_interval.tick().await;
     // Periodic bootstrap interval
 
     /// Creates a proper circuit relay address for connecting through a relay peer
@@ -1589,6 +1600,16 @@ async fn run_dht_node(
                                         }
                                     }
                                 }
+                    }
+
+                    // Periodic relay discovery - automatically discover relay providers in DHT
+                    _ = relay_discovery_interval.tick(), if enable_autorelay => {
+                        info!("🔍 Starting periodic relay discovery");
+                        let relay_key = kad::RecordKey::new(b"chiral:service:relay");
+                        let query_id = swarm.behaviour_mut().kademlia.get_providers(relay_key);
+                        // Store a dummy sender - we'll handle results in handle_kademlia_event
+                        // The discovered relays will be automatically used by relay client when needed
+                        info!("🔍 Periodic relay discovery started (QueryId: {:?})", query_id);
                     }
 
                     cmd = cmd_rx.recv() => {
@@ -2368,6 +2389,12 @@ async fn run_dht_node(
                                     }
                                 }
                             }
+                            Some(DhtCommand::DiscoverRelays { sender }) => {
+                                let relay_key = kad::RecordKey::new(&b"chiral:service:relay");
+                                let query_id = swarm.behaviour_mut().kademlia.get_providers(relay_key);
+                                pending_relay_discoveries.lock().await.insert(query_id, sender);
+                                info!("🔍 Started discovery for relay services (QueryId: {:?})", query_id);
+                            }
                             Some(DhtCommand::ConnectPeer(addr)) => {
                                 info!("Attempting to connect to: {}", addr);
                                 if let Ok(multiaddr) = addr.parse::<Multiaddr>() {
@@ -2859,6 +2886,7 @@ async fn run_dht_node(
                                     &file_metadata_cache,
                                     &pending_dht_queries,
                                     &pending_search_queries,
+                                    &pending_relay_discoveries,
                                 )
                                 .await;
                             }
@@ -4398,6 +4426,9 @@ async fn handle_kademlia_event(
         Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
     >,
     pending_search_queries: &Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>>,
+    pending_relay_discoveries: &Arc<
+        Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Vec<String>, String>>>>,
+    >,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -5034,18 +5065,53 @@ async fn handle_kademlia_event(
                         .send(DhtEvent::Error(format!("Peer discovery failed: {:?}", err)))
                         .await;
                 }
-                QueryResult::GetProviders(Ok(ok)) => {
-                    if let kad::GetProvidersOk::FoundProviders { key, providers } = ok {
-                        let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
+                QueryResult::GetProviders(process_result) => {
+                    match process_result {
+                        Ok(kad::GetProvidersOk::FoundProviders { key, providers }) => {
+                            // Check if this is a relay discovery query
+                            let mut pending_relays = pending_relay_discoveries.lock().await;
+                            if let Some(sender) = pending_relays.remove(&id) {
+                                // Clone providers before consuming them
+                                let providers_clone: Vec<PeerId> = providers.iter().cloned().collect();
+                                let peers: Vec<String> = providers_clone.iter().map(|p| p.to_string()).collect();
+                                info!("✅ Discovered {} relay service providers", peers.len());
+                                
+                                // Log discovered relay providers
+                                for provider_peer_id in &providers_clone {
+                                    info!("📡 Discovered relay provider: {}", provider_peer_id);
+                                    // Try to find the peer in the routing table to get their addresses
+                                    // This helps the relay client discover addresses for these providers
+                                    swarm.behaviour_mut().kademlia.get_closest_peers(*provider_peer_id);
+                                }
+                                
+                                let _ = sender.send(Ok(peers));
+                                return;
+                            }
+                            
+                            // Handle periodic relay discovery (no sender - just log and use)
+                            // Check if this is a periodic discovery by checking if the key matches relay service key
+                            let key_bytes = key.as_ref();
+                            if key_bytes == b"chiral:service:relay" {
+                                info!("✅ Discovered {} relay service providers via periodic discovery", providers.len());
+                                for provider_peer_id in &providers {
+                                    info!("📡 Discovered relay provider: {} (will be used automatically)", provider_peer_id);
+                                    // Try to find the peer to get their addresses
+                                    swarm.behaviour_mut().kademlia.get_closest_peers(*provider_peer_id);
+                                }
+                                // Continue processing - don't return early for periodic discoveries
+                            }
+                            drop(pending_relays);
 
-                        // Remove from pending queries tracking
-                        get_providers_queries.lock().await.remove(&id);
+                            let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
 
-                        info!(
-                            "Found {} providers for file: {}",
-                            providers.len(),
-                            file_hash
-                        );
+                            // Remove from pending queries tracking
+                            get_providers_queries.lock().await.remove(&id);
+
+                            info!(
+                                "Found {} providers for file: {}",
+                                providers.len(),
+                                file_hash
+                            );
 
                         // Convert providers to string format
                         let provider_strings: Vec<String> =
@@ -5095,16 +5161,16 @@ async fn handle_kademlia_event(
                                         drop(metadata_cache); // Release lock
                                         // Check seeder heartbeat cache for metadata
                                         let cache = seeder_heartbeats_cache.lock().await;
-                                    if let Some(entry) = cache.get(&file_hash) {
-                                        // We have cached metadata, emit it with the found providers
-                                        if let Ok(mut metadata_json) =
-                                            serde_json::from_value::<serde_json::Value>(
-                                                entry.metadata.clone(),
-                                            )
-                                        {
-                                            // Update seeders list with found providers
-                                            metadata_json["seeders"] =
-                                                serde_json::json!(provider_strings);
+                                        if let Some(entry) = cache.get(&file_hash) {
+                                            // We have cached metadata, emit it with the found providers
+                                            if let Ok(mut metadata_json) =
+                                                serde_json::from_value::<serde_json::Value>(
+                                                    entry.metadata.clone(),
+                                                )
+                                            {
+                                                // Update seeders list with found providers
+                                                metadata_json["seeders"] =
+                                                    serde_json::json!(provider_strings);
 
                                             if let (
                                                 Some(merkle_root),
@@ -5150,57 +5216,72 @@ async fn handle_kademlia_event(
                                                     ..Default::default()
                                                 };
                                             }
+                                            }
+                                        } else {
+                                            info!("No cached metadata for providers, waiting for metadata record query");
                                         }
-                                    } else {
-                                        info!("No cached metadata for providers, waiting for metadata record query");
                                     }
                                 }
-                                } else {
-                                    // No providers found (empty list) and no pending query
-                                    // This means both metadata and provider queries returned nothing
-                                    info!(
-                                        "Provider query returned 0 providers for {}, file not found",
-                                        file_hash
-                                    );
+                            }
+                        }
+                        Ok(kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. }) => {
+                            // Check if this is a relay discovery query
+                            let mut pending_relays = pending_relay_discoveries.lock().await;
+                            if let Some(sender) = pending_relays.remove(&id) {
+                                info!("⚠️ No relay service providers found");
+                                let _ = sender.send(Ok(Vec::new()));
+                                return;
+                            }
+                            drop(pending_relays);
 
-                                    // Notify pending searches that the file was not found
-                                    notify_pending_searches(
-                                        &pending_searches,
-                                        &file_hash,
-                                        SearchResponse::NotFound,
-                                    )
+                            // Check if we have a pending query for this ID to get the file hash
+                            let mut queries = get_providers_queries.lock().await;
+                            if let Some((file_hash, _)) = queries.remove(&id) {
+                                // No providers found (empty list) and no pending query
+                                // This means both metadata and provider queries returned nothing
+                                info!(
+                                    "Provider query returned 0 providers for {}, file not found",
+                                    file_hash
+                                );
+
+                                // Notify pending searches that the file was not found
+                                notify_pending_searches(
+                                    &pending_searches,
+                                    &file_hash,
+                                    SearchResponse::NotFound,
+                                )
+                                .await;
+
+                                // Emit FileNotFound event
+                                let _ = event_tx
+                                    .send(DhtEvent::FileNotFound(file_hash.clone()))
                                     .await;
+                            }
+                        }
+                        Err(err) => {
+                            warn!("GetProviders query failed: {:?}", err);
 
-                                    // Emit FileNotFound event
-                                    let _ = event_tx
-                                        .send(DhtEvent::FileNotFound(file_hash.clone()))
-                                        .await;
-                                }
+                            // Extract file hash from error for proper cleanup
+                            let kad::GetProvidersError::Timeout { key, .. } = &err;
+                            let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
+
+                            // Remove from pending queries tracking
+                            get_providers_queries.lock().await.remove(&id);
+
+                            // Notify pending searches
+                            info!(
+                                "Provider query failed for {}, notifying as not found",
+                                file_hash
+                            );
+                            notify_pending_searches(
+                                &pending_searches,
+                                &file_hash,
+                                SearchResponse::NotFound,
+                            )
+                            .await;
+                            let _ = event_tx.send(DhtEvent::FileNotFound(file_hash)).await;
                         }
                     }
-                }
-                QueryResult::GetProviders(Err(err)) => {
-                    warn!("GetProviders query failed: {:?}", err);
-
-                    // Extract file hash from error for proper cleanup
-                    let kad::GetProvidersError::Timeout { key, .. } = &err;
-                    let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
-
-                    // Remove from pending queries tracking
-                    get_providers_queries.lock().await.remove(&id);
-
-                    // Notify pending searches
-                    info!(
-                        "Provider query failed for {}, notifying as not found",
-                        file_hash
-                    );
-                    notify_pending_searches(
-                        &pending_searches,
-                        &file_hash,
-                        SearchResponse::NotFound,
-                    )
-                    .await;
-                    let _ = event_tx.send(DhtEvent::FileNotFound(file_hash)).await;
                 }
                 // QueryResult::Bootstrap(Ok(BootstrapOk {
                 //     peer,
@@ -5527,6 +5608,17 @@ async fn handle_autonat_client_event(
                 bytes = bytes_sent,
                 "AutoNAT probe succeeded"
             );
+
+            // If we are public, and we have the relay server enabled (even if standby), advertise it!
+            if let Some(_) = swarm.behaviour().relay_server.as_ref() {
+                 let relay_key = kad::RecordKey::new(b"chiral:service:relay");
+                 if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(relay_key) {
+                     warn!("Failed to advertise relay service: {}", e);
+                 } else {
+                     info!("✅ Started providing relay service in DHT (Public IP confirmed)");
+                 }
+            }
+
             (
                 NatReachabilityState::Public,
                 Some(format!(
@@ -5556,7 +5648,33 @@ async fn handle_autonat_client_event(
     let nat_state = metrics_guard.reachability_state;
     let confidence = metrics_guard.reachability_confidence;
     let last_error = metrics_guard.last_reachability_error.clone();
+    let was_public = metrics_guard.reachability_state == NatReachabilityState::Public;
     drop(metrics_guard);
+
+    // If we just became public and have relay server enabled, advertise it in DHT
+    if state == NatReachabilityState::Public && !was_public {
+        // Check if relay server is enabled (even if in standby mode)
+        if swarm.behaviour_mut().relay_server.as_ref().is_some() {
+            let relay_key = kad::RecordKey::new(b"chiral:service:relay");
+            match swarm.behaviour_mut().kademlia.start_providing(relay_key) {
+                Ok(query_id) => {
+                    info!(
+                        "✅ Enabled relay server behavior due to public IP detection (query_id: {:?})",
+                        query_id
+                    );
+                    info!("📡 Started providing relay service in DHT");
+                    let _ = event_tx
+                        .send(DhtEvent::Info(
+                            "Relay server enabled and advertised in DHT due to public IP detection".to_string(),
+                        ))
+                        .await;
+                }
+                Err(e) => {
+                    warn!("Failed to advertise relay service in DHT: {}", e);
+                }
+            }
+        }
+    }
 
     let _ = event_tx
         .send(DhtEvent::NatStatus {
@@ -5771,6 +5889,28 @@ async fn handle_external_addr_confirmed(
         "🔄 Upgraded Kademlia to Server mode - node is publicly reachable at {}",
         addr
     );
+
+    // If we have relay server enabled (even if in standby mode), advertise it in DHT
+    if swarm.behaviour_mut().relay_server.as_ref().is_some() {
+        let relay_key = kad::RecordKey::new(b"chiral:service:relay");
+        match swarm.behaviour_mut().kademlia.start_providing(relay_key) {
+            Ok(query_id) => {
+                info!(
+                    "✅ Enabled relay server behavior due to public IP detection (query_id: {:?})",
+                    query_id
+                );
+                info!("📡 Started providing relay service in DHT");
+                let _ = event_tx
+                    .send(DhtEvent::Info(
+                        "Relay server enabled and advertised in DHT due to public IP detection".to_string(),
+                    ))
+                    .await;
+            }
+            Err(e) => {
+                warn!("Failed to advertise relay service in DHT: {}", e);
+            }
+        }
+    }
 
     if nat_enabled {
         let _ = event_tx
@@ -6338,8 +6478,8 @@ impl DhtService {
         // Start in Client mode - will switch to Server after AutoNAT confirms public reachability
         // This prevents NAT'd nodes from advertising unreachable addresses in the DHT
         // which would cause other peers to fail when trying to fetch records from them
-        kademlia.set_mode(Some(Mode::Server));
-        info!("Starting Kademlia in Server mode");
+        kademlia.set_mode(Some(Mode::Client));
+        info!("Starting Kademlia in Client mode (waiting for AutoNAT confirmation)");
 
         // Create identify behaviour with proactive push updates
         let identify_config =
@@ -6407,8 +6547,14 @@ impl DhtService {
         let dcutr_toggle = toggle::Toggle::from(Some(dcutr::Behaviour::new(local_peer_id)));
 
         // Relay server configuration
-        let relay_server_behaviour = if enable_relay_server {
-            info!("🔁 Relay server enabled - this node can relay traffic for others");
+        // Relay server configuration
+        // Enable relay server if explicitly requested OR if AutoNAT is enabled (to allow auto-relay on public IP)
+        let relay_server_behaviour = if enable_relay_server || enable_autonat {
+            if enable_relay_server {
+                info!("🔁 Relay server enabled - this node can relay traffic for others");
+            } else {
+                info!("🔁 Relay server initialized (standby) - will be advertised if public IP is detected");
+            }
             Some(relay::Behaviour::new(
                 local_peer_id,
                 relay::Config::default(),
@@ -6691,6 +6837,9 @@ impl DhtService {
         // Add this initialization around line 6100 after pending_dht_queries:
         let pending_search_queries: Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let pending_relay_discoveries: Arc<
+            Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Vec<String>, String>>>>,
+        > = Arc::new(Mutex::new(HashMap::new()));
 
         {
             let mut guard = metrics.lock().await;
@@ -6742,7 +6891,8 @@ impl DhtService {
             file_metadata_cache_local.clone(),
             pending_dht_queries.clone(),
             pending_key_requests.clone(),
-            pending_search_queries.clone(), // Add this parameter to the tokio::spawn call around line 6145:
+            pending_search_queries.clone(),
+            pending_relay_discoveries.clone(),
             is_bootstrap,
             final_enable_autorelay,
             relay_candidates,

@@ -112,7 +112,6 @@
     enableRelayServer: false,
     anonymousMode: false,
     shareAnalytics: true,
-    enableWalletAutoLock: false,
     customBootstrapNodes: [],
     autoStartDHT: true, // Auto-start DHT by default
     autoStartGeth: true, // Auto-start Geth by default
@@ -2138,23 +2137,6 @@ function sectionMatches(section: string, query: string) {
           <Label for="share-analytics" class="cursor-pointer">
             {$t("privacy.shareAnalytics")}
           </Label>
-        </div>
-
-        <div class="flex items-start gap-2">
-          <input
-            type="checkbox"
-            id="wallet-auto-lock"
-            bind:checked={localSettings.enableWalletAutoLock}
-            class="mt-1"
-          />
-          <div>
-            <Label for="wallet-auto-lock" class="cursor-pointer">
-              {$t("privacy.autoLockWallet")}
-            </Label>
-            <p class="text-xs text-muted-foreground">
-              {$t("privacy.autoLockWalletHint")}
-            </p>
-          </div>
         </div>
       </div>
     </Expandable>

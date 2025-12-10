@@ -25,8 +25,8 @@ pub mod transaction_services;
 
 // Re-export modules from the lib crate
 use chiral_network::{
-    analytics, bandwidth, bittorrent_handler, dht, download_restart,
-    ed2k_client, encryption, file_transfer, http_download, keystore,
+    analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source,
+    ed2k_client, encryption, file_transfer, ftp_client, http_download, keystore,
     logger, manager, multi_source_download, peer_selection, protocols, reputation,
     stream_auth, webrtc_service,
 };
@@ -1563,7 +1563,29 @@ async fn start_dht_node(
     }
 
     // AutoNAT disabled by default - users can enable in settings if needed for NAT detection
-    let auto_enabled = enable_autonat.unwrap_or(false);
+    // But if CHIRAL_ENABLE_AUTONAT env var is set, enable it automatically (useful for VM/headless mode)
+    // Also auto-enable if running in cloud VM environment (detected via metadata service)
+    let auto_enabled = if let Ok(env_val) = std::env::var("CHIRAL_ENABLE_AUTONAT") {
+        let env_enabled = env_val == "1" || env_val.to_lowercase() == "true";
+        if env_enabled {
+            tracing::info!("AutoNAT enabled via env CHIRAL_ENABLE_AUTONAT={}", env_val);
+        }
+        env_enabled || enable_autonat.unwrap_or(false)
+    } else {
+        // Check if running in cloud VM environment (Google Cloud, AWS, Azure)
+        // These VMs typically have public IPs and should auto-enable relay server
+        let is_cloud_vm = std::env::var("GOOGLE_CLOUD_PROJECT").is_ok()
+            || std::env::var("AWS_EXECUTION_ENV").is_ok()
+            || std::env::var("WEBSITE_INSTANCE_ID").is_ok() // Azure
+            || std::env::var("CHIRAL_VM_MODE").is_ok(); // Generic VM mode flag
+        
+        if is_cloud_vm && enable_autonat.is_none() {
+            tracing::info!("Cloud VM environment detected - auto-enabling AutoNAT for relay server");
+            true
+        } else {
+            enable_autonat.unwrap_or(false)
+        }
+    };
     info!("AUTONAT {}", auto_enabled);
     let probe_interval = autonat_probe_interval_secs.map(Duration::from_secs);
     let autonat_server_list = autonat_servers.unwrap_or(bootstrap_nodes.clone());
@@ -1589,7 +1611,7 @@ async fn start_dht_node(
 
     // --- AutoRelay is now disabled by default (can be enabled via config or env var)
     // Disable AutoRelay on bootstrap nodes (and via env var)
-    let mut final_enable_autorelay = enable_autorelay.unwrap_or(true);
+    let mut final_enable_autorelay = enable_autorelay.unwrap_or(false);
     if is_bootstrap.unwrap_or(false) {
         final_enable_autorelay = false;
         tracing::info!("AutoRelay disabled on bootstrap (hotfix).");
@@ -7201,9 +7223,9 @@ async fn download_ftp(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     use chiral_network::transfer_events::{
-        current_timestamp_ms, SourceInfo, SourceType, TransferPriority,
+        calculate_eta, calculate_progress, current_timestamp_ms, SourceInfo, SourceType, TransferPriority,
         TransferQueuedEvent, TransferStartedEvent, TransferEvent,
-        TransferFailedEvent, TransferCompletedEvent, SourceConnectedEvent,
+        TransferFailedEvent, TransferCompletedEvent, TransferProgressEvent, SourceConnectedEvent,
         SourceSummary, ErrorCategory,
     };
     use chiral_network::ftp_downloader::FtpDownloader;
@@ -7367,40 +7389,82 @@ async fn download_ftp(
             }
         };
         
-        // Download the file
-        match downloader.download_full(&mut stream, &remote_path).await {
-            Ok(data) => {
-                let download_duration = download_start.elapsed();
-                let duration_secs = download_duration.as_secs_f64();
-                let speed_bps = if duration_secs > 0.0 {
-                    data.len() as f64 / duration_secs
+        // Create FTP source info for the progress-enabled download
+        let ftp_source_info = download_source::FtpSourceInfo {
+            url: parsed_url_clone.to_string(),
+            username: None, // Anonymous FTP
+            encrypted_password: None,
+            passive_mode: true,
+            use_ftps: false,
+            timeout_secs: Some(30),
+        };
+
+        // Track progress for event emission
+        let progress_state = Arc::new(std::sync::Mutex::new((download_start, 0u64))); // (last_progress_update, last_downloaded_bytes)
+        let transfer_id_for_callback = transfer_id_clone.clone();
+        let app_handle_for_callback = app_handle.clone();
+
+        // Create progress callback
+        let progress_state_clone = Arc::clone(&progress_state);
+        let progress_callback: ftp_client::ProgressCallback = Box::new(move |downloaded: u64, total: u64| {
+            let now = std::time::Instant::now();
+
+            let mut state = progress_state_clone.lock().unwrap();
+            let (last_progress_update, last_downloaded_bytes) = *state;
+
+            // Throttle progress updates to every 100ms to avoid overwhelming the UI
+            if now.duration_since(last_progress_update).as_millis() >= 100 || downloaded == total {
+                let elapsed_secs = download_start.elapsed().as_secs_f64();
+                let speed = if elapsed_secs > 0.0 {
+                    downloaded as f64 / elapsed_secs
                 } else {
                     0.0
                 };
-                
-                // Save to disk
-                if let Err(e) = std::fs::write(&output_path, &data) {
-                    let failed_event = TransferFailedEvent {
-                        transfer_id: transfer_id_clone.clone(),
-                        file_hash: transfer_id_clone.clone(),
-                        failed_at: current_timestamp_ms(),
-                        error: format!("Failed to save file: {}", e),
-                        error_category: ErrorCategory::Filesystem,
-                        downloaded_bytes: data.len() as u64,
-                        total_bytes: file_size,
-                        retry_possible: true,
-                    };
-                    let _ = app_handle.emit("transfer:event", &TransferEvent::Failed(failed_event));
-                    tracing::error!("Failed to save FTP download: {}", e);
-                    return;
-                }
-                
+
+                let remaining = total.saturating_sub(downloaded);
+                let eta = calculate_eta(remaining, speed);
+
+                let progress_event = TransferProgressEvent {
+                    transfer_id: transfer_id_for_callback.clone(),
+                    downloaded_bytes: downloaded,
+                    total_bytes: total,
+                    completed_chunks: if total > 0 && downloaded >= total { 1 } else { 0 },
+                    total_chunks: 1,
+                    progress_percentage: calculate_progress(downloaded, total),
+                    download_speed_bps: speed,
+                    upload_speed_bps: 0.0,
+                    eta_seconds: eta,
+                    active_sources: 1,
+                    timestamp: current_timestamp_ms(),
+                };
+
+                let _ = app_handle_for_callback.emit("transfer:event", &TransferEvent::Progress(progress_event));
+
+                *state = (now, downloaded);
+            }
+        });
+
+        // Download the file with progress tracking
+        match ftp_client::download_from_ftp_with_progress(
+            &ftp_source_info,
+            &output_path,
+            progress_callback
+        ).await {
+            Ok(bytes_downloaded) => {
+                let download_duration = download_start.elapsed();
+                let duration_secs = download_duration.as_secs_f64();
+                let speed_bps = if duration_secs > 0.0 {
+                    bytes_downloaded as f64 / duration_secs
+                } else {
+                    0.0
+                };
+
                 // Emit completed event
                 let completed_event = TransferCompletedEvent {
                     transfer_id: transfer_id_clone.clone(),
                     file_hash: transfer_id_clone.clone(),
                     file_name: file_name_clone.clone(),
-                    file_size: data.len() as u64,
+                    file_size: bytes_downloaded,
                     output_path: output_path.to_string_lossy().to_string(),
                     completed_at: current_timestamp_ms(),
                     duration_seconds: duration_secs as u64,
@@ -7410,23 +7474,26 @@ async fn download_ftp(
                         source_id: source_id_clone.clone(),
                         source_type: SourceType::Ftp,
                         chunks_provided: 1,
-                        bytes_provided: data.len() as u64,
+                        bytes_provided: bytes_downloaded,
                         average_speed_bps: speed_bps,
                         connection_duration_seconds: duration_secs as u64,
                     }],
                 };
                 let _ = app_handle.emit("transfer:event", &TransferEvent::Completed(completed_event));
-                tracing::info!("FTP download completed: {} ({} bytes in {:.2}s)", 
-                    file_name_clone, data.len(), duration_secs);
+                tracing::info!("FTP download completed: {} ({} bytes in {:.2}s)",
+                    file_name_clone, bytes_downloaded, duration_secs);
             }
             Err(e) => {
+                // Get the last downloaded bytes from the progress state
+                let downloaded_bytes = progress_state.lock().unwrap().1;
+
                 let failed_event = TransferFailedEvent {
                     transfer_id: transfer_id_clone.clone(),
                     file_hash: transfer_id_clone.clone(),
                     failed_at: current_timestamp_ms(),
                     error: format!("FTP download failed: {}", e),
                     error_category: ErrorCategory::Network,
-                    downloaded_bytes: 0,
+                    downloaded_bytes,
                     total_bytes: file_size,
                     retry_possible: true,
                 };
@@ -7612,7 +7679,7 @@ fn main() {
     // Store DHT service and related data for later use in setup()
     let dht_service_for_bt = dht_service_arc.clone();
 
-    let (bittorrent_handler_arc, ftp_server_arc, protocol_manager_arc) = runtime.block_on(async move {
+    let (bittorrent_handler_arc, ftp_server_arc, protocol_manager_arc, ftp_event_bus_holder) = runtime.block_on(async move {
         // Use the instance_id and instance_suffix from above for BitTorrent paths
         let download_dir =
             directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
@@ -7666,10 +7733,10 @@ fn main() {
         let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
         manager.register(Box::new(ed2k_handler));
 
-        let ftp_handler = protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
+        let (ftp_handler, ftp_event_bus_holder) = protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
         manager.register(Box::new(ftp_handler));
 
-        (bittorrent_handler_arc, ftp_server, Arc::new(manager))
+        (bittorrent_handler_arc, ftp_server, Arc::new(manager), ftp_event_bus_holder)
     });
 
     // Reputation system Tauri commands
@@ -7736,6 +7803,9 @@ fn main() {
         );
         Ok(verdicts)
     }
+
+    // Clone the FTP event bus holder so it can be moved into setup()
+    let ftp_event_bus_holder_for_setup = ftp_event_bus_holder.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -8077,7 +8147,13 @@ fn main() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
+            // Initialize FTP event bus now that we have the app handle
+            protocols::ftp::FtpProtocolHandler::set_event_bus_from_holder(
+                &ftp_event_bus_holder_for_setup,
+                app.handle().clone(),
+            );
+
             // Load settings from disk
             let settings = load_settings_from_file(&app.handle());
 
