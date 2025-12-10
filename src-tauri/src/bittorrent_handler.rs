@@ -822,7 +822,7 @@ pub async fn new_with_state(
     async fn start_download_with_options(
         &self,
         identifier: &str,
-        add_opts: AddTorrentOptions,
+        mut add_opts: AddTorrentOptions,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
         info!("Starting BitTorrent download for: {}", identifier);
 
@@ -910,8 +910,8 @@ pub async fn new_with_state(
         }
 
         // Persist to state
-        {
-            let mut state_mgr = self.state_manager.lock().await;
+        if let Some(state_mgr) = &self.state_manager {
+            let mut state_mgr = state_mgr.lock().await;
             let persistent_torrent = PersistentTorrent {
                 info_hash: hash_hex.clone(),
                 source: if identifier.starts_with("magnet:") {
@@ -925,6 +925,7 @@ pub async fn new_with_state(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs(),
+                priority: 0,
             };
 
             if let Err(e) = state_mgr.add_torrent(persistent_torrent) {
@@ -1364,9 +1365,11 @@ impl BitTorrentHandler {
         self.cancel_torrent(info_hash, delete_files).await?;
         
         // 2. Remove from persistent state
-        let mut state_mgr = self.state_manager.lock().await;
-        state_mgr.remove_torrent(info_hash)
-            .map_err(|e| BitTorrentError::IoError { message: e })?;
+        if let Some(state_mgr) = &self.state_manager {
+            let mut state_mgr = state_mgr.lock().await;
+            state_mgr.remove_torrent(info_hash)
+                .map_err(|e| BitTorrentError::IoError { message: e })?;
+        }
     
         info!("Successfully removed torrent {} from all state", info_hash);
         Ok(())
@@ -1877,5 +1880,3 @@ mod torrent_state_manager_tests {
     // Test for malformed JSON file (should load empty or return error, depending on desired behavior)
     // Current implementation logs a warning and returns empty, which is good.
 }
-
-
