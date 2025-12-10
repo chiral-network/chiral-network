@@ -300,6 +300,23 @@ impl TorrentStateManager {
             Ok(())
         }
     }
+
+    /// Remove a torrent from the persistent state
+    pub fn remove_torrent(&mut self, info_hash: &str) -> Result<(), String> {
+        if self.torrents.remove(info_hash).is_none() {
+            return Err("Torrent not found".to_string());
+        }
+
+        // Save the updated state
+        self.save().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Add a torrent to the persistent state
+    pub fn add_torrent(&mut self, torrent: PersistentTorrent) -> Result<(), String> {
+        self.torrents.insert(torrent.info_hash.clone(), torrent);
+        self.save().map_err(|e| e.to_string())
+    }
 }
 
 /// Tauri command to update the priority of downloads based on a new order.
@@ -355,7 +372,6 @@ pub struct BitTorrentHandler {
     rqbit_session: Arc<Session>,
     dht_service: Arc<DhtService>,
     download_directory: std::path::PathBuf,
-    // NEW: Manage active torrents and their stats.
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
     app_handle: Arc<tokio::sync::Mutex<Option<AppHandle>>>,
@@ -893,6 +909,30 @@ pub async fn new_with_state(
             torrents.insert(hash_hex.clone(), handle.clone());
         }
 
+        // Persist to state
+        if let Some(state_mgr) = &self.state_manager {
+            let mut state_mgr = state_mgr.lock().await;
+            let persistent_torrent = PersistentTorrent {
+                info_hash: hash_hex.clone(),
+                source: if identifier.starts_with("magnet:") {
+                    PersistentTorrentSource::Magnet(identifier.to_string())
+                } else {
+                    PersistentTorrentSource::File(PathBuf::from(identifier))
+                },
+                output_path: self.download_directory.clone(),
+                status: PersistentTorrentStatus::Downloading,
+                added_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                priority: 0,
+            };
+
+            if let Err(e) = state_mgr.add_torrent(persistent_torrent) {
+                warn!("Failed to persist torrent to state: {}", e);
+            }
+        }
+
         Ok(handle)
     }
 
@@ -1315,6 +1355,24 @@ impl BitTorrentHandler {
                 info_hash: info_hash.to_string(),
             })
         }
+    }
+
+    /// Remove a torrent completely - from session, memory, and persistent state
+    pub async fn remove_torrent(&self, info_hash: &str, delete_files: bool) -> Result<(), BitTorrentError> {
+        info!("Removing torrent: {} (delete_files: {})", info_hash, delete_files);
+        
+        // 1. Cancel from session and remove from active tracking
+        self.cancel_torrent(info_hash, delete_files).await?;
+        
+        // 2. Remove from persistent state
+        if let Some(state_mgr) = &self.state_manager {
+            let mut state_mgr = state_mgr.lock().await;
+            state_mgr.remove_torrent(info_hash)
+                .map_err(|e| BitTorrentError::IoError { message: e })?;
+        }
+    
+        info!("Successfully removed torrent {} from all state", info_hash);
+        Ok(())
     }
 }
 
@@ -1822,5 +1880,3 @@ mod torrent_state_manager_tests {
     // Test for malformed JSON file (should load empty or return error, depending on desired behavior)
     // Current implementation logs a warning and returns empty, which is good.
 }
-
-

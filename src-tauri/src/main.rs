@@ -7195,6 +7195,20 @@ async fn download_file_http(
 
 // Protocol-specific download commands
 
+/// Tauri command to remove a torrent from the BitTorrent handler and persistent state
+#[tauri::command]
+async fn remove_torrent(
+    info_hash: String,
+    delete_files: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let handler = state.bittorrent_handler.clone();
+    handler
+        .remove_torrent(&info_hash, delete_files)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn download_ed2k(link: String, state: State<'_, AppState>) -> Result<(), String> {
     tracing::info!("Starting ED2K download: {}", link);
@@ -7943,6 +7957,7 @@ fn main() {
             open_torrent_folder,
             seed,
             create_and_seed_torrent,
+            remove_torrent,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
