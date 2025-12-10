@@ -2874,16 +2874,11 @@ async function loadAndResumeDownloads() {
                   <span class="text-foreground">{(file.progress || 0).toFixed(2)}%</span>
                 </div>
                 {#if detectedProtocol === 'Bitswap' && file.totalChunks}
-                  <div class="w-full bg-border rounded-full h-2 flex overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
-                    {#if file.totalChunks && file.totalChunks > 0}
-                      {@const chunkWidth = 100 / file.totalChunks}
-                      {#each Array.from({ length: file.totalChunks }) as _, i}
-                        <div
-                          class="h-2 {file.downloadedChunks?.includes(i) ? 'bg-green-500' : 'bg-transparent'}"
-                          style="width: {chunkWidth}%"
-                        ></div>
-                      {/each}
-                    {/if}
+                  <div class="w-full bg-border rounded-full h-2 overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
+                    <div
+                      class="h-2 bg-green-500 transition-all duration-300"
+                      style="width: {file.progress || 0}%"
+                    ></div>
                   </div>
                 {:else}
                   <Progress
