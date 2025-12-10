@@ -37,6 +37,9 @@ fn get_local_ip() -> Option<String> {
     Some(local_addr.ip().to_string())
 }
 
+/// Shared holder for the event bus, allowing it to be set after handler creation
+pub type EventBusHolder = Arc<std::sync::RwLock<Option<Arc<TransferEventBus>>>>;
+
 /// FTP protocol handler implementing the enhanced ProtocolHandler trait
 pub struct FtpProtocolHandler {
     /// Underlying FTP downloader (wrapped in Arc for sharing across async tasks)
@@ -47,8 +50,8 @@ pub struct FtpProtocolHandler {
     active_downloads: Arc<Mutex<HashMap<String, FtpDownloadState>>>,
     /// Track download progress
     download_progress: Arc<Mutex<HashMap<String, DownloadProgress>>>,
-    /// Optional event bus for emitting transfer events to frontend
-    event_bus: Option<Arc<TransferEventBus>>,
+    /// Optional event bus for emitting transfer events to frontend (wrapped in RwLock for late initialization)
+    event_bus: EventBusHolder,
 }
 
 /// Internal state for an FTP download
@@ -73,24 +76,33 @@ impl FtpProtocolHandler {
             ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: None,
+            event_bus: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
-    /// Creates a handler with FTP server support
-    pub fn with_ftp_server(ftp_server: Arc<crate::ftp_server::FtpServer>) -> Self {
-        Self {
+    /// Creates a handler with FTP server support and returns the event bus holder for later initialization
+    pub fn with_ftp_server(ftp_server: Arc<crate::ftp_server::FtpServer>) -> (Self, EventBusHolder) {
+        let event_bus_holder = Arc::new(std::sync::RwLock::new(None));
+        let handler = Self {
             downloader: Arc::new(FtpDownloader::new()),
             ftp_server: Some(ftp_server),
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: None,
-        }
+            event_bus: event_bus_holder.clone(),
+        };
+        (handler, event_bus_holder)
     }
 
     /// Set the FTP server for seeding support
     pub fn set_ftp_server(&mut self, ftp_server: Arc<crate::ftp_server::FtpServer>) {
         self.ftp_server = Some(ftp_server);
+    }
+
+    /// Set the event bus for UI progress updates (call this after AppHandle is available)
+    pub fn set_event_bus_from_holder(holder: &EventBusHolder, app_handle: AppHandle) {
+        if let Ok(mut guard) = holder.write() {
+            *guard = Some(Arc::new(TransferEventBus::new(app_handle)));
+        }
     }
 
     /// Creates a handler with custom configuration (no event bus)
@@ -100,7 +112,7 @@ impl FtpProtocolHandler {
             ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: None,
+            event_bus: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -111,7 +123,7 @@ impl FtpProtocolHandler {
             ftp_server: Some(ftp_server),
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
+            event_bus: Arc::new(std::sync::RwLock::new(Some(Arc::new(TransferEventBus::new(app_handle))))),
         }
     }
 
@@ -122,7 +134,7 @@ impl FtpProtocolHandler {
             ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
+            event_bus: Arc::new(std::sync::RwLock::new(Some(Arc::new(TransferEventBus::new(app_handle))))),
         }
     }
 
@@ -133,8 +145,13 @@ impl FtpProtocolHandler {
             ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
+            event_bus: Arc::new(std::sync::RwLock::new(Some(Arc::new(TransferEventBus::new(app_handle))))),
         }
+    }
+    
+    /// Helper to get the event bus for use in async contexts
+    fn get_event_bus(&self) -> Option<Arc<TransferEventBus>> {
+        self.event_bus.read().ok().and_then(|guard| guard.clone())
     }
 
     /// Get current timestamp
@@ -348,7 +365,7 @@ impl ProtocolHandler for FtpProtocolHandler {
         let id = download_id.clone();
         let output_path = options.output_path.clone();
         let creds = credentials.clone();
-        let event_bus = self.event_bus.clone();
+        let event_bus = self.get_event_bus();
         let task_source_id = source_id.clone();
         let task_file_name = file_name.clone();
 
@@ -660,7 +677,7 @@ impl ProtocolHandler for FtpProtocolHandler {
             };
 
             // Emit paused event
-            if let Some(ref bus) = self.event_bus {
+            if let Some(ref bus) = self.get_event_bus() {
                 bus.emit_paused(TransferPausedEvent {
                     transfer_id: identifier.to_string(),
                     paused_at: Self::now_ms(),
@@ -716,7 +733,7 @@ impl ProtocolHandler for FtpProtocolHandler {
             };
 
             // Emit canceled event
-            if let Some(ref bus) = self.event_bus {
+            if let Some(ref bus) = self.get_event_bus() {
                 bus.emit_canceled(TransferCanceledEvent {
                     transfer_id: identifier.to_string(),
                     canceled_at: Self::now_ms(),
