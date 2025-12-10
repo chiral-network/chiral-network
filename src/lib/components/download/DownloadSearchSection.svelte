@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { invoke } from '@tauri-apps/api/core';
   import Card from '$lib/components/ui/card.svelte';
   import Input from '$lib/components/ui/input.svelte';
   import Label from '$lib/components/ui/label.svelte';
@@ -144,10 +145,16 @@
   }
 
   async function searchForFile() {
+    console.log('🔍 searchForFile() called with searchMode:', searchMode, 'searchHash:', searchHash)
+    if (isSearching) {
+      console.warn('⚠️ Search already in progress, ignoring duplicate call')
+      return
+    }
     isSearching = true
 
     // Handle BitTorrent downloads - show confirmation instead of immediately downloading
     if (searchMode === 'magnet' || searchMode === 'torrent' || searchMode === 'ed2k' || searchMode === 'ftp') {
+      console.log('✅ Entering magnet/torrent/ed2k/ftp path')
       let identifier: string | null = null
 
       if (searchMode === 'magnet') {
@@ -159,12 +166,19 @@
         }
 
         // For magnet links, extract info_hash and search DHT directly
+        console.log('🔍 Parsing magnet link:', identifier)
         const urlParams = new URLSearchParams(identifier.split('?')[1])
-        const infoHash = urlParams.get('xt')?.replace('urn:btih:', '')
+        const infoHash = urlParams.get('xt')?.replace('urn:btih:', '').toLowerCase()
+        console.log('🔍 Extracted info_hash (normalized to lowercase):', infoHash)
         if (infoHash) {
           try {
-            // Search DHT using the info_hash as the key (BitTorrent files are stored with info_hash as merkle_root)
-            const metadata = await dhtService.searchFileMetadata(infoHash, SEARCH_TIMEOUT_MS)
+            console.log('🔍 Searching DHT by info_hash:', infoHash)
+            // Tauri converts parameters to camelCase, so we use infoHash here
+            const params = { infoHash }
+            console.log('🔍 Calling search_by_infohash with params:', JSON.stringify(params))
+            // Search DHT by info_hash (uses two-step lookup: info_hash -> merkle_root -> metadata)
+            const metadata = await invoke('search_by_infohash', params) as FileMetadata | null
+            console.log('🔍 DHT search result:', metadata)
             if (metadata) {
               // Found the file! Show it instead of the placeholder
               metadata.fileHash = metadata.merkleRoot || ""
@@ -174,10 +188,15 @@
               pushMessage(`Found file: ${metadata.fileName}`, 'success')
               isSearching = false
               return
+            } else {
+              console.log('⚠️ No metadata found for info_hash:', infoHash)
             }
           } catch (error) {
-            console.log('DHT search failed, falling back to magnet download:', error)
+            console.error('❌ DHT search error:', error)
+            console.log('Falling back to magnet download')
           }
+        } else {
+          console.log('⚠️ Could not extract info_hash from magnet link')
         }
 
         // If not found in DHT or no info_hash, proceed with magnet download

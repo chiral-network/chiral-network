@@ -1844,15 +1844,26 @@ async fn run_dht_node(
                                 // notify frontend
                                 info!("🔍 DEBUG DHT: About to send PublishedFile event");
                                 info!("🔍 DEBUG DHT: merged_metadata.seeders before sending event = {:?}", merged_metadata.seeders);
+                                info!("🔍 DEBUG DHT: merged_metadata.info_hash = {:?}", merged_metadata.info_hash);
                                 let _ = event_tx.send(DhtEvent::PublishedFile(merged_metadata.clone())).await;
                                 // store in file_uploaded_cache
 
                                 // If there's an info_hash, create the secondary index record
                                 if let Some(info_hash) = &merged_metadata.info_hash {
                                     let index_key = format!("{}{}", INFO_HASH_PREFIX, info_hash);
+                                    info!("🔗 Creating info_hash index: {} -> {}", index_key, merged_metadata.merkle_root);
                                     let index_record = Record::new(index_key.as_bytes().to_vec(), merged_metadata.merkle_root.as_bytes().to_vec());
-                                    swarm.behaviour_mut().kademlia.put_record(index_record, kad::Quorum::One).ok();
-                                    info!("Published info_hash index for {}", info_hash);
+                                    match swarm.behaviour_mut().kademlia.put_record(index_record, quorum) {
+                                        Ok(query_id) => {
+                                            info!("✅ Published info_hash index for {} (query: {:?})", info_hash, query_id);
+                                        }
+                                        Err(e) => {
+                                            error!("❌ Failed to publish info_hash index for {}: {}", info_hash, e);
+                                            let _ = event_tx.send(DhtEvent::Error(format!("Failed to publish info_hash index: {}", e))).await;
+                                        }
+                                    }
+                                } else {
+                                    info!("⚠️ No info_hash in metadata, skipping index creation");
                                 }
                                 let _ = response_tx.send(merged_metadata.clone());
                             }
@@ -4924,6 +4935,12 @@ async fn handle_kademlia_event(
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
                     let key_str = String::from_utf8_lossy(key.as_ref());
+                    info!("✅ PutRecord completed successfully for key: {}", key_str);
+
+                    // Check if this is an info_hash index
+                    if key_str.starts_with(INFO_HASH_PREFIX) {
+                        info!("✅ Info_hash index record stored in DHT: {}", key_str);
+                    }
                 }
                 QueryResult::PutRecord(Err(err)) => {
                     error!("❌ PutRecord failed: {:?}", err);
@@ -8184,12 +8201,16 @@ impl DhtService {
         &self,
         info_hash: String,
     ) -> Result<Option<FileMetadata>, String> {
+        info!("🔍 DHT search_by_infohash called for: {}", info_hash);
         let (sender, receiver) = oneshot::channel();
         self.cmd_tx
-            .send(DhtCommand::SearchByInfohash { info_hash, sender })
+            .send(DhtCommand::SearchByInfohash { info_hash: info_hash.clone(), sender })
             .await
             .map_err(|e| e.to_string())?;
-        receiver.await.map_err(|e| e.to_string())
+
+        let result = receiver.await.map_err(|e| e.to_string())?;
+        info!("🔍 DHT search_by_infohash result for {}: {:?}", info_hash, result.is_some());
+        Ok(result)
     }
 
     /// Store a value in the DHT with the given key

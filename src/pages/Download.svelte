@@ -175,6 +175,9 @@
             // Sync to files store and add to download history
             syncTorrentToFilesStore(info_hash, name || existing.name, 'completed', 100, existing.size, 0, 0);
             addTorrentToHistory(info_hash, name || existing.name, existing.size);
+
+            // Automatically seed and publish to Chiral Network DHT
+            publishToChiralNetwork(info_hash);
           } else {
             // Handle case where Complete event arrives before any Progress events
             torrentDownloads.set(info_hash, {
@@ -193,6 +196,9 @@
             // Sync to files store and add to download history
             syncTorrentToFilesStore(info_hash, name || 'Unknown', 'completed', 100, 0, 0, 0);
             addTorrentToHistory(info_hash, name || 'Unknown', 0);
+
+            // Automatically seed and publish to Chiral Network DHT
+            publishToChiralNetwork(info_hash);
           }
         } else if (payload.Added) {
             const { info_hash, name } = payload.Added;
@@ -1737,6 +1743,45 @@ async function loadAndResumeDownloads() {
         transfers.delete(fileId);
         return transfers;
       });
+    }
+  }
+
+  /**
+   * Publish a completed BitTorrent download to the Chiral Network DHT.
+   * This makes the file discoverable on the Chiral Network and starts seeding.
+   */
+  async function publishToChiralNetwork(infoHash: string) {
+    try {
+      console.log(`🌐 Publishing torrent to Chiral Network: ${infoHash}`);
+
+      const result = await invoke('bittorrent_post_download_publish', {
+        infoHash
+      }) as {
+        chiral_hash: string;
+        magnet_link: string;
+        file_name: string;
+        file_size: number;
+        info_hash: string;
+        published_to_dht: boolean;
+      };
+
+      if (result.published_to_dht) {
+        console.log(`✅ Published to Chiral DHT with hash: ${result.chiral_hash}`);
+        showToast(
+          `Now seeding "${result.file_name}" on both BitTorrent and Chiral Network`,
+          'success'
+        );
+      } else {
+        console.warn(`⚠️ Failed to publish to Chiral DHT`);
+        showToast(
+          `Download complete but couldn't publish to Chiral Network`,
+          'warning'
+        );
+      }
+    } catch (error) {
+      console.error(`❌ Error publishing to Chiral Network:`, error);
+      // Don't show error toast as download was successful, just DHT publish failed
+      console.warn(`Download successful but DHT publishing failed: ${error}`);
     }
   }
 

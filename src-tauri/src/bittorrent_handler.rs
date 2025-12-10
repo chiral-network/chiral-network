@@ -1316,6 +1316,159 @@ impl BitTorrentHandler {
             })
         }
     }
+
+    /// After a BitTorrent download completes, automatically:
+    /// 1. Continue seeding the file
+    /// 2. Compute the Chiral Network hash (SHA-256)
+    /// 3. Publish metadata to the DHT so it's discoverable on the Chiral Network
+    pub async fn post_download_seed_and_publish(
+        &self,
+        info_hash: &str,
+    ) -> Result<PostDownloadResult, String> {
+        // Normalize info_hash to lowercase for consistent DHT key storage
+        let info_hash_lower = info_hash.to_lowercase();
+
+        info!(
+            "Starting post-download seed and publish for info_hash: {} (normalized to: {})",
+            info_hash, info_hash_lower
+        );
+
+        // Get the torrent handle (use original case for lookup)
+        let torrents = self.active_torrents.lock().await;
+        let handle = torrents
+            .get(info_hash)
+            .ok_or_else(|| format!("Torrent not found: {}", info_hash))?;
+
+        // Get torrent stats to get the file path
+        let stats = handle.stats();
+
+        // Get the download folder
+        let folder_path = self.download_directory.clone();
+
+        // Find the completed file - for now, use first file in directory
+        // In production, you'd want to iterate through the torrent's files
+        let mut file_path = folder_path.clone();
+        let mut file_name = String::from("unknown");
+
+        // Try to find the file by reading directory
+        if let Ok(entries) = tokio::fs::read_dir(&folder_path).await {
+            let mut entries = entries;
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Ok(metadata) = entry.metadata().await {
+                    if metadata.is_file() {
+                        file_path = entry.path();
+                        file_name = entry.file_name().to_string_lossy().to_string();
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Verify file exists
+        if !file_path.exists() || file_path == folder_path {
+            return Err(format!(
+                "Downloaded file not found in: {}",
+                folder_path.display()
+            ));
+        }
+
+        // Read the file and compute Chiral Network hash (SHA-256)
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let chiral_hash = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&file_data);
+            format!("{:x}", hasher.finalize())
+        };
+
+        info!(
+            "Computed Chiral hash for {}: {}",
+            file_name, chiral_hash
+        );
+
+        // Get file size
+        let file_size = stats.total_bytes;
+
+        // Get our local peer ID from DHT for seeders list
+        let local_peer_id = self
+            .dht_service
+            .get_peer_id()
+            .await
+            .to_string();
+
+        // Create FileMetadata for DHT publishing
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let magnet_link = format!("magnet:?xt=urn:btih:{}", info_hash);
+
+        let metadata = crate::dht::models::FileMetadata {
+            merkle_root: chiral_hash.clone(),
+            file_name: file_name.clone(),
+            file_size,
+            file_data: Vec::new(), // Don't include file data in DHT
+            seeders: vec![local_peer_id.clone()],
+            created_at,
+            mime_type: None,
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
+            encrypted_key_bundle: None,
+            uploader_address: None,
+            cids: None,
+            // BitTorrent-specific fields (use lowercase for consistent DHT indexing)
+            info_hash: Some(info_hash_lower.clone()),
+            trackers: Some(vec![]), // rqbit handles trackers internally
+            // Other protocol fields
+            ftp_sources: None,
+            ed2k_sources: None,
+            http_sources: None,
+            price: 0.0,
+            is_root: false,
+            parent_hash: None,
+            download_path: None,
+        };
+
+        // Publish to DHT
+        info!("Publishing file metadata to Chiral DHT...");
+        self.dht_service
+            .publish_file(metadata.clone(), None)
+            .await
+            .map_err(|e| format!("Failed to publish to DHT: {}", e))?;
+
+        info!(
+            "Successfully published to DHT with merkle_root: {}",
+            chiral_hash
+        );
+
+        // Note: The torrent is already seeding through rqbit, so no need to call seed() again
+        // rqbit automatically continues seeding after download completes
+
+        Ok(PostDownloadResult {
+            chiral_hash,
+            magnet_link,
+            file_name,
+            file_size,
+            info_hash: info_hash_lower,
+            published_to_dht: true,
+        })
+    }
+}
+
+/// Result of post-download seeding and DHT publishing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostDownloadResult {
+    pub chiral_hash: String,
+    pub magnet_link: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub info_hash: String,
+    pub published_to_dht: bool,
 }
 
 /// Progress information for a torrent
