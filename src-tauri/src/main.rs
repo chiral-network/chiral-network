@@ -7734,7 +7734,7 @@ fn main() {
         manager.register(Arc::new(ed2k_handler));
 
         let (ftp_handler, ftp_event_bus_holder) = protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
-        manager.register(Box::new(ftp_handler));
+        manager.register(Arc::new(ftp_handler));
 
         (bittorrent_handler_arc, ftp_server, Arc::new(manager), ftp_event_bus_holder)
     });
