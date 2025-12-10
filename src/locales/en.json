@@ -667,6 +667,13 @@
       "savePasswordWarning": "Warning: Saving your password locally is convenient but less secure. Use with caution.",
       "addressMismatch": "Decryption error: address does not match."
     }
+    ,
+    "delete": {
+      "confirm": "Delete keystore account {address}? This cannot be undone.",
+      "success": "Keystore account removed.",
+      "error": "Failed to delete keystore account: {error}",
+      "button": "Delete"
+    }
   },
   "blacklist": {
     "title": "Blacklist Management",

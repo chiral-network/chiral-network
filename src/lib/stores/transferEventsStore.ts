@@ -308,8 +308,33 @@ function handleQueuedEvent(transfers: Map<string, Transfer>, event: any) {
 }
 
 function handleStartedEvent(transfers: Map<string, Transfer>, event: any) {
-  const transfer = transfers.get(event.transferId);
-  if (!transfer) return;
+  let transfer = transfers.get(event.transferId);
+  
+  // If transfer doesn't exist (e.g., FTP downloads skip the queued event),
+  // create it from the started event data
+  if (!transfer) {
+    const newTransfer: Transfer = {
+      transferId: event.transferId,
+      fileHash: event.fileHash || event.transferId,
+      fileName: event.fileName || "Unknown",
+      fileSize: event.fileSize || 0,
+      outputPath: "",
+      status: "starting",
+      priority: "normal",
+      downloadedBytes: 0,
+      completedChunks: 0,
+      totalChunks: event.totalChunks || 0,
+      progressPercentage: 0,
+      downloadSpeedBps: 0,
+      uploadSpeedBps: 0,
+      availableSources: event.availableSources || [],
+      connectedSources: new Map(),
+      activeSources: 0,
+      startedAt: event.startedAt,
+    };
+    transfers.set(newTransfer.transferId, newTransfer);
+    return;
+  }
 
   transfer.status = "starting";
   transfer.startedAt = event.startedAt;
@@ -429,6 +454,7 @@ function handleCompletedEvent(transfers: Map<string, Transfer>, event: any) {
   transfer.durationSeconds = event.durationSeconds;
   transfer.averageSpeedBps = event.averageSpeedBps;
   transfer.downloadedBytes = event.fileSize;
+  transfer.fileSize = event.fileSize; // Update file size for correct display
   transfer.progressPercentage = 100;
   transfer.sourcesUsed = event.sourcesUsed;
 }

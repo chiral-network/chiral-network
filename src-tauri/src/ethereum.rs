@@ -374,14 +374,27 @@ impl GethProcess {
             .arg("*")
             .arg("--syncmode")
             .arg("snap")
+            // Sync performance optimizations
+            .arg("--cache")
+            .arg("2048") // Increase cache to 2GB for faster sync (default is 1024)
+            .arg("--cache.database")
+            .arg("60") // 60% of cache for database
+            .arg("--cache.trie")
+            .arg("30") // 30% for trie cache
+            .arg("--cache.gc")
+            .arg("10") // 10% for garbage collection
             .arg("--maxpeers")
-            .arg("50")
+            .arg("100") // Increase peer connections for faster sync (was 50)
             // P2P discovery settings
             .arg("--port")
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
             .arg("any")
+            // Snapshot sync acceleration
+            .arg("--snapshot")
+            .arg("--state.scheme")
+            .arg("hash") // Use hash-based state scheme for better performance
             // Enable transaction pool gossip to propagate transactions across network
             .arg("--txpool.globalslots")
             .arg("16384") // Increase tx pool size for network-wide transactions
@@ -3186,18 +3199,49 @@ pub async fn get_transaction_history(
                     .and_then(|g| g.as_str())
                     .map(|s| s.to_string());
 
-                transactions.push(TransactionHistoryItem {
-                    hash: tx_hash,
-                    from: from.clone(),
-                    to,
-                    value,
-                    block_number: block_num,
-                    timestamp,
-                    status,
-                    tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
-                    gas_used,
-                    gas_price,
-                });
+                // When sending to yourself, create both sent and received transactions
+                if is_from_us && is_to_us {
+                    // Create sent transaction
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash.clone(),
+                        from: from.clone(),
+                        to: to.clone(),
+                        value: value.clone(),
+                        block_number: block_num,
+                        timestamp,
+                        status: status.clone(),
+                        tx_type: "sent".to_string(),
+                        gas_used: gas_used.clone(),
+                        gas_price: gas_price.clone(),
+                    });
+                    // Create received transaction
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash,
+                        from: from.clone(),
+                        to,
+                        value,
+                        block_number: block_num,
+                        timestamp,
+                        status,
+                        tx_type: "received".to_string(),
+                        gas_used,
+                        gas_price,
+                    });
+                } else {
+                    // Normal transaction to/from someone else
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash,
+                        from: from.clone(),
+                        to,
+                        value,
+                        block_number: block_num,
+                        timestamp,
+                        status,
+                        tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
+                        gas_used,
+                        gas_price,
+                    });
+                }
             }
         }
     }

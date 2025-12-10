@@ -1039,6 +1039,26 @@
     }
   }
 
+  async function deleteKeystoreAccount() {
+    if (!selectedKeystoreAccount) return;
+
+    const confirmMsg = tr('keystore.delete.confirm', { values: { address: selectedKeystoreAccount } });
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      await walletService.deleteKeystoreAccount(selectedKeystoreAccount);
+      // Refresh list
+      await loadKeystoreAccountsList();
+      // Clear selection and password
+      selectedKeystoreAccount = '';
+      loadKeystorePassword = '';
+      showToast(tr('keystore.delete.success'), 'success');
+    } catch (error) {
+      console.error('Failed to delete keystore account:', error);
+      showToast(tr('keystore.delete.error', { values: { error: String(error) } }), 'error');
+    }
+  }
+
   function saveOrClearPassword(address: string, password: string) {
     try {
       const savedPasswordsRaw = localStorage.getItem('chiral_keystore_passwords');
@@ -1578,84 +1598,6 @@
     }
   }
 
-  let sessionTimeout = 3600; // seconds (1 hour)
-  let sessionTimer: number | null = null;
-  let sessionCleanup: (() => void) | null = null;
-  let autoLockMessage = '';
-
-  function clearSessionTimer() {
-    if (sessionTimer) {
-      clearTimeout(sessionTimer);
-      sessionTimer = null;
-    }
-  }
-
-  function resetSessionTimer() {
-    if (typeof window === 'undefined' || !$settings.enableWalletAutoLock) {
-      clearSessionTimer();
-      return;
-    }
-    clearSessionTimer();
-    sessionTimer = window.setTimeout(() => {
-      autoLockWallet();
-    }, sessionTimeout * 1000);
-  }
-
-  function autoLockWallet() {
-    if (!$settings.enableWalletAutoLock) return;
-    handleLogout();
-    autoLockMessage = 'Wallet auto-locked due to inactivity.';
-    showToast(autoLockMessage, 'warning');
-    setTimeout(() => autoLockMessage = '', 5000);
-  }
-
-  // Listen for user activity to reset timer
-  function setupSessionTimeout() {
-    if (typeof window === 'undefined') {
-      return () => {};
-    }
-    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
-    const handler = () => resetSessionTimer();
-    for (const ev of events) {
-      window.addEventListener(ev, handler);
-    }
-    resetSessionTimer();
-    return () => {
-      for (const ev of events) {
-        window.removeEventListener(ev, handler);
-      }
-      clearSessionTimer();
-    };
-  }
-
-  function teardownSessionTimeout() {
-    if (sessionCleanup) {
-      sessionCleanup();
-      sessionCleanup = null;
-    } else {
-      clearSessionTimer();
-    }
-  }
-
-  $: if (typeof window !== 'undefined') {
-    if ($settings.enableWalletAutoLock) {
-      if (!sessionCleanup) {
-        sessionCleanup = setupSessionTimeout();
-      } else {
-        resetSessionTimer();
-      }
-    } else {
-      teardownSessionTimeout();
-    }
-  }
-
-  onMount(() => {
-    if ($settings.enableWalletAutoLock && !sessionCleanup) {
-      sessionCleanup = setupSessionTimeout();
-    }
-    return () => teardownSessionTimeout();
-  });
-
 </script>
 
 <div class="space-y-6">
@@ -1801,6 +1743,15 @@
                   >
                     <KeyRound class="h-4 w-4 mr-2" />
                     {isLoadingFromKeystore ? $t('actions.unlocking') : $t('actions.unlockAccount')}
+                  </Button>
+                  <Button
+                    class="w-full mt-2"
+                    variant="outline"
+                    on:click={deleteKeystoreAccount}
+                    disabled={!selectedKeystoreAccount || isLoadingFromKeystore}
+                  >
+                    <BadgeX class="h-4 w-4 mr-2 text-red-600" />
+                    {$t('keystore.delete.button')}
                   </Button>
                   {#if keystoreLoadMessage}
                     <p class="text-xs text-center {keystoreLoadMessage.toLowerCase().includes('success') ? 'text-green-600' : 'text-red-600'}">{keystoreLoadMessage}</p>
@@ -2902,11 +2853,6 @@
           </Button>
         </div>
       </div>
-    </div>
-  {/if}
-  {#if autoLockMessage}
-  <div class="fixed top-0 left-0 w-full bg-yellow-100 text-yellow-800 text-center py-2 z-50">
-    {autoLockMessage}
   </div>
   {/if}
 </div>

@@ -8,6 +8,7 @@ import {
   transactionPagination,
   miningPagination,
   wallet,
+  blacklist,
   type ETCAccount,
   type Transaction,
   type WalletInfo,
@@ -698,8 +699,22 @@ export class WalletService {
       }
 
       // Calculate pending sent transactions (after reconciliation)
+      // Exclude transactions to blacklisted addresses - they shouldn't reduce available balance
+      const blacklistedAddresses = new Set(
+        get(blacklist).map((entry) => entry.chiral_address.toLowerCase())
+      );
+      
       const pendingSent = get(transactions)
-        .filter((tx) => tx.status === "pending" && tx.type === "sent")
+        .filter((tx) => {
+          if (tx.status !== "pending" || tx.type !== "sent") {
+            return false;
+          }
+          // Exclude pending transactions to blacklisted addresses
+          if (tx.to && blacklistedAddresses.has(tx.to.toLowerCase())) {
+            return false;
+          }
+          return true;
+        })
         .reduce((sum, tx) => sum + tx.amount, 0);
 
       // Use real balance from Geth (no fallback - if Geth says 0, show 0 unless guarded above)
@@ -1266,6 +1281,19 @@ export class WalletService {
     this.setActiveAccount(account);
     await this.syncFromBackend();
     return account;
+  }
+
+  async deleteKeystoreAccount(address: string): Promise<void> {
+    if (!this.isTauri) {
+      throw new Error('Keystore deletion is only available in the desktop app');
+    }
+
+    try {
+      await invoke('remove_account_from_keystore', { address });
+    } catch (error) {
+      console.error('Failed to delete keystore account:', error);
+      throw error;
+    }
   }
 
   async exportSnapshot(options?: {

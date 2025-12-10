@@ -251,6 +251,89 @@
           isSearching = false
           return
         }
+
+        // Handle FTP URL - extract hash and search DHT for real metadata
+        try {
+          const ftpUrl = new URL(identifier)
+          const pathSegments = ftpUrl.pathname.split('/').filter(s => s.length > 0)
+          let fileName = pathSegments.length > 0 ? decodeURIComponent(pathSegments[pathSegments.length - 1]) : 'unknown_file'
+
+          // Extract hash prefix if present (format: {64-char-hash}_{original_filename})
+          let extractedHash = ''
+          if (fileName.length > 65 && fileName.charAt(64) === '_') {
+            // Check if first 64 chars look like a hex hash
+            const potentialHash = fileName.substring(0, 64)
+            if (/^[a-f0-9]{64}$/i.test(potentialHash)) {
+              extractedHash = potentialHash
+              fileName = fileName.substring(65) // Remove hash prefix and underscore
+            }
+          }
+
+          // If we have a hash, search DHT for real metadata
+          if (extractedHash) {
+            try {
+              const metadata = await dhtService.searchFileMetadata(extractedHash, SEARCH_TIMEOUT_MS)
+              if (metadata) {
+                // Use real metadata but override FTP sources
+                latestMetadata = {
+                  ...metadata,
+                  ftpSources: [{
+                    url: identifier,
+                    username: ftpUrl.username || undefined,
+                    password: ftpUrl.password || undefined,
+                    supportsResume: true, // Assume true for user-provided FTP URLs
+                    isAvailable: true
+                  }]
+                }
+                latestStatus = 'found'
+                hasSearched = true
+                isSearching = false
+                pushMessage(`Found FTP file: ${fileName}`, 'success')
+                return
+              }
+            } catch (error) {
+              console.log('DHT search failed for FTP hash, falling back to basic FTP metadata:', error)
+            }
+          }
+
+          // Fallback: Create basic metadata with FTP source if no hash found or DHT search failed
+          latestMetadata = {
+            merkleRoot: extractedHash || '',
+            fileHash: extractedHash || '',
+            fileName: fileName,
+            fileSize: 0, // Unknown for FTP URLs without metadata
+            seeders: [],
+            createdAt: Date.now() / 1000,
+            mimeType: undefined,
+            isEncrypted: false,
+            encryptionMethod: undefined,
+            keyFingerprint: undefined,
+            cids: undefined,
+            isRoot: true,
+            downloadPath: undefined,
+            price: 0,
+            uploaderAddress: undefined,
+            httpSources: undefined,
+            ftpSources: [{
+              url: identifier,
+              username: ftpUrl.username || undefined,
+              password: ftpUrl.password || undefined,
+              supportsResume: true, // Assume true for user-provided FTP URLs
+              isAvailable: true
+            }]
+          }
+
+          latestStatus = 'found'
+          hasSearched = true
+          isSearching = false
+          const fallbackMsg = extractedHash ? `FTP file ready to download: ${fileName} (metadata not found)` : `FTP file ready to download: ${fileName}`
+          pushMessage(fallbackMsg, 'success')
+        } catch (error) {
+          console.error("Failed to parse FTP URL:", error)
+          pushMessage(`Invalid FTP URL: ${String(error)}`, 'error')
+          isSearching = false
+        }
+        return
       }
 
       if (identifier) {
@@ -779,13 +862,23 @@
         if (pendingTorrentType === 'file' && pendingTorrentBytes) {
           // For torrent files, pass the file bytes
           await invoke('download_torrent_from_bytes', { bytes: pendingTorrentBytes })
-        } else if (pendingTorrentType === 'magnet') {
+          // We can't easily get the infohash on the frontend from a torrent file
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
+        } else if (pendingTorrentType === 'magnet' && pendingTorrentIdentifier) {
           // For magnet links
-          await invoke('download_torrent', { identifier: pendingTorrentIdentifier })
+          await invoke('download', { identifier: pendingTorrentIdentifier })
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
         } else {
-          // For BitTorrent from metadata
-          await invoke('download_torrent', { identifier: selectedFile?.infoHash })
+          // For BitTorrent from metadata (already on the network)
+          await invoke('download', { identifier: selectedFile?.infoHash })
+          // The download is already started in the backend, and will be tracked via torrent_event listener
+          // So we don't need to dispatch the download event here
         }
+
+        // Note: We don't dispatch the download event for BitTorrent downloads
+        // The torrent_event listener in Download.svelte will handle showing the download progress
 
         // Clear state
         searchHash = ''

@@ -312,12 +312,21 @@
       } finally {
         checkingBalance = false;
       }
+    } else {
+      // For magnet links or files with no size, skip balance check
+      checkingBalance = false;
+      canAfford = true;
+      currentPrice = 0;
     }
   }
 
   // Trigger balance check when metadata or wallet balance changes
   $: if (metadata.fileSize && metadata.fileSize > 0) {
     checkBalance();
+  } else {
+    checkingBalance = false;
+    canAfford = true;
+    currentPrice = 0;
   }
 
   // Reactive check for affordability when balance changes and we have a current price
@@ -327,7 +336,13 @@
 
   // Check balance when component mounts
   onMount(() => {
-    checkBalance();
+    if (metadata.fileSize > 0) {
+      checkBalance();
+    } else {
+      checkingBalance = false;
+      canAfford = true;
+      currentPrice = 0;
+    }
   });
 </script>
 

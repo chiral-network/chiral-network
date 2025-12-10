@@ -38,7 +38,14 @@
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
   import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
-  import { validateStoragePath } from "$lib/utils/validation";
+  import { 
+    validateStoragePath, 
+    validatePort, 
+    validateProxyAddress,
+    validateBandwidth,
+    validatePercentage,
+    validateMultiaddr
+  } from "$lib/utils/validation";
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -105,7 +112,6 @@
     enableRelayServer: false,
     anonymousMode: false,
     shareAnalytics: true,
-    enableWalletAutoLock: false,
     customBootstrapNodes: [],
     autoStartDHT: true, // Auto-start DHT by default
     autoStartGeth: true, // Auto-start Geth by default
@@ -821,10 +827,27 @@
 
   function addBootstrapNode() {
     const trimmed = newBootstrapNode.trim();
-    if (trimmed && !localSettings.customBootstrapNodes.includes(trimmed)) {
-      localSettings.customBootstrapNodes = [...localSettings.customBootstrapNodes, trimmed];
-      newBootstrapNode = '';
+    if (!trimmed) {
+      showToast("Bootstrap node address cannot be empty", "error");
+      return;
     }
+
+    // Validate multiaddress format
+    const validation = validateMultiaddr(trimmed);
+    if (!validation.isValid) {
+      showToast(validation.error || "Invalid multiaddress format", "error");
+      return;
+    }
+
+    // Check for duplicates
+    if (localSettings.customBootstrapNodes.includes(trimmed)) {
+      showToast("This bootstrap node is already added", "warning");
+      return;
+    }
+
+    localSettings.customBootstrapNodes = [...localSettings.customBootstrapNodes, trimmed];
+    newBootstrapNode = '';
+    showToast("Bootstrap node added successfully", "success");
   }
 
   function removeBootstrapNode(index: number) {
@@ -1048,6 +1071,45 @@ selectedLanguage = initial; // Synchronize dropdown display value
         if (val < cfg.min || val > cfg.max) {
             next[key] = rangeMessage(cfg.label, cfg.min, cfg.max);
         }
+    }
+
+    // Validate port number
+    if (localSettings.port) {
+      const portValidation = validatePort(localSettings.port);
+      if (!portValidation.isValid) {
+        next.port = portValidation.error || "Invalid port";
+      }
+    }
+
+    // Validate bandwidth limits
+    if (localSettings.uploadBandwidth !== undefined && localSettings.uploadBandwidth !== 0) {
+      const bwValidation = validateBandwidth(localSettings.uploadBandwidth, 1000000); // Max 1 GB/s
+      if (!bwValidation.isValid) {
+        next.uploadBandwidth = bwValidation.error || "Invalid upload bandwidth";
+      }
+    }
+
+    if (localSettings.downloadBandwidth !== undefined && localSettings.downloadBandwidth !== 0) {
+      const bwValidation = validateBandwidth(localSettings.downloadBandwidth, 1000000); // Max 1 GB/s
+      if (!bwValidation.isValid) {
+        next.downloadBandwidth = bwValidation.error || "Invalid download bandwidth";
+      }
+    }
+
+    // Validate proxy address if proxy is enabled
+    if (localSettings.enableProxy && localSettings.proxyAddress && localSettings.proxyAddress.trim()) {
+      const proxyValidation = validateProxyAddress(localSettings.proxyAddress);
+      if (!proxyValidation.isValid) {
+        next.proxyAddress = proxyValidation.error || "Invalid proxy address";
+      }
+    }
+
+    // Validate cleanup threshold percentage
+    if (localSettings.cleanupThreshold !== undefined) {
+      const percentValidation = validatePercentage(localSettings.cleanupThreshold, 50, 99);
+      if (!percentValidation.isValid) {
+        next.cleanupThreshold = percentValidation.error || "Invalid cleanup threshold";
+      }
     }
 
     const thresholds = Array.isArray(localSettings.capWarningThresholds)
@@ -1456,7 +1518,7 @@ function sectionMatches(section: string, query: string) {
               bind:value={localSettings.maxConnections}
               min="10"
               max="200"
-              class="mt-2"
+              class="mt-2 {errors.maxConnections ? 'border-red-500 focus:border-red-500' : ''}"
             />
             {#if errors.maxConnections}
               <p class="mt-1 text-sm text-red-500">{errors.maxConnections}</p>
@@ -1471,7 +1533,7 @@ function sectionMatches(section: string, query: string) {
               bind:value={localSettings.port}
               min="1024"
               max="65535"
-              class="mt-2"
+              class="mt-2 {errors.port ? 'border-red-500 focus:border-red-500' : ''}"
             />
             {#if errors.port}
               <p class="mt-1 text-sm text-red-500">{errors.port}</p>
@@ -1487,7 +1549,7 @@ function sectionMatches(section: string, query: string) {
               type="number"
               bind:value={localSettings.uploadBandwidth}
               min="0"
-              class="mt-2"
+              class="mt-2 {errors.uploadBandwidth ? 'border-red-500 focus:border-red-500' : ''}"
             />
             {#if errors.uploadBandwidth}
               <p class="mt-1 text-sm text-red-500">{errors.uploadBandwidth}</p>
@@ -1501,7 +1563,7 @@ function sectionMatches(section: string, query: string) {
               type="number"
               bind:value={localSettings.downloadBandwidth}
               min="0"
-              class="mt-2"
+              class="mt-2 {errors.downloadBandwidth ? 'border-red-500 focus:border-red-500' : ''}"
             />
             {#if errors.downloadBandwidth}
               <p class="mt-1 text-sm text-red-500">{errors.downloadBandwidth}</p>
@@ -1942,9 +2004,12 @@ function sectionMatches(section: string, query: string) {
               id="proxy-address"
               bind:value={localSettings.proxyAddress}
               placeholder="127.0.0.1:9050 (SOCKS5)"
-              class="mt-1"
+              class="mt-1 {errors.proxyAddress ? 'border-red-500 focus:border-red-500' : ''}"
             />
             <p class="text-xs text-muted-foreground mt-1">{$t("privacy.proxyHint")}</p>
+            {#if errors.proxyAddress}
+              <p class="mt-1 text-sm text-red-500">{errors.proxyAddress}</p>
+            {/if}
           </div>
         {/if}
 
@@ -2072,23 +2137,6 @@ function sectionMatches(section: string, query: string) {
           <Label for="share-analytics" class="cursor-pointer">
             {$t("privacy.shareAnalytics")}
           </Label>
-        </div>
-
-        <div class="flex items-start gap-2">
-          <input
-            type="checkbox"
-            id="wallet-auto-lock"
-            bind:checked={localSettings.enableWalletAutoLock}
-            class="mt-1"
-          />
-          <div>
-            <Label for="wallet-auto-lock" class="cursor-pointer">
-              {$t("privacy.autoLockWallet")}
-            </Label>
-            <p class="text-xs text-muted-foreground">
-              {$t("privacy.autoLockWalletHint")}
-            </p>
-          </div>
         </div>
       </div>
     </Expandable>

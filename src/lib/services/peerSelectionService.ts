@@ -109,6 +109,23 @@ export class PeerSelectionService {
   }
 
   /**
+   * Get metrics for a specific list of peers.
+   * This is more efficient than getPeerMetrics() when you only need a subset.
+   */
+  static async getMetricsForPeers(peerIds: string[]): Promise<PeerMetrics[]> {
+    if (peerIds.length === 0) {
+      return [];
+    }
+    try {
+      // Assumes a 'get_batch_peer_metrics' command exists in the Rust backend.
+      const metrics = await invoke<PeerMetrics[]>("get_batch_peer_metrics", { peerIds });
+      return metrics || [];
+    } catch (error) {
+      console.error("Failed to get batch peer metrics:", error);
+      return [];
+    }
+  }
+  /**
    * Get peer metrics for all currently connected DHT peers
    * This includes peers without transfer history, ensuring the reputation system shows all active peers
    */
@@ -286,6 +303,14 @@ export class PeerSelectionService {
       return [];
     }
 
+    // ✨ Pre-rank available peers by local reputation composite score
+    // This prioritizes peers with higher reputation before passing them to the strategy selector.
+    const sortedAvailablePeers = [...availablePeers].sort((a, b) => {
+      const scoreB = this.rep.composite(b);
+      const scoreA = this.rep.composite(a);
+      return scoreB - scoreA; // Higher score first
+    });
+
     // For very large files, use load balancing to distribute across peers
     const strategy: PeerSelectionStrategy =
       fileSize > 500 * 1024 * 1024
@@ -295,7 +320,7 @@ export class PeerSelectionService {
     const peerCount = Math.min(maxPeers, supportedPeers.length);
 
     return await this.selectPeersWithStrategy(
-      availablePeers,
+      sortedAvailablePeers,
       peerCount,
       strategy,
       requireEncryption
@@ -355,6 +380,23 @@ export class PeerSelectionService {
         100
     );
   }
+
+  /**
+   * Converts a raw reputation score into a standardized trust level.
+   * @param score The numeric reputation score.
+   * @returns A trust level string ('Trusted', 'Medium', or 'Low').
+   */
+  static getTrustLevelFromScore(score: number): 'Trusted' | 'Medium' | 'Low' {
+    // These thresholds are now centralized here.
+    if (score > 50) {
+      return 'Trusted';
+    }
+    if (score >= 0) {
+      return 'Medium';
+    }
+    return 'Low';
+  }
+
 
   /**
    * Auto-cleanup inactive peers periodically

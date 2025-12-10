@@ -206,11 +206,6 @@
         
         console.log(`📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}`);
         
-        // DISABLED: DHT verdict queries cause disconnections
-        // TODO: Move to background/lazy loading or cache locally
-        // Skip DHT queries for now and rely solely on backend metrics
-        // TEMPORARILY DISABLED: Verdict fetching overwhelms DHT with concurrent searches
-        // Will re-enable once verdict storage is fixed and we add rate limiting
         /*
         // Try to get reputation verdicts to augment interaction count AND score
         try {
@@ -307,17 +302,45 @@
           } as Record<TrustLevel, number>,
         );
 
-        analytics = {
-          totalPeers,
-          trustedPeers,
-          averageScore,
-          topPerformers,
-          recentEvents: [],
-          trustLevelDistribution,
-        };
+      // Build analytics
+      const totalPeers = mappedPeers.length;
+      const trustedPeers = mappedPeers.filter(
+        (p) => p.trustLevel === TrustLevel.Trusted,
+      ).length;
+      const averageScore =
+        totalPeers > 0
+          ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers
+          : 0;
+      const topPerformers = [...mappedPeers]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10);
+      // Build trust level distribution deterministically from the known options
+      const trustLevelDistribution = trustLevelOptions.reduce(
+        (acc, level) => {
+          acc[level] = mappedPeers.filter(
+            (p) => p.trustLevel === level,
+          ).length;
+          return acc;
+        },
+        {
+          [TrustLevel.Trusted]: 0,
+          [TrustLevel.High]: 0,
+          [TrustLevel.Medium]: 0,
+          [TrustLevel.Low]: 0,
+          [TrustLevel.Unknown]: 0,
+        } as Record<TrustLevel, number>,
+      );
 
-        peers = mappedPeers;
-      }
+      analytics = {
+        totalPeers,
+        trustedPeers,
+        averageScore,
+        topPerformers,
+        recentEvents: [],
+        trustLevelDistribution,
+      };
+
+      peers = mappedPeers;
     } catch (e) {
       console.error("Failed to load peer metrics", e);
       peers = [];
