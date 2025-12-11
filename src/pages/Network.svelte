@@ -10,7 +10,7 @@
   import { peers, networkStats, userLocation, settings } from '$lib/stores'
   import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText, Wifi } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
   import { get } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -164,10 +164,10 @@
   }
   
   // UI variables
-  // let copiedPeerId = false
-  // let copiedBootstrap = false
-  // let copiedListenAddr: string | null = null
-  // let publicMultiaddrs: string[] = []
+  let copiedPeerId = false
+  let copiedBootstrap = false
+  let copiedListenAddr: string | null = null
+  let publicMultiaddrs: string[] = []
 
   // Fetch public multiaddresses (non-loopback)
   /*
@@ -199,12 +199,6 @@
     return `${size.toFixed(2)} ${units[unitIndex]}`
   }
 
-  /*
-  function formatPeerTimestamp(ms?: number): string {
-    if (!ms) return tr('network.dht.health.never')
-    return new Date(ms).toLocaleString()
-  }
-
   function formatHealthTimestamp(epoch: number | null): string {
     if (!epoch) return tr('network.dht.health.never')
     return new Date(epoch * 1000).toLocaleString()
@@ -213,7 +207,6 @@
   function formatHealthMessage(value: string | null): string {
     return value ?? tr('network.dht.health.none')
   }
-  */
 
   function formatPeerDate(date: Date | string | number | null | undefined): string {
     if (!date) {
@@ -277,7 +270,6 @@
     }
   }
 
-  /*
   function reachabilityBadgeClass(state?: NatReachabilityState | null): string {
     switch (state) {
       case 'public':
@@ -288,7 +280,6 @@
         return 'bg-muted text-muted-foreground'
     }
   }
-  */
 
   function formatNatTimestamp(epoch?: number | null): string {
     if (!epoch) return tr('network.dht.health.never')
@@ -1500,7 +1491,301 @@
           <HardDrive class="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
         </div>
       </div>
-    </Card>
+    
+    <div class="space-y-3">
+      {#if dhtStatus === 'disconnected'}
+        <div class="text-center py-4">
+          <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
+          <p class="text-sm text-muted-foreground mb-3">{$t('network.dht.notConnected')}</p>
+          <div class="px-8 my-4 text-left">
+            <Label for="dht-port" class="text-sm">{$t('network.dht.port')}</Label>
+            <Input id="dht-port" type="number" bind:value={dhtPort} class="mt-1" />
+          </div>
+          {#if dhtError}
+            <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mb-3 mx-4">
+              <p class="text-xs text-red-400 font-medium mb-1">{$t('network.dht.connectionError')}:</p>
+              <p class="text-xs text-red-300 font-mono">{dhtError}</p>
+            </div>
+          {/if}
+          <div class="flex gap-2 justify-center">
+            <Button on:click={startDht} disabled={isConnecting}>
+              <Wifi class="h-4 w-4 mr-2 {isConnecting ? 'animate-pulse' : ''}" />
+              {isConnecting ? $t('network.status.connecting') : connectionAttempts > 0 ? $t('network.dht.retry') : $t('network.dht.connect')}
+            </Button>
+            {#if dhtPeerId}
+              <Button variant="outline" on:click={stopDht} disabled={isConnecting}>
+                <Wifi class="h-4 w-4 mr-2" />
+                {$t('network.dht.stop')}
+              </Button>
+            {/if}
+          </div>
+          
+          {#if dhtEvents.length > 0}
+            <div class="mt-4 mx-4">
+              <p class="text-xs text-muted-foreground mb-2">{$t('network.dht.log')}:</p>
+              <div class="bg-secondary/50 rounded-lg p-2 max-h-32 overflow-y-auto text-left">
+                {#each dhtEvents.slice(-5) as event}
+                  <p class="text-xs font-mono text-muted-foreground">{event}</p>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </div>
+      {:else if dhtStatus === 'connecting'}
+        <div class="text-center py-4">
+          <Wifi class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
+          <p class="text-sm text-muted-foreground">{$t('network.dht.connectingToBootstrap')}</p>
+          <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
+          <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts: connectionAttempts } })}</p>
+          <div class="mt-4">
+            <Button variant="outline" size="sm" on:click={cancelDhtConnection}>
+              <Square class="h-4 w-4 mr-2" />
+              {$t('network.dht.cancel')}
+            </Button>
+          </div>
+        </div>
+      {:else}
+        <div class="space-y-3">
+          <div class="grid grid-cols-2 gap-4">
+            <div class="bg-secondary rounded-lg p-3">
+              <p class="text-sm text-muted-foreground">{$t('network.dht.port')}</p>
+              <p class="text-2xl font-bold">{dhtPort}</p>
+            </div>
+            <div class="bg-secondary rounded-lg p-3">
+              <p class="text-sm text-muted-foreground">{$t('network.dht.peers')}</p>
+              <p class="text-2xl font-bold">{dhtPeerCount}</p>
+            </div>
+          </div>
+          
+          <div class="pt-2">
+            <div class="flex items-center justify-between mb-1 gap-2">
+              <p class="text-sm text-muted-foreground">{$t('network.dht.peerId')}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-7 px-2"
+                on:click={async () => {
+                  await copy(dhtPeerId);
+                  copiedPeerId = true;
+                  setTimeout(() => (copiedPeerId = false), 1200);
+                }}
+                disabled={!dhtPeerId}
+              >
+                <Clipboard class="h-3.5 w-3.5 mr-1" />
+                {copiedPeerId ? $t('network.copied') : $t('network.copy')}
+              </Button>
+            </div>
+            <p class="text-xs font-mono break-all">{dhtPeerId}</p>
+          </div>
+          
+          <div class="pt-2">
+            <div class="flex items-center justify-between mb-1 gap-2">
+              <p class="text-sm text-muted-foreground">{$t('network.dht.bootstrapNode')}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-7 px-2"
+                on:click={async () => {
+                  await copy(dhtBootstrapNode);
+                  copiedBootstrap = true;
+                  setTimeout(() => (copiedBootstrap = false), 1200);
+                }}
+                disabled={!dhtBootstrapNode}
+              >
+                <Clipboard class="h-3.5 w-3.5 mr-1" />
+                {copiedBootstrap ? $t('network.copied') : $t('network.copy')}
+              </Button>
+            </div>
+            <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
+          </div>
+
+          {#if publicMultiaddrs && publicMultiaddrs.length > 0}
+            <div class="pt-2 space-y-2">
+              <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
+              {#each publicMultiaddrs as fullAddr}
+                <div class="bg-muted/40 rounded-lg px-3 py-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <p class="text-xs font-mono break-all flex-1">{fullAddr}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="h-7 px-2 flex-shrink-0"
+                      on:click={async () => {
+                        await copy(fullAddr)
+                        copiedListenAddr = fullAddr
+                        setTimeout(() => (copiedListenAddr = null), 1200)
+                      }}
+                    >
+                      <Clipboard class="h-3.5 w-3.5 mr-1" />
+                      {copiedListenAddr === fullAddr ? $t('network.copied') : $t('network.copy')}
+                    </Button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else if dhtStatus === 'connected'}
+            <div class="pt-2">
+              <p class="text-xs text-muted-foreground">{$t('network.dht.noListenAddresses')}</p>
+            </div>
+          {/if}
+
+          <div class="pt-4 space-y-4">
+            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.title')}</p>
+                <div class="mt-2 flex items-center gap-2">
+                  <Badge class={reachabilityBadgeClass(dhtHealth?.reachability)}>
+                    {formatReachabilityState(dhtHealth?.reachability)}
+                  </Badge>
+                  <span class="text-sm text-muted-foreground">
+                    {formatNatConfidence(dhtHealth?.reachabilityConfidence)}
+                  </span>
+                </div>
+              </div>
+              <div class="text-sm text-muted-foreground space-y-1 text-right">
+                <p>{$t('network.dht.reachability.lastProbe')}: {formatNatTimestamp(dhtHealth?.lastProbeAt ?? null)}</p>
+                <p>{$t('network.dht.reachability.lastChange')}: {formatNatTimestamp(dhtHealth?.lastReachabilityChange ?? null)}</p>
+                {#if dhtHealth && !dhtHealth.autonatEnabled}
+                  <p class="text-xs text-yellow-600">{$t('network.dht.reachability.autonatDisabled')}</p>
+                {/if}
+              </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-2">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.observedAddrs')}</p>
+                {#if dhtHealth?.observedAddrs && dhtHealth.observedAddrs.length > 0}
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    {#each dhtHealth.observedAddrs as addr}
+                      <button
+                        class="inline-flex max-w-full items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-mono hover:bg-muted/80"
+                        on:click={() => copyObservedAddr(addr)}
+                        type="button"
+                      >
+                        <span class="break-all text-left">{addr}</span>
+                        <Clipboard class="h-3 w-3 flex-shrink-0" />
+                      </button>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.observedEmpty')}</p>
+                {/if}
+              </div>
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.lastError')}</p>
+                <p class="mt-2 break-all text-sm text-muted-foreground">{dhtHealth?.lastReachabilityError ?? tr('network.dht.health.none')}</p>
+              </div>
+            </div>
+
+            <div>
+              <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.history')}</p>
+              {#if dhtHealth?.reachabilityHistory && dhtHealth.reachabilityHistory.length > 0}
+                <div class="mt-2 overflow-hidden rounded-md border border-muted/40">
+                  <table class="min-w-full text-sm">
+                    <thead class="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
+                      <tr>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.timestamp')}</th>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.stateLabel')}</th>
+                        <th class="px-3 py-2">{$t('network.dht.reachability.summary')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each dhtHealth.reachabilityHistory as item}
+                        <tr class="border-t border-muted/30">
+                          <td class="px-3 py-2">{formatNatTimestamp(item.timestamp)}</td>
+                          <td class="px-3 py-2">{formatReachabilityState(item.state)}</td>
+                          <td class="px-3 py-2 break-words text-muted-foreground">{item.summary ?? '—'}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {:else}
+                <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.historyEmpty')}</p>
+              {/if}
+            </div>
+          </div>
+
+          {#if dhtHealth}
+            <div class="pt-4 space-y-3 border-t border-muted/40">
+              <div class="flex items-center justify-between">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.title')}</p>
+                <Badge class={dhtHealth.autorelayEnabled ? 'bg-green-600' : 'bg-gray-500'}>
+                  {dhtHealth.autorelayEnabled ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
+                </Badge>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.enabledAt')}</p>
+                  <p class="text-sm font-medium mt-1">
+                    {dhtHealth.lastAutorelayEnabledAt
+                      ? formatHealthTimestamp(dhtHealth.lastAutorelayEnabledAt)
+                      : $t('network.dht.relay.neverEnabled')}
+                  </p>
+                </div>
+                <div class="bg-muted/40 rounded-lg p-3">
+                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.disabledAt')}</p>
+                  <p class="text-sm font-medium mt-1">
+                    {dhtHealth.lastAutorelayDisabledAt
+                      ? formatHealthTimestamp(dhtHealth.lastAutorelayDisabledAt)
+                      : $t('network.dht.relay.neverDisabled')}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
+              <div class="bg-muted/40 rounded-lg p-3">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastBootstrap')}</p>
+                <p class="text-sm font-medium mt-1">{formatHealthTimestamp(dhtHealth.lastBootstrap)}</p>
+              </div>
+              <div class="bg-muted/40 rounded-lg p-3">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastPeer')}</p>
+                <p class="text-sm font-medium mt-1">{formatHealthTimestamp(dhtHealth.lastPeerEvent)}</p>
+              </div>
+              <div class="bg-muted/40 rounded-lg p-3">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastError')}</p>
+                <div class="mt-1 h-32 overflow-y-auto rounded border border-muted/40 bg-background/40 p-2 text-sm font-medium break-words w-full space-y-1">
+                  {#each formatHealthMessage(dhtHealth.lastError).split(/\r?\n+/) as line}
+                    <p class="whitespace-pre-wrap">{line}</p>
+                  {/each}
+                </div>
+                {#if dhtHealth.lastErrorAt}
+                  <p class="text-xs text-muted-foreground mt-1">{formatHealthTimestamp(dhtHealth.lastErrorAt)}</p>
+                {/if}
+              </div>
+              <div class="bg-muted/40 rounded-lg p-3">
+                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.failures')}</p>
+                <p class="text-sm font-medium mt-1">{dhtHealth.bootstrapFailures}</p>
+              </div>
+            </div>
+          {/if}
+          
+          {#if dhtEvents.length > 0}
+            <div class="pt-2">
+              <p class="text-sm text-muted-foreground mb-2">{$t('network.dht.recentEvents')}</p>
+              <div class="bg-secondary rounded-lg p-2 max-h-32 overflow-y-auto">
+                {#each dhtEvents.slice(-5) as event}
+                  <p class="text-xs font-mono text-muted-foreground">{event}</p>
+                {/each}
+              </div>
+            </div>
+          {/if}
+          
+          <Button class="w-full" variant="outline" on:click={stopDht}>
+            <Square class="h-4 w-4 mr-2" />
+            {$t('network.dht.disconnect')}
+          </Button>
+        </div>
+      {/if}
+    </div>
+  </Card>
+
+  <!-- DCUtR Hole-Punching Card -->
+  {#if dhtStatus === 'connected' && dhtHealth}
+    <Card class="p-6">
+      <h3 class="text-lg font-semibold mb-4">{$t('network.dht.dcutr.title')}</h3>
+      <p class="text-sm text-muted-foreground mb-4">{$t('network.dht.dcutr.description')}</p>
 
     <!-- Active Peers -->
     <Card class="p-4 border-l-4 {dhtStatus === 'connected' ? 'border-l-blue-500' : 'border-l-muted'}">
@@ -1546,7 +1831,12 @@
         </div>
       </div>
     </Card>
+
+    </Card>
+  {/if}
+
   </div>
+</div>
 
   <!-- Tab Navigation -->
   <div class="border-b border-border">
@@ -2116,4 +2406,3 @@
     {/if}
 
   </div>
-</div>

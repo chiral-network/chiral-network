@@ -90,10 +90,11 @@ export interface RelayAttemptResult {
  * Relay error service configuration
  */
 export interface RelayErrorConfig {
-  maxRetries: number; // Max retry attempts per relay
-  initialRetryDelay: number; // Initial retry delay in ms
-  maxRetryDelay: number; // Maximum retry delay in ms
-  backoffMultiplier: number; // Exponential backoff multiplier
+  maxRetries: number;               // Max retry attempts per relay
+  initialRetryDelay: number;        // Initial retry delay in ms
+  maxRetryDelay: number;            // Maximum retry delay in ms
+  backoffMultiplier: number;        // Exponential backoff multiplier
+  overloadedCooldownMs: number;     // Cooldown applied when relay reports resource limits
   reservationRenewalThreshold: number; // Renew when X seconds remain
   healthScoreDecay: number;         // Health score reduction per failure
   errorHistoryLimit: number;        // Max errors to track per relay
@@ -108,6 +109,7 @@ const DEFAULT_CONFIG: RelayErrorConfig = {
   initialRetryDelay: 1000,
   maxRetryDelay: 30000,
   backoffMultiplier: 2,
+  overloadedCooldownMs: 60000,
   reservationRenewalThreshold: 300, // 5 minutes
   healthScoreDecay: 15,
   errorHistoryLimit: 10,
@@ -130,11 +132,13 @@ class RelayErrorService {
   public relayPool = writable<Map<string, RelayNode>>(new Map());
   public activeRelay = writable<RelayNode | null>(null);
   public errorLog = writable<RelayError[]>([]);
+  private relayCooldowns = new Map<string, number>(); // relayId -> cooldown until epoch ms
+  private persistedErrorsKey = 'relayErrorLog';
 
   // Derived stores
   public healthyRelays = derived(this.relayPool, ($pool) =>
     Array.from($pool.values())
-      .filter((relay) => relay.healthScore >= this.config.minHealthScore)
+      .filter(relay => relay.healthScore >= this.config.minHealthScore && !this.isInCooldown(relay.id))
       .sort((a, b) => b.healthScore - a.healthScore)
   );
 
@@ -159,6 +163,26 @@ class RelayErrorService {
 
   private constructor(config?: Partial<RelayErrorConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    // Load persisted error log (for UI visibility even when not on the relay page)
+    try {
+      const raw = localStorage.getItem(this.persistedErrorsKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.errorLog.set(parsed);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load persisted relay error log', e);
+    }
+    // Persist on change
+    this.errorLog.subscribe(errors => {
+      try {
+        localStorage.setItem(this.persistedErrorsKey, JSON.stringify(errors.slice(0, 100)));
+      } catch (e) {
+        console.warn('Failed to persist relay error log', e);
+      }
+    });
   }
 
   static getInstance(config?: Partial<RelayErrorConfig>): RelayErrorService {
@@ -243,6 +267,36 @@ class RelayErrorService {
       };
       this.logError(error);
       return { success: false, relayId: relayId || "unknown", error };
+    }
+
+    // Skip relays currently in cooldown after resource-limit errors
+    if (relay && this.isInCooldown(relay.id)) {
+      const error: RelayError = {
+        type: RelayErrorType.RELAY_OVERLOADED,
+        message: 'Relay in cooldown after resource-limit rejection',
+        timestamp: Date.now(),
+        relayId: relay.id,
+        retryCount: 0
+      };
+      this.logError(error);
+      return { success: false, relayId: relay.id, error };
+    }
+
+    // If this relay has an unsupported/invalid multiaddr, drop it without attempting a connection
+    if (this.isUnsupportedMultiaddr({ message: relay.multiaddr } as RelayError)) {
+      this.relayPool.update(pool => {
+        pool.delete(relay.id);
+        return pool;
+      });
+      const error: RelayError = {
+        type: RelayErrorType.PROTOCOL_ERROR,
+        message: 'Unsupported relay multiaddr',
+        timestamp: Date.now(),
+        relayId: relay.id,
+        retryCount: 0
+      };
+      this.logError(error);
+      return { success: false, relayId: relay.id, error };
     }
 
     // Attempt connection with retries
@@ -437,8 +491,46 @@ class RelayErrorService {
       errors: [...relay.errors, error].slice(-this.config.errorHistoryLimit),
     });
 
+    // If relay reports resource limit / overload, apply cooldown to avoid hammering it
+    if (error.type === RelayErrorType.RELAY_OVERLOADED || this.isResourceLimit(error.message)) {
+      this.relayCooldowns.set(relay.id, Date.now() + this.config.overloadedCooldownMs);
+    }
+
+    // If the relay multiaddr is unsupported/invalid, drop it from the pool so we stop repinging it
+    if (this.isUnsupportedMultiaddr(error)) {
+      this.relayPool.update(pool => {
+        pool.delete(relay.id);
+        return pool;
+      });
+      const active = get(this.activeRelay);
+      if (active?.id === relay.id) {
+        this.activeRelay.set(null);
+      }
+      return;
+    }
+
     // Attempt fallback to another relay
     this.attemptFallback(relay.id);
+  }
+
+  private isUnsupportedMultiaddr(error: RelayError): boolean {
+    const message = error.message.toLowerCase();
+    return message.includes('multiaddr') && (message.includes('unsupported') || message.includes('not supported') || message.includes('invalid'));
+  }
+
+  private isResourceLimit(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes('resource limit') || lower.includes('too many connections') || lower.includes('limit exceeded');
+  }
+
+  private isInCooldown(relayId: string): boolean {
+    const until = this.relayCooldowns.get(relayId);
+    if (!until) return false;
+    if (Date.now() >= until) {
+      this.relayCooldowns.delete(relayId);
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -571,7 +663,7 @@ class RelayErrorService {
       return RelayErrorType.CONNECTION_TIMEOUT;
     } else if (message.includes("reservation")) {
       return RelayErrorType.RESERVATION_FAILED;
-    } else if (message.includes("overload") || message.includes("capacity")) {
+    } else if (message.includes('overload') || message.includes('capacity') || this.isResourceLimit(message)) {
       return RelayErrorType.RELAY_OVERLOADED;
     } else if (
       message.includes("unreachable") ||
@@ -582,7 +674,10 @@ class RelayErrorService {
       return RelayErrorType.AUTHENTICATION_FAILED;
     } else if (message.includes("protocol")) {
       return RelayErrorType.PROTOCOL_ERROR;
-    } else if (message.includes("network")) {
+    } else if (message.includes('multiaddr') && (message.includes('unsupported') || message.includes('not supported') || message.includes('invalid'))) {
+      // Unsupported/invalid relay address - treat as protocol error so we can drop it from the pool
+      return RelayErrorType.PROTOCOL_ERROR;
+    } else if (message.includes('network')) {
       return RelayErrorType.NETWORK_ERROR;
     }
 
@@ -657,14 +752,11 @@ class RelayErrorService {
 
     return {
       relayCount: relays.length,
-      healthyCount: relays.filter(
-        (r) => r.healthScore >= this.config.minHealthScore
-      ).length,
-      connectedCount: relays.filter(
-        (r) =>
-          r.state === RelayConnectionState.CONNECTED ||
-          r.state === RelayConnectionState.RESERVED
-      ).length,
+      healthyCount: relays.filter(r => r.healthScore >= this.config.minHealthScore && !this.isInCooldown(r.id)).length,
+      connectedCount: relays.filter(r =>
+        r.state === RelayConnectionState.CONNECTED ||
+        r.state === RelayConnectionState.RESERVED
+      ).length
     };
   }
 
@@ -673,6 +765,11 @@ class RelayErrorService {
    */
   clearErrorLog(): void {
     this.errorLog.set([]);
+    try {
+      localStorage.removeItem(this.persistedErrorsKey);
+    } catch (e) {
+      console.warn('Failed to clear persisted relay error log', e);
+    }
   }
 
   /**
