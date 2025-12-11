@@ -10,7 +10,7 @@
   import { peers, networkStats, userLocation, settings } from '$lib/stores'
   import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText, Wifi } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
   import { get } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -164,10 +164,10 @@
   }
   
   // UI variables
-  // let copiedPeerId = false
-  // let copiedBootstrap = false
-  // let copiedListenAddr: string | null = null
-  // let publicMultiaddrs: string[] = []
+  let copiedPeerId = false
+  let copiedBootstrap = false
+  let copiedListenAddr: string | null = null
+  let publicMultiaddrs: string[] = []
 
   // Fetch public multiaddresses (non-loopback)
   /*
@@ -199,12 +199,6 @@
     return `${size.toFixed(2)} ${units[unitIndex]}`
   }
 
-  /*
-  function formatPeerTimestamp(ms?: number): string {
-    if (!ms) return tr('network.dht.health.never')
-    return new Date(ms).toLocaleString()
-  }
-
   function formatHealthTimestamp(epoch: number | null): string {
     if (!epoch) return tr('network.dht.health.never')
     return new Date(epoch * 1000).toLocaleString()
@@ -213,7 +207,6 @@
   function formatHealthMessage(value: string | null): string {
     return value ?? tr('network.dht.health.none')
   }
-  */
 
   function formatPeerDate(date: Date | string | number | null | undefined): string {
     if (!date) {
@@ -277,7 +270,6 @@
     }
   }
 
-  /*
   function reachabilityBadgeClass(state?: NatReachabilityState | null): string {
     switch (state) {
       case 'public':
@@ -288,7 +280,6 @@
         return 'bg-muted text-muted-foreground'
     }
   }
-  */
 
   function formatNatTimestamp(epoch?: number | null): string {
     if (!epoch) return tr('network.dht.health.never')
@@ -1840,6 +1831,12 @@
         </div>
       </div>
     </Card>
+
+    </Card>
+  {/if}
+
+  </div>
+</div>
 
   <!-- Tab Navigation -->
   <div class="border-b border-border">
