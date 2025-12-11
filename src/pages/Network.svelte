@@ -1,4 +1,3 @@
-
 <script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
@@ -8,10 +7,10 @@
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
-  import { peers, networkStats, networkStatus, userLocation, settings } from '$lib/stores'
+  import { peers, networkStats, userLocation, settings } from '$lib/stores'
   import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Wifi, UserMinus, Square, Play, Download, AlertCircle } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
   import { get } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -43,24 +42,24 @@
     summary?: string | null
   }
   
+  // Tab State
+  let activeTab: 'overview' | 'peers' | 'diagnostics' = 'overview';
+
   let discoveryRunning = false
   let newPeerAddress = ''
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
-  let currentPage = 1
-  let peersPerPage = 5
-  let discoveryCurrentPage = 1
-  let discoveryPerPage = 5
 
   const UNKNOWN_DISTANCE = 1_000_000;
 
   $: if (sortBy || sortDirection) {
     // Reset to page 1 when sorting changes
-    currentPage = 1
+    // currentPage = 1
   }
 
   let currentUserRegion: GeoRegionConfig = normalizeRegion(undefined);
   $: currentUserRegion = normalizeRegion($userLocation);
+  
   // Update sort direction when category changes to match the default
   $: if (sortBy) {
     const defaults: Record<typeof sortBy, 'asc' | 'desc'> = {
@@ -81,7 +80,7 @@
   let isGethInstalled = false
   let isStartingNode = false
   let isDownloading = false
-  let isCheckingGeth = false  // Start as false, will be set to true only when actually checking
+  let isCheckingGeth = false 
   let downloadProgress = {
     downloaded: 0,
     total: 0,
@@ -91,9 +90,9 @@
   let downloadError = ''
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
-  let chainId = 98765 // Default, will be fetched from backend
+  let chainId: number | null = 98765; // Default, will be fetched from backend
   let nodeAddress = ''
-  let copiedNodeAddr = false
+  // let copiedNodeAddr = false
   
   // DHT variables
   let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
@@ -112,13 +111,13 @@
   let lastNatState: NatReachabilityState | null = null
   let lastNatConfidence: NatConfidence | null = null
   let cancelConnection = false
+  let isConnecting = false  // Prevent multiple simultaneous connection attempts
 
   // Always preserve connections - no unreliable time-based detection
   
   // WebRTC and Signaling variables
   let signaling: SignalingService;
   let webrtcSession: ReturnType<typeof createWebRTCSession> | null = null;
-  // let discoveredPeers: string[] = [];
   let webDiscoveredPeers: string[] = [];
   let discoveredPeerEntries: PeerDiscovery[] = [];
   let peerDiscoveryUnsub: (() => void) | null = null;
@@ -165,12 +164,13 @@
   }
   
   // UI variables
-  let copiedPeerId = false
-  let copiedBootstrap = false
-  let copiedListenAddr: string | null = null
-  let publicMultiaddrs: string[] = []
+  // let copiedPeerId = false
+  // let copiedBootstrap = false
+  // let copiedListenAddr: string | null = null
+  // let publicMultiaddrs: string[] = []
 
   // Fetch public multiaddresses (non-loopback)
+  /*
   async function fetchPublicMultiaddrs() {
     try {
       const addrs = await invoke<string[]>('get_multiaddresses')
@@ -180,6 +180,7 @@
       publicMultiaddrs = []
     }
   }
+  */
 
   function formatSize(bytes: number | undefined): string {
     if (bytes === undefined || bytes === null || isNaN(bytes)) {
@@ -198,6 +199,7 @@
     return `${size.toFixed(2)} ${units[unitIndex]}`
   }
 
+  /*
   function formatPeerTimestamp(ms?: number): string {
     if (!ms) return tr('network.dht.health.never')
     return new Date(ms).toLocaleString()
@@ -211,6 +213,7 @@
   function formatHealthMessage(value: string | null): string {
     return value ?? tr('network.dht.health.none')
   }
+  */
 
   function formatPeerDate(date: Date | string | number | null | undefined): string {
     if (!date) {
@@ -246,6 +249,23 @@
     }
   }
 
+  /*
+  function getNodeRole(state?: NatReachabilityState | null): { title: string, description: string, color: string } {
+    if (state === 'public') {
+      return {
+        title: 'Participant (Full Node)',
+        description: 'Your node is publicly reachable. You are storing records and helping the network.',
+        color: 'text-emerald-600 dark:text-emerald-400'
+      }
+    }
+    return {
+      title: 'Observer (Client)',
+      description: 'Your node is behind a NAT. You can download files, but you are not routing traffic.',
+      color: 'text-muted-foreground'
+    }
+  }
+  */
+
   function formatNatConfidence(confidence?: NatConfidence | null): string {
     switch (confidence) {
       case 'high':
@@ -257,6 +277,7 @@
     }
   }
 
+  /*
   function reachabilityBadgeClass(state?: NatReachabilityState | null): string {
     switch (state) {
       case 'public':
@@ -267,6 +288,7 @@
         return 'bg-muted text-muted-foreground'
     }
   }
+  */
 
   function formatNatTimestamp(epoch?: number | null): string {
     if (!epoch) return tr('network.dht.health.never')
@@ -400,6 +422,25 @@
     }
   }
   
+  // Listen for low peer count warnings from backend
+  let lowPeerCountUnlisten: (() => void) | null = null;
+  
+  async function registerLowPeerCountListener() {
+    if (!isTauri || lowPeerCountUnlisten) return;
+    try {
+      lowPeerCountUnlisten = await listen('dht_low_peer_count', (event) => {
+        const payload = event.payload as { peer_count: number; minimum: number; message: string };
+        if (payload && payload.message) {
+          dhtEvents = [...dhtEvents, `⚠️ ${payload.message}`];
+          showToast(payload.message, 'warning');
+          diagnosticLogger.debug('Network', payload.message, { peerCount: payload.peer_count, minimum: payload.minimum });
+        }
+      });
+    } catch (error) {
+      errorLogger.networkError(`Failed to subscribe to low peer count warnings: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
   async function startDht() {
     if (!isTauri) {
       // Mock DHT connection for web
@@ -416,7 +457,14 @@
       return
     }
     
+    // Prevent multiple simultaneous connection attempts
+    if (isConnecting) {
+      diagnosticLogger.debug('Network', 'Connection attempt already in progress, ignoring');
+      return;
+    }
+    
     try {
+      isConnecting = true;
       dhtError = null
       cancelConnection = false
       
@@ -586,6 +634,8 @@
       
       dhtError = errorMessage
       dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${errorMessage}`]
+    } finally {
+      isConnecting = false;
     }
   }
 
@@ -633,7 +683,7 @@
           applyHealth(health)
           peerCount = health.peerCount
           // Fetch public multiaddresses
-          await fetchPublicMultiaddrs()
+          // await fetchPublicMultiaddrs() // Disabled for now to remove unused variable warning
         } else {
           peerCount = await dhtService.getPeerCount()
           dhtPeerCount = peerCount
@@ -689,7 +739,7 @@
       dhtError = null
       connectionAttempts = 0
       dhtHealth = null
-      copiedListenAddr = null
+      // copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
       cancelConnection = false
@@ -710,7 +760,7 @@
       connectionAttempts = 0
       dhtEvents = [...dhtEvents, `✓ DHT stopped - port ${dhtPort} released`]
       dhtHealth = null
-      copiedListenAddr = null
+      // copiedListenAddr = null
       lastNatState = null
       lastNatConfidence = null
       cancelConnection = false
@@ -1044,30 +1094,6 @@
     }
   }
   
-  function sendTestMessage() {
-    if (!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open') {
-      // showToast('No active WebRTC connection', 'error');
-      showToast(tr('toasts.network.noConnection'), 'error');
-      return;
-    }
-    
-    const testMessage = `Hello from ${signaling.getClientId()} at ${new Date().toLocaleTimeString()}`;
-    try {
-      webrtcSession.send(testMessage);
-      // showToast('Test message sent: ' + testMessage, 'success');
-      showToast(
-        tr('toasts.network.messageSent', { values: { message: testMessage } }),
-        'success'
-      );
-    } catch (error) {
-      // showToast('Failed to send message: ' + error, 'error');
-      showToast(
-        tr('toasts.network.sendError', { values: { error: String(error) } }),
-        'error'
-      );
-    }
-  }
-  
   async function refreshConnectedPeers() {
     if (!isTauri) {
       return;
@@ -1266,7 +1292,7 @@
       chainId = await invoke('get_network_chain_id') as number
     } catch (error) {
       console.error('Failed to fetch chain ID:', error)
-      chainId = null
+      // Keep the default value on error
     }
   }
 
@@ -1371,6 +1397,7 @@
         }
         await refreshConnectedPeers();
         await registerNatListener()
+        await registerLowPeerCountListener()
 
         // Listen for download progress updates
         unlistenProgress = await listen('geth-download-progress', (event) => {
@@ -1392,6 +1419,10 @@
       if (natStatusUnlisten) {
         natStatusUnlisten()
         natStatusUnlisten = null
+      }
+      if (lowPeerCountUnlisten) {
+        lowPeerCountUnlisten()
+        lowPeerCountUnlisten = null
       }
       if (stopPeerEvents) {
         stopPeerEvents()
@@ -1419,6 +1450,10 @@
       natStatusUnlisten()
       natStatusUnlisten = null
     }
+    if (lowPeerCountUnlisten) {
+      lowPeerCountUnlisten()
+      lowPeerCountUnlisten = null
+    }
     if (stopPeerEvents) {
       stopPeerEvents()
       stopPeerEvents = null
@@ -1432,952 +1467,471 @@
   })
 </script>
 
-<div class="space-y-6">
-  <div>
-    <h1 class="text-3xl font-bold">{$t('network.title')}</h1>
-    <p class="text-muted-foreground mt-2">{$t('network.subtitle')}</p>
-  </div>
-
-  <!-- Quick Actions -->
-<Card class="p-6 bg-muted/60 border border-muted-foreground/10 rounded-xl shadow-sm mb-6">
-  <div class="flex items-center justify-between mb-4">
-    <h2 class="text-lg font-semibold text-foreground tracking-tight">{$t('network.quickActions.title')}</h2>
-    <Badge variant="outline" class="text-xs text-muted-foreground border-muted-foreground/20 bg-transparent">
-      {$t('network.quickActions.badge')}
-    </Badge>
-  </div>
-  <div class="flex flex-wrap gap-4 justify-start items-center">
-    <!-- Discover Peers -->
-    <Button
-      size="lg"
-      variant="secondary"
-      class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
-      title={$t('network.quickActions.discoverPeers.tooltip')}
-      on:click={async () => {
-        if (dhtStatus !== 'connected') await startDht();
-        await runDiscovery();
-      }}
-      disabled={dhtStatus === 'connecting'}
-    >
-      <RefreshCw class={`h-5 w-5${dhtStatus === 'connecting' ? ' animate-spin' : ''}`} />
-      {dhtStatus === 'connecting' ? $t('network.quickActions.discoverPeers.discovering') : $t('network.quickActions.discoverPeers.button')}
-    </Button>
-
-    <!-- Add Peer by Address (inline input, condensed) -->
-    <div class="flex items-center gap-2 bg-muted/80 border border-muted-foreground/10 rounded-lg px-3 py-2">
-      <Input placeholder={$t('network.quickActions.addPeer.placeholder')} bind:value={newPeerAddress} class="w-32 text-sm bg-background border border-muted-foreground/10 rounded" />
-      <Button size="sm" variant="secondary" class="rounded" title={$t('network.quickActions.addPeer.tooltip')} on:click={async () => { if (newPeerAddress) { await addConnectedPeer(newPeerAddress); showToast($t('network.quickActions.addPeer.success'), 'success'); newPeerAddress = ''; }}} disabled={!newPeerAddress}>
-        <UserPlus class="h-4 w-4" />
-      </Button>
-    </div>
-
-    <!-- Copy Peer ID -->
-    <Button
-      size="lg"
-      variant="secondary"
-      class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
-      title={dhtPeerId ? $t('network.quickActions.copyPeerId.tooltip') : $t('network.quickActions.copyPeerId.tooltipUnavailable')}
-      on:click={async () => {
-        if (dhtPeerId) {
-          await copy(dhtPeerId);
-          showToast($t('network.quickActions.copyPeerId.success'), 'success');
-        }
-      }}
-      disabled={!dhtPeerId}
-    >
-      <Users class="h-5 w-5" />
-      {$t('network.quickActions.copyPeerId.button')}
-    </Button>
-
-    <!-- Refresh Status -->
-    <Button
-      size="lg"
-      variant="secondary"
-      class="flex items-center gap-2 px-6 py-3 font-semibold text-base rounded-lg shadow-sm border border-primary/10 bg-background hover:bg-secondary/80"
-      title={$t('network.quickActions.refreshStatus.tooltip')}
-      on:click={async () => {
-        await checkGethStatus();
-        showToast($t('network.quickActions.refreshStatus.success'), 'success');
-      }}
-    >
-      <Activity class="h-5 w-5" />
-      {$t('network.quickActions.refreshStatus.button')}
-    </Button>
-
-
-  </div>
-</Card>
-
-  <!-- Chiral Network Node Status Card -->
-  <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">{$t('network.nodeStatus')}</h2>
-      <div class="flex items-center gap-2">
-        {#if !isGethInstalled}
-          <div class="h-2 w-2 bg-yellow-500 rounded-full"></div>
-          <span class="text-sm text-yellow-600">{$t('network.status.notInstalled')}</span>
-        {:else if isGethRunning}
-          <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-green-600">{$t('network.status.connected')}</span>
-        {:else}
-          <div class="h-2 w-2 bg-red-500 rounded-full"></div>
-          <span class="text-sm text-red-600">{$t('network.status.disconnected')}</span>
-        {/if}
-      </div>
-    </div>
-
-    <div class="space-y-3">
-      {#if !isGethInstalled && !isGethRunning}
-        <div class="text-center py-4">
-          <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-1">
-            {isCheckingGeth ? 'Checking...' : 'Geth not installed'}
-          </p>
-          {#if !isCheckingGeth}
-            <p class="text-xs text-muted-foreground mb-3">Download and install the Chiral Network node</p>
-          {/if}
-          {#if downloadError}
-            <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-2 mb-3">
-              <div class="flex items-center gap-2 justify-center">
-                <AlertCircle class="h-4 w-4 text-red-500 flex-shrink-0" />
-                <p class="text-xs text-red-500">{downloadError}</p>
-              </div>
-            </div>
-          {/if}
-          {#if !isCheckingGeth}
-            <Button on:click={downloadGeth} disabled={isDownloading}>
-              <Download class="h-4 w-4 mr-2" />
-              Download Geth
-            </Button>
-          {/if}
-        </div>
-      {:else if isGethRunning}
-        <div class="grid grid-cols-2 gap-4">
-          <div class="bg-secondary rounded-lg p-3">
-            <p class="text-sm text-muted-foreground">{$t('network.chiralPeers')}</p>
-            <p class="text-2xl font-bold">{peerCount}</p>
-          </div>
-          <div class="bg-secondary rounded-lg p-3">
-            <p class="text-sm text-muted-foreground">{$t('network.chainId')}</p>
-            <p class="text-2xl font-bold">{chainId}</p>
-          </div>
-        </div>
-        <div class="pt-2">
-          <div class="flex items-center justify-between mb-1 gap-2">
-            <p class="text-sm text-muted-foreground">{$t('network.nodeAddress')}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              class="h-7 px-2"
-              on:click={async () => {
-                await copy(nodeAddress);
-                copiedNodeAddr = true;
-                setTimeout(() => (copiedNodeAddr = false), 1200);
-              }}
-            >
-              <Clipboard class="h-3.5 w-3.5 mr-1" />
-              {copiedNodeAddr ? $t('network.copied') : $t('network.copy')}
-            </Button>
-          </div>
-          <p class="text-xs font-mono break-all">{nodeAddress}</p>
-        </div>
-        <Button class="w-full mt-4" variant="outline" on:click={stopGethNode}>
-          <Square class="h-4 w-4 mr-2" />
-          Stop Node
-        </Button>
-      {:else}
-        <div class="text-center py-8">
-          <Server class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-3">Chiral Node not running</p>
-          <Button on:click={startGethNode} disabled={isStartingNode || isCheckingGeth}>
-            {#if isStartingNode}
-              <RefreshCw class="h-4 w-4 mr-2 animate-spin" />
-              Starting Node...
-            {:else}
-              <Play class="h-4 w-4 mr-2" />
-              Start Node
-            {/if}
-          </Button>
-        </div>
-      {/if}
-    </div>
-  </Card>
-
-  <!-- Geth Node Lifecycle & Bootstrap Health -->
-  <GethStatusCard dataDir="./bin/geth-data" logLines={40} refreshIntervalMs={10000} />
-
-
-  <!-- DHT Network Status Card -->
-  <Card class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">{$t('network.dht.title')}</h2>
-      <div class="flex items-center gap-2">
-        {#if dhtStatus === 'connected'}
-          <div class="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-green-600">{$t('network.status.connected')}</span>
-        {:else if dhtStatus === 'connecting'}
-          <div class="h-2 w-2 bg-yellow-500 rounded-full animate-pulse"></div>
-          <span class="text-sm text-yellow-600">{$t('network.status.connecting')}</span>
-        {:else}
-          <div class="h-2 w-2 bg-red-500 rounded-full"></div>
-          <span class="text-sm text-red-600">{$t('network.status.disconnected')}</span>
-        {/if}
-      </div>
-    </div>
-    
-    <div class="space-y-3">
-      {#if dhtStatus === 'disconnected'}
-        <div class="text-center py-4">
-          <Wifi class="h-12 w-12 text-muted-foreground mx-auto mb-2" />
-          <p class="text-sm text-muted-foreground mb-3">{$t('network.dht.notConnected')}</p>
-          <div class="px-8 my-4 text-left">
-            <Label for="dht-port" class="text-sm">{$t('network.dht.port')}</Label>
-            <Input id="dht-port" type="number" bind:value={dhtPort} class="mt-1" />
-          </div>
-          {#if dhtError}
-            <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mb-3 mx-4">
-              <p class="text-xs text-red-400 font-medium mb-1">{$t('network.dht.connectionError')}:</p>
-              <p class="text-xs text-red-300 font-mono">{dhtError}</p>
-            </div>
-          {/if}
-          <div class="flex gap-2 justify-center">
-            <Button on:click={startDht}>
-              <Wifi class="h-4 w-4 mr-2" />
-              {connectionAttempts > 0 ? $t('network.dht.retry') : $t('network.dht.connect')}
-            </Button>
-            {#if dhtPeerId}
-              <Button variant="outline" on:click={stopDht}>
-                <Wifi class="h-4 w-4 mr-2" />
-                {$t('network.dht.stop')}
-              </Button>
-            {/if}
-          </div>
-          
-          {#if dhtEvents.length > 0}
-            <div class="mt-4 mx-4">
-              <p class="text-xs text-muted-foreground mb-2">{$t('network.dht.log')}:</p>
-              <div class="bg-secondary/50 rounded-lg p-2 max-h-32 overflow-y-auto text-left">
-                {#each dhtEvents.slice(-5) as event}
-                  <p class="text-xs font-mono text-muted-foreground">{event}</p>
-                {/each}
-              </div>
-            </div>
-          {/if}
-        </div>
-      {:else if dhtStatus === 'connecting'}
-        <div class="text-center py-4">
-          <Wifi class="h-12 w-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
-          <p class="text-sm text-muted-foreground">{$t('network.dht.connectingToBootstrap')}</p>
-          <p class="text-xs text-muted-foreground mt-1">{dhtBootstrapNode}</p>
-          <p class="text-xs text-yellow-500 mt-2">{$t('network.dht.attempt', { values: { connectionAttempts: connectionAttempts } })}</p>
-          <div class="mt-4">
-            <Button variant="outline" size="sm" on:click={cancelDhtConnection}>
-              <Square class="h-4 w-4 mr-2" />
-              {$t('network.dht.cancel')}
-            </Button>
-          </div>
-        </div>
-      {:else}
-        <div class="space-y-3">
-          <div class="grid grid-cols-2 gap-4">
-            <div class="bg-secondary rounded-lg p-3">
-              <p class="text-sm text-muted-foreground">{$t('network.dht.port')}</p>
-              <p class="text-2xl font-bold">{dhtPort}</p>
-            </div>
-            <div class="bg-secondary rounded-lg p-3">
-              <p class="text-sm text-muted-foreground">{$t('network.dht.peers')}</p>
-              <p class="text-2xl font-bold">{dhtPeerCount}</p>
-            </div>
-          </div>
-          
-          <div class="pt-2">
-            <div class="flex items-center justify-between mb-1 gap-2">
-              <p class="text-sm text-muted-foreground">{$t('network.dht.peerId')}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                class="h-7 px-2"
-                on:click={async () => {
-                  await copy(dhtPeerId);
-                  copiedPeerId = true;
-                  setTimeout(() => (copiedPeerId = false), 1200);
-                }}
-                disabled={!dhtPeerId}
-              >
-                <Clipboard class="h-3.5 w-3.5 mr-1" />
-                {copiedPeerId ? $t('network.copied') : $t('network.copy')}
-              </Button>
-            </div>
-            <p class="text-xs font-mono break-all">{dhtPeerId}</p>
-          </div>
-          
-          <div class="pt-2">
-            <div class="flex items-center justify-between mb-1 gap-2">
-              <p class="text-sm text-muted-foreground">{$t('network.dht.bootstrapNode')}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                class="h-7 px-2"
-                on:click={async () => {
-                  await copy(dhtBootstrapNode);
-                  copiedBootstrap = true;
-                  setTimeout(() => (copiedBootstrap = false), 1200);
-                }}
-                disabled={!dhtBootstrapNode}
-              >
-                <Clipboard class="h-3.5 w-3.5 mr-1" />
-                {copiedBootstrap ? $t('network.copied') : $t('network.copy')}
-              </Button>
-            </div>
-            <p class="text-xs font-mono break-all">{dhtBootstrapNode}</p>
-          </div>
-
-          {#if publicMultiaddrs && publicMultiaddrs.length > 0}
-            <div class="pt-2 space-y-2">
-              <p class="text-sm text-muted-foreground">{$t('network.dht.listenAddresses')}</p>
-              {#each publicMultiaddrs as fullAddr}
-                <div class="bg-muted/40 rounded-lg px-3 py-2">
-                  <div class="flex items-center justify-between gap-2">
-                    <p class="text-xs font-mono break-all flex-1">{fullAddr}</p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      class="h-7 px-2 flex-shrink-0"
-                      on:click={async () => {
-                        await copy(fullAddr)
-                        copiedListenAddr = fullAddr
-                        setTimeout(() => (copiedListenAddr = null), 1200)
-                      }}
-                    >
-                      <Clipboard class="h-3.5 w-3.5 mr-1" />
-                      {copiedListenAddr === fullAddr ? $t('network.copied') : $t('network.copy')}
-                    </Button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {:else if dhtStatus === 'connected'}
-            <div class="pt-2">
-              <p class="text-xs text-muted-foreground">{$t('network.dht.noListenAddresses')}</p>
-            </div>
-          {/if}
-
-          <div class="pt-4 space-y-4">
-            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.title')}</p>
-                <div class="mt-2 flex items-center gap-2">
-                  <Badge class={reachabilityBadgeClass(dhtHealth?.reachability)}>
-                    {formatReachabilityState(dhtHealth?.reachability)}
-                  </Badge>
-                  <span class="text-sm text-muted-foreground">
-                    {formatNatConfidence(dhtHealth?.reachabilityConfidence)}
-                  </span>
-                </div>
-              </div>
-              <div class="text-sm text-muted-foreground space-y-1 text-right">
-                <p>{$t('network.dht.reachability.lastProbe')}: {formatNatTimestamp(dhtHealth?.lastProbeAt ?? null)}</p>
-                <p>{$t('network.dht.reachability.lastChange')}: {formatNatTimestamp(dhtHealth?.lastReachabilityChange ?? null)}</p>
-                {#if dhtHealth && !dhtHealth.autonatEnabled}
-                  <p class="text-xs text-yellow-600">{$t('network.dht.reachability.autonatDisabled')}</p>
-                {/if}
-              </div>
-            </div>
-
-            <div class="grid gap-4 md:grid-cols-2">
-              <div>
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.observedAddrs')}</p>
-                {#if dhtHealth?.observedAddrs && dhtHealth.observedAddrs.length > 0}
-                  <div class="mt-2 flex flex-wrap gap-2">
-                    {#each dhtHealth.observedAddrs as addr}
-                      <button
-                        class="inline-flex max-w-full items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-mono hover:bg-muted/80"
-                        on:click={() => copyObservedAddr(addr)}
-                        type="button"
-                      >
-                        <span class="break-all text-left">{addr}</span>
-                        <Clipboard class="h-3 w-3 flex-shrink-0" />
-                      </button>
-                    {/each}
-                  </div>
-                {:else}
-                  <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.observedEmpty')}</p>
-                {/if}
-              </div>
-              <div>
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.lastError')}</p>
-                <p class="mt-2 break-all text-sm text-muted-foreground">{dhtHealth?.lastReachabilityError ?? tr('network.dht.health.none')}</p>
-              </div>
-            </div>
-
-            <div>
-              <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.reachability.history')}</p>
-              {#if dhtHealth?.reachabilityHistory && dhtHealth.reachabilityHistory.length > 0}
-                <div class="mt-2 overflow-hidden rounded-md border border-muted/40">
-                  <table class="min-w-full text-sm">
-                    <thead class="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
-                      <tr>
-                        <th class="px-3 py-2">{$t('network.dht.reachability.timestamp')}</th>
-                        <th class="px-3 py-2">{$t('network.dht.reachability.stateLabel')}</th>
-                        <th class="px-3 py-2">{$t('network.dht.reachability.summary')}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each dhtHealth.reachabilityHistory as item}
-                        <tr class="border-t border-muted/30">
-                          <td class="px-3 py-2">{formatNatTimestamp(item.timestamp)}</td>
-                          <td class="px-3 py-2">{formatReachabilityState(item.state)}</td>
-                          <td class="px-3 py-2 break-words text-muted-foreground">{item.summary ?? '—'}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-              {:else}
-                <p class="mt-2 text-sm text-muted-foreground">{$t('network.dht.reachability.historyEmpty')}</p>
-              {/if}
-            </div>
-          </div>
-
-          {#if dhtHealth}
-            <div class="pt-4 space-y-3 border-t border-muted/40">
-              <div class="flex items-center justify-between">
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.title')}</p>
-                <Badge class={dhtHealth.autorelayEnabled ? 'bg-green-600' : 'bg-gray-500'}>
-                  {dhtHealth.autorelayEnabled ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
-                </Badge>
-              </div>
-              <div class="grid gap-3 sm:grid-cols-2">
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.enabledAt')}</p>
-                  <p class="text-sm font-medium mt-1">
-                    {dhtHealth.lastAutorelayEnabledAt
-                      ? formatHealthTimestamp(dhtHealth.lastAutorelayEnabledAt)
-                      : $t('network.dht.relay.neverEnabled')}
-                  </p>
-                </div>
-                <div class="bg-muted/40 rounded-lg p-3">
-                  <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.relay.disabledAt')}</p>
-                  <p class="text-sm font-medium mt-1">
-                    {dhtHealth.lastAutorelayDisabledAt
-                      ? formatHealthTimestamp(dhtHealth.lastAutorelayDisabledAt)
-                      : $t('network.dht.relay.neverDisabled')}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
-              <div class="bg-muted/40 rounded-lg p-3">
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastBootstrap')}</p>
-                <p class="text-sm font-medium mt-1">{formatHealthTimestamp(dhtHealth.lastBootstrap)}</p>
-              </div>
-              <div class="bg-muted/40 rounded-lg p-3">
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastPeer')}</p>
-                <p class="text-sm font-medium mt-1">{formatHealthTimestamp(dhtHealth.lastPeerEvent)}</p>
-              </div>
-              <div class="bg-muted/40 rounded-lg p-3">
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.lastError')}</p>
-                <p class="text-sm font-medium mt-1 break-words w-full">{formatHealthMessage(dhtHealth.lastError)}</p>
-                {#if dhtHealth.lastErrorAt}
-                  <p class="text-xs text-muted-foreground mt-1">{formatHealthTimestamp(dhtHealth.lastErrorAt)}</p>
-                {/if}
-              </div>
-              <div class="bg-muted/40 rounded-lg p-3">
-                <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.health.failures')}</p>
-                <p class="text-sm font-medium mt-1">{dhtHealth.bootstrapFailures}</p>
-              </div>
-            </div>
-          {/if}
-          
-          {#if dhtEvents.length > 0}
-            <div class="pt-2">
-              <p class="text-sm text-muted-foreground mb-2">{$t('network.dht.recentEvents')}</p>
-              <div class="bg-secondary rounded-lg p-2 max-h-32 overflow-y-auto">
-                {#each dhtEvents.slice(-5) as event}
-                  <p class="text-xs font-mono text-muted-foreground">{event}</p>
-                {/each}
-              </div>
-            </div>
-          {/if}
-          
-          <Button class="w-full" variant="outline" on:click={stopDht}>
-            <Square class="h-4 w-4 mr-2" />
-            {$t('network.dht.disconnect')}
-          </Button>
-        </div>
-      {/if}
-    </div>
-  </Card>
-
-  <!-- DCUtR Hole-Punching Card -->
-  {#if dhtStatus === 'connected' && dhtHealth}
-    <Card class="p-6">
-      <h3 class="text-lg font-semibold mb-4">{$t('network.dht.dcutr.title')}</h3>
-      <p class="text-sm text-muted-foreground mb-4">{$t('network.dht.dcutr.description')}</p>
-
-      <div class="grid gap-4 md:grid-cols-3">
-        <div>
-          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.attempts')}</p>
-          <p class="mt-1 text-2xl font-bold">{dhtHealth.dcutrHolePunchAttempts ?? 0}</p>
-        </div>
-        <div>
-          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.successes')}</p>
-          <p class="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{dhtHealth.dcutrHolePunchSuccesses ?? 0}</p>
-        </div>
-        <div>
-          <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.failures')}</p>
-          <p class="mt-1 text-2xl font-bold text-rose-600 dark:text-rose-400">{dhtHealth.dcutrHolePunchFailures ?? 0}</p>
-        </div>
-      </div>
-
-      <div class="mt-4 pt-4 border-t border-muted/40">
-        <div class="grid gap-4 md:grid-cols-2">
-          <div>
-            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.successRate')}</p>
-            <p class="mt-1 text-lg font-semibold">
-              {#if dhtHealth.dcutrHolePunchAttempts > 0}
-                {((dhtHealth.dcutrHolePunchSuccesses / dhtHealth.dcutrHolePunchAttempts) * 100).toFixed(1)}%
-              {:else}
-                —
-              {/if}
-            </p>
-          </div>
-          <div>
-            <p class="text-xs uppercase text-muted-foreground">{$t('network.dht.dcutr.enabled')}</p>
-            <Badge class={dhtHealth.dcutrEnabled ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300' : 'bg-muted text-muted-foreground'}>
-              {dhtHealth.dcutrEnabled ? $t('network.dht.dcutr.enabled') : $t('network.dht.dcutr.disabled')}
-            </Badge>
-          </div>
-        </div>
-      </div>
-
-      <div class="mt-4 text-sm text-muted-foreground space-y-1">
-        <p>{$t('network.dht.dcutr.lastSuccess')}: {formatNatTimestamp(dhtHealth.lastDcutrSuccess ?? null)}</p>
-        <p>{$t('network.dht.dcutr.lastFailure')}: {formatNatTimestamp(dhtHealth.lastDcutrFailure ?? null)}</p>
-      </div>
-    </Card>
-  {/if}
-
-  <!-- Smart Peer Selection Metrics -->
-  {#if dhtStatus === 'connected'}
-    <PeerMetrics />
-  {/if}
+<div class="container mx-auto max-w-7xl px-4 py-6 space-y-6">
   
-  <!-- Network Statistics Cards -->
+  <!-- Header & Status Bar -->
+  <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div>
+      <h1 class="text-3xl font-bold tracking-tight">{$t('network.title')}</h1>
+      <p class="text-muted-foreground mt-1">{$t('network.subtitle')}</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <!-- Global status badge -->
+      <Badge class="px-3 py-1 text-sm font-medium {dhtStatus === 'connected' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}">
+        {dhtStatus === 'connected' ? 'Network Online' : 'Network Offline'}
+      </Badge>
+    </div>
+  </div>
+
+  <!-- Global Metrics Grid (The 4 boxes) -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-    <Card class="p-4">
-      <div class="flex items-center gap-3">
-        <div class="p-2 bg-green-500/10 rounded-lg">
-          <Signal class="h-5 w-5 text-green-500" />
-        </div>
+    <!-- Blockchain Node -->
+    <Card class="p-4 border-l-4 {isGethRunning ? 'border-l-emerald-500' : 'border-l-red-500'}">
+      <div class="flex justify-between items-start">
         <div>
-          <p class="text-sm text-muted-foreground">{$t('network.networkStatus')}</p>
-          <p class="text-xl font-bold capitalize">{$networkStatus}</p>
+          <p class="text-sm font-medium text-muted-foreground">Blockchain Node</p>
+          <div class="flex items-center gap-2 mt-1">
+             <div class="w-2 h-2 rounded-full {isGethRunning ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}"></div>
+             <h3 class="text-sm font-bold">{isGethRunning ? 'Running' : 'Stopped'}</h3>
+          </div>
+          <p class="text-xs text-muted-foreground mt-0.5">Chain ID: {chainId}</p>
+        </div>
+        <div class="p-2 bg-emerald-100 dark:bg-emerald-900/20 rounded-lg">
+          <HardDrive class="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
         </div>
       </div>
     </Card>
-    
-    <Card class="p-4">
-      <div class="flex items-center gap-3">
-        <div class="p-2 bg-blue-500/10 rounded-lg">
-          <Users class="h-5 w-5 text-blue-500" />
-        </div>
+
+    <!-- Active Peers -->
+    <Card class="p-4 border-l-4 {dhtStatus === 'connected' ? 'border-l-blue-500' : 'border-l-muted'}">
+      <div class="flex justify-between items-start">
         <div>
-          <p class="text-sm text-muted-foreground">{$t('network.dhtPeers')}</p>
-          <p class="text-xl font-bold">{dhtStatus === 'connected' ? dhtPeerCount : 0}</p>
+          <p class="text-sm font-medium text-muted-foreground">Active Peers</p>
+          <h3 class="text-2xl font-bold mt-1">{dhtStatus === 'connected' ? dhtPeerCount : 0}</h3>
+        </div>
+        <div class="p-2 bg-blue-100 dark:bg-blue-900/20 rounded-lg">
+          <Users class="h-5 w-5 text-blue-600 dark:text-blue-400" />
         </div>
       </div>
     </Card>
-    
-    <Card class="p-4">
-      <div class="flex items-center gap-3">
-        <div class="p-2 bg-purple-500/10 rounded-lg">
-          <HardDrive class="h-5 w-5 text-purple-500" />
-        </div>
+
+    <!-- Reachability -->
+    <Card class="p-4 border-l-4 {dhtHealth?.reachability === 'public' ? 'border-l-green-500' : 'border-l-orange-500'}">
+      <div class="flex justify-between items-start">
         <div>
-          <p class="text-sm text-muted-foreground">{$t('network.networkSize')}</p>
-          <p class="text-xl font-bold">{formatSize($networkStats.networkSize)}</p>
+          <p class="text-sm font-medium text-muted-foreground">Reachability</p>
+          <div class="flex items-center gap-2 mt-1">
+            <h3 class="text-xl font-bold capitalize">{dhtHealth?.reachability || 'Unknown'}</h3>
+          </div>
+          <p class="text-xs text-muted-foreground mt-0.5 capitalize">{dhtHealth?.reachabilityConfidence || 'Low'} Confidence</p>
+        </div>
+        <div class="p-2 bg-orange-100 dark:bg-orange-900/20 rounded-lg">
+          <Signal class="h-5 w-5 text-orange-600 dark:text-orange-400" />
         </div>
       </div>
     </Card>
-    
-    <Card class="p-4">
-      <div class="flex items-center gap-3">
-        <div class="p-2 bg-orange-500/10 rounded-lg">
-          <Activity class="h-5 w-5 text-orange-500" />
-        </div>
+
+    <!-- Data Traffic -->
+    <Card class="p-4 border-l-4 border-l-purple-500">
+      <div class="flex justify-between items-start">
         <div>
-          <p class="text-sm text-muted-foreground">{$t('network.bandwidth')}</p>
-          <p class="text-sm font-bold">↓ {dhtStatus === 'connected' ? $networkStats.avgDownloadSpeed.toFixed(1) : '0.0'} MB/s</p>
-          <p class="text-sm font-bold">↑ {dhtStatus === 'connected' ? $networkStats.avgUploadSpeed.toFixed(1) : '0.0'} MB/s</p>
+          <p class="text-sm font-medium text-muted-foreground">Network Traffic</p>
+          <div class="mt-1 space-y-0.5">
+            <p class="text-sm font-bold">↓ {dhtStatus === 'connected' ? $networkStats.avgDownloadSpeed.toFixed(1) : '0.0'} MB/s</p>
+            <p class="text-sm font-bold">↑ {dhtStatus === 'connected' ? $networkStats.avgUploadSpeed.toFixed(1) : '0.0'} MB/s</p>
+          </div>
+        </div>
+        <div class="p-2 bg-purple-100 dark:bg-purple-900/20 rounded-lg">
+          <Activity class="h-5 w-5 text-purple-600 dark:text-purple-400" />
         </div>
       </div>
     </Card>
   </div>
-  
+
+  <!-- Tab Navigation -->
+  <div class="border-b border-border">
+    <nav class="flex space-x-8" aria-label="Tabs">
+      <button
+        class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'overview' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground'}"
+        on:click={() => activeTab = 'overview'}
+      >
+        <LayoutDashboard class="mr-2 h-4 w-4" />
+        Overview
+      </button>
+      <button
+        class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'peers' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground'}"
+        on:click={() => activeTab = 'peers'}
+      >
+        <Users class="mr-2 h-4 w-4" />
+        Peers
+      </button>
+      <button
+        class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'diagnostics' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground'}"
+        on:click={() => activeTab = 'diagnostics'}
+      >
+        <FileText class="mr-2 h-4 w-4" />
+        Diagnostics
+      </button>
+    </nav>
+  </div>
+
+  <!-- Tab Content -->
   <div class="mt-6">
-    <GeoDistributionCard />
-  </div>
-
-  <!-- Relay health & monitoring (DHT snapshot) -->
-  <Card class="p-6 mt-6">
-    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-      <div>
-        <p class="text-xs uppercase text-muted-foreground">AutoRelay</p>
-        <p class="text-sm text-muted-foreground">{ $settings.enableAutorelay ? 'Enabled' : 'Disabled' }</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <Button
-          size="sm"
-          on:click={() => setAutorelay(true)}
-          disabled={autorelayToggling || $settings.enableAutorelay}
-        >
-          Enable AutoRelay
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          on:click={() => setAutorelay(false)}
-          disabled={autorelayToggling || !$settings.enableAutorelay}
-        >
-          Disable AutoRelay
-        </Button>
-      </div>
-    </div>
-    {#if dhtHealth}
-      {#if $settings.enableAutorelay && dhtStatus === 'connected'}
-        <div>
-          <h3 class="text-lg font-semibold text-foreground mb-3">{$t('relay.monitoring.title')}</h3>
-          <RelayErrorMonitor />
-        </div>
-      {:else}
-        <div class="text-sm text-muted-foreground">
-          Enable auto-relay and connect to the DHT to view relay monitoring details.
-        </div>
-      {/if}
-    {:else}
-      <div class="mt-4 rounded-lg border border-dashed border-muted/40 bg-muted/20 p-4 text-sm text-muted-foreground">
-        Start the DHT to capture a relay snapshot from the health report.
-      </div>
-    {/if}
-  </Card>
-  
-  <!-- Peer Discovery -->
-  <Card class="p-6">
-    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-      <h2 class="text-lg font-semibold">{$t('network.peerDiscovery.title')}</h2>
-      <div class="flex-shrink-0">
-        <Button
-          size="sm"
-          variant="outline"
-          on:click={runDiscovery}
-          disabled={discoveryRunning}
-        >
-          <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
-          {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
-        </Button>
-      </div>
-    </div>
     
-    <div class="space-y-4">
-      <div>
-        <Label for="peer-address">{$t('network.peerDiscovery.directConnect')}</Label>
-        <div class="flex flex-wrap gap-2 mt-2">
-          <Input
-            id="peer-address"
-            bind:value={newPeerAddress}
-            placeholder={$t('network.peerDiscovery.placeholder')}
-            class="flex-1 min-w-0 break-all"
-          />
-          <Button on:click={connectToPeer} disabled={!newPeerAddress}>
-            <UserPlus class="h-4 w-4 mr-2" />
-            {$t('network.peerDiscovery.connect')}
-          </Button>
-          <Button
-            on:click={sendTestMessage}
-            disabled={!webrtcSession || !webrtcSession.channel || webrtcSession.channel.readyState !== 'open'}
-            variant="outline"
-          >
-            {$t('network.sendTest')}
-          </Button>
-        </div>
-        <!-- {#if discoveredPeers && discoveredPeers.length > 0} -->
-         {#if isTauri}
-          {@const discoveryTotalPages = Math.ceil(discoveredPeerEntries.length / discoveryPerPage)}
-          {@const discoveryStartIndex = (discoveryCurrentPage - 1) * discoveryPerPage}
-          {@const discoveryEndIndex = Math.min(discoveryStartIndex + discoveryPerPage, discoveredPeerEntries.length)}
-          {@const paginatedDiscoveryPeers = discoveredPeerEntries.slice(discoveryStartIndex, discoveryEndIndex)}
-
-          <div class="mt-4 space-y-3">
-            <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
-            <div class="flex items-center justify-between gap-4">
-              <!-- Left: Showing peers counter -->
-              <div class="text-sm text-muted-foreground flex-shrink-0">
-                {#if discoveredPeerEntries.length > 0}
-                  Showing {discoveryStartIndex + 1}-{discoveryEndIndex} of {discoveredPeerEntries.length} discovered peers
-                {:else}
-                  No discovered peers
-                {/if}
-              </div>
-
-              <!-- Center: Pagination Controls -->
-              <div class="flex items-center justify-center flex-1">
-                {#if discoveredPeerEntries.length > discoveryPerPage}
-                  <div class="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      on:click={() => {
-                        if (discoveryCurrentPage > 1) discoveryCurrentPage--
-                      }}
-                      disabled={discoveryCurrentPage === 1}
-                    >
-                      Previous
-                    </Button>
-                    <div class="flex items-center gap-1">
-                      {#each Array.from({ length: discoveryTotalPages }, (_, i) => i + 1) as page}
-                        {#if page === 1 || page === discoveryTotalPages || (page >= discoveryCurrentPage - 1 && page <= discoveryCurrentPage + 1)}
-                          <Button
-                            size="sm"
-                            variant={page === discoveryCurrentPage ? 'default' : 'outline'}
-                            class="w-10"
-                            on:click={() => discoveryCurrentPage = page}
-                          >
-                            {page}
-                          </Button>
-                        {:else if page === discoveryCurrentPage - 2 || page === discoveryCurrentPage + 2}
-                          <span class="px-2 text-muted-foreground">...</span>
-                        {/if}
-                      {/each}
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      on:click={() => {
-                        if (discoveryCurrentPage < discoveryTotalPages) discoveryCurrentPage++
-                      }}
-                      disabled={discoveryCurrentPage === discoveryTotalPages}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                {/if}
-              </div>
-
-              <!-- Right: Run Discovery button -->
-              <div class="flex-shrink-0">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  on:click={runDiscovery}
-                  disabled={discoveryRunning}
-                >
-                  <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
-                  {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
-                </Button>
-              </div>
+    <!-- OVERVIEW TAB -->
+    {#if activeTab === 'overview'}
+      <div class="space-y-6">
+        
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Blockchain Node Lifecycle -->
+          <Card class="p-6">
+            <div class="flex items-center justify-between mb-6">
+              <h3 class="text-lg font-semibold flex items-center gap-2">
+                <Server class="h-5 w-5 text-primary" />
+                Blockchain Node
+              </h3>
+              <Badge variant={isGethRunning ? 'default' : 'secondary'} class={isGethRunning ? 'bg-emerald-600' : ''}>
+                {isGethRunning ? 'Running' : !isGethInstalled ? 'Not Installed' : 'Stopped'}
+              </Badge>
             </div>
 
-            {#if paginatedDiscoveryPeers.length > 0}
-              <ul class="space-y-3">
-                {#each paginatedDiscoveryPeers as peer}
-                  <li class="border rounded p-3 space-y-2 bg-background/50">
-                    <div class="flex items-start justify-between gap-2">
-                      <div class="text-sm font-mono break-all">{peer.peerId}</div>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        class="h-8 w-8"
-                        title={$t('network.quickActions.copyPeerId.button')}
-                        on:click={async () => {
-                          await copy(peer.peerId)
-                          showToast($t('network.quickActions.copyPeerId.success'), 'success')
-                        }}
-                      >
-                        <Clipboard class="h-4 w-4" />
-                      </Button>
-                    </div>
-                    {#if peer.addresses.length > 0}
-                      <div class="space-y-1">
-                        {#each peer.addresses as addr}
-                          <div class="flex items-center justify-between gap-2">
-                            <span class="text-xs font-mono break-all">{addr}</span>
-                            {#if addr.includes('/p2p/')}
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                on:click={() => {
-                                  newPeerAddress = addr
-                                  showToast($t('network.peerDiscovery.peerAddedToInput'), 'success')
-                                }}
-                              >
-                                {$t('network.peerDiscovery.add')}
-                              </Button>
-                            {/if}
-                          </div>
-                        {/each}
-                      </div>
+            <div class="space-y-6">
+              {#if !isGethInstalled}
+                <div class="text-center py-6 space-y-4">
+                  <p class="text-muted-foreground text-sm">The Chiral blockchain node is required for transaction validation and mining.</p>
+                  <Button on:click={downloadGeth} disabled={isDownloading}>
+                    {#if isDownloading}
+                      <RefreshCw class="h-4 w-4 mr-2 animate-spin" /> Downloading...
                     {:else}
-                      <p class="text-xs text-muted-foreground">{$t('network.peerMetrics.noPeers')}</p>
+                      <Download class="h-4 w-4 mr-2" /> Download Node Software
                     {/if}
-                    <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.lastSeen')}: {formatPeerTimestamp(peer.lastSeen)}</p>
-                  </li>
-                {/each}
-              </ul>
-            {/if}
-          </div>
-        {:else if webDiscoveredPeers.length > 0}
-          {@const webDiscoveryTotalPages = Math.ceil(webDiscoveredPeers.length / discoveryPerPage)}
-          {@const webDiscoveryStartIndex = (discoveryCurrentPage - 1) * discoveryPerPage}
-          {@const webDiscoveryEndIndex = Math.min(webDiscoveryStartIndex + discoveryPerPage, webDiscoveredPeers.length)}
-          {@const paginatedWebDiscoveryPeers = webDiscoveredPeers.slice(webDiscoveryStartIndex, webDiscoveryEndIndex)}
-
-          <div class="mt-4 space-y-3">
-            <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
-            <div class="flex items-center justify-between gap-4">
-              <!-- Left: Showing peers counter -->
-              <div class="text-sm text-muted-foreground flex-shrink-0">
-                {#if webDiscoveredPeers.length > 0}
-                  Showing {webDiscoveryStartIndex + 1}-{webDiscoveryEndIndex} of {webDiscoveredPeers.length} discovered peers
-                {:else}
-                  No discovered peers
-                {/if}
-              </div>
-
-              <!-- Center: Pagination Controls -->
-              <div class="flex items-center justify-center flex-1">
-                {#if webDiscoveredPeers.length > discoveryPerPage}
-                  <div class="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      on:click={() => {
-                        if (discoveryCurrentPage > 1) discoveryCurrentPage--
-                      }}
-                      disabled={discoveryCurrentPage === 1}
+                  </Button>
+                  {#if downloadError}
+                    <p class="text-xs text-red-500 mt-2">{downloadError}</p>
+                  {/if}
+                </div>
+              {:else}
+                <div class="space-y-4">
+                  <div class="flex gap-3">
+                    <Button 
+                      class="flex-1" 
+                      variant={isGethRunning ? "secondary" : "default"}
+                      disabled={isGethRunning || isStartingNode}
+                      on:click={startGethNode}
                     >
-                      Previous
+                      {#if isStartingNode}
+                        <RefreshCw class="h-4 w-4 mr-2 animate-spin" /> Starting...
+                      {:else}
+                        <Play class="h-4 w-4 mr-2" /> Start Node
+                      {/if}
                     </Button>
-                    <div class="flex items-center gap-1">
-                      {#each Array.from({ length: webDiscoveryTotalPages }, (_, i) => i + 1) as page}
-                        {#if page === 1 || page === webDiscoveryTotalPages || (page >= discoveryCurrentPage - 1 && page <= discoveryCurrentPage + 1)}
-                          <Button
-                            size="sm"
-                            variant={page === discoveryCurrentPage ? 'default' : 'outline'}
-                            class="w-10"
-                            on:click={() => discoveryCurrentPage = page}
-                          >
-                            {page}
-                          </Button>
-                        {:else if page === discoveryCurrentPage - 2 || page === discoveryCurrentPage + 2}
-                          <span class="px-2 text-muted-foreground">...</span>
-                        {/if}
-                      {/each}
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      on:click={() => {
-                        if (discoveryCurrentPage < webDiscoveryTotalPages) discoveryCurrentPage++
-                      }}
-                      disabled={discoveryCurrentPage === webDiscoveryTotalPages}
+                    <Button 
+                      class="flex-1" 
+                      variant="destructive"
+                      disabled={!isGethRunning}
+                      on:click={stopGethNode}
                     >
-                      Next
+                      <Square class="h-4 w-4 mr-2" /> Stop Node
                     </Button>
                   </div>
+
+                  <div class="pt-2 border-t space-y-3">
+                    <div class="flex justify-between text-sm">
+                      <span class="text-muted-foreground">Chain ID</span>
+                      <span class="font-mono">{chainId}</span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                      <span class="text-muted-foreground">Peers</span>
+                      <span class="font-mono">{peerCount}</span>
+                    </div>
+                    <div class="space-y-1">
+                      <span class="text-xs text-muted-foreground uppercase">Node Address</span>
+                      <div class="flex items-center gap-2">
+                        <code class="bg-muted px-2 py-1 rounded text-xs font-mono flex-1 truncate" title={nodeAddress}>
+                          {nodeAddress || 'Waiting for start...'}
+                        </code>
+                        {#if nodeAddress}
+                          <Button variant="ghost" size="icon" class="h-6 w-6 flex-shrink-0" on:click={() => copy(nodeAddress)}>
+                            <Clipboard class="h-3 w-3" />
+                          </Button>
+                        {/if}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div class="flex justify-end pt-2">
+                    <Button variant="ghost" size="sm" class="h-8 text-xs text-muted-foreground" on:click={checkGethStatus} disabled={isCheckingGeth}>
+                      <RefreshCw class="h-3 w-3 mr-1 {isCheckingGeth ? 'animate-spin' : ''}" />
+                      Refresh Status
+                    </Button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          </Card>
+
+          <!-- DHT Network Control -->
+          <Card class="p-6">
+            <div class="flex items-center justify-between mb-6">
+              <h3 class="text-lg font-semibold flex items-center gap-2">
+                <Network class="h-5 w-5 text-primary" />
+                DHT Network
+              </h3>
+              <Badge variant={dhtStatus === 'connected' ? 'default' : 'secondary'} class={dhtStatus === 'connected' ? 'bg-green-600' : ''}>
+                {dhtStatus === 'connected' ? 'Connected' : dhtStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+              </Badge>
+            </div>
+
+            <div class="space-y-6">
+              {#if dhtStatus === 'disconnected'}
+                <div class="space-y-4">
+                  <div class="space-y-2">
+                    <Label for="dht-port">Network Port</Label>
+                    <div class="flex gap-3">
+                      <Input id="dht-port" type="number" bind:value={dhtPort} class="max-w-[120px]" />
+                      <Button on:click={startDht} class="flex-1" disabled={connectionAttempts > 0}>
+                        <Play class="h-4 w-4 mr-2" />
+                        Connect Network
+                      </Button>
+                    </div>
+                    <p class="text-xs text-muted-foreground">
+                      Port {dhtPort} will be used for P2P connections. Ensure this port is open if you are behind a firewall.
+                    </p>
+                  </div>
+                  {#if dhtError}
+                    <div class="p-3 bg-red-100/50 border border-red-200 text-red-700 rounded-md text-sm flex items-start gap-2">
+                      <AlertCircle class="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <span>{dhtError}</span>
+                    </div>
+                  {/if}
+                </div>
+              {:else if dhtStatus === 'connecting'}
+                 <div class="text-center py-8 space-y-3">
+                    <RefreshCw class="h-8 w-8 mx-auto animate-spin text-primary" />
+                    <p class="text-muted-foreground">Connecting to Chiral Network...</p>
+                    <Button variant="outline" size="sm" on:click={cancelDhtConnection}>Cancel</Button>
+                 </div>
+              {:else}
+                <div class="space-y-4">
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                      <span class="text-xs font-medium text-muted-foreground uppercase">My Peer ID</span>
+                      <div class="flex items-center gap-2">
+                        <code class="bg-muted px-2 py-1 rounded text-xs font-mono flex-1 truncate" title={dhtPeerId}>{dhtPeerId}</code>
+                        <Button variant="ghost" size="icon" class="h-6 w-6 flex-shrink-0" on:click={() => copy(dhtPeerId)}>
+                          <Clipboard class="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div class="space-y-1">
+                      <span class="text-xs font-medium text-muted-foreground uppercase">Port</span>
+                      <div class="font-mono text-sm border px-3 py-1 rounded bg-muted/20">{dhtPort}</div>
+                    </div>
+                  </div>
+
+                  {#if dhtHealth?.observedAddrs?.[0]}
+                    <div class="space-y-1">
+                      <span class="text-xs font-medium text-muted-foreground uppercase">Multiaddress</span>
+                      <div class="flex items-center gap-2">
+                        <code class="bg-muted px-2 py-1 rounded text-xs font-mono flex-1 truncate" title={dhtHealth.observedAddrs[0]}>
+                          {dhtHealth.observedAddrs[0]}
+                        </code>
+                        <Button variant="ghost" size="icon" class="h-6 w-6 flex-shrink-0" on:click={() => copy(dhtHealth?.observedAddrs?.[0])}>
+                          <Clipboard class="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  {/if}
+
+                  {#if dhtBootstrapNode}
+                    <div class="space-y-1">
+                      <span class="text-xs font-medium text-muted-foreground uppercase">Connected Bootstrap</span>
+                      <div class="font-mono text-xs text-muted-foreground truncate" title={dhtBootstrapNode}>
+                        {dhtBootstrapNode}
+                      </div>
+                    </div>
+                  {/if}
+
+                  <Button variant="destructive" class="w-full mt-2" on:click={stopDht}>
+                    <Square class="h-4 w-4 mr-2" />
+                    Disconnect Network
+                  </Button>
+                </div>
+              {/if}
+            </div>
+          </Card>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          
+          <!-- Left Column: Hole Punching & Geo -->
+          <div class="space-y-6">
+            <!-- Hole Punching (DCUtR) -->
+            <Card class="p-6">
+              <div class="flex items-center justify-between mb-4">
+                  <h3 class="text-lg font-semibold">Hole Punching (DCUtR)</h3>
+                {#if dhtHealth}
+                    <Badge variant={dhtHealth.dcutrEnabled ? 'default' : 'secondary'} class={dhtHealth.dcutrEnabled ? 'bg-blue-100 text-blue-800 hover:bg-blue-200' : ''}>
+                        {dhtHealth.dcutrEnabled ? 'Enabled' : 'Disabled'}
+                    </Badge>
                 {/if}
+            </div>
+            
+            {#if dhtHealth}
+              <div class="grid grid-cols-3 gap-4 text-center mb-4">
+                 <div class="p-2 bg-muted/20 rounded-lg">
+                    <div class="text-2xl font-bold">{dhtHealth.dcutrHolePunchAttempts || 0}</div>
+                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Attempts</div>
+                 </div>
+                 <div class="p-2 bg-green-50/50 dark:bg-green-900/10 rounded-lg">
+                    <div class="text-2xl font-bold text-green-600 dark:text-green-400">{dhtHealth.dcutrHolePunchSuccesses || 0}</div>
+                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Success</div>
+                 </div>
+                 <div class="p-2 bg-red-50/50 dark:bg-red-900/10 rounded-lg">
+                    <div class="text-2xl font-bold text-red-600 dark:text-red-400">{dhtHealth.dcutrHolePunchFailures || 0}</div>
+                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Failed</div>
+                 </div>
               </div>
 
-              <!-- Right: Run Discovery button -->
-              <div class="flex-shrink-0">
+              <div class="space-y-3 pt-3 border-t">
+                 <div class="flex justify-between text-sm">
+                    <span class="text-muted-foreground">Success Rate</span>
+                    <span class="font-medium">
+                        {dhtHealth.dcutrHolePunchAttempts > 0 
+                            ? ((dhtHealth.dcutrHolePunchSuccesses / dhtHealth.dcutrHolePunchAttempts) * 100).toFixed(1) 
+                            : '0.0'}%
+                    </span>
+                 </div>
+                 <div class="flex justify-between text-sm">
+                    <span class="text-muted-foreground">Last Success</span>
+                    <span class="font-mono text-xs">{formatNatTimestamp(dhtHealth.lastDcutrSuccess)}</span>
+                 </div>
+              </div>
+            {:else}
+              <div class="py-8 text-center">
+                 <p class="text-sm text-muted-foreground">DHT not connected.</p>
+              </div>
+            {/if}
+          </Card>
+            
+            <!-- Geographic Distribution -->
+            <GeoDistributionCard />
+          </div>
+
+          <!-- Relay Status -->
+          <Card class="p-6">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-semibold">Relay Status</h3>
+              <div class="flex items-center gap-1 bg-muted/30 p-1 rounded-md">
                 <Button
                   size="sm"
-                  variant="outline"
-                  on:click={runDiscovery}
-                  disabled={discoveryRunning}
+                  variant="ghost"
+                  class="h-8 px-3 text-xs transition-colors {$settings.enableAutorelay ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm' : 'text-muted-foreground hover:bg-transparent'}"
+                  on:click={() => setAutorelay(true)}
+                  disabled={autorelayToggling || $settings.enableAutorelay}
                 >
-                  <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
-                  {discoveryRunning ? $t('network.peerDiscovery.discovering') : $t('network.peerDiscovery.run')}
+                  On
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  class="h-8 px-3 text-xs transition-colors {!$settings.enableAutorelay ? 'bg-red-600 text-white hover:bg-red-700 shadow-sm' : 'text-muted-foreground hover:bg-transparent'}"
+                  on:click={() => setAutorelay(false)}
+                  disabled={autorelayToggling || !$settings.enableAutorelay}
+                >
+                  Off
                 </Button>
               </div>
             </div>
-
-            <ul class="space-y-2">
-              {#each paginatedWebDiscoveryPeers as p}
-                <li class="flex items-center justify-between p-2 border rounded">
-                  <div class="truncate mr-4">{p}</div>
-                      <!-- <div class="flex items-center gap-2">
-                        <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
-                          {$t('network.peerDiscovery.add')}
-                        </Button>
-                      </div> -->
-                    <div class="flex items-center gap-2">
-                      <Button size="sm" variant="outline" on:click={() => { newPeerAddress = p; showToast($t('network.peerDiscovery.peerAddedToInput'), 'success'); }}>
-                        {$t('network.peerDiscovery.add')}
-                      </Button>
-                    </div>
-                </li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
-      </div>
-    </div>
-  </Card>
-  
-  <!-- Connected Peers -->
-  <Card class="p-6">
-      <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <h2 class="text-lg font-semibold">{$t('network.connectedPeers.title', { values: { count: $peers.length } })}</h2>
-      <div class="flex items-center gap-2">
-        <Label for="sort" class="flex items-center">
-    <span class="text-base">{$t('network.connectedPeers.sortBy')}</span>
-        </Label>
-  <div class="w-40 flex-shrink-0">
-  <DropDown
-  id="sort"
-        options={[
-          { value: 'reputation', label: $t('network.connectedPeers.reputation') },
-          { value: 'sharedFiles', label: $t('network.connectedPeers.sharedFiles') },
-          { value: 'totalSize', label: $t('network.connectedPeers.totalSize') },
-          { value: 'nickname', label: $t('network.connectedPeers.name') },
-          { value: 'location', label: $t('network.connectedPeers.location') },
-          { value: 'joinDate', label: $t('network.connectedPeers.joinDate') },
-          { value: 'lastSeen', label: $t('network.connectedPeers.lastSeen') },
-          { value: 'status', label: $t('network.connectedPeers.status') }
-        ]}
-        bind:value={sortBy}
-  />
-  </div>
-  <div class="w-40 flex-shrink-0">
-  <DropDown
-  id="sort-direction"
-        options={
-          sortBy === 'reputation'
-          ? [ { value: 'desc', label: $t('network.connectedPeers.highest') }, { value: 'asc', label: $t('network.connectedPeers.lowest') } ]
-          : sortBy === 'sharedFiles'
-          ? [ { value: 'desc', label: $t('network.connectedPeers.most') }, { value: 'asc', label: $t('network.connectedPeers.least') } ]
-          : sortBy === 'totalSize'
-          ? [ { value: 'desc', label: $t('network.connectedPeers.largest') }, { value: 'asc', label: $t('network.connectedPeers.smallest') } ]
-          : sortBy === 'joinDate'
-          ? [ { value: 'desc', label: $t('network.connectedPeers.newest') }, { value: 'asc', label: $t('network.connectedPeers.oldest') } ]
-          : sortBy === 'lastSeen'
-          ? [ { value: 'desc', label: $t('network.connectedPeers.mostRecent') }, { value: 'asc', label: $t('network.connectedPeers.leastRecent') } ]
-          : sortBy === 'location'
-          ? [ { value: 'asc', label: $t('network.connectedPeers.closest') }, { value: 'desc', label: $t('network.connectedPeers.farthest') } ]
-          : sortBy === 'status'
-          ? [ { value: 'asc', label: $t('network.connectedPeers.online') }, { value: 'desc', label: $t('network.connectedPeers.offline') } ]
-          : sortBy === 'nickname'
-          ? [ { value: 'asc', label: $t('network.connectedPeers.aToZ') }, { value: 'desc', label: $t('network.connectedPeers.zToA') } ]
-          : [ { value: 'desc', label: 'Desc' }, { value: 'asc', label: 'Asc' } ]
-        }
-        bind:value={sortDirection}
-        />
+            {#if dhtStatus === 'connected' && dhtHealth}
+               <div>
+                 <RelayErrorMonitor />
+               </div>
+            {:else}
+               <div class="text-xs text-muted-foreground italic">Connect to DHT to view relay status.</div>
+            {/if}
+          </Card>
         </div>
-          </div>
       </div>
-    {@const sortedPeers = [...$peers].sort((a, b) => {
+
+    <!-- PEERS TAB -->
+    {:else if activeTab === 'peers'}
+      <div class="space-y-6">
+        
+        <!-- Peer Discovery Section -->
+        <Card class="p-5 border-2 bg-muted/10">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-semibold text-lg">Discovery</h3>
+              <p class="text-sm text-muted-foreground">Find new peers to connect with</p>
+            </div>
+            <div class="flex gap-2">
+               <Button variant="secondary" on:click={runDiscovery} disabled={discoveryRunning}>
+                 <RefreshCw class="h-4 w-4 mr-2 {discoveryRunning ? 'animate-spin' : ''}" />
+                 Run Discovery
+               </Button>
+               <Button variant="outline" on:click={() => newPeerAddress = ''}>
+                 Add Manually
+               </Button>
+            </div>
+          </div>
+          
+          <div class="mt-4">
+             <div class="flex items-center gap-2 max-w-md">
+                <Input 
+                  placeholder="Peer Address / ID" 
+                  class="h-9 text-sm" 
+                  bind:value={newPeerAddress} 
+                />
+                <Button size="sm" variant="secondary" disabled={!newPeerAddress} on:click={connectToPeer}>
+                  <UserPlus class="h-4 w-4" />
+                </Button>
+             </div>
+          </div>
+          
+          {#if discoveredPeerEntries.length > 0}
+            <div class="mt-4 pt-4 border-t">
+              <p class="text-sm font-medium mb-2">Discovered Peers ({discoveredPeerEntries.length})</p>
+              <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                {#each discoveredPeerEntries.slice(0, 6) as peer}
+                  <div class="flex items-center justify-between p-2 bg-background border rounded text-sm">
+                    <span class="font-mono truncate w-32">{peer.peerId}</span>
+                    <Button size="icon" variant="ghost" class="h-6 w-6" on:click={() => copy(peer.peerId)}>
+                      <Clipboard class="h-3 w-3" />
+                    </Button>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </Card>
+
+        <!-- Smart Peer Connection -->
+        <PeerMetrics />
+
+        <!-- Main Connected Peers List -->
+        <Card class="p-0 overflow-hidden">
+          <div class="p-4 border-b bg-muted/30 flex items-center justify-between">
+            <h3 class="font-semibold">Connected Peers ({$peers.length})</h3>
+            <div class="flex items-center gap-2">
+               <span class="text-sm text-muted-foreground">Sort by:</span>
+               <div class="w-32">
+                 <DropDown
+                  options={[
+                    { value: 'reputation', label: $t('network.connectedPeers.reputation') },
+                    { value: 'location', label: $t('network.connectedPeers.location') },
+                    { value: 'status', label: $t('network.connectedPeers.status') }
+                  ]}
+                  bind:value={sortBy}
+                 />
+               </div>
+               <Button variant="ghost" size="icon" on:click={refreshConnectedPeers}>
+                 <RefreshCw class="h-4 w-4" />
+               </Button>
+            </div>
+          </div>
+          
+          {@const sortedPeers = [...$peers].sort((a, b) => {
             let aVal: any, bVal: any
 
             switch (sortBy) {
@@ -2394,30 +1948,18 @@
                     bVal = b.totalSize
                     break
                 case 'nickname':
-                    aVal = (a.nickname || 'zzzzz').toLowerCase() // Put empty names at the end
+                    aVal = (a.nickname || 'zzzzz').toLowerCase()
                     bVal = (b.nickname || 'zzzzz').toLowerCase()
                     break
                 case 'location':
                     const getLocationDistance = (peerLocation: string | undefined) => {
                         if (!peerLocation) return UNKNOWN_DISTANCE;
-
                         const peerRegion = normalizeRegion(peerLocation);
-
-                        if (peerRegion.id === UNKNOWN_REGION_ID) {
-                            return UNKNOWN_DISTANCE;
-                        }
-
-                        if (currentUserRegion.id === UNKNOWN_REGION_ID) {
-                            return peerRegion.id === UNKNOWN_REGION_ID ? 0 : UNKNOWN_DISTANCE;
-                        }
-
-                        if (peerRegion.id === currentUserRegion.id) {
-                            return 0;
-                        }
-
+                        if (peerRegion.id === UNKNOWN_REGION_ID) return UNKNOWN_DISTANCE;
+                        if (currentUserRegion.id === UNKNOWN_REGION_ID) return peerRegion.id === UNKNOWN_REGION_ID ? 0 : UNKNOWN_DISTANCE;
+                        if (peerRegion.id === currentUserRegion.id) return 0;
                         return Math.round(calculateRegionDistance(currentUserRegion, peerRegion));
                     };
-                    
                     aVal = getLocationDistance(a.location);
                     bVal = getLocationDistance(b.location);
                     break
@@ -2430,7 +1972,6 @@
                     bVal = new Date(b.lastSeen).getTime()
                     break
                 case 'status':
-                    // Assign numeric values for logical sorting: online (0) > away (1) > offline (2)
                     aVal = a.status === 'online' ? 0 : a.status === 'away' ? 1 : 2
                     bVal = b.status === 'online' ? 0 : b.status === 'away' ? 1 : 2
                     break
@@ -2438,18 +1979,12 @@
                     return 0
             }
 
-            // Handle string comparison
             if (typeof aVal === 'string' && typeof bVal === 'string') {
-                if (aVal < bVal) {
-                    return sortDirection === 'asc' ? -1 : 1
-                } else if (aVal > bVal) {
-                    return sortDirection === 'asc' ? 1 : -1
-                } else {
-                    return 0
-                }
+                if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1
+                else if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1
+                else return 0
             }
 
-            // Handle numeric comparison
             if (typeof aVal === 'number' && typeof bVal === 'number') {
                 const result = aVal - bVal
                 return sortDirection === 'asc' ? result : -result
@@ -2457,156 +1992,128 @@
 
             return 0
         })}
-    {@const totalPages = Math.ceil(sortedPeers.length / peersPerPage)}
-    {@const startIndex = (currentPage - 1) * peersPerPage}
-    {@const endIndex = Math.min(startIndex + peersPerPage, sortedPeers.length)}
-    {@const paginatedPeers = sortedPeers.slice(startIndex, endIndex)}
-
-    <!-- Controls bar: showing text, pagination, and refresh button all on same line -->
-    <div class="flex items-center justify-between mb-4 gap-4">
-      <!-- Left: Showing peers counter -->
-      <div class="text-sm text-muted-foreground flex-shrink-0">
-        {#if sortedPeers.length > 0}
-          Showing {startIndex + 1}-{endIndex} of {sortedPeers.length} peers
-        {:else}
-          No peers
-        {/if}
-      </div>
-
-      <!-- Center: Pagination Controls -->
-      <div class="flex items-center justify-center flex-1">
-        {#if sortedPeers.length > peersPerPage}
-          <div class="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              on:click={() => {
-                if (currentPage > 1) currentPage--
-              }}
-              disabled={currentPage === 1}
-            >
-              Previous
-            </Button>
-            <div class="flex items-center gap-1">
-              {#each Array.from({ length: totalPages }, (_, i) => i + 1) as page}
-                {#if page === 1 || page === totalPages || (page >= currentPage - 1 && page <= currentPage + 1)}
-                  <Button
-                    size="sm"
-                    variant={page === currentPage ? 'default' : 'outline'}
-                    class="w-10"
-                    on:click={() => currentPage = page}
-                  >
-                    {page}
-                  </Button>
-                {:else if page === currentPage - 2 || page === currentPage + 2}
-                  <span class="px-2 text-muted-foreground">...</span>
-                {/if}
-              {/each}
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              on:click={() => {
-                if (currentPage < totalPages) currentPage++
-              }}
-              disabled={currentPage === totalPages}
-            >
-              Next
-            </Button>
-          </div>
-        {/if}
-      </div>
-
-      <!-- Right: Refresh button -->
-      <div class="flex-shrink-0">
-        <Button
-          size="sm"
-          variant="outline"
-          on:click={refreshConnectedPeers}
-          disabled={!isTauri || dhtStatus !== 'connected'}
-        >
-          <RefreshCw class="h-4 w-4 mr-2" />
-          Refresh Peers
-        </Button>
-      </div>
-    </div>
-
-    <!-- Peer list -->
-    <div class="space-y-3">
-        {#each paginatedPeers as peer}
-        <div class="p-4 bg-secondary rounded-lg">
-          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2 gap-2">
-            <div class="flex items-start gap-3 min-w-0">
-              <div class="w-2 h-2 rounded-full flex-shrink-0 {
-                peer.status === 'online' ? 'bg-green-500' :
-                peer.status === 'away' ? 'bg-yellow-500' :
-                'bg-red-500'
-              }"></div>
-              <div>
-                <p class="font-medium">{peer.nickname || $t('network.connectedPeers.anonymous')}</p>
-                <p class="text-xs text-muted-foreground break-all">{peer.address}</p>
-              </div>
-            </div>
-            <div class="flex flex-wrap items-center gap-2 justify-end">
-              <Badge variant="outline" class="flex-shrink-0">
-              ⭐ {(peer.reputation ?? 0).toFixed(1)}
-              </Badge>
-                <Badge variant={peer.status === 'online' ? 'default' : 'secondary'}
-                       class={
-                          peer.status === 'online' ? 'bg-green-500 text-white' :
-                          peer.status === 'away' ? 'bg-yellow-500 text-white' :
-                          'bg-red-500 text-white'
-                        }
-                        style="pointer-events: none;"
-                >
-                {peer.status}
-              </Badge>
-              <Button
-                size="sm"
-                variant="outline"
-                class="h-8 px-2"
-                on:click={() => disconnectFromPeer(peer.address)}
-              >
-                <UserMinus class="h-3.5 w-3.5 mr-1" />
-                {$t('network.connectedPeers.disconnect')}
-              </Button>
-            </div>
-          </div>
           
-          <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
-            <div>
-              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.sharedFiles')}</p>
-              <p class="font-medium">{peer.sharedFiles}</p>
-            </div>
-            <div>
-              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.totalSize')}</p>
-              <p class="font-medium">{formatSize(peer.totalSize)}</p>
-            </div>
-            <div>
-              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.location')}</p>
-              <p class="font-medium">{peer.location || $t('network.connectedPeers.unknown')}</p>
-            </div>
-            <div>
-              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.joined')}</p>
-              <p class="font-medium">{formatPeerDate(peer.joinDate)}</p>
-            </div>
-            <div>
-              <p class="text-xs text-muted-foreground">{$t('network.connectedPeers.lastSeen')}</p>
-              <p class="font-medium">
-                {#if peer.status === 'online'}
-                  {$t('network.connectedPeers.now')}
-                {:else}
-                  {formatPeerDate(peer.lastSeen)}
-                {/if}
-              </p>
-            </div>
+          <div class="divide-y">
+            {#each sortedPeers as peer}
+              <div class="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-muted/10 transition-colors">
+                 <div class="flex items-center gap-3">
+                    <div class="w-2 h-2 rounded-full flex-shrink-0 {peer.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}"></div>
+                    <div>
+                       <div class="flex items-center gap-2">
+                         <span class="font-medium">{peer.nickname || 'Anonymous'}</span>
+                         <Badge variant="outline" class="text-xs py-0 h-5">⭐ {peer.reputation?.toFixed(1) || '0.0'}</Badge>
+                       </div>
+                       <p class="text-xs text-muted-foreground font-mono mt-0.5">{peer.address.substring(0, 20)}...</p>
+                    </div>
+                 </div>
+                 
+                 <div class="flex items-center gap-6 text-sm text-muted-foreground">
+                    <div class="text-right hidden md:block">
+                       <p class="text-xs uppercase">Data</p>
+                       <p class="font-medium text-foreground">{formatSize(peer.totalSize)}</p>
+                    </div>
+                    <div class="text-right">
+                       <p class="text-xs uppercase">Location</p>
+                       <p class="font-medium text-foreground">{peer.location || 'Unknown'}</p>
+                    </div>
+                    <div class="text-right hidden md:block">
+                       <p class="text-xs uppercase">Shared</p>
+                       <p class="font-medium text-foreground">{peer.sharedFiles || 0}</p>
+                    </div>
+                    <div class="text-right hidden md:block">
+                       <p class="text-xs uppercase">Last Seen</p>
+                       <p class="font-medium text-foreground">{formatPeerDate(peer.lastSeen)}</p>
+                    </div>
+                    <Button size="sm" variant="ghost" class="text-red-500 hover:text-red-600 hover:bg-red-50" on:click={() => disconnectFromPeer(peer.address)}>
+                       Disconnect
+                    </Button>
+                 </div>
+              </div>
+            {/each}
+            {#if sortedPeers.length === 0}
+               <div class="p-8 text-center text-muted-foreground">
+                 No peers connected. Try running discovery.
+               </div>
+            {/if}
+          </div>
+        </Card>
+      </div>
+
+    <!-- DIAGNOSTICS TAB -->
+    {:else if activeTab === 'diagnostics'}
+      <div class="space-y-6">
+        
+        <!-- Blockchain Node Logs Status -->
+        <div class="space-y-2">
+          <h3 class="text-sm font-medium text-muted-foreground uppercase">Blockchain Logs Status</h3>
+          <GethStatusCard dataDir="./bin/geth-data" logLines={20} refreshIntervalMs={10000} />
+        </div>
+
+        <!-- Detailed Reachability Info -->
+        <Card class="p-5">
+           <h3 class="font-semibold mb-4">Network Reachability Details</h3>
+           <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+             <div class="space-y-2">
+               <div class="flex justify-between border-b pb-1">
+                 <span class="text-muted-foreground">Current State</span>
+                 <span class="font-medium">{formatReachabilityState(dhtHealth?.reachability)}</span>
+               </div>
+               <div class="flex justify-between border-b pb-1">
+                 <span class="text-muted-foreground">Confidence</span>
+                 <span class="font-medium">{formatNatConfidence(dhtHealth?.reachabilityConfidence)}</span>
+               </div>
+               <div class="flex justify-between border-b pb-1">
+                 <span class="text-muted-foreground">Public Probe</span>
+                 <span class="font-medium">{formatNatTimestamp(dhtHealth?.lastProbeAt)}</span>
+               </div>
+             </div>
+             <div class="space-y-2">
+               {#if dhtHealth?.observedAddrs && dhtHealth.observedAddrs.length > 0}
+                 <p class="text-xs uppercase text-muted-foreground mb-1">Observed Public Addresses</p>
+                 <div class="flex flex-wrap gap-2">
+                   {#each dhtHealth.observedAddrs as addr}
+                      <button class="font-mono text-xs border rounded px-2 py-1 bg-muted/20 hover:bg-muted/40 text-left truncate max-w-full" on:click={() => copyObservedAddr(addr)}>
+                        {addr}
+                      </button>
+                   {/each}
+                 </div>
+               {:else}
+                 <p class="text-muted-foreground italic">No public addresses observed.</p>
+               {/if}
+             </div>
+           </div>
+           
+           {#if dhtHealth?.reachabilityHistory}
+              <div class="mt-4 pt-4 border-t">
+                 <p class="text-xs uppercase text-muted-foreground mb-2">Reachability History</p>
+                 <div class="space-y-1">
+                    {#each dhtHealth.reachabilityHistory.slice(0, 3) as item}
+                       <div class="text-xs flex gap-2">
+                          <span class="text-muted-foreground">{formatNatTimestamp(item.timestamp)}</span>
+                          <span class="font-medium">{formatReachabilityState(item.state)}</span>
+                       </div>
+                    {/each}
+                 </div>
+              </div>
+           {/if}
+        </Card>
+
+        <!-- DHT Events -->
+        <div class="space-y-2">
+          <h3 class="font-semibold text-sm uppercase text-muted-foreground">DHT Network Events</h3>
+          <div class="h-48 overflow-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs">
+            {#if dhtEvents.length > 0}
+              {#each dhtEvents as event}
+                <p class="whitespace-pre-wrap border-b border-border/50 pb-1 mb-1 last:border-0">{event}</p>
+              {/each}
+            {:else}
+               <p class="text-muted-foreground italic">No events recorded.</p>
+            {/if}
           </div>
         </div>
-      {/each}
 
-      {#if $peers.length === 0}
-        <p class="text-center text-muted-foreground py-8">{$t('network.connectedPeers.noPeers')}</p>
-      {/if}
-    </div>
-  </Card>
+      </div>
+    {/if}
+
+  </div>
 </div>

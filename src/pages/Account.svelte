@@ -439,12 +439,29 @@
         const snapshot = await walletService.exportSnapshot({ includePrivateKey: true });
         const dataStr = JSON.stringify(snapshot, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const fileName = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+
+        if (isTauri) {
+          try {
+            const storagePath = await invoke<string>('get_download_directory');
+            await invoke('ensure_directory_exists', { path: storagePath });
+            const { join } = await import('@tauri-apps/api/path');
+            const exportPath = await join(storagePath, fileName);
+            const { writeFile } = await import('@tauri-apps/plugin-fs');
+            await writeFile(exportPath, new TextEncoder().encode(dataStr));
+            exportMessage = tr('wallet.exportSuccess');
+            setTimeout(() => exportMessage = '', 3000);
+            return;
+          } catch (error) {
+            console.error('Tauri export failed, falling back to browser flow:', error);
+          }
+        }
         
         // Check if the File System Access API is supported
         if ('showSaveFilePicker' in window) {
           try {
             const fileHandle = await (window as any).showSaveFilePicker({
-              suggestedName: `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`,
+              suggestedName: fileName,
               types: [{
                 description: 'JSON files',
                 accept: {
@@ -470,7 +487,7 @@
           const url = URL.createObjectURL(dataBlob);
           const link = document.createElement('a');
           link.href = url;
-          link.download = `chiral-wallet-export-${new Date().toISOString().split('T')[0]}.json`;
+          link.download = fileName;
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
@@ -585,9 +602,7 @@
 
   // Ensure pendingCount is used (for linter)
   $: void $pendingCount;
-
-  let balanceRefreshInterval: ReturnType<typeof setInterval> | null = null;
-  
+    
   onMount(() => {
     // Initialize wallet service asynchronously
     walletService.initialize().then(async () => {
@@ -1021,6 +1036,26 @@
     } finally {
         isLoadingFromKeystore = false;
         setTimeout(() => keystoreLoadMessage = '', 4000);
+    }
+  }
+
+  async function deleteKeystoreAccount() {
+    if (!selectedKeystoreAccount) return;
+
+    const confirmMsg = tr('keystore.delete.confirm', { values: { address: selectedKeystoreAccount } });
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      await walletService.deleteKeystoreAccount(selectedKeystoreAccount);
+      // Refresh list
+      await loadKeystoreAccountsList();
+      // Clear selection and password
+      selectedKeystoreAccount = '';
+      loadKeystorePassword = '';
+      showToast(tr('keystore.delete.success'), 'success');
+    } catch (error) {
+      console.error('Failed to delete keystore account:', error);
+      showToast(tr('keystore.delete.error', { values: { error: String(error) } }), 'error');
     }
   }
 
@@ -1511,8 +1546,16 @@
 
       // Clear any stored session data from both localStorage and sessionStorage
       if (typeof localStorage !== 'undefined') {
-        localStorage.removeItem('lastAccount');
-        localStorage.removeItem('miningSession');
+        const walletKeys = [
+          'lastAccount',
+          'miningSession',
+          'chiral_wallet',
+          'chiral_transactions',
+          'transactionPagination',
+          'miningPagination',
+          'chiral_keystore_passwords',
+        ];
+        walletKeys.forEach(key => localStorage.removeItem(key));
         // Clear all sessionStorage data for security
         sessionStorage.clear();
       }
@@ -1554,84 +1597,6 @@
       alert('Could not generate the QR code.');
     }
   }
-
-  let sessionTimeout = 3600; // seconds (1 hour)
-  let sessionTimer: number | null = null;
-  let sessionCleanup: (() => void) | null = null;
-  let autoLockMessage = '';
-
-  function clearSessionTimer() {
-    if (sessionTimer) {
-      clearTimeout(sessionTimer);
-      sessionTimer = null;
-    }
-  }
-
-  function resetSessionTimer() {
-    if (typeof window === 'undefined' || !$settings.enableWalletAutoLock) {
-      clearSessionTimer();
-      return;
-    }
-    clearSessionTimer();
-    sessionTimer = window.setTimeout(() => {
-      autoLockWallet();
-    }, sessionTimeout * 1000);
-  }
-
-  function autoLockWallet() {
-    if (!$settings.enableWalletAutoLock) return;
-    handleLogout();
-    autoLockMessage = 'Wallet auto-locked due to inactivity.';
-    showToast(autoLockMessage, 'warning');
-    setTimeout(() => autoLockMessage = '', 5000);
-  }
-
-  // Listen for user activity to reset timer
-  function setupSessionTimeout() {
-    if (typeof window === 'undefined') {
-      return () => {};
-    }
-    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
-    const handler = () => resetSessionTimer();
-    for (const ev of events) {
-      window.addEventListener(ev, handler);
-    }
-    resetSessionTimer();
-    return () => {
-      for (const ev of events) {
-        window.removeEventListener(ev, handler);
-      }
-      clearSessionTimer();
-    };
-  }
-
-  function teardownSessionTimeout() {
-    if (sessionCleanup) {
-      sessionCleanup();
-      sessionCleanup = null;
-    } else {
-      clearSessionTimer();
-    }
-  }
-
-  $: if (typeof window !== 'undefined') {
-    if ($settings.enableWalletAutoLock) {
-      if (!sessionCleanup) {
-        sessionCleanup = setupSessionTimeout();
-      } else {
-        resetSessionTimer();
-      }
-    } else {
-      teardownSessionTimeout();
-    }
-  }
-
-  onMount(() => {
-    if ($settings.enableWalletAutoLock && !sessionCleanup) {
-      sessionCleanup = setupSessionTimeout();
-    }
-    return () => teardownSessionTimeout();
-  });
 
 </script>
 
@@ -1778,6 +1743,15 @@
                   >
                     <KeyRound class="h-4 w-4 mr-2" />
                     {isLoadingFromKeystore ? $t('actions.unlocking') : $t('actions.unlockAccount')}
+                  </Button>
+                  <Button
+                    class="w-full mt-2"
+                    variant="outline"
+                    on:click={deleteKeystoreAccount}
+                    disabled={!selectedKeystoreAccount || isLoadingFromKeystore}
+                  >
+                    <BadgeX class="h-4 w-4 mr-2 text-red-600" />
+                    {$t('keystore.delete.button')}
                   </Button>
                   {#if keystoreLoadMessage}
                     <p class="text-xs text-center {keystoreLoadMessage.toLowerCase().includes('success') ? 'text-green-600' : 'text-red-600'}">{keystoreLoadMessage}</p>
@@ -2879,11 +2853,6 @@
           </Button>
         </div>
       </div>
-    </div>
-  {/if}
-  {#if autoLockMessage}
-  <div class="fixed top-0 left-0 w-full bg-yellow-100 text-yellow-800 text-center py-2 z-50">
-    {autoLockMessage}
   </div>
   {/if}
 </div>

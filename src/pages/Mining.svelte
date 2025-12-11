@@ -9,11 +9,6 @@
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
 
-  // Event payload types for mining events
-  interface MiningScanProgressPayload {
-    address: string;
-    blocks_found_in_batch: number;
-  }
   import { onDestroy, onMount, getContext } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { getVersion } from "@tauri-apps/api/app";

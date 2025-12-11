@@ -109,6 +109,37 @@ export class PeerSelectionService {
   }
 
   /**
+   * Get metrics for a specific list of peers.
+   * This is more efficient than getPeerMetrics() when you only need a subset.
+   */
+  static async getMetricsForPeers(peerIds: string[]): Promise<PeerMetrics[]> {
+    if (peerIds.length === 0) {
+      return [];
+    }
+    try {
+      // Assumes a 'get_batch_peer_metrics' command exists in the Rust backend.
+      const metrics = await invoke<PeerMetrics[]>("get_batch_peer_metrics", { peerIds });
+      return metrics || [];
+    } catch (error) {
+      console.error("Failed to get batch peer metrics:", error);
+      return [];
+    }
+  }
+  /**
+   * Get peer metrics for all currently connected DHT peers
+   * This includes peers without transfer history, ensuring the reputation system shows all active peers
+   */
+  static async getConnectedPeerMetrics(): Promise<PeerMetrics[]> {
+    try {
+      const metrics = await invoke<PeerMetrics[]>("get_connected_peer_metrics");
+      return metrics || [];
+    } catch (error) {
+      console.error("Failed to get connected peer metrics:", error);
+      return [];
+    }
+  }
+
+  /**
    * Select peers using a specific strategy
    */
   static async selectPeersWithStrategy(
@@ -272,6 +303,14 @@ export class PeerSelectionService {
       return [];
     }
 
+    // ✨ Pre-rank available peers by local reputation composite score
+    // This prioritizes peers with higher reputation before passing them to the strategy selector.
+    const sortedAvailablePeers = [...availablePeers].sort((a, b) => {
+      const scoreB = this.rep.composite(b);
+      const scoreA = this.rep.composite(a);
+      return scoreB - scoreA; // Higher score first
+    });
+
     // For very large files, use load balancing to distribute across peers
     const strategy: PeerSelectionStrategy =
       fileSize > 500 * 1024 * 1024
@@ -281,7 +320,7 @@ export class PeerSelectionService {
     const peerCount = Math.min(maxPeers, supportedPeers.length);
 
     return await this.selectPeersWithStrategy(
-      availablePeers,
+      sortedAvailablePeers,
       peerCount,
       strategy,
       requireEncryption
@@ -343,6 +382,23 @@ export class PeerSelectionService {
   }
 
   /**
+   * Converts a raw reputation score into a standardized trust level.
+   * @param score The numeric reputation score.
+   * @returns A trust level string ('Trusted', 'Medium', or 'Low').
+   */
+  static getTrustLevelFromScore(score: number): 'Trusted' | 'Medium' | 'Low' {
+    // These thresholds are now centralized here.
+    if (score > 50) {
+      return 'Trusted';
+    }
+    if (score >= 0) {
+      return 'Medium';
+    }
+    return 'Low';
+  }
+
+
+  /**
    * Auto-cleanup inactive peers periodically
    */
   static startPeriodicCleanup(intervalMinutes: number = 60): () => void {
@@ -360,25 +416,54 @@ export class PeerSelectionService {
 
   /**
    * Composite score in [0,1], combining:
-   *  - local reputation (Beta) 60%
-   *  - freshness (last_seen)   25%
-   *  - performance (latency)   15%
+   *  - backend success_rate 60% (uses actual transfer data)
+   *  - freshness (last_seen) 25%
+   *  - performance (latency) 15%
    */
   static compositeScoreFromMetrics(p: PeerMetrics): number {
     // keep the store updated with what we see
     this.rep.noteSeen(p.peer_id);
-    if (typeof p.latency_ms === "number") {
-      // don't mark success here; RTT success will be recorded where you actually connect/transfer
-      // but we can gently update EMA if we want to reflect recent latency probes
-      // (optional, comment out if you prefer only connection-based updates)
-      // this.rep.success(p.peer_id, p.latency_ms);
+    
+    // Sync backend transfer data with frontend store
+    if (p.successful_transfers > 0 || p.failed_transfers > 0) {
+      const storedRep = this.rep.getAllPeers().get(p.peer_id);
+      const storedSuccesses = storedRep?.alpha || 0;
+      const storedFailures = storedRep?.beta || 0;
+      
+      // Update store if backend has more recent data
+      if (p.successful_transfers > storedSuccesses) {
+        for (let i = storedSuccesses; i < p.successful_transfers; i++) {
+          this.rep.success(p.peer_id, p.latency_ms);
+        }
+      }
+      if (p.failed_transfers > storedFailures) {
+        for (let i = storedFailures; i < p.failed_transfers; i++) {
+          this.rep.failure(p.peer_id);
+        }
+      }
     }
 
-    // local rep components
-    const repScore = this.rep.repScore(p.peer_id);
+    // For new peers with no transfer history, return exactly 0.7 (3.5 stars, "High" trust level)
+    // Once they have transfers, use the weighted calculation
+    if (p.transfer_count === 0) {
+      // Only log if window.DEBUG is set (for debugging)
+      if (typeof window !== "undefined" && (window as any).DEBUG) {
+        console.log(`✨ New peer ${p.peer_id.substring(0,15)}... has 0 transfers, returning 0.7 score (High trust)`);
+      }
+      return 0.7; // Exactly 3.5/5.0 stars for new peers
+    }
+    
+    console.log(`📈 Existing peer ${p.peer_id.substring(0,15)}... has ${p.transfer_count} transfers (${p.successful_transfers} success, ${p.failed_transfers} failed)`);
+
+    
+    // Use backend success_rate directly (more accurate than frontend Beta distribution)
+    const repScore = p.success_rate;
+    
     const freshScore = (() => {
+      // Since we just called noteSeen(), this peer is fresh right now
+      // Use the backend's last_seen time to calculate staleness
       const nowSec = Date.now() / 1000;
-      const ageSec = Math.max(0, nowSec - (p.last_seen || 0));
+      const ageSec = Math.max(0, nowSec - (p.last_seen || nowSec));
       if (ageSec <= 60) return 1;
       if (ageSec >= 86400) return 0;
       return 1 - (ageSec - 60) / (86400 - 60);

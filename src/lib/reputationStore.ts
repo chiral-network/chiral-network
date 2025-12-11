@@ -9,6 +9,8 @@ export type PeerReputation = {
   lastUpdatedMs: number;
 };
 
+const STORAGE_KEY = 'chiral.reputation.store';
+
 export class ReputationStore {
   private static _instance: ReputationStore | null = null;
   static getInstance() {
@@ -22,7 +24,33 @@ export class ReputationStore {
   private readonly rttAlpha = 0.3; // EMA weight
   private readonly halfLifeDays = 14;
 
-  private constructor() {}
+  private constructor() {
+    this.loadFromStorage();
+  }
+
+  private loadFromStorage() {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const data = JSON.parse(stored) as Array<[PeerId, PeerReputation]>;
+        this.store = new Map(data);
+        console.log(`✅ Loaded ${this.store.size} peer reputations from storage`);
+      }
+    } catch (e) {
+      console.warn('Failed to load reputation store from localStorage:', e);
+    }
+  }
+
+  private saveToStorage() {
+    if (typeof window === 'undefined') return;
+    try {
+      const data = Array.from(this.store.entries());
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.warn('Failed to save reputation store to localStorage:', e);
+    }
+  }
 
   private decay(rep: PeerReputation) {
     const now = Date.now();
@@ -52,6 +80,7 @@ export class ReputationStore {
   noteSeen(id: PeerId) {
     const rep = this.ensure(id);
     rep.lastSeenMs = Date.now();
+    this.saveToStorage();
   }
 
   success(id: PeerId, rttMs?: number) {
@@ -60,11 +89,13 @@ export class ReputationStore {
     if (typeof rttMs === "number") {
       rep.rttMsEMA = rep.rttMsEMA * (1 - this.rttAlpha) + rttMs * this.rttAlpha;
     }
+    this.saveToStorage();
   }
 
   failure(id: PeerId) {
     const rep = this.ensure(id);
     rep.beta += 1;
+    this.saveToStorage();
   }
 
   // Core components in [0,1]
@@ -91,6 +122,34 @@ export class ReputationStore {
   composite(id: PeerId): number {
     const wRep = 0.6, wFresh = 0.25, wPerf = 0.15;
     return wRep * this.repScore(id) + wFresh * this.freshScore(id) + wPerf * this.perfScore(id);
+  }
+
+  // Load reputation data from backend peer metrics
+  loadFromBackendMetrics(metrics: Array<{ peer_id: string; successful_transfers: number; failed_transfers: number; latency_ms?: number; last_seen: number }>) {
+    for (const m of metrics) {
+      const rep = this.ensure(m.peer_id);
+      // Sync backend data with frontend store
+      rep.alpha = Math.max(rep.alpha, m.successful_transfers);
+      rep.beta = Math.max(rep.beta, m.failed_transfers);
+      if (typeof m.latency_ms === 'number' && m.latency_ms > 0) {
+        rep.rttMsEMA = rep.rttMsEMA * 0.7 + m.latency_ms * 0.3; // Blend with existing
+      }
+      rep.lastSeenMs = Math.max(rep.lastSeenMs, m.last_seen * 1000);
+      rep.lastUpdatedMs = Date.now();
+    }
+    this.saveToStorage();
+    console.log(`✅ Synced ${metrics.length} peer reputations from backend`);
+  }
+
+  // Get all peers with their data
+  getAllPeers(): Map<PeerId, PeerReputation> {
+    return new Map(this.store);
+  }
+
+  // Clear all data (for testing/debugging)
+  clear() {
+    this.store.clear();
+    this.saveToStorage();
   }
 }
 

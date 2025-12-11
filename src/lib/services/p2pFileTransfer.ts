@@ -3,6 +3,7 @@ import { createWebRTCSession } from "./webrtcService";
 import { SignalingService } from "./signalingService";
 import type { FileMetadata } from "../dht";
 import type { FileManifestForJs } from "./encryption";
+import PeerSelectionService from "./peerSelectionService";
 
 export interface P2PTransfer {
   id: string;
@@ -313,15 +314,30 @@ export class P2PFileTransferService {
     }
   }
 
-  private handleConnectionFailure(
+  private async handleConnectionFailure(
     transfer: P2PTransfer,
     metadata: FileMetadata,
     error: string,
     availableSeeders?: string[],
     maxRetries: number = 5
-  ): void {
+  ): Promise<void> {
     transfer.lastError = error;
     transfer.retryCount = (transfer.retryCount || 0) + 1;
+
+    // Update reputation for failed connection/transfer
+    const failedSeederPeerId = transfer.seeders[transfer.currentSeederIndex || 0];
+    if (failedSeederPeerId) {
+      try {
+        await invoke('record_transfer_failure', {
+          peerId: failedSeederPeerId,
+          error: error,
+        });
+        PeerSelectionService.notePeerFailure(failedSeederPeerId);
+        console.log(`❌ Updated reputation for peer ${failedSeederPeerId.substring(0, 20)}... after connection failure`);
+      } catch (repError) {
+        console.error('Failed to update peer reputation:', repError);
+      }
+    }
 
     // Save checkpoint before retry so progress isn't lost
     if (transfer.streamingSessionId) {
@@ -744,6 +760,23 @@ export class P2PFileTransferService {
           if (this.isTransferComplete(transfer, message.total_chunks)) {
             transfer.status = "completed";
 
+            // Update reputation for successful transfer
+            const duration = Date.now() - transfer.startTime;
+            const seederPeerId = transfer.seeders[transfer.currentSeederIndex || 0];
+            if (seederPeerId) {
+              try {
+                await invoke('record_transfer_success', {
+                  peerId: seederPeerId,
+                  bytes: transfer.fileSize,
+                  durationMs: duration,
+                });
+                PeerSelectionService.notePeerSuccess(seederPeerId, duration);
+                console.log(`✅ Updated reputation for peer ${seederPeerId.substring(0, 20)}... after P2P transfer (+${transfer.fileSize} bytes)`);
+              } catch (repError) {
+                console.error('Failed to update peer reputation:', repError);
+              }
+            }
+
             // Save file if output path is specified
             if (transfer.outputPath) {
               this.saveCompletedFile(transfer);
@@ -781,10 +814,42 @@ export class P2PFileTransferService {
       transfer.status = "completed";
       transfer.outputPath = outputPath;
       console.log(`Streaming download completed: ${outputPath}`);
+
+      // Update reputation for successful streaming transfer
+      const duration = Date.now() - transfer.startTime;
+      const seederPeerId = transfer.seeders[transfer.currentSeederIndex || 0];
+      if (seederPeerId) {
+        try {
+          await invoke('record_transfer_success', {
+            peerId: seederPeerId,
+            bytes: transfer.fileSize,
+            durationMs: duration,
+          });
+          PeerSelectionService.notePeerSuccess(seederPeerId, duration);
+          console.log(`✅ Updated reputation for peer ${seederPeerId.substring(0, 20)}... after streaming transfer (+${transfer.fileSize} bytes)`);
+        } catch (repError) {
+          console.error('Failed to update peer reputation:', repError);
+        }
+      }
     } catch (error) {
       console.error("Failed to finalize streaming download:", error);
       transfer.status = "failed";
       transfer.error = `Failed to finalize download: ${error}`;
+
+      // Update reputation for failed transfer
+      const seederPeerId = transfer.seeders[transfer.currentSeederIndex || 0];
+      if (seederPeerId) {
+        try {
+          await invoke('record_transfer_failure', {
+            peerId: seederPeerId,
+            error: `Streaming finalization failed: ${error}`,
+          });
+          PeerSelectionService.notePeerFailure(seederPeerId);
+          console.log(`❌ Updated reputation for peer ${seederPeerId.substring(0, 20)}... after streaming failure`);
+        } catch (repError) {
+          console.error('Failed to update peer reputation:', repError);
+        }
+      }
     }
 
     transfer.streamingSessionId = undefined;
