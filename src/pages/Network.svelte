@@ -1840,7 +1840,6 @@
         </div>
       </div>
     </Card>
-  </div>
 
   <!-- Tab Navigation -->
   <div class="border-b border-border">
