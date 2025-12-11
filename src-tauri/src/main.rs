@@ -111,7 +111,12 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tokio::{io::AsyncReadExt, sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::{
+    io::AsyncReadExt,
+    sync::Mutex,
+    task::JoinHandle,
+    time::{sleep, timeout},
+};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::{error, info, warn};
 use webrtc_service::{set_webrtc_service, WebRTCFileRequest, WebRTCService};
@@ -7008,6 +7013,89 @@ async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String
     Ok(())
 }
 
+async fn shutdown_application(app_handle: tauri::AppHandle) {
+    tracing::info!("Window close requested - starting shutdown");
+
+    if let Some(state) = app_handle.try_state::<AppState>() {
+        // Stop HTTP server if running
+        let _server_addr = {
+            let mut addr_lock = state.http_server_addr.lock().await;
+            addr_lock.take()
+        };
+        let shutdown_tx = {
+            let mut shutdown_lock = state.http_server_shutdown.lock().await;
+            shutdown_lock.take()
+        };
+        if let Some(tx) = shutdown_tx {
+            let _ = tx.send(());
+            tracing::info!("Sent shutdown signal to HTTP server");
+        }
+
+        // Stop proof-of-storage watcher
+        {
+            let mut addr = state.proof_contract_address.lock().await;
+            *addr = None;
+        }
+        if let Some(handle) = {
+            let mut guard = state.proof_watcher.lock().await;
+            guard.take()
+        } {
+            handle.abort();
+            let _ = timeout(Duration::from_secs(2), handle).await;
+            tracing::info!("Proof-of-storage watcher stopped");
+        }
+
+        // Stop DHT and related services
+        if let Some(dht) = {
+            let mut dht_guard = state.dht.lock().await;
+            dht_guard.take()
+        } {
+            let (last_enabled, last_disabled) = dht.autorelay_history().await;
+            {
+                let mut guard = state.autorelay_last_enabled.lock().await;
+                *guard = last_enabled;
+            }
+            {
+                let mut guard = state.autorelay_last_disabled.lock().await;
+                *guard = last_disabled;
+            }
+
+            if let Err(e) = dht.shutdown().await {
+                tracing::warn!("Failed to stop DHT: {}", e);
+            }
+        }
+
+        {
+            let mut proxies = state.proxies.lock().await;
+            proxies.clear();
+        }
+        let _ = app_handle.emit("proxy_reset", ());
+
+        {
+            *state.webrtc.lock().await = None;
+            *state.file_transfer.lock().await = None;
+            *state.multi_source_download.lock().await = None;
+            *state.file_transfer_pump.lock().await = None;
+            *state.multi_source_pump.lock().await = None;
+        }
+
+        if let Ok(mut geth) = state.geth.try_lock() {
+            if let Err(e) = geth.stop() {
+                tracing::warn!("Failed to stop geth: {}", e);
+            } else {
+                tracing::info!("Geth node stopped during shutdown");
+            }
+        }
+
+        // Brief pause to allow background tasks to flush
+        sleep(Duration::from_millis(100)).await;
+    } else {
+        tracing::warn!("App state unavailable during shutdown");
+    }
+
+    app_handle.exit(0);
+}
+
 // ============================================================================
 // HTTP Server Commands - Serve files via HTTP protocol
 // ============================================================================
@@ -8350,14 +8438,10 @@ fn main() {
                     }
                     "quit" => {
                         println!("Quit menu item clicked");
-                        // Stop geth before exiting
-                        if let Some(state) = app.try_state::<AppState>() {
-                            if let Ok(mut geth) = state.geth.try_lock() {
-                                let _ = geth.stop();
-                                println!("Geth node stopped");
-                            }
-                        }
-                        app.exit(0);
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            shutdown_application(app_handle).await;
+                        });
                     }
                     _ => {}
                 })
@@ -8371,11 +8455,11 @@ fn main() {
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        // Prevent the window from closing and hide it instead
                         api.prevent_close();
-                        if let Some(window) = app_handle.get_webview_window("main") {
-                            let _ = window.hide();
-                        }
+                        let app_handle = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            shutdown_application(app_handle).await;
+                        });
                     }
                 });
             } else {
