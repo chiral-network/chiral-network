@@ -608,6 +608,18 @@ async fn create_and_seed_torrent(
     create_and_seed_torrent_internal(file_path, handler).await
 }
 
+/// Tauri command to handle post-download seeding and DHT publishing for completed BitTorrent downloads.
+/// This makes the downloaded file discoverable on the Chiral Network.
+#[tauri::command]
+async fn bittorrent_post_download_publish(
+    info_hash: String,
+    state: State<'_, AppState>,
+) -> Result<bittorrent_handler::PostDownloadResult, String> {
+    println!("Post-download publish for info_hash: {}", info_hash);
+    let handler = state.bittorrent_handler.clone();
+    handler.post_download_seed_and_publish(&info_hash).await
+}
+
 #[tauri::command]
 async fn stop_geth_node(state: State<'_, AppState>) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
@@ -5991,6 +6003,27 @@ async fn get_file_seeders(
     }
 }
 
+/// Search for file metadata by BitTorrent info_hash.
+/// This performs a two-step lookup:
+/// 1. Look up info_hash_idx::<info_hash> to get merkle_root
+/// 2. Look up the actual metadata using merkle_root
+#[tauri::command]
+async fn search_by_infohash(
+    state: State<'_, AppState>,
+    info_hash: String,
+) -> Result<Option<FileMetadata>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht {
+        dht_service.search_by_infohash(info_hash).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
 #[tauri::command]
 async fn get_available_storage() -> f64 {
     use std::time::Duration;
@@ -7727,14 +7760,14 @@ fn main() {
         // Wrap the simple handler in the enhanced protocol handler
         let bittorrent_protocol_handler =
             BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
-        manager.register(Box::new(bittorrent_protocol_handler));
+        manager.register(Arc::new(bittorrent_protocol_handler));
 
         // Register ED2K and FTP handlers
         let ed2k_handler = protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
-        manager.register(Box::new(ed2k_handler));
+        manager.register(Arc::new(ed2k_handler));
 
         let (ftp_handler, ftp_event_bus_holder) = protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
-        manager.register(Box::new(ftp_handler));
+        manager.register(Arc::new(ftp_handler));
 
         (bittorrent_handler_arc, ftp_server, Arc::new(manager), ftp_event_bus_holder)
     });
@@ -7943,6 +7976,7 @@ fn main() {
             open_torrent_folder,
             seed,
             create_and_seed_torrent,
+            bittorrent_post_download_publish,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
@@ -7983,6 +8017,7 @@ fn main() {
             stop_dht_node,
             stop_publishing_file,
             search_file_metadata,
+            search_by_infohash,
             get_file_seeders,
             connect_to_peer,
             get_dht_events,
@@ -8453,7 +8488,7 @@ fn main() {
                         let state_manager = bittorrent_handler::TorrentStateManager::new(torrent_state_path);
                         
                         // Call get_all() to get Vec<PersistentTorrent>
-                        let persistent_torrents = state_manager.get_all();
+                        let persistent_torrents = state_manager.await.get_all();
                         
                         // Set the app_handle on the BitTorrent handler so it can emit events
                         let bittorrent_handler = state.bittorrent_handler.clone();
