@@ -608,6 +608,18 @@ async fn create_and_seed_torrent(
     create_and_seed_torrent_internal(file_path, handler).await
 }
 
+/// Tauri command to handle post-download seeding and DHT publishing for completed BitTorrent downloads.
+/// This makes the downloaded file discoverable on the Chiral Network.
+#[tauri::command]
+async fn bittorrent_post_download_publish(
+    info_hash: String,
+    state: State<'_, AppState>,
+) -> Result<bittorrent_handler::PostDownloadResult, String> {
+    println!("Post-download publish for info_hash: {}", info_hash);
+    let handler = state.bittorrent_handler.clone();
+    handler.post_download_seed_and_publish(&info_hash).await
+}
+
 #[tauri::command]
 async fn stop_geth_node(state: State<'_, AppState>) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
@@ -5991,6 +6003,27 @@ async fn get_file_seeders(
     }
 }
 
+/// Search for file metadata by BitTorrent info_hash.
+/// This performs a two-step lookup:
+/// 1. Look up info_hash_idx::<info_hash> to get merkle_root
+/// 2. Look up the actual metadata using merkle_root
+#[tauri::command]
+async fn search_by_infohash(
+    state: State<'_, AppState>,
+    info_hash: String,
+) -> Result<Option<FileMetadata>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    if let Some(dht_service) = dht {
+        dht_service.search_by_infohash(info_hash).await
+    } else {
+        Err("DHT node is not running".to_string())
+    }
+}
+
 #[tauri::command]
 async fn get_available_storage() -> f64 {
     use std::time::Duration;
@@ -7943,6 +7976,7 @@ fn main() {
             open_torrent_folder,
             seed,
             create_and_seed_torrent,
+            bittorrent_post_download_publish,
             is_geth_running,
             check_geth_binary,
             get_geth_status,
@@ -7983,6 +8017,7 @@ fn main() {
             stop_dht_node,
             stop_publishing_file,
             search_file_metadata,
+            search_by_infohash,
             get_file_seeders,
             connect_to_peer,
             get_dht_events,
