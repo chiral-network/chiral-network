@@ -3199,18 +3199,49 @@ pub async fn get_transaction_history(
                     .and_then(|g| g.as_str())
                     .map(|s| s.to_string());
 
-                transactions.push(TransactionHistoryItem {
-                    hash: tx_hash,
-                    from: from.clone(),
-                    to,
-                    value,
-                    block_number: block_num,
-                    timestamp,
-                    status,
-                    tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
-                    gas_used,
-                    gas_price,
-                });
+                // When sending to yourself, create both sent and received transactions
+                if is_from_us && is_to_us {
+                    // Create sent transaction
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash.clone(),
+                        from: from.clone(),
+                        to: to.clone(),
+                        value: value.clone(),
+                        block_number: block_num,
+                        timestamp,
+                        status: status.clone(),
+                        tx_type: "sent".to_string(),
+                        gas_used: gas_used.clone(),
+                        gas_price: gas_price.clone(),
+                    });
+                    // Create received transaction
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash,
+                        from: from.clone(),
+                        to,
+                        value,
+                        block_number: block_num,
+                        timestamp,
+                        status,
+                        tx_type: "received".to_string(),
+                        gas_used,
+                        gas_price,
+                    });
+                } else {
+                    // Normal transaction to/from someone else
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash,
+                        from: from.clone(),
+                        to,
+                        value,
+                        block_number: block_num,
+                        timestamp,
+                        status,
+                        tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
+                        gas_used,
+                        gas_price,
+                    });
+                }
             }
         }
     }
