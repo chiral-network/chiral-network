@@ -18,6 +18,7 @@ pub mod geth_bootstrap;
 pub mod geth_downloader;
 pub mod headless;
 pub mod http_server;
+pub mod chiral_bittorrent_extension;
 pub mod net;
 pub mod pool;
 pub mod reassembly;
