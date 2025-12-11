@@ -1500,7 +1500,6 @@
           <HardDrive class="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
         </div>
       </div>
-    </div>
     
     <div class="space-y-3">
       {#if dhtStatus === 'disconnected'}
