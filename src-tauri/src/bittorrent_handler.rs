@@ -394,6 +394,7 @@ impl BitTorrentHandler {
             rqbit_session: session.clone(),
             dht_service,
             download_directory: download_directory.clone(),
+            chiral_extension: None,
             active_torrents: Default::default(),
             peer_states: Default::default(),
             app_handle,
@@ -500,9 +501,10 @@ impl BitTorrentHandler {
     /// Creates a new BitTorrentHandler with Chiral extension support
     pub async fn new_with_chiral_extension(
         download_directory: std::path::PathBuf,
+        dht_service: Arc<DhtService>,
         wallet_address: Option<String>,
     ) -> Result<Self, BitTorrentError> {
-        let mut handler = Self::new(download_directory).await?;
+        let mut handler = Self::new(download_directory, dht_service).await?;
         
         // Initialize Chiral extension
         let chiral_extension = ChiralBitTorrentExtension::new(
