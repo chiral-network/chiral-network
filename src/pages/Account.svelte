@@ -160,6 +160,11 @@
   let isLoadingGas = false;
   let gasError = '';
 
+  // Derived display value
+  $: estimatedFeeDisplay = gasEstimate 
+    ? `${gasEstimate.gasPrices[selectedGasOption]?.fee.toFixed(6) ?? 0} CHR` 
+    : '--';
+
   // Derive Geth running status from store
   $: isGethRunning = $gethStatus === 'running';
 
@@ -2085,22 +2090,22 @@
             <div class="inline-flex rounded-md border border-gray-300 dark:border-gray-600 overflow-hidden">
               <button 
                 type="button" 
-                class="px-4 py-2 text-xs font-medium transition-colors {feePreset === 'low' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
-                on:click={() => feePreset = 'low'}
+                class="px-4 py-2 text-xs font-medium transition-colors {selectedGasOption === 'slow' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
+                on:click={() => selectedGasOption = 'slow'}
               >
                 {$t('transfer.fees.low')}
               </button>
               <button 
                 type="button" 
-                class="px-4 py-2 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors {feePreset === 'market' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
-                on:click={() => feePreset = 'market'}
+                class="px-4 py-2 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors {selectedGasOption === 'standard' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
+                on:click={() => selectedGasOption = 'standard'}
               >
                 {$t('transfer.fees.market')}
               </button>
               <button 
                 type="button" 
-                class="px-4 py-2 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors {feePreset === 'fast' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
-                on:click={() => feePreset = 'fast'}
+                class="px-4 py-2 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors {selectedGasOption === 'fast' ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}" 
+                on:click={() => selectedGasOption = 'fast'}
               >
                 {$t('transfer.fees.fast')}
               </button>
