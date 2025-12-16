@@ -111,6 +111,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::{
     io::AsyncReadExt,
     sync::Mutex,
@@ -7117,6 +7118,25 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
     app_handle.exit(0);
 }
 
+fn prompt_close_confirmation(app_handle: &tauri::AppHandle) {
+    let handle = app_handle.clone();
+
+    app_handle
+        .dialog()
+        .message("Close Chiral Network? Active downloads and uploads will stop.")
+        .title("Confirm Exit")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Stay".into()))
+        .show(move |should_quit| {
+            if should_quit {
+                let app_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    shutdown_application(app_handle).await;
+                });
+            }
+        });
+}
+
 // ============================================================================
 // HTTP Server Commands - Serve files via HTTP protocol
 // ============================================================================
@@ -8459,10 +8479,7 @@ fn main() {
                     }
                     "quit" => {
                         println!("Quit menu item clicked");
-                        let app_handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            shutdown_application(app_handle).await;
-                        });
+                        prompt_close_confirmation(app);
                     }
                     _ => {}
                 })
@@ -8477,10 +8494,7 @@ fn main() {
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
-                        let app_handle = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            shutdown_application(app_handle).await;
-                        });
+                        prompt_close_confirmation(&app_handle);
                     }
                 });
             } else {

@@ -37,7 +37,7 @@ import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents
 import { walletService } from '$lib/wallet';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { exit } from '@tauri-apps/plugin-process';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -736,7 +736,10 @@ function handleFirstRunComplete() {
       // Ctrl/Cmd + Q - Quit application
       if ((event.ctrlKey || event.metaKey) && event.key === "q") {
         event.preventDefault();
-        exit(0);
+        const appWindow = getCurrentWebviewWindow();
+        appWindow.close().catch((error) => {
+          console.error("Failed to close app window:", error);
+        });
         return;
       }
 
