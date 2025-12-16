@@ -4,6 +4,7 @@ use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
 use crate::bandwidth::BandwidthController;
 use crate::manager::{ChunkInfo, FileManifest};
+use crate::multi_source_download::MultiSourceDownloadService;
 use aes_gcm::aead::Aead;
 use aes_gcm::{AeadCore, KeyInit};
 use serde::{Deserialize, Serialize};
@@ -283,6 +284,8 @@ pub struct WebRTCService {
     bandwidth: Arc<BandwidthController>,
     /// Connection manager for retry logic
     connection_manager: Arc<ConnectionManager>,
+    /// Multi-source download service for hash verification and chunk management
+    multi_source_service: Option<Arc<MultiSourceDownloadService>>,
 }
 
 impl WebRTCService {
@@ -291,6 +294,23 @@ impl WebRTCService {
         file_transfer_service: Arc<FileTransferService>,
         keystore: Arc<Mutex<Keystore>>,
         bandwidth: Arc<BandwidthController>,
+    ) -> Result<Self, String> {
+        Self::new_with_multi_source(
+            app_handle,
+            file_transfer_service,
+            keystore,
+            bandwidth,
+            None,
+        ).await
+    }
+
+    /// Create a new WebRTCService with optional MultiSourceDownloadService for hash verification
+    pub async fn new_with_multi_source(
+        app_handle: tauri::AppHandle,
+        file_transfer_service: Arc<FileTransferService>,
+        keystore: Arc<Mutex<Keystore>>,
+        bandwidth: Arc<BandwidthController>,
+        multi_source_service: Option<Arc<MultiSourceDownloadService>>,
     ) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(1000); // Increased capacity for high-throughput transfers
@@ -302,6 +322,7 @@ impl WebRTCService {
 
         // Spawn the WebRTC service task
         let connection_manager_clone = connection_manager.clone();
+        let multi_source_service_clone = multi_source_service.clone();
         tokio::spawn(Self::run_webrtc_service(
             app_handle.clone(),
             cmd_rx,
@@ -312,6 +333,7 @@ impl WebRTCService {
             active_private_key.clone(),
             bandwidth.clone(),
             connection_manager_clone,
+            multi_source_service_clone,
         ));
 
         Ok(WebRTCService {
@@ -325,7 +347,15 @@ impl WebRTCService {
             active_private_key,
             bandwidth,
             connection_manager,
+            multi_source_service,
         })
+    }
+
+    /// Set the multi-source download service for hash verification
+    pub async fn set_multi_source_service(&self, service: Option<Arc<MultiSourceDownloadService>>) {
+        // Note: This requires updating the service in the spawned task
+        // For now, we'll pass it through the constructor
+        // If dynamic updates are needed, we can add a channel for this
     }
 
     /// Set the active private key for decryption operations
@@ -360,6 +390,7 @@ impl WebRTCService {
         active_private_key: Arc<Mutex<Option<String>>>,
         bandwidth: Arc<BandwidthController>,
         connection_manager: Arc<ConnectionManager>,
+        multi_source_service: Option<Arc<MultiSourceDownloadService>>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -375,6 +406,7 @@ impl WebRTCService {
                         &active_private_key,
                         &bandwidth,
                         &connection_manager,
+                        multi_source_service.as_ref(),
                     )
                     .await;
                 }
@@ -423,6 +455,7 @@ impl WebRTCService {
                         &active_private_key,
                         &bandwidth,
                         &connection_manager,
+                        multi_source_service.as_ref(),
                     )
                     .await;
                 }
@@ -442,6 +475,7 @@ impl WebRTCService {
         active_private_key: &Arc<Mutex<Option<String>>>,
         bandwidth: &Arc<BandwidthController>,
         connection_manager: &Arc<ConnectionManager>,
+        multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
     ) {
         // Get or create tracker for this peer
         let mut tracker = connection_manager.get_or_create(peer_id).await;
@@ -458,6 +492,7 @@ impl WebRTCService {
             keystore,
             active_private_key,
             bandwidth,
+            multi_source_service,
         )
         .await;
         
@@ -511,6 +546,7 @@ impl WebRTCService {
         active_private_key: &Arc<Mutex<Option<String>>>,
         bandwidth: &Arc<BandwidthController>,
         connection_manager: &Arc<ConnectionManager>,
+        multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
     ) {
         let tracker = connection_manager.get_or_create(peer_id).await;
         
@@ -562,6 +598,7 @@ impl WebRTCService {
             active_private_key,
             bandwidth,
             connection_manager,
+            multi_source_service,
         )
         .await;
     }
@@ -577,6 +614,7 @@ impl WebRTCService {
         keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         bandwidth: &Arc<BandwidthController>,
+        multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
     ) -> Result<(), String> {
         // Call the existing implementation but return Result
         Self::handle_establish_connection(
@@ -589,6 +627,7 @@ impl WebRTCService {
             keystore,
             active_private_key,
             bandwidth,
+            multi_source_service,
         )
         .await;
         
@@ -615,6 +654,7 @@ impl WebRTCService {
         keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
         bandwidth: &Arc<BandwidthController>,
+        multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
     ) {
         info!("Establishing WebRTC connection with peer: {}", peer_id);
 
@@ -663,6 +703,7 @@ impl WebRTCService {
         let keystore_clone = keystore.clone();
         let active_private_key_clone = Arc::new(active_private_key.clone());
         let bandwidth_clone = bandwidth.clone();
+        let multi_source_service_clone = multi_source_service.cloned();
 
         let app_handle_clone = app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -673,6 +714,7 @@ impl WebRTCService {
             let keystore = keystore_clone.clone();
             let active_private_key = active_private_key_clone.clone();
             let bandwidth = bandwidth_clone.clone();
+            let multi_source_service = multi_source_service_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
             // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
@@ -688,6 +730,7 @@ impl WebRTCService {
                     &active_private_key,
                     app_handle_for_task,
                     bandwidth,
+                    multi_source_service.as_ref(),
                 )
                 .await;
             });
@@ -1229,6 +1272,7 @@ impl WebRTCService {
         active_private_key: &Arc<Mutex<Option<String>>>,
         app_handle: tauri::AppHandle,
         bandwidth: Arc<BandwidthController>,
+        multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
     ) {
         debug!("📩 Data channel message received from peer {}: {} bytes", peer_id, msg.data.len());
         if let Ok(text) = std::str::from_utf8(&msg.data) {
@@ -1251,6 +1295,7 @@ impl WebRTCService {
                     &active_private_key,
                     &app_handle,
                     &bandwidth,
+                    multi_source_service,
                 )
                 .await;
                 let _ = event_tx
@@ -1423,6 +1468,7 @@ impl WebRTCService {
                             &active_private_key,
                             &app_handle,
                             &bandwidth,
+                            multi_source_service,
                         )
                         .await;
                     }
@@ -1869,6 +1915,7 @@ impl WebRTCService {
         active_private_key: &Arc<Mutex<Option<String>>>,
         app_handle: &tauri::AppHandle,
         bandwidth: &Arc<BandwidthController>,
+        multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
     ) {
         // NOTE: HMAC authentication removed - WebRTC DTLS provides transport security.
 
@@ -1907,6 +1954,30 @@ impl WebRTCService {
         if calculated_checksum != chunk.checksum {
             warn!("Chunk checksum mismatch for file {}", chunk.file_hash);
             return;
+        }
+
+        // 3. Verify SHA-256 hash if multi-source service is available
+        if let Some(service) = multi_source_service {
+            if service.verify_chunk_for_download(
+                &chunk.file_hash,
+                chunk.chunk_index,
+                &final_chunk_data,
+                peer_id,
+            )
+            .await
+            .is_err()
+            {
+                warn!(
+                    "WebRTC chunk {} hash verification failed for file {}",
+                    chunk.chunk_index, chunk.file_hash
+                );
+                return; // Don't store the chunk
+            } else {
+                debug!(
+                    "WebRTC chunk {} hash verification passed for file {}",
+                    chunk.chunk_index, chunk.file_hash
+                );
+            }
         }
 
         bandwidth.acquire_download(chunk_len).await;
@@ -2085,6 +2156,7 @@ impl WebRTCService {
         let keystore_clone = Arc::new(self.keystore.clone());
         let active_private_key_clone = Arc::new(self.active_private_key.clone());
         let bandwidth_clone = self.bandwidth.clone();
+        let multi_source_service_clone = self.multi_source_service.clone();
 
         let app_handle_clone = self.app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -2095,6 +2167,7 @@ impl WebRTCService {
             let keystore = keystore_clone.clone();
             let active_private_key = active_private_key_clone.clone();
             let bandwidth = bandwidth_clone.clone();
+            let multi_source_service = multi_source_service_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
             // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
@@ -2109,6 +2182,7 @@ impl WebRTCService {
                     &active_private_key,
                     app_handle_for_task,
                     bandwidth,
+                    multi_source_service.as_ref(),
                 )
                 .await;
             });
@@ -2333,6 +2407,7 @@ impl WebRTCService {
         let active_private_key_for_dc = self.active_private_key.clone();
         let bandwidth_for_dc = self.bandwidth.clone();
         let app_handle_for_dc = self.app_handle.clone();
+        let multi_source_service_for_dc = self.multi_source_service.clone();
 
         info!("Setting up on_data_channel callback for peer: {}", peer_id);
 
@@ -2347,6 +2422,7 @@ impl WebRTCService {
             let active_private_key = active_private_key_for_dc.clone();
             let bandwidth = bandwidth_for_dc.clone();
             let app_handle = app_handle_for_dc.clone();
+            let multi_source_service = multi_source_service_for_dc.clone();
 
             // Set up message handler for received data channel
             // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
@@ -2359,6 +2435,7 @@ impl WebRTCService {
                 let active_private_key = active_private_key.clone();
                 let bandwidth = bandwidth.clone();
                 let app_handle_for_task = app_handle.clone();
+                let multi_source_service = multi_source_service.clone();
 
                 tokio::spawn(async move {
                     Self::handle_data_channel_message(
@@ -2371,6 +2448,7 @@ impl WebRTCService {
                         &active_private_key,
                         app_handle_for_task,
                         bandwidth,
+                        multi_source_service.as_ref(),
                     )
                     .await;
                 });

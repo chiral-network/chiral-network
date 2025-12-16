@@ -2322,6 +2322,36 @@ impl MultiSourceDownloadService {
                                             if end <= ed2k_chunk_data.len() {
                                                 let chunk_data = ed2k_chunk_data[start..end].to_vec();
 
+                                                // Verify SHA-256 hash for the extracted chunk
+                                                if let Err((expected, actual)) = verify_chunk_integrity(chunk_info, &chunk_data) {
+                                                    warn!(
+                                                        "ED2K chunk {} hash verification failed: expected {}, got {}",
+                                                        chunk_info.chunk_id, expected, actual
+                                                    );
+                                                    download.failed_chunks.push_back(chunk_info.chunk_id);
+                                                    
+                                                    // Emit ChunkFailed event
+                                                    let error_msg = format!(
+                                                        "Chunk hash mismatch: expected {}, got {}",
+                                                        expected, actual
+                                                    );
+                                                    let current_timestamp = current_timestamp_ms();
+                                                    
+                                                    transfer_event_bus_clone.emit_chunk_failed(ChunkFailedEvent {
+                                                        transfer_id: file_hash_inner.clone(),
+                                                        chunk_id: chunk_info.chunk_id,
+                                                        source_id: server_url_clone.clone(),
+                                                        source_type: SourceType::P2p,
+                                                        failed_at: current_timestamp,
+                                                        error: error_msg,
+                                                        retry_count: 0,
+                                                        will_retry: true,
+                                                        next_retry_at: None,
+                                                    });
+                                                    
+                                                    continue; // Skip this chunk
+                                                }
+
                                                 let completed_chunk = CompletedChunk {
                                                     chunk_id: chunk_info.chunk_id,
                                                     data: chunk_data.clone(),
@@ -2336,7 +2366,7 @@ impl MultiSourceDownloadService {
                                                 extracted_chunks.push((chunk_info.clone(), chunk_data));
                                                 
                                                 info!(
-                                                    "Ed2k chunk {} extracted from ed2k chunk {} (offset {})",
+                                                    "Ed2k chunk {} extracted and verified from ed2k chunk {} (offset {})",
                                                     chunk_info.chunk_id, ed2k_chunk_id, offset_within_ed2k
                                                 );
                                             } else {
