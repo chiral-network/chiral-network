@@ -116,7 +116,8 @@ pub type PeerAssignment = SourceAssignment;
 #[deprecated(note = "Use SourceStatus instead")]
 pub type PeerStatus = SourceStatus;
 
-fn normalized_sha256_hex(hash: &str) -> Option<String> {
+/// Normalize and validate SHA-256 hash format (64 hex characters, lowercase)
+pub fn normalized_sha256_hex(hash: &str) -> Option<String> {
     let trimmed = hash.trim();
     if trimmed.len() != 64 {
         return None;
@@ -129,7 +130,9 @@ fn normalized_sha256_hex(hash: &str) -> Option<String> {
     }
 }
 
-fn verify_chunk_integrity(chunk: &ChunkInfo, data: &[u8]) -> Result<(), (String, String)> {
+/// Verify chunk integrity by comparing SHA-256 hash of data with expected hash from ChunkInfo
+/// Returns Ok(()) if hash matches, Err((expected, actual)) if mismatch
+pub fn verify_chunk_integrity(chunk: &ChunkInfo, data: &[u8]) -> Result<(), (String, String)> {
     let expected = match normalized_sha256_hex(&chunk.hash) {
         Some(value) => value,
         None => return Ok(()),
@@ -343,6 +346,61 @@ impl MultiSourceDownloadService {
             Some(self.calculate_progress(download))
         } else {
             None
+        }
+    }
+
+    /// Verify chunk integrity and handle failure if hash mismatch
+    /// Returns Ok(()) if verification passes, Err(()) if it fails
+    pub async fn verify_chunk_for_download(
+        &self,
+        file_hash: &str,
+        chunk_id: u32,
+        data: &[u8],
+        source_id: &str,
+    ) -> Result<(), ()> {
+        let downloads = self.active_downloads.read().await;
+        if let Some(download) = downloads.get(file_hash) {
+            if let Some(chunk_info) = download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                if let Err((expected, actual)) = verify_chunk_integrity(chunk_info, data) {
+                    drop(downloads);
+                    
+                    // Mark chunk as failed
+                    {
+                        let mut downloads = self.active_downloads.write().await;
+                        if let Some(download) = downloads.get_mut(file_hash) {
+                            download.failed_chunks.push_back(chunk_id);
+                        }
+                    }
+                    
+                    // Emit ChunkFailed event
+                    let error_msg = format!(
+                        "Chunk hash mismatch: expected {}, got {}",
+                        expected, actual
+                    );
+                    let current_timestamp = current_timestamp_ms();
+                    
+                    self.transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                        transfer_id: file_hash.to_string(),
+                        chunk_id,
+                        source_id: source_id.to_string(),
+                        source_type: SourceType::P2p,
+                        failed_at: current_timestamp,
+                        error: error_msg,
+                        retry_count: 0,
+                        will_retry: true,
+                        next_retry_at: None,
+                    });
+                    
+                    return Err(());
+                }
+                Ok(())
+            } else {
+                // No ChunkInfo found, skip verification
+                Ok(())
+            }
+        } else {
+            // No active download found, skip verification
+            Ok(())
         }
     }
 
