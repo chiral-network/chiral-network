@@ -3644,7 +3644,7 @@ async fn start_file_transfer_service(
         *ft_guard = Some(ft_arc.clone());
     }
 
-    // Initialize WebRTC service with file transfer service
+    // Initialize WebRTC service with file transfer service (without multi_source_service initially)
     let webrtc_service = WebRTCService::new(
         app.app_handle().clone(),
         ft_arc.clone(),
@@ -3690,7 +3690,28 @@ async fn start_file_transfer_service(
             state.analytics.clone(),
             chunk_manager,
         );
-        let multi_source_arc                                                                                                                                                                                                             = Arc::new(multi_source_service);
+        let multi_source_arc = Arc::new(multi_source_service);
+        
+        // Update WebRTCService with MultiSourceDownloadService for hash verification
+        // Since WebRTCService is already created and may have active connections,
+        // we need to recreate it with the multi_source_service to enable hash verification
+        // Note: This will close existing connections, but hash verification is critical
+        let webrtc_service_with_multi_source = WebRTCService::new_with_multi_source(
+            app.app_handle().clone(),
+            ft_arc.clone(),
+            state.keystore.clone(),
+            state.bandwidth.clone(),
+            Some(multi_source_arc.clone()),
+        )
+        .await
+        .map_err(|e| format!("Failed to recreate WebRTC service with multi-source: {}", e))?;
+        
+        let webrtc_arc_updated = Arc::new(webrtc_service_with_multi_source);
+        {
+            let mut webrtc_guard = state.webrtc.lock().await;
+            *webrtc_guard = Some(webrtc_arc_updated.clone());
+        }
+        set_webrtc_service(webrtc_arc_updated.clone()).await;
 
         {
             let mut multi_source_guard = state.multi_source_download.lock().await;
