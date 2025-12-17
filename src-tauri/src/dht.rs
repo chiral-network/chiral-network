@@ -3141,8 +3141,28 @@ async fn run_dht_node(
                                                         .map_err(|e| format!("String: {}", e))
                                                 })
                                                 .or_else(|_| {
-                                                    // Try 3: Direct CID array (parse from Cid bytes representation)
-                                                    // The data might be a CBOR-encoded Cid array, try parsing as JSON with Cid structure
+                                                    // Try 3: Vec<Vec<u8>> (binary CID array - legacy format)
+                                                    serde_json::from_slice::<Vec<Vec<u8>>>(&data)
+                                                        .map_err(|e| format!("Vec<Vec<u8>>: {}", e))
+                                                        .and_then(|cid_bytes_array| {
+                                                            info!("Parsing root block as Vec<Vec<u8>> (binary CID format)");
+                                                            let mut cid_strings = Vec::new();
+                                                            for cid_bytes in cid_bytes_array {
+                                                                match Cid::try_from(cid_bytes.as_slice()) {
+                                                                    Ok(cid) => {
+                                                                        info!("Successfully parsed binary CID: {}", cid);
+                                                                        cid_strings.push(cid.to_string());
+                                                                    }
+                                                                    Err(e) => {
+                                                                        return Err(format!("Failed to parse CID from bytes: {}", e));
+                                                                    }
+                                                                }
+                                                            }
+                                                            Ok(cid_strings)
+                                                        })
+                                                })
+                                                .or_else(|_| {
+                                                    // Try 4: IPLD CID wrapper format
                                                     #[derive(serde::Deserialize)]
                                                     struct CidWrapper {
                                                         #[serde(rename = "/")]
@@ -3257,7 +3277,7 @@ async fn run_dht_node(
                                             Err(e) => {
                                                 let data_preview = String::from_utf8_lossy(&data);
                                                 error!("Failed to parse root block in any supported format for file {}", metadata.merkle_root);
-                                                error!("  Tried formats: Vec<String>, String, Vec<CidWrapper>");
+                                                error!("  Tried formats: Vec<String>, String, Vec<Vec<u8>>, Vec<CidWrapper>");
                                                 error!("  Errors: {}", e);
                                                 error!("  Raw data (first 200 bytes): {}", 
                                                     if data_preview.len() > 200 { &data_preview[..200] } else { &data_preview });
