@@ -778,6 +778,10 @@ fn construct_file_metadata_from_json_simple(
             .unwrap_or(None)
         }),
         download_path: None,
+        manifest: metadata_json
+            .get("manifest")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
     }
 }
 
@@ -7156,6 +7160,7 @@ impl DhtService {
             info_hash: None,
             trackers: None,
             ed2k_sources: None,
+            manifest: None,
         })
     }
 
