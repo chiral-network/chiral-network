@@ -3129,7 +3129,15 @@ async fn run_dht_node(
                                         info!("✅ This is a ROOT BLOCK for file: {}", metadata.merkle_root);
 
                                         // This is the root block containing CIDs - parse and request all data blocks
-                                        match serde_json::from_slice::<Vec<String>>(&data) {
+                                        // Try multiple formats for backward compatibility
+                                        let parse_result = serde_json::from_slice::<Vec<String>>(&data)
+                                            .or_else(|e| {
+                                                warn!("Failed to parse root block as Vec<String> ({}), trying single CID string format", e);
+                                                // Try parsing as a single CID string (legacy format)
+                                                serde_json::from_slice::<String>(&data).map(|s| vec![s])
+                                            });
+
+                                        match parse_result {
                                             Ok(cid_strings) => {
                                                 // Convert CID strings to Cid objects
                                                 let mut cids = Vec::new();
