@@ -2119,7 +2119,7 @@ function sectionMatches(section: string, query: string) {
 
         <!-- Pure Client Mode -->
         <div class="space-y-3 border-t pt-3">
-          <h4 class="font-medium">DHT Client Mode</h4>
+          <h4 class="font-medium">DHT Client Mode (Advanced)</h4>
 
           <div class="space-y-2">
             <div class="flex items-center gap-2">
@@ -2129,17 +2129,22 @@ function sectionMatches(section: string, query: string) {
                 bind:checked={localSettings.pureClientMode}
               />
               <Label for="pure-client-mode" class="cursor-pointer">
-                Enable Pure Client Mode (Hard NAT)
+                Force Client-Only Mode
               </Label>
             </div>
             <p class="text-xs text-muted-foreground ml-6">
-              For users behind hard NAT or restrictive firewalls. Node will only download files and cannot seed or act as DHT server. Requires DHT restart to take effect.
+              <strong>Advanced/Developer option:</strong> Forces node to stay in client mode even if publicly reachable.
+              <br/>
+              <strong>Note:</strong> AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.
             </p>
             {#if localSettings.pureClientMode}
               <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                ⚠️ <strong>Warning:</strong> You will not be able to seed files or help the network in this mode.
+                ⚠️ <strong>Client mode forced:</strong> You will not be able to seed files or act as DHT server, even if publicly reachable. Requires DHT restart.
               </div>
             {/if}
+            <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+              ℹ️ <strong>Automatic behavior:</strong> If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle.
+            </div>
           </div>
         </div>
 
