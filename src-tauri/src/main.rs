@@ -496,13 +496,14 @@ async fn start_geth_node(
     state: State<'_, AppState>,
     data_dir: String,
     rpc_url: Option<String>,
+    pure_client_mode: Option<bool>,
 ) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
     let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
     *state.rpc_url.lock().await = rpc_url.clone();
 
-    geth.start(&data_dir, miner_address.as_deref())?;
+    geth.start(&data_dir, miner_address.as_deref(), pure_client_mode.unwrap_or(false))?;
     Ok(())
 }
 

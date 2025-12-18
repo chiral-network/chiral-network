@@ -2448,7 +2448,7 @@ function sectionMatches(section: string, query: string) {
             </p>
             {#if localSettings.pureClientMode}
               <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                ⚠️ <strong>Client mode forced:</strong> You will not be able to seed files or act as DHT server, even if publicly reachable. Requires DHT restart.
+                ⚠️ <strong>Client mode forced:</strong> You will not be able to seed files or act as DHT server, even if publicly reachable. Blockchain uses light sync mode (minimal download) instead of full sync. Requires DHT restart.
               </div>
             {/if}
             <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">

@@ -586,6 +586,7 @@ function handleFirstRunComplete() {
         }
         
         // Start Geth blockchain node if auto-start is enabled
+        // In pure-client mode, Geth uses light sync to minimize bandwidth/storage
         if (currentSettings.autoStartGeth && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
           try {
             // Check if Geth is already running
@@ -626,8 +627,11 @@ function handleFirstRunComplete() {
               }
 
               try {
-                await invoke('start_geth_node', { dataDir: './bin/geth-data' });
-                
+                await invoke('start_geth_node', {
+                  dataDir: './bin/geth-data',
+                  pureClientMode: currentSettings.pureClientMode
+                });
+
                 // Update geth status
                 const { gethStatus } = await import('./lib/services/gethService');
                 gethStatus.set('running');

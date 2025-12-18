@@ -1224,7 +1224,10 @@
 
     isStartingNode = true
     try {
-      await invoke('start_geth_node', { dataDir: './bin/geth-data' })
+      await invoke('start_geth_node', {
+        dataDir: './bin/geth-data',
+        pureClientMode: $settings.pureClientMode
+      })
       isGethRunning = true
       startPolling()
     } catch (error) {
@@ -1603,8 +1606,8 @@
               {:else}
                 <div class="space-y-4">
                   <div class="flex gap-3">
-                    <Button 
-                      class="flex-1" 
+                    <Button
+                      class="flex-1"
                       variant={isGethRunning ? "secondary" : "default"}
                       disabled={isGethRunning || isStartingNode}
                       on:click={startGethNode}

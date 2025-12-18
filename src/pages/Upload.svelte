@@ -1312,7 +1312,7 @@
           </p>
           <p class="text-sm text-yellow-700">
             {#if clientModeReason === "forced"}
-              You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server.
+              You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).
             {:else if clientModeReason === "nat"}
               AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.
             {:else}

@@ -176,7 +176,7 @@ impl GethProcess {
     }
 
 
-    pub fn start(&mut self, data_dir: &str, miner_address: Option<&str>) -> Result<(), String> {
+    pub fn start(&mut self, data_dir: &str, miner_address: Option<&str>, pure_client_mode: bool) -> Result<(), String> {
         // Check if we already have a tracked child process
         if self.child.is_some() {
             return Ok(()); // Already running, no need to start again
@@ -373,7 +373,7 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg("snap")
+            .arg(if pure_client_mode { "light" } else { "snap" })
             // Sync performance optimizations
             .arg("--cache")
             .arg("2048") // Increase cache to 2GB for faster sync (default is 1024)

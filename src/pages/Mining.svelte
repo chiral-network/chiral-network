@@ -778,7 +778,7 @@
         return;
       }
     }
-    
+
     if (!isGethRunning) {
       error = $t('mining.errors.gethNotRunning')
       return
