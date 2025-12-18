@@ -1574,6 +1574,7 @@ async fn start_dht_node(
     enable_relay_server: Option<bool>,
     enable_upnp: Option<bool>,
     pure_client_mode: Option<bool>,
+    force_server_mode: Option<bool>,
 ) -> Result<String, String> {
     {
         let dht_guard = state.dht.lock().await;
@@ -1695,6 +1696,7 @@ async fn start_dht_node(
         previous_autorelay_enabled,
         previous_autorelay_disabled,
         pure_client_mode.unwrap_or(false), // Pure client mode disabled by default
+        force_server_mode.unwrap_or(false), // Force server mode disabled by default
     )
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
@@ -7835,6 +7837,7 @@ fn main() {
             None,
             None,
             false,        // pure_client_mode
+            false,        // force_server_mode
         )
         .await
         .expect("Failed to create DHT service at startup");

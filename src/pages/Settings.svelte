@@ -2456,6 +2456,43 @@ function sectionMatches(section: string, query: string) {
             </div>
           </div>
         </div>
+
+        <!-- DHT Server Mode -->
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium">DHT Server Mode (Override)</h4>
+
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="force-server-mode"
+                bind:checked={localSettings.forceServerMode}
+                disabled={localSettings.pureClientMode}
+              />
+              <Label for="force-server-mode" class="cursor-pointer">
+                Force Server Mode
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              <strong>Developer override:</strong> Forces node to act as DHT server even if behind NAT (for testing only).
+              <br/>
+              <strong>Note:</strong> This may not work if you're behind a strict NAT/firewall. AutoNAT automatically upgrades you to server mode when publicly reachable.
+            </p>
+            {#if localSettings.forceServerMode}
+              <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                ⚠️ <strong>Server mode forced:</strong> Node will attempt to act as DHT server even behind NAT. This may result in connectivity issues. Requires DHT restart.
+              </div>
+            {/if}
+            {#if localSettings.pureClientMode}
+              <div class="ml-6 p-2 bg-gray-50 border border-gray-200 rounded text-xs text-gray-600">
+                ℹ️ Server mode is disabled when client mode is forced.
+              </div>
+            {/if}
+            <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+              ℹ️ <strong>Automatic behavior:</strong> If AutoNAT detects you're publicly reachable, you'll automatically be upgraded to server mode without needing this toggle.
+            </div>
+          </div>
+        </div>
       </div>
     </Expandable>
   {/if}

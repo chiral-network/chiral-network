@@ -525,6 +525,7 @@
         cacheSizeMb: $settings.cacheSize,
         enableUpnp: $settings.enableUPnP,
         pureClientMode: $settings.pureClientMode,
+        forceServerMode: $settings.forceServerMode,
       })
       dhtPeerId = peerId
       dhtService.setPeerId(peerId)

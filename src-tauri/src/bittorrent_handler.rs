@@ -2017,6 +2017,7 @@ mod tests {
                 None,
                 None,
                 false,                        // pure_client_mode
+                false,                        // force_server_mode
             )
             .await
             .expect("Failed to create DHT service for test"),
@@ -2088,6 +2089,7 @@ mod tests {
                 None,
                 None,
                 false,                        // pure_client_mode
+                false,                        // force_server_mode
             )
             .await
             .expect("Failed to create DHT service for test"),
@@ -2147,6 +2149,7 @@ mod tests {
                 None,
                 None,
                 false,                        // pure_client_mode
+                false,                        // force_server_mode
             )
             .await
             .expect("Failed to create DHT service for test"),

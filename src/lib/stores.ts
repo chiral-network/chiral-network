@@ -666,6 +666,7 @@ export interface AppSettings {
   enableRelayServer: boolean; // Act as a relay server for other peers
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
   pureClientMode: boolean; // Pure DHT client mode - cannot seed files or act as DHT server (for hard NAT environments)
+  forceServerMode: boolean; // Force DHT server mode - act as DHT server even behind NAT (for testing/development)
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableWalletAutoLock: boolean;
@@ -721,6 +722,7 @@ export const settings = writable<AppSettings>({
   enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
   pureClientMode: false, // Disabled by default - full DHT peer mode
+  forceServerMode: false, // Disabled by default - automatic mode detection
   anonymousMode: false,
   shareAnalytics: true,
   enableWalletAutoLock: false,

@@ -141,6 +141,7 @@
       cacheSizeMb: currentSettings.cacheSize,
       enableUpnp: currentSettings.enableUPnP,
       pureClientMode: currentSettings.pureClientMode,
+      forceServerMode: currentSettings.forceServerMode,
     });
 
     relayServerEnabled = currentSettings.enableRelayServer ?? relayServerEnabled;
