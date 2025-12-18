@@ -25,8 +25,9 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
+use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// WebRTC Protocol Handler for Chiral Network P2P file transfers
 pub struct WebRtcProtocolHandler {
@@ -55,27 +56,50 @@ impl WebRtcProtocolHandler {
         identifier.starts_with("chiral://sha256:")
     }
 
-    /// Extracts the file hash from a chiral:// identifier
+    /// Validates that a string is a valid SHA-256 hash (64 hexadecimal characters)
+    fn is_valid_sha256_hash(hash: &str) -> bool {
+        hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit())
+    }
+
+    /// Extracts the file hash from a chiral:// identifier and validates format
     fn extract_hash(identifier: &str) -> Option<String> {
         if let Some(hash_part) = identifier.strip_prefix("chiral://sha256:") {
-            Some(hash_part.to_string())
+            // Validate hash format (must be 64 hex characters)
+            if Self::is_valid_sha256_hash(hash_part) {
+                Some(hash_part.to_string())
+            } else {
+                warn!("Invalid SHA-256 hash format in identifier: {}", identifier);
+                None
+            }
         } else {
             None
         }
     }
 
-    /// Calculates SHA-256 hash of a file
+    /// Calculates SHA-256 hash of a file using streaming to avoid loading entire file into memory
     async fn calculate_file_hash(file_path: &PathBuf) -> Result<String, ProtocolError> {
-        // Read file contents
-        let data = fs::read(file_path).await.map_err(|e| {
-            ProtocolError::FileNotFound(format!("Failed to read file: {}", e))
+        // Open file for streaming
+        let mut file = fs::File::open(file_path).await.map_err(|e| {
+            ProtocolError::FileNotFound(format!("Failed to open file: {}", e))
         })?;
 
-        // Calculate SHA-256 hash
+        // Calculate hash in chunks to avoid memory issues with large files
         let mut hasher = Sha256::new();
-        hasher.update(&data);
-        let result = hasher.finalize();
+        let mut buffer = vec![0u8; 8192]; // 8KB buffer
 
+        loop {
+            let bytes_read = file.read(&mut buffer).await.map_err(|e| {
+                ProtocolError::Internal(format!("Failed to read file during hashing: {}", e))
+            })?;
+
+            if bytes_read == 0 {
+                break; // EOF reached
+            }
+
+            hasher.update(&buffer[..bytes_read]);
+        }
+
+        let result = hasher.finalize();
         Ok(hex::encode(result))
     }
 
@@ -234,31 +258,127 @@ impl ProtocolHandler for WebRtcProtocolHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_chiral_identifier_validation() {
         let handler = WebRtcProtocolHandler::new();
 
-        // Valid identifiers
-        assert!(handler.supports("chiral://sha256:abc123"));
-        assert!(handler.supports("chiral://sha256:0123456789abcdef"));
+        // Valid identifier (64 hex characters)
+        let valid_hash = "a".repeat(64);
+        assert!(handler.supports(&format!("chiral://sha256:{}", valid_hash)));
 
         // Invalid identifiers
         assert!(!handler.supports("http://example.com/file.zip"));
         assert!(!handler.supports("magnet:?xt=urn:btih:..."));
         assert!(!handler.supports("chiral://md5:abc123")); // Wrong hash type
         assert!(!handler.supports("webrtc://sha256:abc123")); // Wrong scheme
+        assert!(!handler.supports("chiral://sha256:abc")); // Too short (not 64 chars)
+        assert!(!handler.supports("chiral://sha256:")); // Empty hash
+    }
+
+    #[test]
+    fn test_hash_validation() {
+        // Valid SHA-256 hashes (64 hex characters)
+        assert!(WebRtcProtocolHandler::is_valid_sha256_hash(&"a".repeat(64)));
+        assert!(WebRtcProtocolHandler::is_valid_sha256_hash(&"0123456789abcdef".repeat(4)));
+        assert!(WebRtcProtocolHandler::is_valid_sha256_hash("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+
+        // Invalid hashes
+        assert!(!WebRtcProtocolHandler::is_valid_sha256_hash("abc")); // Too short
+        assert!(!WebRtcProtocolHandler::is_valid_sha256_hash(&"a".repeat(65))); // Too long
+        assert!(!WebRtcProtocolHandler::is_valid_sha256_hash(&"g".repeat(64))); // Invalid hex char
+        assert!(!WebRtcProtocolHandler::is_valid_sha256_hash("xyz123")); // Invalid chars
+        assert!(!WebRtcProtocolHandler::is_valid_sha256_hash("")); // Empty
     }
 
     #[test]
     fn test_hash_extraction() {
+        // Valid extraction (with proper hash format)
+        let valid_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         assert_eq!(
-            WebRtcProtocolHandler::extract_hash("chiral://sha256:abc123"),
-            Some("abc123".to_string())
+            WebRtcProtocolHandler::extract_hash(&format!("chiral://sha256:{}", valid_hash)),
+            Some(valid_hash.to_string())
+        );
+
+        // Invalid extractions
+        assert_eq!(
+            WebRtcProtocolHandler::extract_hash("chiral://sha256:abc"), // Too short
+            None
+        );
+        assert_eq!(
+            WebRtcProtocolHandler::extract_hash("chiral://sha256:"), // Empty
+            None
         );
         assert_eq!(
             WebRtcProtocolHandler::extract_hash("http://example.com"),
             None
         );
+        assert_eq!(
+            WebRtcProtocolHandler::extract_hash(&format!("chiral://sha256:{}", "g".repeat(64))), // Invalid hex
+            None
+        );
+    }
+
+    #[test]
+    fn test_identifier_creation() {
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let identifier = WebRtcProtocolHandler::create_identifier(hash);
+        assert_eq!(identifier, format!("chiral://sha256:{}", hash));
+    }
+
+    #[tokio::test]
+    async fn test_file_hash_calculation() {
+        // Create a temporary file with known content
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"Hello, World!").unwrap();
+        temp_file.flush().unwrap();
+
+        // Calculate hash
+        let hash = WebRtcProtocolHandler::calculate_file_hash(&temp_file.path().to_path_buf())
+            .await
+            .unwrap();
+
+        // Expected SHA-256 hash of "Hello, World!"
+        let expected_hash = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
+        assert_eq!(hash, expected_hash);
+    }
+
+    #[tokio::test]
+    async fn test_file_hash_empty_file() {
+        // Create an empty temporary file
+        let temp_file = NamedTempFile::new().unwrap();
+
+        // Calculate hash
+        let hash = WebRtcProtocolHandler::calculate_file_hash(&temp_file.path().to_path_buf())
+            .await
+            .unwrap();
+
+        // Expected SHA-256 hash of empty string
+        let expected_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        assert_eq!(hash, expected_hash);
+    }
+
+    #[tokio::test]
+    async fn test_file_hash_nonexistent_file() {
+        let result = WebRtcProtocolHandler::calculate_file_hash(&PathBuf::from("/nonexistent/file.txt")).await;
+        assert!(result.is_err());
+        match result {
+            Err(ProtocolError::FileNotFound(_)) => {},
+            _ => panic!("Expected FileNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_capabilities() {
+        let handler = WebRtcProtocolHandler::new();
+        let caps = handler.capabilities();
+
+        assert!(caps.supports_seeding);
+        assert!(caps.supports_pause_resume);
+        assert!(caps.supports_multi_source);
+        assert!(caps.supports_encryption);
+        assert!(caps.supports_dht);
     }
 }
