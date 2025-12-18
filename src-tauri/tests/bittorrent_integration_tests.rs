@@ -36,6 +36,7 @@ async fn test_start_download_fallback_to_public() {
             None,                         // blockstore_db_path
             None,
             None,
+            false,                        // pure_client_mode
         )
         .await
         .expect("Failed to create DHT service for test"),
@@ -90,6 +91,7 @@ async fn test_integration_protocol_handler_download_linux_distro() {
             None,                         // blockstore_db_path
             None,
             None,
+            false,                        // pure_client_mode
         )
         .await
         .expect("Failed to create DHT service for test"),
@@ -149,6 +151,7 @@ async fn test_integration_seed_file() {
             None,                         // blockstore_db_path
             None,
             None,
+            false,                        // pure_client_mode
         )
         .await
         .expect("Failed to create DHT service for test"),

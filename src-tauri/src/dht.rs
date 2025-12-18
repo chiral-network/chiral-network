@@ -6393,6 +6393,7 @@ impl DhtService {
         blockstore_db_path: Option<&Path>,
         last_autorelay_enabled_at: Option<SystemTime>,
         last_autorelay_disabled_at: Option<SystemTime>,
+        pure_client_mode: bool,
     ) -> Result<Self, Box<dyn Error>> {
         // Respect user-configured AutoRelay preference (allow env to force-disable)
         let mut final_enable_autorelay = enable_autorelay;

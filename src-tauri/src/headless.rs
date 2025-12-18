@@ -232,6 +232,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         None,
         None,
         None,
+        false, // pure_client_mode: disabled by default
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;

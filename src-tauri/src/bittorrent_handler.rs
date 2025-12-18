@@ -2016,6 +2016,7 @@ mod tests {
                 None,                         // blockstore_db_path
                 None,
                 None,
+                false,                        // pure_client_mode
             )
             .await
             .expect("Failed to create DHT service for test"),
@@ -2086,6 +2087,7 @@ mod tests {
                 None,                         // blockstore_db_path
                 None,
                 None,
+                false,                        // pure_client_mode
             )
             .await
             .expect("Failed to create DHT service for test"),
@@ -2144,6 +2146,7 @@ mod tests {
                 None,                         // blockstore_db_path
                 None,
                 None,
+                false,                        // pure_client_mode
             )
             .await
             .expect("Failed to create DHT service for test"),
