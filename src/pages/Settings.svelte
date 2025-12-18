@@ -2447,8 +2447,8 @@ function sectionMatches(section: string, query: string) {
               <strong>Note:</strong> AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.
             </p>
             {#if localSettings.pureClientMode}
-              <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                ⚠️ <strong>Client mode forced:</strong> You will not be able to seed files or act as DHT server, even if publicly reachable. Blockchain uses light sync mode (minimal download) instead of full sync. Requires DHT restart.
+              <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800 dark:bg-yellow-950/30 dark:border-yellow-800 dark:text-yellow-200">
+                ⚠️ <strong>Client mode forced:</strong> You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.
               </div>
             {/if}
             <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">

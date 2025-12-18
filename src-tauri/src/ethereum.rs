@@ -415,7 +415,10 @@ impl GethProcess {
             .arg("0")
             // Recommend transactions for mining (include pending txs)
             .arg("--miner.recommit")
-            .arg("500ms"); // Re-create the mining block every 500ms to include new transactions faster
+            .arg("500ms") // Re-create the mining block every 500ms to include new transactions faster
+            // Limit transaction lookup to reduce storage (partial blockchain sync)
+            .arg("--txlookuplimit")
+            .arg(if pure_client_mode { "100" } else { "10000" }); // Pure-client: 100 blocks, Normal: 10000 blocks
 
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");

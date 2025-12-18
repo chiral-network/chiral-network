@@ -586,7 +586,7 @@ function handleFirstRunComplete() {
         }
         
         // Start Geth blockchain node if auto-start is enabled
-        // In pure-client mode, Geth uses light sync to minimize bandwidth/storage
+        // Pure-client mode uses partial sync (limited blocks) instead of full sync
         if (currentSettings.autoStartGeth && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
           try {
             // Check if Geth is already running
