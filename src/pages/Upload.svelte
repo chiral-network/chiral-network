@@ -160,6 +160,10 @@
   let lastChecked: Date | null = null;
   let isUploading = false;
 
+  // Client mode detection
+  let isClientMode = false;
+  let clientModeReason: "forced" | "nat" | null = null;
+
   // Protocol selection state - read from settings with Bitswap fallback
   $: selectedProtocol = $settings.selectedProtocol || "Bitswap";
   
@@ -332,11 +336,41 @@
     }
   }
 
+  // Check if node is in client mode (cannot seed)
+  async function checkClientMode() {
+    try {
+      // Check if pure client mode is forced
+      if ($settings.pureClientMode) {
+        isClientMode = true;
+        clientModeReason = "forced";
+        return;
+      }
+
+      // Check DHT health to see if behind NAT
+      const health = await dhtService.getHealth();
+      if (health) {
+        if (health.reachability === "private") {
+          isClientMode = true;
+          clientModeReason = "nat";
+        } else if (health.reachability === "public") {
+          isClientMode = false;
+          clientModeReason = null;
+        }
+      }
+    } catch (error) {
+      console.error("Failed to check client mode:", error);
+    }
+  }
+
   // Map to track active WebRTC sessions with downloaders
   let activeSeederSessions = new Map<string, any>();
   let signalingService: any = null;
   let unlisten: (() => void) | null = null;
   onMount(async () => {
+    // Check if in client mode
+    await checkClientMode();
+
+
     // Initialize WebRTC seeder to accept download requests
     try {
       const { SignalingService } = await import(
@@ -1241,6 +1275,46 @@
     <h1 class="text-3xl font-bold">{$t("upload.title")}</h1>
     <p class="text-muted-foreground mt-2">{$t("upload.subtitle")}</p>
   </div>
+
+  <!-- Client Mode Warning -->
+  {#if isClientMode}
+    <Card class="p-4 bg-yellow-50 border-yellow-200">
+      <div class="flex items-start gap-3">
+        <div class="text-yellow-600 mt-0.5">
+          ⚠️
+        </div>
+        <div class="flex-1 space-y-2">
+          <p class="text-sm font-semibold text-yellow-800">
+            {#if clientModeReason === "forced"}
+              Client-Only Mode Enabled (Forced)
+            {:else if clientModeReason === "nat"}
+              Client-Only Mode (Behind NAT)
+            {:else}
+              Client-Only Mode
+            {/if}
+          </p>
+          <p class="text-sm text-yellow-700">
+            {#if clientModeReason === "forced"}
+              You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server.
+            {:else if clientModeReason === "nat"}
+              AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.
+            {:else}
+              You are in client-only mode and cannot seed files.
+            {/if}
+          </p>
+          <p class="text-xs text-yellow-600">
+            {#if clientModeReason === "forced"}
+              To enable seeding, disable "Force Client-Only Mode" in Settings → Privacy → DHT Client Mode.
+            {:else if clientModeReason === "nat"}
+              Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.
+            {:else}
+              Check your network settings or AutoNAT configuration.
+            {/if}
+          </p>
+        </div>
+      </div>
+    </Card>
+  {/if}
 
   {#if isTauri}
     <Card class="p-4 flex flex-wrap items-start justify-between gap-4">
