@@ -5,7 +5,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { blockReward, miningState, type MiningHistoryPoint, wallet, accurateTotals, isCalculatingAccurateTotals } from '$lib/stores';
+  import { blockReward, miningState, type MiningHistoryPoint, wallet, accurateTotals, isCalculatingAccurateTotals, settings } from '$lib/stores';
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
 
@@ -785,7 +785,8 @@
     }
 
     // Check if blockchain is still syncing (only when Geth is running)
-    if (isGethRunning && isSyncing) {
+    // In pure-client mode (light sync), mining is allowed while syncing headers
+    if (isGethRunning && isSyncing && !$settings.pureClientMode) {
       error = `Cannot start mining while blockchain is syncing (${syncProgress.toFixed(1)}% complete). Please wait for sync to finish.`
       return
     }
@@ -1582,7 +1583,7 @@
             size="lg"
             onclick={() => $miningState.isMining ? stopMining() : startMining()}
             class="min-w-[150px]"
-            disabled={isInvalid || !isGethRunning || isSyncing}
+            disabled={isInvalid || !isGethRunning || (isSyncing && !$settings.pureClientMode)}
           >
             {#if $miningState.isMining}
               <Pause class="h-4 w-4 mr-2" />
