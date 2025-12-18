@@ -20,6 +20,7 @@ pub mod headless;
 pub mod http_server;
 pub mod net;
 pub mod pool;
+pub mod repl;
 pub mod reassembly;
 pub mod transaction_services;
 
@@ -7421,6 +7422,104 @@ async fn get_download_status_restart(
     }
 }
 
+// Interactive mode entry point
+async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::commands::bootstrap::get_bootstrap_nodes;
+
+    info!("Starting Chiral Network in interactive mode");
+
+    // Initialize services similar to headless mode
+    let download_restart_service = Arc::new(download_restart::DownloadRestartService::new(None));
+
+    // Add default bootstrap nodes if no custom ones specified
+    let mut bootstrap_nodes = args.bootstrap.clone();
+    if bootstrap_nodes.is_empty() {
+        bootstrap_nodes.extend(get_bootstrap_nodes());
+        info!("Using default bootstrap nodes");
+    }
+
+    let enable_autonat = !args.disable_autonat;
+    let probe_interval = if enable_autonat {
+        Some(Duration::from_secs(args.autonat_probe_interval))
+    } else {
+        None
+    };
+
+    // Optionally start local file-transfer service
+    let file_transfer_service = Some(Arc::new(file_transfer::FileTransferService::new().await.map_err(|e| {
+        format!("Failed to start file transfer service: {}", e)
+    })?));
+
+    // Finalize AutoRelay flag
+    let mut final_enable_autorelay = !args.disable_autorelay;
+    if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
+        final_enable_autorelay = false;
+    }
+
+    // Start DHT node
+    let dht_service = DhtService::new(
+        args.dht_port,
+        bootstrap_nodes.clone(),
+        args.secret,
+        args.is_bootstrap,
+        enable_autonat,
+        probe_interval,
+        args.autonat_server.clone(),
+        args.socks5_proxy,
+        file_transfer_service.clone(),
+        None, // chunk_manager
+        None, // chunk_size_kb: use default
+        None, // cache_size_mb: use default
+        final_enable_autorelay,
+        args.relay.clone(),
+        args.enable_relay,
+        true,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    let peer_id = dht_service.get_peer_id().await;
+    info!("Node started with Peer ID: {}", peer_id);
+
+    // Connect to bootstrap nodes
+    if !args.is_bootstrap {
+        for bootstrap_addr in &bootstrap_nodes {
+            match dht_service.connect_peer(bootstrap_addr.clone()).await {
+                Ok(_) => info!("Connected to bootstrap: {}", bootstrap_addr),
+                Err(e) => error!("Failed to connect to {}: {}", bootstrap_addr, e),
+            }
+        }
+    }
+
+    // Optionally start geth
+    let geth_process = if args.enable_geth {
+        info!("Starting geth node...");
+        let mut geth = ethereum::GethProcess::new();
+        geth.start(&args.geth_data_dir, args.miner_address.as_deref())?;
+        info!("Geth node started");
+        Some(geth)
+    } else {
+        None
+    };
+
+    let dht_arc = Arc::new(dht_service);
+
+    // Create REPL context
+    let context = repl::ReplContext {
+        dht_service: dht_arc.clone(),
+        file_transfer_service,
+        geth_process,
+        peer_id,
+    };
+
+    // Run the REPL
+    repl::run_repl(context).await?;
+
+    Ok(())
+}
+
 // #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
@@ -7465,6 +7564,35 @@ fn main() {
         // Run the headless mode
         if let Err(e) = runtime.block_on(headless::run_headless(args)) {
             eprintln!("Error in headless mode: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // For interactive mode, initialize basic console logging
+    if args.interactive {
+        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        let mut filter = EnvFilter::from_default_env();
+
+        // Add directives with safe fallback
+        if let Ok(directive) = "chiral_network=info".parse() {
+            filter = filter.add_directive(directive);
+        }
+        if let Ok(directive) = "libp2p=warn".parse() {
+            filter = filter.add_directive(directive);
+        }
+
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(filter)
+            .init();
+
+        // Create a tokio runtime for async operations
+        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+        // Run the interactive mode
+        if let Err(e) = runtime.block_on(run_interactive_mode(args)) {
+            eprintln!("Error in interactive mode: {}", e);
             std::process::exit(1);
         }
         return;
