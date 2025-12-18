@@ -665,6 +665,7 @@ export interface AppSettings {
   preferredRelays: string[]; // Preferred relay node multiaddrs
   enableRelayServer: boolean; // Act as a relay server for other peers
   relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
+  pureClientMode: boolean; // Pure DHT client mode - cannot seed files or act as DHT server (for hard NAT environments)
   anonymousMode: boolean;
   shareAnalytics: boolean;
   enableWalletAutoLock: boolean;
@@ -719,6 +720,7 @@ export const settings = writable<AppSettings>({
   preferredRelays: [], // Use bootstrap nodes as relays by default
   enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
   relayServerAlias: "", // Empty by default - user can set a friendly name
+  pureClientMode: false, // Disabled by default - full DHT peer mode
   anonymousMode: false,
   shareAnalytics: true,
   enableWalletAutoLock: false,
