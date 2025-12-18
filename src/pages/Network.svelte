@@ -1225,9 +1225,23 @@
 
     isStartingNode = true
     try {
+      // Check if in client mode (forced OR NAT-based)
+      let isClientMode = $settings.pureClientMode;
+      if (!isClientMode) {
+        // Check DHT reachability to detect NAT-based client mode
+        try {
+          const health = await dhtService.getHealth();
+          if (health && health.reachability === 'private') {
+            isClientMode = true;
+          }
+        } catch (err) {
+          console.warn('Failed to check DHT reachability for client mode:', err);
+        }
+      }
+
       await invoke('start_geth_node', {
         dataDir: './bin/geth-data',
-        pureClientMode: $settings.pureClientMode
+        pureClientMode: isClientMode  // Combined: forced OR NAT-based
       })
       isGethRunning = true
       startPolling()

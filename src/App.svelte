@@ -627,9 +627,24 @@ function handleFirstRunComplete() {
               }
 
               try {
+                // Check if in client mode (forced OR NAT-based)
+                let isClientMode = currentSettings.pureClientMode;
+                if (!isClientMode) {
+                  // Check DHT reachability to detect NAT-based client mode
+                  try {
+                    const { dhtService } = await import('./lib/dht');
+                    const health = await dhtService.getHealth();
+                    if (health && health.reachability === 'private') {
+                      isClientMode = true;
+                    }
+                  } catch (err) {
+                    console.warn('Failed to check DHT reachability for client mode:', err);
+                  }
+                }
+
                 await invoke('start_geth_node', {
                   dataDir: './bin/geth-data',
-                  pureClientMode: currentSettings.pureClientMode
+                  pureClientMode: isClientMode  // Combined: forced OR NAT-based
                 });
 
                 // Update geth status
