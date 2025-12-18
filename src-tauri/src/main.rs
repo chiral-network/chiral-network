@@ -7834,6 +7834,7 @@ fn main() {
             Some(&async_blockstore_path),
             None,
             None,
+            false,        // pure_client_mode
         )
         .await
         .expect("Failed to create DHT service at startup");
