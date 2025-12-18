@@ -21,16 +21,17 @@ Chiral Network provides multiple interface modes to suit different deployment sc
 
 ### Available Modes
 
-| Mode | Interface Type | Use Case |
-|------|---------------|----------|
-| **GUI** (default) | Graphical window | Desktop users, visual monitoring |
-| **Headless** | Daemon (no interaction) | Bootstrap nodes, background services |
-| **REPL** | Interactive shell | Testing, debugging, server management |
-| **TUI** | Full-screen terminal | Live monitoring, server dashboards |
+| Mode              | Interface Type          | Use Case                              |
+| ----------------- | ----------------------- | ------------------------------------- |
+| **GUI** (default) | Graphical window        | Desktop users, visual monitoring      |
+| **Headless**      | Daemon (no interaction) | Bootstrap nodes, background services  |
+| **REPL**          | Interactive shell       | Testing, debugging, server management |
+| **TUI**           | Full-screen terminal    | Live monitoring, server dashboards    |
 
 ### When to Use Interactive Shells
 
 Choose REPL or TUI mode when you need:
+
 - ✅ Server-side management via SSH
 - ✅ Quick testing and debugging
 - ✅ Runtime control without GUI overhead
@@ -48,6 +49,7 @@ Choose REPL or TUI mode when you need:
 Core interactive shell functionality with command-line interface.
 
 **Implemented Features:**
+
 - ✅ Interactive command prompt with rustyline
 - ✅ Command history and navigation (↑/↓ arrows)
 - ✅ Network status monitoring (`status`, `peers`, `dht`)
@@ -60,30 +62,47 @@ Core interactive shell functionality with command-line interface.
 - ✅ All CLI flags support (--dht-port, --bootstrap, etc.)
 
 **Files:**
+
 - `src-tauri/src/repl.rs` - Main REPL implementation
 - `src-tauri/src/main.rs` - Interactive mode entry point
 - `docs/INTERACTIVE_SHELL_GUIDE.md` - This guide
 
 **Usage:**
+
 ```bash
 ./chiral-network --interactive [options]
 ```
 
-### Phase 2: Enhanced REPL Features 📋 **PLANNED**
+### Phase 2: Enhanced REPL Features ✅ **COMPLETED**
 
-**Target:** v0.2.0
+**Status:** Released in v0.1.0
 
 Advanced REPL capabilities and improved UX.
 
-**Planned Features:**
-- ⏳ Tab completion for commands and file paths
-- ⏳ Syntax highlighting for hashes and addresses
-- ⏳ Real-time download progress display
-- ⏳ Configuration management commands (`config get/set`)
-- ⏳ Advanced peer filtering and search
-- ⏳ File versioning commands
-- ⏳ Reputation management commands
-- ⏳ Enhanced error messages with suggestions
+**Implemented Features:**
+
+- ✅ Tab completion for commands and subcommands (rustyline Completer trait)
+- ✅ Syntax highlighting for hashes (Qm...) and peer IDs (12D3KooW...)
+- ✅ Real-time download progress display (`downloads` command)
+- ✅ Configuration management commands (`config list/get/set/reset`)
+- ✅ Advanced peer filtering (`peers list --trust --sort --limit`)
+- ✅ File versioning commands (`versions list/info`)
+- ✅ Reputation management commands (`reputation list/info`)
+- ✅ Enhanced error messages with Levenshtein distance suggestions
+
+**Technical Implementation:**
+
+- ReplHelper struct with Completer, Highlighter, Hinter traits
+- Levenshtein distance algorithm for typo suggestions (strsim crate)
+- ANSI terminal colors for syntax highlighting (colored crate)
+- Advanced filtering and sorting for peer lists
+- Mock data for reputation and versioning (ready for backend integration)
+
+**New Dependencies:**
+
+- `colored = "2.1"` - ANSI terminal colors
+- `indicatif = "0.17"` - Progress bars (for future use)
+- `strsim = "0.11"` - Levenshtein distance for suggestions
 
 ### Phase 3: TUI Mode 🚧 **IN PLANNING**
 
@@ -92,6 +111,7 @@ Advanced REPL capabilities and improved UX.
 Full-screen terminal dashboard with live updates.
 
 **Planned Features:**
+
 - ⏳ Live dashboard with multiple panels
 - ⏳ Real-time network metrics visualization
 - ⏳ Progress bars for active downloads
@@ -102,6 +122,7 @@ Full-screen terminal dashboard with live updates.
 - ⏳ Customizable layout and themes
 
 **Technology Stack:**
+
 - `ratatui` - Modern Rust TUI framework
 - `crossterm` - Cross-platform terminal handling
 - Event-driven architecture
@@ -114,6 +135,7 @@ Full-screen terminal dashboard with live updates.
 Advanced monitoring and management capabilities.
 
 **Ideas Under Consideration:**
+
 - Custom REPL scripts and macros
 - Plugin system for custom commands
 - Remote REPL access (secure RPC)
@@ -129,20 +151,21 @@ Advanced monitoring and management capabilities.
 
 ### Detailed Comparison Table
 
-| Feature | GUI | Headless | REPL | TUI (Future) |
-|---------|-----|----------|------|--------------|
-| **Display Required** | ✅ Yes (X11/Wayland) | ❌ No | ❌ No | ❌ No |
-| **Works over SSH** | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Runtime Interaction** | ✅ Full | ❌ None | ✅ Commands | ✅ Full |
-| **Resource Usage** | 🔴 High | 🟢 Low | 🟢 Low | 🟡 Medium |
-| **Visual Feedback** | 🟢 Best | ⚫ Logs only | 🟡 Text output | 🟢 Live dashboard |
-| **Learning Curve** | 🟢 Easy | - | 🟡 Medium | 🟡 Medium |
-| **Automation** | ❌ No | ⚠️ Limited | ✅ Yes | ⚠️ Limited |
-| **Monitoring** | 🟢 Real-time | ⚫ Logs | 🟡 On-demand | 🟢 Real-time |
+| Feature                 | GUI                  | Headless     | REPL           | TUI (Future)      |
+| ----------------------- | -------------------- | ------------ | -------------- | ----------------- |
+| **Display Required**    | ✅ Yes (X11/Wayland) | ❌ No        | ❌ No          | ❌ No             |
+| **Works over SSH**      | ❌ No                | ✅ Yes       | ✅ Yes         | ✅ Yes            |
+| **Runtime Interaction** | ✅ Full              | ❌ None      | ✅ Commands    | ✅ Full           |
+| **Resource Usage**      | 🔴 High              | 🟢 Low       | 🟢 Low         | 🟡 Medium         |
+| **Visual Feedback**     | 🟢 Best              | ⚫ Logs only | 🟡 Text output | 🟢 Live dashboard |
+| **Learning Curve**      | 🟢 Easy              | -            | 🟡 Medium      | 🟡 Medium         |
+| **Automation**          | ❌ No                | ⚠️ Limited   | ✅ Yes         | ⚠️ Limited        |
+| **Monitoring**          | 🟢 Real-time         | ⚫ Logs      | 🟡 On-demand   | 🟢 Real-time      |
 
 ### Which Mode Should I Use?
 
 **Choose REPL if you need:**
+
 - Command-line control with instant feedback
 - Scriptable operations (pipe commands, automation)
 - Minimal resource usage
@@ -150,6 +173,7 @@ Advanced monitoring and management capabilities.
 - Testing and debugging
 
 **Choose TUI if you need:**
+
 - Live monitoring dashboard
 - Visual status at a glance
 - Server-side monitoring via SSH
@@ -157,11 +181,13 @@ Advanced monitoring and management capabilities.
 - Mouse support (optional)
 
 **Choose GUI if you need:**
+
 - Full feature set with visual interface
 - Drag-and-drop file operations
 - Desktop application experience
 
 **Choose Headless if you need:**
+
 - Pure daemon mode (bootstrap nodes)
 - No interaction after startup
 - Absolute minimal resources
@@ -226,6 +252,7 @@ All interactive modes support these flags:
 REPL (Read-Eval-Print Loop) is an interactive command-line interface where you type commands and get immediate responses. Think of it like the `python` or `mysql` CLI.
 
 **Key Features:**
+
 - Command history (↑/↓ arrows)
 - Clean output (no log spam)
 - Scriptable (pipe commands)
@@ -317,6 +344,23 @@ chiral> dht get QmHash123...
 chiral> mining status
 chiral> mining start 4
 chiral> mining stop
+
+# Configuration management
+chiral> config list
+chiral> config get max_peers
+chiral> config set max_peers 100
+
+# Peer filtering and reputation
+chiral> peers list --trust high --sort score --limit 10
+chiral> reputation list
+chiral> reputation info 12D3KooW...
+
+# File versioning
+chiral> versions list QmHash123...
+chiral> versions info QmHash123...
+
+# Active downloads
+chiral> downloads
 ```
 
 ### Command History
@@ -446,15 +490,15 @@ Command: █                    [Tab] for autocomplete
 
 ### Planned Keybindings
 
-| Key | Action |
-|-----|--------|
-| `1-5` | Switch to panel |
-| `q` | Quit |
-| `h` or `F1` | Help |
-| `r` | Refresh |
-| `↑↓←→` | Navigate |
-| `Enter` | Select/Activate |
-| `Tab` | Command autocomplete |
+| Key         | Action               |
+| ----------- | -------------------- |
+| `1-5`       | Switch to panel      |
+| `q`         | Quit                 |
+| `h` or `F1` | Help                 |
+| `r`         | Refresh              |
+| `↑↓←→`      | Navigate             |
+| `Enter`     | Select/Activate      |
+| `Tab`       | Command autocomplete |
 
 ### Starting TUI Mode (Future)
 
@@ -469,6 +513,7 @@ Command: █                    [Tab] for autocomplete
 ### Implementation Timeline
 
 TUI mode is planned for a future release after REPL mode is stable. Implementation will use:
+
 - **ratatui** - Modern Rust TUI framework
 - **crossterm** - Cross-platform terminal manipulation
 - **Live updates** - 1-second refresh rate
@@ -480,40 +525,57 @@ TUI mode is planned for a future release after REPL mode is stable. Implementati
 
 ### General Commands
 
-| Command | Aliases | Description | Example |
-|---------|---------|-------------|---------|
-| `help` | `h`, `?` | Show command list | `help` |
-| `status` | `s` | Network status overview | `status` |
-| `clear` | `cls` | Clear screen | `clear` |
-| `quit` | `exit`, `q` | Exit shell | `quit` |
+| Command  | Aliases     | Description             | Example  |
+| -------- | ----------- | ----------------------- | -------- |
+| `help`   | `h`, `?`    | Show command list       | `help`   |
+| `status` | `s`         | Network status overview | `status` |
+| `clear`  | `cls`       | Clear screen            | `clear`  |
+| `quit`   | `exit`, `q` | Exit shell              | `quit`   |
 
 ### Network Commands
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `peers count` | Show peer count | `peers count` |
-| `peers list` | List all peers | `peers list` |
-| `dht status` | DHT reachability info | `dht status` |
-| `dht get <hash>` | Search DHT for file | `dht get QmHash...` |
+| Command                    | Description                | Example                               |
+| -------------------------- | -------------------------- | ------------------------------------- |
+| `peers count`              | Show peer count            | `peers count`                         |
+| `peers list`               | List all peers             | `peers list`                          |
+| `peers list --trust <lvl>` | Filter peers by trust      | `peers list --trust high`             |
+| `peers list --sort <fld>`  | Sort peers                 | `peers list --sort score`             |
+| `peers list --limit <n>`   | Limit results              | `peers list --limit 10`               |
+| `dht status`               | DHT reachability info      | `dht status`                          |
+| `dht get <hash>`           | Search DHT for file        | `dht get QmHash...`                   |
+| `reputation list`          | Show peer reputation       | `reputation list`                     |
+| `reputation info <peer>`   | Detailed peer stats        | `reputation info 12D3KooW...`         |
 
 ### File Commands
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `list files` | List seeding files | `list files` |
-| `list downloads` | Show download history | `list downloads` |
-| `add <path>` | Add file to share | `add /path/file.pdf` |
-| `download <hash>` | Download by hash | `download QmHash...` |
+| Command                 | Description            | Example                    |
+| ----------------------- | ---------------------- | -------------------------- |
+| `list files`            | List seeding files     | `list files`               |
+| `list downloads`        | Show download history  | `list downloads`           |
+| `add <path>`            | Add file to share      | `add /path/file.pdf`       |
+| `download <hash>`       | Download by hash       | `download QmHash...`       |
+| `downloads`             | Active downloads       | `downloads`                |
+| `versions list <hash>`  | Show file versions     | `versions list QmHash...`  |
+| `versions info <hash>`  | Version details        | `versions info QmHash...`  |
 
 ### Mining Commands
 
 > **Note:** Requires `--enable-geth` flag
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `mining status` | Show mining info | `mining status` |
-| `mining start [threads]` | Start mining | `mining start 4` |
-| `mining stop` | Stop mining | `mining stop` |
+| Command                  | Description      | Example          |
+| ------------------------ | ---------------- | ---------------- |
+| `mining status`          | Show mining info | `mining status`  |
+| `mining start [threads]` | Start mining     | `mining start 4` |
+| `mining stop`            | Stop mining      | `mining stop`    |
+
+### Configuration Commands
+
+| Command                    | Description            | Example                     |
+| -------------------------- | ---------------------- | --------------------------- |
+| `config list`              | List all settings      | `config list`               |
+| `config get <key>`         | Get setting value      | `config get max_peers`      |
+| `config set <key> <value>` | Update setting         | `config set max_peers 100`  |
+| `config reset <key>`       | Reset to default       | `config reset max_peers`    |
 
 ---
 
