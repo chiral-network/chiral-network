@@ -266,7 +266,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     let geth_handle = if args.enable_geth {
         info!("Starting geth node...");
         let mut geth = GethProcess::new();
-        geth.start(&args.geth_data_dir, args.miner_address.as_deref())?;
+        geth.start(&args.geth_data_dir, args.miner_address.as_deref(), false)?; // Use normal snap sync in headless mode
         info!("✅ Geth node started");
         Some(geth)
     } else {

@@ -1097,7 +1097,7 @@ async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> R
         let mut geth = state.geth.lock().await;
         let miner_address = state.miner_address.lock().await;
         info!("Restarting Geth with miner address: {:?}", miner_address);
-        geth.start(data_dir, miner_address.as_deref())?;
+        geth.start(data_dir, miner_address.as_deref(), false)?; // Use normal snap sync mode
     }
 
     // Wait for Geth to become responsive

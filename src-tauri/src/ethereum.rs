@@ -561,8 +561,8 @@ pub async fn start_geth_with_health_check(
     }
     
     // Start Geth (it will use the fallback bootstrap string if health check found issues)
-    geth.start(data_dir, miner_address)?;
-    
+    geth.start(data_dir, miner_address, false)?; // Use normal snap sync mode
+
     Ok(health_report)
 }
 
