@@ -7426,8 +7426,6 @@ async fn get_download_status_restart(
 async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     use crate::commands::bootstrap::get_bootstrap_nodes;
 
-    info!("Starting Chiral Network in interactive mode");
-
     // Initialize services similar to headless mode
     let download_restart_service = Arc::new(download_restart::DownloadRestartService::new(None));
 
@@ -7435,7 +7433,6 @@ async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std
     let mut bootstrap_nodes = args.bootstrap.clone();
     if bootstrap_nodes.is_empty() {
         bootstrap_nodes.extend(get_bootstrap_nodes());
-        info!("Using default bootstrap nodes");
     }
 
     let enable_autonat = !args.disable_autonat;
@@ -7481,24 +7478,18 @@ async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std
     .await?;
 
     let peer_id = dht_service.get_peer_id().await;
-    info!("Node started with Peer ID: {}", peer_id);
 
     // Connect to bootstrap nodes
     if !args.is_bootstrap {
         for bootstrap_addr in &bootstrap_nodes {
-            match dht_service.connect_peer(bootstrap_addr.clone()).await {
-                Ok(_) => info!("Connected to bootstrap: {}", bootstrap_addr),
-                Err(e) => error!("Failed to connect to {}: {}", bootstrap_addr, e),
-            }
+            let _ = dht_service.connect_peer(bootstrap_addr.clone()).await;
         }
     }
 
     // Optionally start geth
     let geth_process = if args.enable_geth {
-        info!("Starting geth node...");
         let mut geth = ethereum::GethProcess::new();
         geth.start(&args.geth_data_dir, args.miner_address.as_deref())?;
-        info!("Geth node started");
         Some(geth)
     } else {
         None
@@ -7569,23 +7560,10 @@ fn main() {
         return;
     }
 
-    // For interactive mode, initialize basic console logging
+    // For interactive mode, disable logging for clean shell
     if args.interactive {
-        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-        let mut filter = EnvFilter::from_default_env();
-
-        // Add directives with safe fallback
-        if let Ok(directive) = "chiral_network=info".parse() {
-            filter = filter.add_directive(directive);
-        }
-        if let Ok(directive) = "libp2p=warn".parse() {
-            filter = filter.add_directive(directive);
-        }
-
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(filter)
-            .init();
+        // Don't initialize tracing subscriber - keep the shell clean
+        // Logs are disabled in interactive mode for better UX
 
         // Create a tokio runtime for async operations
         let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");

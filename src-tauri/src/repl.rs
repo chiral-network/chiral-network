@@ -5,7 +5,6 @@ use crate::file_transfer::{AttemptStatus, FileTransferService};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::sync::Arc;
-use tracing::error;
 
 pub struct ReplContext {
     pub dht_service: Arc<DhtService>,
@@ -71,7 +70,7 @@ pub async fn run_repl(context: ReplContext) -> Result<(), Box<dyn std::error::Er
                 break;
             }
             Err(err) => {
-                error!("Readline error: {:?}", err);
+                eprintln!("Readline error: {:?}", err);
                 break;
             }
         }
@@ -252,7 +251,8 @@ async fn cmd_peers(args: &[&str], context: &ReplContext) -> Result<(), String> {
             }
 
             if connected_peers.len() > 20 {
-                println!("  │ ... and {} more", connected_peers.len() - 20);
+                let msg = format!("... and {} more", connected_peers.len() - 20);
+                println!("  │ {:<54} │", msg);
             }
 
             println!("  └────────────────────────────────────────────────────────┘");
@@ -430,12 +430,13 @@ async fn cmd_dht(args: &[&str], context: &ReplContext) -> Result<(), String> {
                 println!("  ├─────────────────────────────────────────────────────────┤");
                 println!("  │ Observed Addresses:                                     │");
                 for addr in metrics.observed_addrs.iter().take(3) {
-                    let addr_str = if addr.len() > 50 {
-                        format!("{}...", &addr[..47])
+                    // Truncate to fit in the box (max 53 chars for the content area)
+                    let display_addr = if addr.len() > 53 {
+                        format!("{}...", &addr[..50])
                     } else {
                         addr.clone()
                     };
-                    println!("  │   {:<53} │", addr_str);
+                    println!("  │   {:<53} │", display_addr);
                 }
             }
 
