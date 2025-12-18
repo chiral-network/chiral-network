@@ -1321,7 +1321,7 @@
           </p>
           <p class="text-xs text-yellow-600">
             {#if clientModeReason === "forced"}
-              To enable seeding, disable "Force Client-Only Mode" in Settings → Privacy → DHT Client Mode.
+              To enable seeding, disable "Force Client-Only Mode" in Settings → Developers → DHT Client Mode.
             {:else if clientModeReason === "nat"}
               Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.
             {:else}

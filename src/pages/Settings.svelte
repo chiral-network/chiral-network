@@ -21,6 +21,7 @@
     Copy,
     Download as DownloadIcon,
     Upload as UploadIcon,
+    Code,
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import {open} from "@tauri-apps/plugin-dialog";
@@ -58,6 +59,7 @@
   let privacySectionOpen = false;
   let notificationsSectionOpen = false;
   let diagnosticsSectionOpen = false;
+  let developersSectionOpen = false;
 
   // Dynamic placeholder for storage path
   let storagePathPlaceholder = "Select download directory";
@@ -74,6 +76,7 @@
     advanced: boolean;
     diagnostics: boolean;
     backupRestore: boolean;
+    developers: boolean;
   };
 
   let accordionStateInitialized = false;
@@ -250,6 +253,7 @@
         if (typeof parsed.advanced === "boolean") advancedSectionOpen = parsed.advanced;
         if (typeof parsed.diagnostics === "boolean") diagnosticsSectionOpen = parsed.diagnostics;
         if (typeof parsed.backupRestore === "boolean") backupRestoreSectionOpen = parsed.backupRestore;
+        if (typeof parsed.developers === "boolean") developersSectionOpen = parsed.developers;
       }
     } catch (error) {
       diagnosticLogger.warn('Settings', 'Failed to restore settings accordion state', { error: error instanceof Error ? error.message : String(error) });
@@ -270,6 +274,7 @@
         advanced: advancedSectionOpen,
         diagnostics: diagnosticsSectionOpen,
         backupRestore: backupRestoreSectionOpen,
+        developers: developersSectionOpen,
       };
       window.localStorage.setItem(ACCORDION_STORAGE_KEY, JSON.stringify(accordionState));
     } catch (error) {
@@ -2117,37 +2122,6 @@ function sectionMatches(section: string, query: string) {
           {/if}
         </div>
 
-        <!-- Pure Client Mode -->
-        <div class="space-y-3 border-t pt-3">
-          <h4 class="font-medium">DHT Client Mode (Advanced)</h4>
-
-          <div class="space-y-2">
-            <div class="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="pure-client-mode"
-                bind:checked={localSettings.pureClientMode}
-              />
-              <Label for="pure-client-mode" class="cursor-pointer">
-                Force Client-Only Mode
-              </Label>
-            </div>
-            <p class="text-xs text-muted-foreground ml-6">
-              <strong>Advanced/Developer option:</strong> Forces node to stay in client mode even if publicly reachable.
-              <br/>
-              <strong>Note:</strong> AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.
-            </p>
-            {#if localSettings.pureClientMode}
-              <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                ⚠️ <strong>Client mode forced:</strong> You will not be able to seed files or act as DHT server, even if publicly reachable. Requires DHT restart.
-              </div>
-            {/if}
-            <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-              ℹ️ <strong>Automatic behavior:</strong> If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle.
-            </div>
-          </div>
-        </div>
-
         <div class="flex items-center gap-2">
           <input
             type="checkbox"
@@ -2436,6 +2410,52 @@ function sectionMatches(section: string, query: string) {
             {importExportFeedback.message}
           </div>
         {/if}
+      </div>
+    </Expandable>
+  {/if}
+
+  <!-- Developers -->
+  {#if sectionMatches("developers", search) || sectionMatches("developer", search)}
+    <Expandable bind:isOpen={developersSectionOpen}>
+      <div slot="title" class="flex items-center gap-3">
+        <Code class="h-6 w-6 text-purple-600" />
+        <h2 class="text-xl font-semibold text-black">Developers</h2>
+      </div>
+      <div class="space-y-4">
+        <p class="text-sm text-muted-foreground">
+          Advanced developer options for testing and debugging. Most users don't need to change these settings.
+        </p>
+
+        <!-- DHT Client Mode -->
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium">DHT Client Mode (Override)</h4>
+
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="pure-client-mode"
+                bind:checked={localSettings.pureClientMode}
+              />
+              <Label for="pure-client-mode" class="cursor-pointer">
+                Force Client-Only Mode
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              <strong>Developer override:</strong> Forces node to stay in client mode even if publicly reachable.
+              <br/>
+              <strong>Note:</strong> AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.
+            </p>
+            {#if localSettings.pureClientMode}
+              <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                ⚠️ <strong>Client mode forced:</strong> You will not be able to seed files or act as DHT server, even if publicly reachable. Requires DHT restart.
+              </div>
+            {/if}
+            <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+              ℹ️ <strong>Automatic behavior:</strong> If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle.
+            </div>
+          </div>
+        </div>
       </div>
     </Expandable>
   {/if}
