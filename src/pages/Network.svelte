@@ -523,6 +523,8 @@
         relayServerAlias: $settings.relayServerAlias || '',
         chunkSizeKb: $settings.chunkSize,
         cacheSizeMb: $settings.cacheSize,
+        enableUpnp: $settings.enableUPnP,
+        pureClientMode: $settings.pureClientMode,
       })
       dhtPeerId = peerId
       dhtService.setPeerId(peerId)

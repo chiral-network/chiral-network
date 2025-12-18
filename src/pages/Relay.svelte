@@ -139,6 +139,8 @@
       relayServerAlias: currentSettings.relayServerAlias || '',
       chunkSizeKb: currentSettings.chunkSize,
       cacheSizeMb: currentSettings.cacheSize,
+      enableUpnp: currentSettings.enableUPnP,
+      pureClientMode: currentSettings.pureClientMode,
     });
 
     relayServerEnabled = currentSettings.enableRelayServer ?? relayServerEnabled;

@@ -539,6 +539,7 @@ function handleFirstRunComplete() {
                 chunkSizeKb: currentSettings.chunkSize,
                 cacheSizeMb: currentSettings.cacheSize,
                 enableUpnp: currentSettings.enableUPnP,
+                pureClientMode: currentSettings.pureClientMode,
               });
               
               console.log("✅ DHT node auto-started successfully with peer ID:", peerId);
