@@ -7894,6 +7894,10 @@ fn main() {
 
         let mut manager = ProtocolManager::new();
 
+        // Register WebRTC protocol handler (highest priority for P2P downloads)
+        let webrtc_handler = protocols::webrtc::WebRtcProtocolHandler::new();
+        manager.register(Arc::new(webrtc_handler));
+
         // Wrap the simple handler in the enhanced protocol handler
         let bittorrent_protocol_handler =
             BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
