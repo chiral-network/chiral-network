@@ -6,6 +6,7 @@
 //!
 //! ## Supported Protocols
 //!
+//! - **WebRTC**: P2P file transfers using WebRTC data channels (chiral:// scheme)
 //! - **BitTorrent**: Magnet links and .torrent files, with DHT support
 //! - **HTTP/HTTPS**: Direct file downloads with range request support
 //! - **FTP/FTPS**: FTP server downloads with resume capability
@@ -31,6 +32,7 @@
 //! ```
 
 pub mod traits;
+pub mod webrtc;
 pub mod bittorrent;
 pub mod http;
 pub mod ftp;
@@ -87,6 +89,7 @@ use tracing::{debug, info, warn};
 #[deprecated(note = "Use SimpleProtocolHandler or ProtocolHandler instead")]
 pub use traits::SimpleProtocolHandler as LegacyProtocolHandler;
 
+pub use webrtc::WebRtcProtocolHandler;
 pub use bittorrent::BitTorrentProtocolHandler;
 pub use http::HttpProtocolHandler;
 pub use ftp::FtpProtocolHandler;
@@ -282,13 +285,13 @@ impl ProtocolManager {
     /// Get best protocol handler for an identifier
     ///
     /// Uses priority ordering to select the best handler that supports
-    /// the given identifier. Priority: BitTorrent > ED2K > HTTP > FTP
+    /// the given identifier. Priority: WebRTC > BitTorrent > ED2K > HTTP > FTP
     pub fn get_best_handler(
         &self,
         identifier: &str,
     ) -> Result<Arc<dyn ProtocolHandler>, ProtocolError> {
         // Priority order
-        let priority = ["bittorrent", "ed2k", "http", "ftp"];
+        let priority = ["webrtc", "bittorrent", "ed2k", "http", "ftp"];
 
         for protocol in &priority {
             if let Some(handler) = self.handlers.iter().find(|h| h.name() == *protocol) {
