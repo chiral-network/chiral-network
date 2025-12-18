@@ -617,15 +617,23 @@
       const handleDragOver = (e: DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer!.dropEffect = "copy";
-        isDragging = true;
+        if (isClientMode) {
+          e.dataTransfer!.dropEffect = "none";
+        } else {
+          e.dataTransfer!.dropEffect = "copy";
+          isDragging = true;
+        }
       };
 
       const handleDragEnter = (e: DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer!.dropEffect = "copy";
-        isDragging = true;
+        if (isClientMode) {
+          e.dataTransfer!.dropEffect = "none";
+        } else {
+          e.dataTransfer!.dropEffect = "copy";
+          isDragging = true;
+        }
       };
 
       const handleDragLeave = (e: DragEvent) => {
@@ -642,6 +650,15 @@
 
       const handleDrop = async (e: DragEvent) => {
         isDragging = false;
+
+        // Check if in client mode
+        if (isClientMode) {
+          showToast(
+            "File sharing is disabled in client-only mode",
+            "warning",
+          );
+          return;
+        }
 
         // IMPORTANT: Extract files immediately before any async operations
         // dataTransfer.files becomes empty after the event completes
@@ -1575,7 +1592,9 @@
   <!-- BitTorrent Seeding Section (Collapsible) - REMOVED: Now integrated as protocol option -->
 
   <Card
-    class="drop-zone relative p-6 transition-all duration-200 border-dashed {isDragging
+    class="drop-zone relative p-6 transition-all duration-200 border-dashed {isClientMode
+      ? 'border-muted-foreground/15 bg-muted/30 opacity-60'
+      : isDragging
       ? 'border-primary bg-primary/5'
       : isUploading
         ? 'border-orange-500 bg-orange-500/5'
@@ -1602,27 +1621,33 @@
               ? 'text-primary'
               : isUploading
                 ? 'text-orange-500'
-                : 'text-foreground'}"
+                : isClientMode
+                  ? 'text-muted-foreground'
+                  : 'text-foreground'}"
           >
-            {isDragging
-              ? $t("upload.dropFilesHere")
-              : isUploading
-                ? $t("upload.uploadingFiles")
-                : $t("upload.dropFiles")}
+            {isClientMode
+              ? "File Sharing Unavailable"
+              : isDragging
+                ? $t("upload.dropFilesHere")
+                : isUploading
+                  ? $t("upload.uploadingFiles")
+                  : $t("upload.dropFiles")}
           </h3>
 
           <p
             class="text-muted-foreground mb-8 text-lg transition-colors duration-300"
           >
-            {isDragging
-              ? isTauri
-                ? $t("upload.releaseToUpload")
-                : $t("upload.dragDropWebNotAvailable")
-              : isUploading
-                ? $t("upload.pleaseWaitProcessing")
-                : isTauri
-                  ? $t("upload.dropFilesHint")
-                  : $t("upload.dragDropRequiresDesktop")}
+            {isClientMode
+              ? "You are in client-only mode and cannot share files with the network."
+              : isDragging
+                ? isTauri
+                  ? $t("upload.releaseToUpload")
+                  : $t("upload.dragDropWebNotAvailable")
+                : isUploading
+                  ? $t("upload.pleaseWaitProcessing")
+                  : isTauri
+                    ? $t("upload.dropFilesHint")
+                    : $t("upload.dragDropRequiresDesktop")}
           </p>
 
           <div
@@ -1645,13 +1670,14 @@
             {#if isTauri}
               <button
                 class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-                disabled={isUploading}
+                disabled={isUploading || isClientMode}
                 on:click={openFileDialog}
+                title={isClientMode ? "File sharing disabled in client-only mode" : ""}
               >
                 <Plus
                   class="h-5 w-5 mr-2 group-hover:rotate-90 transition-transform duration-300"
                 />
-                {isUploading ? $t("upload.uploading") : $t("upload.addFiles")}
+                {isClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addFiles")}
               </button>
             {:else}
               <div class="text-center">
