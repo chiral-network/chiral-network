@@ -7,7 +7,7 @@
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
-  import { peers, networkStats, userLocation, settings } from '$lib/stores'
+  import { peers, networkStats, userLocation, settings, wallet } from '$lib/stores'
   import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText, Wifi } from 'lucide-svelte'
@@ -91,7 +91,8 @@
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
   let chainId: number | null = 98765; // Default, will be fetched from backend
-  let nodeAddress = ''
+  // Reactive node address from wallet
+  $: nodeAddress = $wallet.address || ''
   // let copiedNodeAddr = false
   
   // DHT variables
