@@ -1736,11 +1736,12 @@
           {#if isTauri}
             <button
               class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={isUploading}
+              disabled={isUploading || isClientMode}
               on:click={openFileDialog}
+              title={isClientMode ? "File sharing disabled in client-only mode" : ""}
             >
               <Plus class="h-4 w-4 mr-2" />
-              {isUploading ? $t("upload.uploading") : $t("upload.addMoreFiles")}
+              {isClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addMoreFiles")}
             </button>
           {:else}
             <div class="text-center">
@@ -1751,6 +1752,29 @@
           {/if}
         </div>
       </div>
+
+      <!-- Client Mode Warning for Shared Files -->
+      {#if isClientMode && $coalescedFiles.length > 0}
+        <div class="mx-4 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <div class="flex items-start gap-2">
+            <div class="text-amber-600 text-sm mt-0.5">⚠️</div>
+            <div class="flex-1">
+              <p class="text-sm font-medium text-amber-800">
+                Seeding Inactive in Client-Only Mode
+              </p>
+              <p class="text-xs text-amber-700 mt-1">
+                {#if clientModeReason === "forced"}
+                  Your files are saved locally but cannot be accessed by other peers because client-only mode is forced.
+                {:else if clientModeReason === "nat"}
+                  Your files are saved locally but cannot be accessed by other peers due to NAT/firewall restrictions.
+                {:else}
+                  Your files are saved locally but cannot be accessed by other peers while in client-only mode.
+                {/if}
+              </p>
+            </div>
+          </div>
+        </div>
+      {/if}
 
       <!-- File List -->
       {#if $coalescedFiles.length > 0}
