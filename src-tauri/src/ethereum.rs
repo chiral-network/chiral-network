@@ -390,12 +390,16 @@ impl GethProcess {
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
-            .arg("any")
-            // Snapshot sync acceleration
-            .arg("--snapshot")
-            .arg("--state.scheme")
-            .arg("hash") // Use hash-based state scheme for better performance
-            // Enable transaction pool gossip to propagate transactions across network
+            .arg("any");
+
+        // Snapshot and state scheme are only for full/snap sync, not light sync
+        if !pure_client_mode {
+            cmd.arg("--snapshot")
+                .arg("--state.scheme")
+                .arg("hash"); // Use hash-based state scheme for better performance
+        }
+
+        cmd // Enable transaction pool gossip to propagate transactions across network
             .arg("--txpool.globalslots")
             .arg("16384") // Increase tx pool size for network-wide transactions
             .arg("--txpool.globalqueue")
