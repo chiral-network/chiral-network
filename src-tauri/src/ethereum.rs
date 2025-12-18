@@ -373,7 +373,7 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg(if pure_client_mode { "light" } else { "snap" })
+            .arg("snap") // Always use snap mode (light mode doesn't work for private networks)
             // Sync performance optimizations
             .arg("--cache")
             .arg("2048") // Increase cache to 2GB for faster sync (default is 1024)
@@ -390,16 +390,12 @@ impl GethProcess {
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
-            .arg("any");
-
-        // Snapshot and state scheme are only for full/snap sync, not light sync
-        if !pure_client_mode {
-            cmd.arg("--snapshot")
-                .arg("--state.scheme")
-                .arg("hash"); // Use hash-based state scheme for better performance
-        }
-
-        cmd // Enable transaction pool gossip to propagate transactions across network
+            .arg("any")
+            // Snapshot sync acceleration
+            .arg("--snapshot")
+            .arg("--state.scheme")
+            .arg("hash") // Use hash-based state scheme for better performance
+            // Enable transaction pool gossip to propagate transactions across network
             .arg("--txpool.globalslots")
             .arg("16384") // Increase tx pool size for network-wide transactions
             .arg("--txpool.globalqueue")
@@ -879,7 +875,7 @@ pub async fn get_chain_id() -> Result<u64, String> {
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
     // First, ensure geth is ready to accept RPC calls
     let mut attempts = 0;
-    let max_attempts = 10; // 10 seconds max wait
+    let max_attempts = 60; // 60 seconds max wait (Geth may need time to rewind blockchain)
     loop {
         // Check if geth is responding to RPC calls
         if let Ok(response) = HTTP_CLIENT
