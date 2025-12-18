@@ -14,10 +14,11 @@ pub struct ReplContext {
 }
 
 pub async fn run_repl(context: ReplContext) -> Result<(), Box<dyn std::error::Error>> {
-    println!("\n┌─────────────────────────────────────────────────────────┐");
-    println!("│  Chiral Network v0.1.0 - Interactive Shell             │");
-    println!("│  Type 'help' for commands, 'quit' to exit              │");
-    println!("└─────────────────────────────────────────────────────────┘");
+    // Box width = 56 chars content
+    println!("\n┌────────────────────────────────────────────────────────┐");
+    println!("│ {:<54} │", "Chiral Network v0.1.0 - Interactive Shell");
+    println!("│ {:<54} │", "Type 'help' for commands, 'quit' to exit");
+    println!("└────────────────────────────────────────────────────────┘");
     println!("\nPeer ID: {}", context.peer_id);
     println!();
 
@@ -137,51 +138,51 @@ async fn handle_command(
 
 fn print_help() {
     println!("\n📚 Available Commands:");
-    println!("  ┌─────────────────────────────────────────────────────────────┐");
-    println!("  │ General                                                     │");
-    println!("  ├─────────────────────────────────────────────────────────────┤");
-    println!("  │  help, h, ?              Show this help message             │");
-    println!("  │  status, s               Show network status                │");
-    println!("  │  clear, cls              Clear screen                       │");
-    println!("  │  quit, exit, q           Exit REPL                          │");
-    println!("  ├─────────────────────────────────────────────────────────────┤");
-    println!("  │ Network                                                     │");
-    println!("  ├─────────────────────────────────────────────────────────────┤");
-    println!("  │  peers [count|list]      Show peer information              │");
-    println!("  │  dht [status|get <hash>] DHT operations                     │");
-    println!("  ├─────────────────────────────────────────────────────────────┤");
-    println!("  │ Files                                                       │");
-    println!("  ├─────────────────────────────────────────────────────────────┤");
-    println!("  │  list [files|downloads]  List files or active downloads     │");
-    println!("  │  add <path>              Add file to share                  │");
-    println!("  │  download <hash>         Download file by hash              │");
-    println!("  ├─────────────────────────────────────────────────────────────┤");
-    println!("  │ Mining                                                      │");
-    println!("  ├─────────────────────────────────────────────────────────────┤");
-    println!("  │  mining status           Show mining status                 │");
-    println!("  │  mining start [threads]  Start mining (requires geth)       │");
-    println!("  │  mining stop             Stop mining                        │");
-    println!("  └─────────────────────────────────────────────────────────────┘");
+    println!("  ┌────────────────────────────────────────────────────────┐");
+    println!("  │ {:<54} │", "General");
+    println!("  ├────────────────────────────────────────────────────────┤");
+    println!("  │ {:<54} │", "  help, h, ?              Show this help message");
+    println!("  │ {:<54} │", "  status, s               Show network status");
+    println!("  │ {:<54} │", "  clear, cls              Clear screen");
+    println!("  │ {:<54} │", "  quit, exit, q           Exit REPL");
+    println!("  ├────────────────────────────────────────────────────────┤");
+    println!("  │ {:<54} │", "Network");
+    println!("  ├────────────────────────────────────────────────────────┤");
+    println!("  │ {:<54} │", "  peers [count|list]      Show peer information");
+    println!("  │ {:<54} │", "  dht [status|get <hash>] DHT operations");
+    println!("  ├────────────────────────────────────────────────────────┤");
+    println!("  │ {:<54} │", "Files");
+    println!("  ├────────────────────────────────────────────────────────┤");
+    println!("  │ {:<54} │", "  list [files|downloads]  List files or downloads");
+    println!("  │ {:<54} │", "  add <path>              Add file to share");
+    println!("  │ {:<54} │", "  download <hash>         Download file by hash");
+    println!("  ├────────────────────────────────────────────────────────┤");
+    println!("  │ {:<54} │", "Mining");
+    println!("  ├────────────────────────────────────────────────────────┤");
+    println!("  │ {:<54} │", "  mining status           Show mining status");
+    println!("  │ {:<54} │", "  mining start [threads]  Start mining (geth)");
+    println!("  │ {:<54} │", "  mining stop             Stop mining");
+    println!("  └────────────────────────────────────────────────────────┘");
     println!();
 }
 
 async fn cmd_status(context: &ReplContext) -> Result<(), String> {
     println!("\n📊 Network Status:");
-    println!("  ┌─────────────────────────────────────────────────────────────┐");
+    println!("  ┌────────────────────────────────────────────────────────┐");
 
     // Get connected peers
     let connected_peers = context.dht_service.get_connected_peers().await;
-    println!("  │ Connected Peers: {:>42} │", connected_peers.len());
+    println!("  │ {:<54} │", format!("Connected Peers: {}", connected_peers.len()));
 
     // Get DHT metrics
     let metrics = context.dht_service.metrics_snapshot().await;
-    println!("  │ Reachability: {:>45} │", format!("{:?}", metrics.reachability));
-    println!("  │ NAT Status: {:>47} │",
-        if metrics.observed_addrs.is_empty() { "Unknown" } else { "Active" });
+    println!("  │ {:<54} │", format!("Reachability: {:?}", metrics.reachability));
+    println!("  │ {:<54} │", format!("NAT Status: {}",
+        if metrics.observed_addrs.is_empty() { "Unknown" } else { "Active" }));
 
     // AutoNAT status
-    println!("  │ AutoNAT: {:>50} │",
-        if metrics.autonat_enabled { "Enabled" } else { "Disabled" });
+    println!("  │ {:<54} │", format!("AutoNAT: {}",
+        if metrics.autonat_enabled { "Enabled" } else { "Disabled" }));
 
     // Relay status
     let relay_status = if metrics.active_relay_peer_id.is_some() {
@@ -189,7 +190,7 @@ async fn cmd_status(context: &ReplContext) -> Result<(), String> {
     } else {
         "None".to_string()
     };
-    println!("  │ Circuit Relay: {:>44} │", relay_status);
+    println!("  │ {:<54} │", format!("Circuit Relay: {}", relay_status));
 
     // DCUtR stats
     if metrics.dcutr_enabled {
@@ -198,23 +199,23 @@ async fn cmd_status(context: &ReplContext) -> Result<(), String> {
         } else {
             0.0
         };
-        println!("  │ DCUtR Success Rate: {:>38} │",
-            format!("{:.1}% ({}/{})", success_rate,
-                metrics.dcutr_hole_punch_successes,
-                metrics.dcutr_hole_punch_attempts));
+        let rate_str = format!("{:.1}% ({}/{})", success_rate,
+            metrics.dcutr_hole_punch_successes,
+            metrics.dcutr_hole_punch_attempts);
+        println!("  │ {:<54} │", format!("DCUtR Success Rate: {}", rate_str));
     }
 
     // File transfer stats
     if let Some(ft) = &context.file_transfer_service {
         let snapshot = ft.download_metrics_snapshot().await;
-        println!("  ├─────────────────────────────────────────────────────────────┤");
-        println!("  │ Download Stats:                                             │");
-        println!("  │   Success: {:>48} │", snapshot.total_success);
-        println!("  │   Failures: {:>47} │", snapshot.total_failures);
-        println!("  │   Retries: {:>48} │", snapshot.total_retries);
+        println!("  ├────────────────────────────────────────────────────────┤");
+        println!("  │ {:<54} │", "Download Stats:");
+        println!("  │ {:<54} │", format!("  Success: {}", snapshot.total_success));
+        println!("  │ {:<54} │", format!("  Failures: {}", snapshot.total_failures));
+        println!("  │ {:<54} │", format!("  Retries: {}", snapshot.total_retries));
     }
 
-    println!("  └─────────────────────────────────────────────────────────────┘");
+    println!("  └────────────────────────────────────────────────────────┘");
     println!();
 
     Ok(())
@@ -422,25 +423,25 @@ async fn cmd_dht(args: &[&str], context: &ReplContext) -> Result<(), String> {
             let metrics = context.dht_service.metrics_snapshot().await;
 
             println!("\n🔍 DHT Status:");
-            println!("  ┌─────────────────────────────────────────────────────────┐");
-            println!("  │ Reachability: {:>43} │", format!("{:?}", metrics.reachability));
-            println!("  │ Confidence: {:>45} │", format!("{:?}", metrics.reachability_confidence));
+            println!("  ┌────────────────────────────────────────────────────────┐");
+            println!("  │ {:<54} │", format!("Reachability: {:?}", metrics.reachability));
+            println!("  │ {:<54} │", format!("Confidence: {:?}", metrics.reachability_confidence));
 
             if !metrics.observed_addrs.is_empty() {
-                println!("  ├─────────────────────────────────────────────────────────┤");
-                println!("  │ Observed Addresses:                                     │");
+                println!("  ├────────────────────────────────────────────────────────┤");
+                println!("  │ {:<54} │", "Observed Addresses:");
                 for addr in metrics.observed_addrs.iter().take(3) {
-                    // Truncate to fit in the box (max 53 chars for the content area)
-                    let display_addr = if addr.len() > 53 {
-                        format!("{}...", &addr[..50])
+                    // Truncate to fit in the box (max 52 chars for content with 2-space indent)
+                    let display_addr = if addr.len() > 52 {
+                        format!("  {}...", &addr[..49])
                     } else {
-                        addr.clone()
+                        format!("  {}", addr)
                     };
-                    println!("  │   {:<53} │", display_addr);
+                    println!("  │ {:<54} │", display_addr);
                 }
             }
 
-            println!("  └─────────────────────────────────────────────────────────┘");
+            println!("  └────────────────────────────────────────────────────────┘");
             println!();
         }
         "get" => {
