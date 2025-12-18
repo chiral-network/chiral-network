@@ -2117,6 +2117,32 @@ function sectionMatches(section: string, query: string) {
           {/if}
         </div>
 
+        <!-- Pure Client Mode -->
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium">DHT Client Mode</h4>
+
+          <div class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="pure-client-mode"
+                bind:checked={localSettings.pureClientMode}
+              />
+              <Label for="pure-client-mode" class="cursor-pointer">
+                Enable Pure Client Mode (Hard NAT)
+              </Label>
+            </div>
+            <p class="text-xs text-muted-foreground ml-6">
+              For users behind hard NAT or restrictive firewalls. Node will only download files and cannot seed or act as DHT server. Requires DHT restart to take effect.
+            </p>
+            {#if localSettings.pureClientMode}
+              <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                ⚠️ <strong>Warning:</strong> You will not be able to seed files or help the network in this mode.
+              </div>
+            {/if}
+          </div>
+        </div>
+
         <div class="flex items-center gap-2">
           <input
             type="checkbox"
