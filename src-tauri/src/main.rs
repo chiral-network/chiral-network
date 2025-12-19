@@ -1686,6 +1686,7 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
+        None, // webrtc_service
         Some(chunk_manager.clone()), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
@@ -7827,6 +7828,7 @@ fn main() {
             Vec::new(),                    // autonat_servers
             None,                          // proxy_address
             None,                          // file_transfer_service
+            None,                          // webrtc_service
             None,                          // chunk_manager
             None,                          // chunk_size_kb
             None,                          // cache_size_mb

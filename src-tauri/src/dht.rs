@@ -6158,6 +6158,7 @@ pub struct DhtService {
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
+    webrtc_service: Option<Arc<crate::webrtc_service::WebRTCService>>,
     // chunk_manager: Option<Arc<ChunkManager>>, // Not needed here
     pending_webrtc_offers: Arc<
         Mutex<
@@ -6396,6 +6397,7 @@ impl DhtService {
         autonat_servers: Vec<String>,
         proxy_address: Option<String>,
         file_transfer_service: Option<Arc<FileTransferService>>,
+        webrtc_service: Option<Arc<crate::webrtc_service::WebRTCService>>,
         chunk_manager: Option<Arc<ChunkManager>>,
         chunk_size_kb: Option<usize>, // Chunk size in KB (default 256)
         cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
@@ -6957,6 +6959,7 @@ impl DhtService {
             file_metadata_cache: file_metadata_cache_local,
             received_chunks: received_chunks_clone,
             file_transfer_service,
+            webrtc_service,
             // chunk_manager is not stored in DhtService, only passed to the task
             pending_webrtc_offers,
             pending_key_requests,
