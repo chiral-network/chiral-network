@@ -22,6 +22,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub interactive: bool,
 
+    /// Run in TUI (Terminal User Interface) mode
+    #[arg(long)]
+    pub tui: bool,
+
     /// DHT port to listen on
     #[arg(long, default_value = "4001")]
     pub dht_port: u16,
