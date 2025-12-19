@@ -13,19 +13,28 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Gauge, List, ListItem, Paragraph, Tabs,
+        Block, Borders, List, ListItem, Paragraph, Tabs,
     },
     Frame, Terminal,
 };
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::dht::models::DhtMetricsSnapshot;
+use crate::file_transfer::DownloadMetricsSnapshot;
 
 pub struct TuiContext {
     pub dht_service: Arc<DhtService>,
     pub file_transfer_service: Option<Arc<FileTransferService>>,
     pub geth_process: Option<GethProcess>,
     pub peer_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct LiveMetrics {
+    connected_peers: Vec<String>,
+    dht_metrics: DhtMetricsSnapshot,
+    download_metrics: Option<DownloadMetricsSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -115,8 +124,44 @@ async fn run_app<B: ratatui::backend::Backend>(
     state: &mut TuiState,
     context: &TuiContext,
 ) -> io::Result<()> {
+    // Create a channel for live metrics updates
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // Clone Arc references for the background task
+    let dht_clone = context.dht_service.clone();
+    let ft_clone = context.file_transfer_service.clone();
+
+    tokio::spawn(async move {
+        loop {
+            // Fetch metrics from services
+            let connected_peers = dht_clone.get_connected_peers().await;
+            let dht_metrics = dht_clone.metrics_snapshot().await;
+            let download_metrics = if let Some(ft) = &ft_clone {
+                Some(ft.download_metrics_snapshot().await)
+            } else {
+                None
+            };
+
+            let metrics = LiveMetrics {
+                connected_peers,
+                dht_metrics,
+                download_metrics,
+            };
+
+            let _ = tx.send(metrics);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    let mut current_metrics: Option<LiveMetrics> = None;
+
     loop {
-        terminal.draw(|f| ui(f, state, context))?;
+        // Check for new metrics
+        while let Ok(metrics) = rx.try_recv() {
+            current_metrics = Some(metrics);
+        }
+
+        terminal.draw(|f| ui(f, state, context, &current_metrics))?;
 
         // Poll for events with timeout
         if event::poll(Duration::from_millis(100))? {
@@ -153,7 +198,7 @@ fn handle_key_event(key: KeyEvent, state: &mut TuiState) {
     }
 }
 
-fn ui(f: &mut Frame, state: &TuiState, context: &TuiContext) {
+fn ui(f: &mut Frame, state: &TuiState, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let size = f.area();
 
     // Main layout: header + content
@@ -170,7 +215,7 @@ fn ui(f: &mut Frame, state: &TuiState, context: &TuiContext) {
     render_header(f, chunks[0], context);
 
     // Content area with tabs
-    render_content(f, chunks[1], state, context);
+    render_content(f, chunks[1], state, context, metrics);
 
     // Footer
     render_footer(f, chunks[2]);
@@ -203,7 +248,7 @@ fn render_header(f: &mut Frame, area: Rect, context: &TuiContext) {
     f.render_widget(header, area);
 }
 
-fn render_content(f: &mut Frame, area: Rect, state: &TuiState, context: &TuiContext) {
+fn render_content(f: &mut Frame, area: Rect, state: &TuiState, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     // Split into tabs and panel area
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -236,14 +281,14 @@ fn render_content(f: &mut Frame, area: Rect, state: &TuiState, context: &TuiCont
 
     // Render active panel
     match state.active_panel {
-        ActivePanel::Network => render_network_panel(f, chunks[1], context),
-        ActivePanel::Downloads => render_downloads_panel(f, chunks[1], context),
-        ActivePanel::Peers => render_peers_panel(f, chunks[1], context),
+        ActivePanel::Network => render_network_panel(f, chunks[1], context, metrics),
+        ActivePanel::Downloads => render_downloads_panel(f, chunks[1], context, metrics),
+        ActivePanel::Peers => render_peers_panel(f, chunks[1], context, metrics),
         ActivePanel::Mining => render_mining_panel(f, chunks[1], context),
     }
 }
 
-fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
+fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title("📡 Network Status");
@@ -261,31 +306,66 @@ fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
         ])
         .split(inner);
 
-    // Network info (placeholder - would fetch real data)
+    // Get real data from metrics or show loading
+    let (peer_count, reachability, nat_status, autonat_status, relay_status, dcutr_stats) =
+        if let Some(m) = metrics {
+            let peer_count = m.connected_peers.len();
+            let reachability = format!("{:?}", m.dht_metrics.reachability);
+            let nat_status = if m.dht_metrics.observed_addrs.is_empty() {
+                "Unknown".to_string()
+            } else {
+                "Active".to_string()
+            };
+            let autonat_status = if m.dht_metrics.autonat_enabled {
+                "Enabled".to_string()
+            } else {
+                "Disabled".to_string()
+            };
+            let relay_status = if let Some(relay_id) = &m.dht_metrics.active_relay_peer_id {
+                format!("Active ({}...)", &relay_id[..12])
+            } else {
+                "None".to_string()
+            };
+            let dcutr_stats = if m.dht_metrics.dcutr_enabled {
+                let success_rate = if m.dht_metrics.dcutr_hole_punch_attempts > 0 {
+                    (m.dht_metrics.dcutr_hole_punch_successes as f64 / m.dht_metrics.dcutr_hole_punch_attempts as f64) * 100.0
+                } else {
+                    0.0
+                };
+                format!("{:.1}% ({}/{})", success_rate, m.dht_metrics.dcutr_hole_punch_successes, m.dht_metrics.dcutr_hole_punch_attempts)
+            } else {
+                "Disabled".to_string()
+            };
+            (peer_count, reachability, nat_status, autonat_status, relay_status, dcutr_stats)
+        } else {
+            (0, "Loading...".to_string(), "Loading...".to_string(), "Loading...".to_string(), "Loading...".to_string(), "Loading...".to_string())
+        };
+
+    // Network info with real data
     let network_info = vec![
         Line::from(vec![
             Span::styled("Connected Peers: ", Style::default().fg(Color::Gray)),
-            Span::styled("42", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(peer_count.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
             Span::styled("Reachability: ", Style::default().fg(Color::Gray)),
-            Span::styled("Public", Style::default().fg(Color::Green)),
+            Span::styled(reachability, Style::default().fg(Color::Green)),
         ]),
         Line::from(vec![
             Span::styled("NAT Status: ", Style::default().fg(Color::Gray)),
-            Span::styled("Active", Style::default().fg(Color::Green)),
+            Span::styled(nat_status, Style::default().fg(Color::Green)),
         ]),
         Line::from(vec![
             Span::styled("AutoNAT: ", Style::default().fg(Color::Gray)),
-            Span::styled("Enabled", Style::default().fg(Color::Yellow)),
+            Span::styled(autonat_status, Style::default().fg(Color::Yellow)),
         ]),
         Line::from(vec![
             Span::styled("Circuit Relay: ", Style::default().fg(Color::Gray)),
-            Span::styled("Connected", Style::default().fg(Color::Green)),
+            Span::styled(relay_status, Style::default().fg(Color::Green)),
         ]),
         Line::from(vec![
             Span::styled("DCUtR Success: ", Style::default().fg(Color::Gray)),
-            Span::styled("85.2% (23/27)", Style::default().fg(Color::Cyan)),
+            Span::styled(dcutr_stats, Style::default().fg(Color::Cyan)),
         ]),
     ];
 
@@ -293,19 +373,29 @@ fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
         .block(Block::default().borders(Borders::ALL).title("Network"));
     f.render_widget(network_widget, sections[0]);
 
-    // DHT info
+    // DHT info with real data
+    let (dht_reachability, dht_confidence, observed_count) = if let Some(m) = metrics {
+        (
+            format!("{:?}", m.dht_metrics.reachability),
+            format!("{:?}", m.dht_metrics.reachability_confidence),
+            m.dht_metrics.observed_addrs.len(),
+        )
+    } else {
+        ("Loading...".to_string(), "Loading...".to_string(), 0)
+    };
+
     let dht_info = vec![
         Line::from(vec![
             Span::styled("Reachability: ", Style::default().fg(Color::Gray)),
-            Span::styled("Private", Style::default().fg(Color::Yellow)),
+            Span::styled(dht_reachability, Style::default().fg(Color::Yellow)),
         ]),
         Line::from(vec![
             Span::styled("Confidence: ", Style::default().fg(Color::Gray)),
-            Span::styled("Medium", Style::default().fg(Color::Yellow)),
+            Span::styled(dht_confidence, Style::default().fg(Color::Yellow)),
         ]),
         Line::from(vec![
-            Span::styled("DHT Entries: ", Style::default().fg(Color::Gray)),
-            Span::styled("1,234", Style::default().fg(Color::Cyan)),
+            Span::styled("Observed Addresses: ", Style::default().fg(Color::Gray)),
+            Span::styled(observed_count.to_string(), Style::default().fg(Color::Cyan)),
         ]),
     ];
 
@@ -313,23 +403,29 @@ fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
         .block(Block::default().borders(Borders::ALL).title("DHT"));
     f.render_widget(dht_widget, sections[1]);
 
-    // Transfer stats
+    // Transfer stats with real data
+    let (success_count, fail_count, retry_count) = if let Some(m) = metrics {
+        if let Some(dm) = &m.download_metrics {
+            (dm.total_success, dm.total_failures, dm.total_retries)
+        } else {
+            (0, 0, 0)
+        }
+    } else {
+        (0, 0, 0)
+    };
+
     let stats_info = vec![
         Line::from(vec![
             Span::styled("Successful Downloads: ", Style::default().fg(Color::Gray)),
-            Span::styled("156", Style::default().fg(Color::Green)),
+            Span::styled(success_count.to_string(), Style::default().fg(Color::Green)),
         ]),
         Line::from(vec![
             Span::styled("Failed Downloads: ", Style::default().fg(Color::Gray)),
-            Span::styled("3", Style::default().fg(Color::Red)),
+            Span::styled(fail_count.to_string(), Style::default().fg(Color::Red)),
         ]),
         Line::from(vec![
-            Span::styled("Upload Speed: ", Style::default().fg(Color::Gray)),
-            Span::styled("4.2 MB/s", Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from(vec![
-            Span::styled("Download Speed: ", Style::default().fg(Color::Gray)),
-            Span::styled("8.5 MB/s", Style::default().fg(Color::Cyan)),
+            Span::styled("Total Retries: ", Style::default().fg(Color::Gray)),
+            Span::styled(retry_count.to_string(), Style::default().fg(Color::Yellow)),
         ]),
     ];
 
@@ -338,85 +434,72 @@ fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
     f.render_widget(stats_widget, sections[2]);
 }
 
-fn render_downloads_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
+fn render_downloads_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("📥 Active Downloads");
+        .title("📥 Recent Downloads");
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Mock download data
-    let downloads = vec![
-        ("document.pdf", 75, "8 peers", "4.2 MB/s", "2m 15s"),
-        ("video.mp4", 30, "3 peers", "1.8 MB/s", "8m 42s"),
-        ("archive.tar.gz", 92, "12 peers", "6.5 MB/s", "45s"),
-    ];
-
-    let download_height = 5; // Height per download item
-    let constraints: Vec<Constraint> = downloads
-        .iter()
-        .map(|_| Constraint::Length(download_height))
-        .chain(std::iter::once(Constraint::Min(0)))
-        .collect();
-
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(inner);
-
-    for (i, (name, progress, peers, speed, eta)) in downloads.iter().enumerate() {
-        let download_info = vec![
-            Line::from(vec![
-                Span::styled("File: ", Style::default().fg(Color::Gray)),
-                Span::styled(*name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(vec![
-                Span::styled(*peers, Style::default().fg(Color::Yellow)),
-                Span::raw("  │  "),
-                Span::styled(*speed, Style::default().fg(Color::Green)),
-                Span::raw("  │  ETA: "),
-                Span::styled(*eta, Style::default().fg(Color::Magenta)),
-            ]),
-        ];
-
-        let download_block = Block::default().borders(Borders::ALL);
-        let download_inner = download_block.inner(sections[i]);
-        f.render_widget(download_block, sections[i]);
-
-        // Info
-        let info_area = Rect {
-            x: download_inner.x,
-            y: download_inner.y,
-            width: download_inner.width,
-            height: 2,
-        };
-        let info_widget = Paragraph::new(download_info);
-        f.render_widget(info_widget, info_area);
-
-        // Progress bar
-        let progress_area = Rect {
-            x: download_inner.x,
-            y: download_inner.y + 2,
-            width: download_inner.width,
-            height: 1,
-        };
-        let gauge = Gauge::default()
-            .percent(*progress as u16)
-            .label(format!("{}%", progress))
-            .gauge_style(Style::default().fg(Color::Green));
-        f.render_widget(gauge, progress_area);
-    }
+    // Get recent download attempts from real data
+    let downloads = if let Some(m) = metrics {
+        if let Some(dm) = &m.download_metrics {
+            dm.recent_attempts.iter().take(10).map(|attempt| {
+                let hash_short = if attempt.file_hash.len() > 16 {
+                    format!("{}...{}", &attempt.file_hash[..8], &attempt.file_hash[attempt.file_hash.len()-4..])
+                } else {
+                    attempt.file_hash.clone()
+                };
+                let status = format!("{:?}", attempt.status);
+                let attempts_str = format!("{}/{}", attempt.attempt, attempt.max_attempts);
+                (hash_short, status, attempts_str)
+            }).collect::<Vec<_>>()
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
 
     if downloads.is_empty() {
-        let no_downloads = Paragraph::new("No active downloads\n\nUse REPL mode to start downloads")
+        let no_downloads = Paragraph::new("No recent downloads\n\nUse REPL mode or GUI to start downloads")
             .alignment(Alignment::Center)
             .style(Style::default().fg(Color::Gray));
         f.render_widget(no_downloads, inner);
+    } else {
+        // Display as a list
+        let items: Vec<ListItem> = downloads
+            .iter()
+            .map(|(hash, status, attempts)| {
+                let status_color = if status.contains("Success") {
+                    Color::Green
+                } else if status.contains("Failed") {
+                    Color::Red
+                } else {
+                    Color::Yellow
+                };
+
+                let content = vec![Line::from(vec![
+                    Span::styled(format!("{:<20}", hash), Style::default().fg(Color::Cyan)),
+                    Span::raw("  "),
+                    Span::styled(format!("{:<12}", status), Style::default().fg(status_color)),
+                    Span::raw("  "),
+                    Span::styled(format!("Attempt: {}", attempts), Style::default().fg(Color::Gray)),
+                ])];
+
+                ListItem::new(content)
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).title("Recent Attempts"));
+
+        f.render_widget(list, inner);
     }
 }
 
-fn render_peers_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
+fn render_peers_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title("👥 Connected Peers");
@@ -424,44 +507,45 @@ fn render_peers_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Mock peer data
-    let peers = vec![
-        ("12D3KooW...AbCdEf", "82", "High", "45ms", "2.5 MB/s"),
-        ("12D3KooW...XyZ123", "78", "Medium", "52ms", "1.8 MB/s"),
-        ("12D3KooW...Qrs456", "91", "High", "38ms", "3.2 MB/s"),
-        ("12D3KooW...Tuv789", "65", "Low", "120ms", "0.5 MB/s"),
-        ("12D3KooW...Wxy012", "88", "High", "41ms", "2.9 MB/s"),
-    ];
-
-    let items: Vec<ListItem> = peers
-        .iter()
-        .map(|(id, score, trust, latency, bandwidth)| {
-            let trust_color = match *trust {
-                "High" => Color::Green,
-                "Medium" => Color::Yellow,
-                _ => Color::Red,
+    // Get real peer data
+    let peers = if let Some(m) = metrics {
+        m.connected_peers.iter().take(20).map(|peer_id| {
+            let peer_short = if peer_id.len() > 20 {
+                format!("{}...{}", &peer_id[..8], &peer_id[peer_id.len()-8..])
+            } else {
+                peer_id.clone()
             };
+            peer_short
+        }).collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
 
-            let content = vec![Line::from(vec![
-                Span::styled(format!("{:<20}", id), Style::default().fg(Color::Cyan)),
-                Span::raw("  "),
-                Span::styled(format!("Score: {:<3}", score), Style::default().fg(Color::White)),
-                Span::raw("  "),
-                Span::styled(format!("{:<8}", trust), Style::default().fg(trust_color)),
-                Span::raw("  "),
-                Span::styled(format!("{:<8}", latency), Style::default().fg(Color::Magenta)),
-                Span::raw("  "),
-                Span::styled(*bandwidth, Style::default().fg(Color::Green)),
-            ])];
+    if peers.is_empty() {
+        let no_peers = Paragraph::new("No connected peers\n\nConnecting to network...")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));
+        f.render_widget(no_peers, inner);
+    } else {
+        let items: Vec<ListItem> = peers
+            .iter()
+            .enumerate()
+            .map(|(i, peer_id)| {
+                let content = vec![Line::from(vec![
+                    Span::styled(format!("{:>3}. ", i + 1), Style::default().fg(Color::Gray)),
+                    Span::styled(peer_id, Style::default().fg(Color::Cyan)),
+                ])];
 
-            ListItem::new(content)
-        })
-        .collect();
+                ListItem::new(content)
+            })
+            .collect();
 
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Peer List"));
+        let peer_count_title = format!("Peer List ({} connected)", peers.len());
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).title(peer_count_title));
 
-    f.render_widget(list, inner);
+        f.render_widget(list, inner);
+    }
 }
 
 fn render_mining_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
