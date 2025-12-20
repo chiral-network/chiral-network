@@ -4099,6 +4099,68 @@ async fn run_dht_node(
                             "WebRTC transfer failed for {}: {}", file_hash, error
                         ))).await;
                     }
+                    crate::webrtc_service::WebRTCEvent::FileChunkRequested { peer_id, file_hash, chunk_index } => {
+                        info!("📤 Peer {} requested chunk {} of file {}", peer_id, chunk_index, file_hash);
+
+                        // Look up file metadata and serve the chunk
+                        let cache = file_metadata_cache.lock().await;
+                        if let Some(metadata) = cache.get(&file_hash).cloned() {
+                            drop(cache); // Release lock before async operations
+
+                            // Get file data from file transfer service
+                            if let Some(ft_service) = &file_transfer_service {
+                                match ft_service.get_file_data(&file_hash).await {
+                                    Some(file_data) => {
+                                        // Calculate chunk boundaries
+                                        let start = (chunk_index as usize) * chunk_size;
+                                        let end = (start + chunk_size).min(file_data.len());
+
+                                        if start < file_data.len() {
+                                            let chunk_data = file_data[start..end].to_vec();
+
+                                            // Calculate total chunks
+                                            let total_chunks = ((file_data.len() + chunk_size - 1) / chunk_size) as u32;
+
+                                            // Calculate checksum
+                                            let checksum = {
+                                                use sha2::{Sha256, Digest};
+                                                let mut hasher = Sha256::new();
+                                                hasher.update(&chunk_data);
+                                                format!("{:x}", hasher.finalize())
+                                            };
+
+                                            // Create chunk struct
+                                            let chunk = crate::webrtc_service::FileChunk {
+                                                file_hash: file_hash.clone(),
+                                                file_name: metadata.file_name.clone(),
+                                                chunk_index,
+                                                total_chunks,
+                                                data: chunk_data,
+                                                checksum,
+                                                encrypted_key_bundle: metadata.encrypted_key_bundle.clone(),
+                                            };
+
+                                            // Send chunk to peer
+                                            if let Err(e) = webrtc.send_file_chunk(peer_id.clone(), chunk).await {
+                                                error!("Failed to send chunk {} to {}: {}", chunk_index, peer_id, e);
+                                            } else {
+                                                info!("✅ Sent chunk {} to peer {}", chunk_index, peer_id);
+                                            }
+                                        } else {
+                                            warn!("Chunk index {} out of bounds for file {}", chunk_index, file_hash);
+                                        }
+                                    }
+                                    None => {
+                                        warn!("File data not found for {}", file_hash);
+                                    }
+                                }
+                            } else {
+                                warn!("FileTransferService not available to serve chunks");
+                            }
+                        } else {
+                            warn!("File metadata not found in cache for chunk request: {}", file_hash);
+                        }
+                    }
                     crate::webrtc_service::WebRTCEvent::ConnectionEstablished { peer_id } => {
                         info!("WebRTC connection established with {}", peer_id);
                     }
