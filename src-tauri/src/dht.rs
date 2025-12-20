@@ -1345,6 +1345,7 @@ async fn run_dht_node(
     peer_selection: Arc<Mutex<PeerSelectionService>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
+    webrtc_service: Option<Arc<crate::webrtc_service::WebRTCService>>,
     chunk_manager: Option<Arc<ChunkManager>>,
     pending_webrtc_offers: Arc<
         Mutex<
@@ -2040,76 +2041,56 @@ async fn run_dht_node(
                                     }
                                 }
 
-                                let root_cid_result = file_metadata.cids.as_ref()
-                                    .and_then(|cids| cids.first())
-                                    .ok_or_else(|| {
-                                        let msg = format!("No root CID found for file with Merkle root: {}", file_metadata.merkle_root);
-                                        error!("{}", msg);
-                                        msg
-                                    });
-
-                                let root_cid = match root_cid_result {
-                                    Ok(cid) => cid.clone(),
-                                    Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
+                                // Calculate total chunks from cids or file size
+                                let total_chunks = if let Some(cids) = &file_metadata.cids {
+                                    cids.len() as u32
+                                } else {
+                                    // If no CIDs, calculate from file size (assume 256KB chunks)
+                                    let chunk_size = 256 * 1024;
+                                    ((file_metadata.file_size + chunk_size - 1) / chunk_size) as u32
                                 };
+
+                                if total_chunks == 0 {
+                                    let _ = event_tx.send(DhtEvent::Error("File has no chunks".to_string())).await;
+                                    continue;
+                                }
+
                                 if file_metadata.seeders.is_empty() {
                                     let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
                                     return;
                                 }
 
-                                // Try multiple seeders for initial connection/parsing reliability
-                                // IPFS Bitswap will handle peer discovery and distribution automatically,
-                                // but we want to ensure we start with a valid, reachable seeder
-                                let max_attempts = std::cmp::min(3, file_metadata.seeders.len());
-                                let mut tried_seeders: Vec<String> = Vec::new();
+                                // Use WebRTC service if available, otherwise fall back to error
+                                if let Some(webrtc_service) = &webrtc_service {
+                                    // Select first seeder
+                                    let seeder = &file_metadata.seeders[0];
 
-                                let mut successful_start = false;
-
-                                for attempt in 0..max_attempts {
-                                    // Select next seeder (prefer earlier ones but skip tried ones)
-                                    let seeder_to_try = file_metadata.seeders
-                                        .iter()
-                                        .find(|s| !tried_seeders.contains(s))
-                                        .cloned();
-
-                                    let Some(seeder) = seeder_to_try else {
-                                        warn!("All {} seeders tried for file {} - none were valid",
-                                              file_metadata.seeders.len(), file_metadata.merkle_root);
-                                        break;
-                                    };
-
-                                    tried_seeders.push(seeder.clone());
-
-                                    let peer_id = match PeerId::from_str(&seeder) {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            warn!("Invalid seeder peer ID {} (attempt {}/{}): {}",
-                                                  seeder, attempt + 1, max_attempts, e);
-                                            continue;
-                                        }
-                                    };
-
-                                    info!("Attempting IPFS download from seeder {} (attempt {}/{}): {}",
-                                          seeder, attempt + 1, max_attempts, file_metadata.file_name);
-
-                                    // Request the root block which contains the CIDs
-                                    let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+                                    info!("Starting WebRTC download from seeder {}: {} ({} chunks)",
+                                          seeder, file_metadata.file_name, total_chunks);
 
                                     file_metadata.download_path = Some(download_path.clone());
 
-                                    // Store the root query ID to handle when we get the root block
-                                    info!("Started IPFS download attempt with seeder {}", seeder);
-                                    root_query_mapping.lock().await.insert(root_query_id, file_metadata.clone());
+                                    // Request all chunks via WebRTC
+                                    let file_hash = file_metadata.merkle_root.clone();
+                                    for chunk_index in 0..total_chunks {
+                                        if let Err(e) = webrtc_service
+                                            .request_file_chunk(
+                                                seeder.clone(),
+                                                file_hash.clone(),
+                                                chunk_index
+                                            )
+                                            .await
+                                        {
+                                            error!("Failed to request chunk {} for file {}: {}",
+                                                   chunk_index, file_hash, e);
+                                        }
+                                    }
 
-                                    successful_start = true;
-                                    break; // Start with first valid seeder, let IPFS handle the rest
-                                }
-
-                                if !successful_start {
-                                    let _ = event_tx.send(DhtEvent::Error(format!(
-                                        "Failed to start IPFS download after trying {} seeders - all had invalid peer IDs",
-                                        tried_seeders.len()
-                                    ))).await;
+                                    info!("Requested {} chunks for file {}", total_chunks, file_hash);
+                                } else {
+                                    let _ = event_tx.send(DhtEvent::Error(
+                                        "WebRTC service not available for download".to_string()
+                                    )).await;
                                 }
                             }
                             Some(DhtCommand::StopPublish(file_hash)) => {
@@ -6920,6 +6901,7 @@ impl DhtService {
             peer_selection.clone(),
             received_chunks_clone.clone(),
             file_transfer_service.clone(),
+            webrtc_service.clone(),
             chunk_manager,
             pending_webrtc_offers.clone(),
             pending_provider_queries.clone(),
