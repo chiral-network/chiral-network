@@ -4074,8 +4074,22 @@ async fn run_dht_node(
             for event in events {
                 match event {
                     crate::webrtc_service::WebRTCEvent::FileChunkReceived { peer_id, chunk } => {
-                        info!("📥 Received WebRTC chunk {} from peer {}", chunk.chunk_index, peer_id);
-                        // TODO: Track progress and emit DownloadProgress events
+                        info!("📥 Received WebRTC chunk {}/{} from peer {} for file {}",
+                              chunk.chunk_index + 1, chunk.total_chunks, peer_id, chunk.file_hash);
+                    }
+                    crate::webrtc_service::WebRTCEvent::TransferProgress { peer_id, progress } => {
+                        info!("📊 Transfer progress from {}: {:.1}%",
+                              peer_id, progress.percentage);
+                    }
+                    crate::webrtc_service::WebRTCEvent::TransferCompleted { peer_id, file_hash } => {
+                        info!("✅ WebRTC transfer completed: {} from peer {}", file_hash, peer_id);
+                        // TODO: Emit DhtEvent::DownloadedFile with file metadata
+                    }
+                    crate::webrtc_service::WebRTCEvent::TransferFailed { peer_id, file_hash, error } => {
+                        error!("❌ WebRTC transfer failed: {} from peer {}: {}", file_hash, peer_id, error);
+                        let _ = event_tx.send(DhtEvent::Error(format!(
+                            "WebRTC transfer failed for {}: {}", file_hash, error
+                        ))).await;
                     }
                     crate::webrtc_service::WebRTCEvent::ConnectionEstablished { peer_id } => {
                         info!("WebRTC connection established with {}", peer_id);
@@ -4084,7 +4098,7 @@ async fn run_dht_node(
                         warn!("WebRTC connection failed with {}: {}", peer_id, error);
                     }
                     _ => {
-                        // Ignore other WebRTC events for now
+                        // Ignore other WebRTC events (signaling, ICE, etc.)
                     }
                 }
             }
