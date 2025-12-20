@@ -160,6 +160,10 @@
   let lastChecked: Date | null = null;
   let isUploading = false;
 
+  // Client mode detection
+  let isClientMode = false;
+  let clientModeReason: "forced" | "nat" | null = null;
+
   // Protocol selection state - read from settings with Bitswap fallback
   $: selectedProtocol = $settings.selectedProtocol || "Bitswap";
   
@@ -332,11 +336,41 @@
     }
   }
 
+  // Check if node is in client mode (cannot seed)
+  async function checkClientMode() {
+    try {
+      // Check if pure client mode is forced
+      if ($settings.pureClientMode) {
+        isClientMode = true;
+        clientModeReason = "forced";
+        return;
+      }
+
+      // Check DHT health to see if behind NAT
+      const health = await dhtService.getHealth();
+      if (health) {
+        if (health.reachability === "private") {
+          isClientMode = true;
+          clientModeReason = "nat";
+        } else if (health.reachability === "public") {
+          isClientMode = false;
+          clientModeReason = null;
+        }
+      }
+    } catch (error) {
+      console.error("Failed to check client mode:", error);
+    }
+  }
+
   // Map to track active WebRTC sessions with downloaders
   let activeSeederSessions = new Map<string, any>();
   let signalingService: any = null;
   let unlisten: (() => void) | null = null;
   onMount(async () => {
+    // Check if in client mode
+    await checkClientMode();
+
+
     // Initialize WebRTC seeder to accept download requests
     try {
       const { SignalingService } = await import(
@@ -583,15 +617,23 @@
       const handleDragOver = (e: DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer!.dropEffect = "copy";
-        isDragging = true;
+        if (isClientMode) {
+          e.dataTransfer!.dropEffect = "none";
+        } else {
+          e.dataTransfer!.dropEffect = "copy";
+          isDragging = true;
+        }
       };
 
       const handleDragEnter = (e: DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer!.dropEffect = "copy";
-        isDragging = true;
+        if (isClientMode) {
+          e.dataTransfer!.dropEffect = "none";
+        } else {
+          e.dataTransfer!.dropEffect = "copy";
+          isDragging = true;
+        }
       };
 
       const handleDragLeave = (e: DragEvent) => {
@@ -608,6 +650,15 @@
 
       const handleDrop = async (e: DragEvent) => {
         isDragging = false;
+
+        // Check if in client mode
+        if (isClientMode) {
+          showToast(
+            "File sharing is disabled in client-only mode",
+            "warning",
+          );
+          return;
+        }
 
         // IMPORTANT: Extract files immediately before any async operations
         // dataTransfer.files becomes empty after the event completes
@@ -1242,6 +1293,46 @@
     <p class="text-muted-foreground mt-2">{$t("upload.subtitle")}</p>
   </div>
 
+  <!-- Client Mode Warning -->
+  {#if isClientMode}
+    <Card class="p-4 bg-yellow-50 border-yellow-200">
+      <div class="flex items-start gap-3">
+        <div class="text-yellow-600 mt-0.5">
+          ⚠️
+        </div>
+        <div class="flex-1 space-y-2">
+          <p class="text-sm font-semibold text-yellow-800">
+            {#if clientModeReason === "forced"}
+              Client-Only Mode Enabled (Forced)
+            {:else if clientModeReason === "nat"}
+              Client-Only Mode (Behind NAT)
+            {:else}
+              Client-Only Mode
+            {/if}
+          </p>
+          <p class="text-sm text-yellow-700">
+            {#if clientModeReason === "forced"}
+              You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).
+            {:else if clientModeReason === "nat"}
+              AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.
+            {:else}
+              You are in client-only mode and cannot seed files.
+            {/if}
+          </p>
+          <p class="text-xs text-yellow-600">
+            {#if clientModeReason === "forced"}
+              To enable seeding, disable "Force Client-Only Mode" in Settings → Developers → DHT Client Mode.
+            {:else if clientModeReason === "nat"}
+              Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.
+            {:else}
+              Check your network settings or AutoNAT configuration.
+            {/if}
+          </p>
+        </div>
+      </div>
+    </Card>
+  {/if}
+
   {#if isTauri}
     <Card class="p-4 flex flex-wrap items-start justify-between gap-4">
       <div class="space-y-1">
@@ -1501,7 +1592,9 @@
   <!-- BitTorrent Seeding Section (Collapsible) - REMOVED: Now integrated as protocol option -->
 
   <Card
-    class="drop-zone relative p-6 transition-all duration-200 border-dashed {isDragging
+    class="drop-zone relative p-6 transition-all duration-200 border-dashed {isClientMode
+      ? 'border-muted-foreground/15 bg-muted/30 opacity-60'
+      : isDragging
       ? 'border-primary bg-primary/5'
       : isUploading
         ? 'border-orange-500 bg-orange-500/5'
@@ -1528,27 +1621,33 @@
               ? 'text-primary'
               : isUploading
                 ? 'text-orange-500'
-                : 'text-foreground'}"
+                : isClientMode
+                  ? 'text-muted-foreground'
+                  : 'text-foreground'}"
           >
-            {isDragging
-              ? $t("upload.dropFilesHere")
-              : isUploading
-                ? $t("upload.uploadingFiles")
-                : $t("upload.dropFiles")}
+            {isClientMode
+              ? "File Sharing Unavailable"
+              : isDragging
+                ? $t("upload.dropFilesHere")
+                : isUploading
+                  ? $t("upload.uploadingFiles")
+                  : $t("upload.dropFiles")}
           </h3>
 
           <p
             class="text-muted-foreground mb-8 text-lg transition-colors duration-300"
           >
-            {isDragging
-              ? isTauri
-                ? $t("upload.releaseToUpload")
-                : $t("upload.dragDropWebNotAvailable")
-              : isUploading
-                ? $t("upload.pleaseWaitProcessing")
-                : isTauri
-                  ? $t("upload.dropFilesHint")
-                  : $t("upload.dragDropRequiresDesktop")}
+            {isClientMode
+              ? "You are in client-only mode and cannot share files with the network."
+              : isDragging
+                ? isTauri
+                  ? $t("upload.releaseToUpload")
+                  : $t("upload.dragDropWebNotAvailable")
+                : isUploading
+                  ? $t("upload.pleaseWaitProcessing")
+                  : isTauri
+                    ? $t("upload.dropFilesHint")
+                    : $t("upload.dragDropRequiresDesktop")}
           </p>
 
           <div
@@ -1571,13 +1670,14 @@
             {#if isTauri}
               <button
                 class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-                disabled={isUploading}
+                disabled={isUploading || isClientMode}
                 on:click={openFileDialog}
+                title={isClientMode ? "File sharing disabled in client-only mode" : ""}
               >
                 <Plus
                   class="h-5 w-5 mr-2 group-hover:rotate-90 transition-transform duration-300"
                 />
-                {isUploading ? $t("upload.uploading") : $t("upload.addFiles")}
+                {isClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addFiles")}
               </button>
             {:else}
               <div class="text-center">
@@ -1636,11 +1736,12 @@
           {#if isTauri}
             <button
               class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={isUploading}
+              disabled={isUploading || isClientMode}
               on:click={openFileDialog}
+              title={isClientMode ? "File sharing disabled in client-only mode" : ""}
             >
               <Plus class="h-4 w-4 mr-2" />
-              {isUploading ? $t("upload.uploading") : $t("upload.addMoreFiles")}
+              {isClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addMoreFiles")}
             </button>
           {:else}
             <div class="text-center">
@@ -1651,6 +1752,29 @@
           {/if}
         </div>
       </div>
+
+      <!-- Client Mode Warning for Shared Files -->
+      {#if isClientMode && $coalescedFiles.length > 0}
+        <div class="mx-4 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <div class="flex items-start gap-2">
+            <div class="text-amber-600 text-sm mt-0.5">⚠️</div>
+            <div class="flex-1">
+              <p class="text-sm font-medium text-amber-800">
+                Seeding Inactive in Client-Only Mode
+              </p>
+              <p class="text-xs text-amber-700 mt-1">
+                {#if clientModeReason === "forced"}
+                  Your files are saved locally but cannot be accessed by other peers because client-only mode is forced.
+                {:else if clientModeReason === "nat"}
+                  Your files are saved locally but cannot be accessed by other peers due to NAT/firewall restrictions.
+                {:else}
+                  Your files are saved locally but cannot be accessed by other peers while in client-only mode.
+                {/if}
+              </p>
+            </div>
+          </div>
+        </div>
+      {/if}
 
       <!-- File List -->
       {#if $coalescedFiles.length > 0}

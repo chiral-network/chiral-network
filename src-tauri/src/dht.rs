@@ -1378,6 +1378,8 @@ async fn run_dht_node(
     relay_candidates: HashSet<String>,
     chunk_size: usize,
     bootstrap_peer_ids: HashSet<PeerId>,
+    pure_client_mode: bool,
+    force_server_mode: bool,
 ) {
     // Track peers that support relay (discovered via identify protocol)
     let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> =
@@ -3543,7 +3545,7 @@ async fn run_dht_node(
                                 handle_upnp_event(upnp_event, &mut swarm, &event_tx).await;
                             }
                             SwarmEvent::ExternalAddrConfirmed { address, .. } if !is_bootstrap => {
-                                handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr, &pending_provider_registrations)
+                                handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr, &pending_provider_registrations, pure_client_mode, force_server_mode)
                                     .await;
                             }
                             SwarmEvent::ExternalAddrExpired { address, .. } if !is_bootstrap => {
@@ -5937,6 +5939,8 @@ async fn handle_external_addr_confirmed(
     event_tx: &mpsc::Sender<DhtEvent>,
     proxy_mgr: &ProxyMgr,
     pending_provider_registrations: &Arc<Mutex<HashSet<String>>>,
+    pure_client_mode: bool,
+    force_server_mode: bool,
 ) {
     let mut metrics_guard = metrics.lock().await;
     let nat_enabled = metrics_guard.autonat_enabled;
@@ -5954,11 +5958,20 @@ async fn handle_external_addr_confirmed(
 
     // Upgrade Kademlia to Server mode now that we're publicly reachable
     // This allows other nodes to fetch DHT records from us
-    swarm.behaviour_mut().kademlia.set_mode(Some(Mode::Server));
-    info!(
-        "🔄 Upgraded Kademlia to Server mode - node is publicly reachable at {}",
-        addr
-    );
+    // Skip upgrade if in pure-client mode (cannot act as DHT server)
+    if pure_client_mode {
+        info!(
+            "⚠️  Pure client mode enabled - staying in Client mode despite public reachability at {}",
+            addr
+        );
+        info!("   Note: Node cannot seed files or act as DHT server in pure-client mode");
+    } else {
+        swarm.behaviour_mut().kademlia.set_mode(Some(Mode::Server));
+        info!(
+            "🔄 Upgraded Kademlia to Server mode - node is publicly reachable at {}",
+            addr
+        );
+    }
 
     // If we have relay server enabled (even if in standby mode), advertise it in DHT
     if swarm.behaviour_mut().relay_server.as_ref().is_some() {
@@ -6446,6 +6459,8 @@ impl DhtService {
         blockstore_db_path: Option<&Path>,
         last_autorelay_enabled_at: Option<SystemTime>,
         last_autorelay_disabled_at: Option<SystemTime>,
+        pure_client_mode: bool,
+        force_server_mode: bool,
     ) -> Result<Self, Box<dyn Error>> {
         // Respect user-configured AutoRelay preference (allow env to force-disable)
         let mut final_enable_autorelay = enable_autorelay;
@@ -6548,8 +6563,15 @@ impl DhtService {
         // Start in Client mode - will switch to Server after AutoNAT confirms public reachability
         // This prevents NAT'd nodes from advertising unreachable addresses in the DHT
         // which would cause other peers to fail when trying to fetch records from them
-        kademlia.set_mode(Some(Mode::Client));
-        info!("Starting Kademlia in Client mode (waiting for AutoNAT confirmation)");
+        // Developer override: force Server mode immediately if requested (for testing/debugging)
+        if force_server_mode {
+            kademlia.set_mode(Some(Mode::Server));
+            info!("⚠️  Starting Kademlia in FORCED Server mode (developer override)");
+            info!("   Note: This may cause connectivity issues if behind NAT/firewall");
+        } else {
+            kademlia.set_mode(Some(Mode::Client));
+            info!("Starting Kademlia in Client mode (waiting for AutoNAT confirmation)");
+        }
 
         // Create identify behaviour with proactive push updates
         let identify_config =
@@ -6968,6 +6990,8 @@ impl DhtService {
             relay_candidates,
             chunk_size,
             bootstrap_peer_ids,
+            pure_client_mode,
+            force_server_mode,
         ));
 
         Ok(DhtService {
@@ -8907,6 +8931,7 @@ mod tests {
             None,
             None,
             None,
+            false,      // pure_client_mode
         )
         .await
         {

@@ -5,7 +5,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
-  import { blockReward, miningState, type MiningHistoryPoint, wallet, accurateTotals, isCalculatingAccurateTotals } from '$lib/stores';
+  import { blockReward, miningState, type MiningHistoryPoint, wallet, accurateTotals, isCalculatingAccurateTotals, settings } from '$lib/stores';
   import { get } from 'svelte/store';
   import { Cpu, Zap, TrendingUp, Award, Play, Pause, Coins, Thermometer, AlertCircle, Terminal, X, RefreshCw, Calculator, DollarSign } from 'lucide-svelte'
 
@@ -19,10 +19,15 @@
   import TemporaryAccountWarning from '$lib/components/TemporaryAccountWarning.svelte';
   import { showToast } from '$lib/toast';
   import { gethSyncStatus } from '$lib/services/gethService';
+  import { dhtService } from '$lib/dht';
   type TranslateParams = { values?: Record<string, unknown>; default?: string };
   // const tr = (key: string, params?: TranslateParams) => get(t)(key, params);
   const tr = (key: string, params?: TranslateParams): string =>
   $t(key, params);
+
+  // Client mode detection (forced OR automatic NAT-based)
+  let isClientMode = false;
+  let clientModeReason: "forced" | "nat" | null = null;
 
 
   // Local UI state only
@@ -435,6 +440,31 @@
   let hoveredPoint: MiningHistoryPoint | null = null;
   let hoveredIndex: number | null = null;
 
+  // Check if in client mode (forced OR automatic NAT-based)
+  async function checkClientMode() {
+    try {
+      // Check if pure client mode is forced
+      if ($settings.pureClientMode) {
+        isClientMode = true;
+        clientModeReason = "forced";
+        return;
+      }
+
+      // Check DHT health to see if behind NAT
+      const health = await dhtService.getHealth();
+      if (health) {
+        if (health.reachability === "private") {
+          isClientMode = true;
+          clientModeReason = "nat";
+        } else if (health.reachability === "public") {
+          isClientMode = false;
+          clientModeReason = null;
+        }
+      }
+    } catch (error) {
+      console.error("Failed to check client mode:", error);
+    }
+  }
 
   onMount(async () => {
     try{
@@ -457,6 +487,7 @@
 
     await checkGethStatus()
     await updateNetworkStats()
+    await checkClientMode()  // Check if in client mode (forced or NAT-based)
 
     // Always fetch initial mining stats (blocksFound, totalRewards) on mount
     if (isTauri) {
@@ -778,7 +809,7 @@
         return;
       }
     }
-    
+
     if (!isGethRunning) {
       error = $t('mining.errors.gethNotRunning')
       return
@@ -1293,6 +1324,46 @@
     <h1 class="text-3xl font-bold">{$t('mining.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('mining.subtitle')}</p>
   </div>
+
+  <!-- Client Mode Warning -->
+  {#if isClientMode}
+    <Card class="p-4 bg-yellow-50 border-yellow-200">
+      <div class="flex items-start gap-3">
+        <div class="text-yellow-600 mt-0.5">
+          ⚠️
+        </div>
+        <div class="flex-1 space-y-2">
+          <p class="text-sm font-semibold text-yellow-800">
+            {#if clientModeReason === "forced"}
+              Client-Only Mode Enabled (Forced) - Limited Blockchain Sync
+            {:else if clientModeReason === "nat"}
+              Client-Only Mode (Behind NAT) - Limited Blockchain Sync
+            {:else}
+              Client-Only Mode - Limited Blockchain Sync
+            {/if}
+          </p>
+          <p class="text-sm text-yellow-700">
+            {#if clientModeReason === "forced"}
+              You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.
+            {:else if clientModeReason === "nat"}
+              AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.
+            {:else}
+              You are in client-only mode. Blockchain syncs only last ~100 blocks (minimal storage). Mining is available.
+            {/if}
+          </p>
+          <p class="text-xs text-yellow-600">
+            {#if clientModeReason === "forced"}
+              To enable full blockchain sync (10,000 blocks), disable "Force Client-Only Mode" in Settings → Developers.
+            {:else if clientModeReason === "nat"}
+              Full nodes sync ~10,000 blocks. To upgrade, configure port forwarding or use a VPN with a public IP to become publicly reachable.
+            {:else}
+              Check your network settings or AutoNAT configuration for full functionality.
+            {/if}
+          </p>
+        </div>
+      </div>
+    </Card>
+  {/if}
 
   <!-- Temporary Account Warning -->
   {#if showTemporaryAccountWarning && isTemporaryAccount}

@@ -7,7 +7,7 @@
   import PeerMetrics from '$lib/components/PeerMetrics.svelte'
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
-  import { peers, networkStats, userLocation, settings } from '$lib/stores'
+  import { peers, networkStats, userLocation, settings, wallet } from '$lib/stores'
   import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
   import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText, Wifi } from 'lucide-svelte'
@@ -91,7 +91,8 @@
   let peerCount = 0
   let peerCountInterval: ReturnType<typeof setInterval> | undefined
   let chainId: number | null = 98765; // Default, will be fetched from backend
-  let nodeAddress = ''
+  // Reactive node address from wallet
+  $: nodeAddress = $wallet.address || ''
   // let copiedNodeAddr = false
   
   // DHT variables
@@ -523,6 +524,9 @@
         relayServerAlias: $settings.relayServerAlias || '',
         chunkSizeKb: $settings.chunkSize,
         cacheSizeMb: $settings.cacheSize,
+        enableUpnp: $settings.enableUPnP,
+        pureClientMode: $settings.pureClientMode,
+        forceServerMode: $settings.forceServerMode,
       })
       dhtPeerId = peerId
       dhtService.setPeerId(peerId)
@@ -1221,7 +1225,24 @@
 
     isStartingNode = true
     try {
-      await invoke('start_geth_node', { dataDir: './bin/geth-data' })
+      // Check if in client mode (forced OR NAT-based)
+      let isClientMode = $settings.pureClientMode;
+      if (!isClientMode) {
+        // Check DHT reachability to detect NAT-based client mode
+        try {
+          const health = await dhtService.getHealth();
+          if (health && health.reachability === 'private') {
+            isClientMode = true;
+          }
+        } catch (err) {
+          console.warn('Failed to check DHT reachability for client mode:', err);
+        }
+      }
+
+      await invoke('start_geth_node', {
+        dataDir: './bin/geth-data',
+        pureClientMode: isClientMode  // Combined: forced OR NAT-based
+      })
       isGethRunning = true
       startPolling()
     } catch (error) {
@@ -1600,8 +1621,8 @@
               {:else}
                 <div class="space-y-4">
                   <div class="flex gap-3">
-                    <Button 
-                      class="flex-1" 
+                    <Button
+                      class="flex-1"
                       variant={isGethRunning ? "secondary" : "default"}
                       disabled={isGethRunning || isStartingNode}
                       on:click={startGethNode}
