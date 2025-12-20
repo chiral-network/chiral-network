@@ -18,6 +18,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub headless: bool,
 
+    /// Run in interactive REPL mode
+    #[arg(long)]
+    pub interactive: bool,
+
     /// DHT port to listen on
     #[arg(long, default_value = "4001")]
     pub dht_port: u16,

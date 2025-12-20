@@ -1181,6 +1181,7 @@ impl MultiSourceDownloadService {
         let transfer_event_bus = self.transfer_event_bus.clone();
         let chunk_manager = self.chunk_manager.clone();
         let ftp_info_clone = ftp_info.clone();
+        let command_tx = self.command_tx.clone();
 
         tokio::spawn(async move {
             let semaphore = Arc::new(tokio::sync::Semaphore::new(2)); // Max 2 concurrent FTP downloads per server
@@ -1204,6 +1205,7 @@ impl MultiSourceDownloadService {
                 let transfer_event_bus = transfer_event_bus.clone();
                 let chunk_manager = chunk_manager.clone();
                 let ftp_info_for_task = ftp_info_clone.clone();
+                let command_tx = command_tx.clone();
 
                 let task = tokio::spawn(async move {
                     let _permit = permit.unwrap();
@@ -1307,6 +1309,12 @@ impl MultiSourceDownloadService {
                                     peer_id: ftp_url.clone(),
                                     error: error_msg.clone(),
                                 });
+                                
+                                // Trigger retry
+                                let _ = command_tx.send(MultiSourceCommand::RetryFailedChunks {
+                                    file_hash: file_hash.clone(),
+                                });
+                                
                                 return Ok(());
                             }
 
@@ -1344,6 +1352,12 @@ impl MultiSourceDownloadService {
                                     peer_id: ftp_url.clone(),
                                     error: error_msg,
                                 });
+                                
+                                // Trigger retry
+                                let _ = command_tx.send(MultiSourceCommand::RetryFailedChunks {
+                                    file_hash: file_hash.clone(),
+                                });
+                                
                                 return Ok(());
                             }
 
