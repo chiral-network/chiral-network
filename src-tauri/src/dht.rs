@@ -3099,7 +3099,8 @@ async fn run_dht_node(
                                     _ => {}
                                 }
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) if !is_bootstrap => match bitswap {
+                            // Bitswap event handler disabled - using WebRTC for file transfers instead
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) if !is_bootstrap && false => match bitswap {
                                 beetswap::Event::GetQueryResponse { query_id, data } => {
                                     info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
 
