@@ -668,6 +668,7 @@ async fn cmd_add(args: &[&str], context: &ReplContext) -> Result<(), String> {
         info_hash: None,
         trackers: None,
         ed2k_sources: None,
+        manifest: None,
     };
 
     // Publish to DHT

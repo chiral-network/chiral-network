@@ -230,6 +230,7 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         args.autonat_server.clone(),
         args.socks5_proxy,
         file_transfer_service.clone(),
+        None, // webrtc_service
         None, // chunk_manager
         None, // chunk_size_kb: use default
         None, // cache_size_mb: use default

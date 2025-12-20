@@ -1349,6 +1349,7 @@ async fn run_dht_node(
     peer_selection: Arc<Mutex<PeerSelectionService>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
+    webrtc_service: Option<Arc<crate::webrtc_service::WebRTCService>>,
     chunk_manager: Option<Arc<ChunkManager>>,
     pending_webrtc_offers: Arc<
         Mutex<
@@ -2044,76 +2045,56 @@ async fn run_dht_node(
                                     }
                                 }
 
-                                let root_cid_result = file_metadata.cids.as_ref()
-                                    .and_then(|cids| cids.first())
-                                    .ok_or_else(|| {
-                                        let msg = format!("No root CID found for file with Merkle root: {}", file_metadata.merkle_root);
-                                        error!("{}", msg);
-                                        msg
-                                    });
-
-                                let root_cid = match root_cid_result {
-                                    Ok(cid) => cid.clone(),
-                                    Err(e) => { let _ = event_tx.send(DhtEvent::Error(e)).await; continue; }
+                                // Calculate total chunks from cids or file size
+                                let total_chunks = if let Some(cids) = &file_metadata.cids {
+                                    cids.len() as u32
+                                } else {
+                                    // If no CIDs, calculate from file size (assume 256KB chunks)
+                                    let chunk_size = 256 * 1024;
+                                    ((file_metadata.file_size + chunk_size - 1) / chunk_size) as u32
                                 };
+
+                                if total_chunks == 0 {
+                                    let _ = event_tx.send(DhtEvent::Error("File has no chunks".to_string())).await;
+                                    continue;
+                                }
+
                                 if file_metadata.seeders.is_empty() {
                                     let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
                                     return;
                                 }
 
-                                // Try multiple seeders for initial connection/parsing reliability
-                                // IPFS Bitswap will handle peer discovery and distribution automatically,
-                                // but we want to ensure we start with a valid, reachable seeder
-                                let max_attempts = std::cmp::min(3, file_metadata.seeders.len());
-                                let mut tried_seeders: Vec<String> = Vec::new();
+                                // Use WebRTC service if available, otherwise fall back to error
+                                if let Some(webrtc_service) = &webrtc_service {
+                                    // Select first seeder
+                                    let seeder = &file_metadata.seeders[0];
 
-                                let mut successful_start = false;
-
-                                for attempt in 0..max_attempts {
-                                    // Select next seeder (prefer earlier ones but skip tried ones)
-                                    let seeder_to_try = file_metadata.seeders
-                                        .iter()
-                                        .find(|s| !tried_seeders.contains(s))
-                                        .cloned();
-
-                                    let Some(seeder) = seeder_to_try else {
-                                        warn!("All {} seeders tried for file {} - none were valid",
-                                              file_metadata.seeders.len(), file_metadata.merkle_root);
-                                        break;
-                                    };
-
-                                    tried_seeders.push(seeder.clone());
-
-                                    let peer_id = match PeerId::from_str(&seeder) {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            warn!("Invalid seeder peer ID {} (attempt {}/{}): {}",
-                                                  seeder, attempt + 1, max_attempts, e);
-                                            continue;
-                                        }
-                                    };
-
-                                    info!("Attempting IPFS download from seeder {} (attempt {}/{}): {}",
-                                          seeder, attempt + 1, max_attempts, file_metadata.file_name);
-
-                                    // Request the root block which contains the CIDs
-                                    let root_query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+                                    info!("Starting WebRTC download from seeder {}: {} ({} chunks)",
+                                          seeder, file_metadata.file_name, total_chunks);
 
                                     file_metadata.download_path = Some(download_path.clone());
 
-                                    // Store the root query ID to handle when we get the root block
-                                    info!("Started IPFS download attempt with seeder {}", seeder);
-                                    root_query_mapping.lock().await.insert(root_query_id, file_metadata.clone());
+                                    // Request all chunks via WebRTC
+                                    let file_hash = file_metadata.merkle_root.clone();
+                                    for chunk_index in 0..total_chunks {
+                                        if let Err(e) = webrtc_service
+                                            .request_file_chunk(
+                                                seeder.clone(),
+                                                file_hash.clone(),
+                                                chunk_index
+                                            )
+                                            .await
+                                        {
+                                            error!("Failed to request chunk {} for file {}: {}",
+                                                   chunk_index, file_hash, e);
+                                        }
+                                    }
 
-                                    successful_start = true;
-                                    break; // Start with first valid seeder, let IPFS handle the rest
-                                }
-
-                                if !successful_start {
-                                    let _ = event_tx.send(DhtEvent::Error(format!(
-                                        "Failed to start IPFS download after trying {} seeders - all had invalid peer IDs",
-                                        tried_seeders.len()
-                                    ))).await;
+                                    info!("Requested {} chunks for file {}", total_chunks, file_hash);
+                                } else {
+                                    let _ = event_tx.send(DhtEvent::Error(
+                                        "WebRTC service not available for download".to_string()
+                                    )).await;
                                 }
                             }
                             Some(DhtCommand::StopPublish(file_hash)) => {
@@ -3122,7 +3103,8 @@ async fn run_dht_node(
                                     _ => {}
                                 }
                             }
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) if !is_bootstrap => match bitswap {
+                            // Bitswap event handler disabled - using WebRTC for file transfers instead
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) if !is_bootstrap && false => match bitswap {
                                 beetswap::Event::GetQueryResponse { query_id, data } => {
                                     info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
 
@@ -4138,6 +4120,112 @@ async fn run_dht_node(
                         break 'outer;
                     }
                 }
+
+        // Poll WebRTC events for file chunk reception and download completion
+        if let Some(webrtc) = &webrtc_service {
+            let events = webrtc.drain_events(100).await;
+            for event in events {
+                match event {
+                    crate::webrtc_service::WebRTCEvent::FileChunkReceived { peer_id, chunk } => {
+                        info!("📥 Received WebRTC chunk {}/{} from peer {} for file {}",
+                              chunk.chunk_index + 1, chunk.total_chunks, peer_id, chunk.file_hash);
+                    }
+                    crate::webrtc_service::WebRTCEvent::TransferProgress { peer_id, progress } => {
+                        info!("📊 Transfer progress from {}: {:.1}%",
+                              peer_id, progress.percentage);
+                    }
+                    crate::webrtc_service::WebRTCEvent::TransferCompleted { peer_id, file_hash } => {
+                        info!("✅ WebRTC transfer completed: {} from peer {}", file_hash, peer_id);
+
+                        // Look up file metadata and emit DownloadedFile event
+                        let cache = file_metadata_cache.lock().await;
+                        if let Some(metadata) = cache.get(&file_hash) {
+                            let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
+                            info!("Emitted DownloadedFile event for {}", file_hash);
+                        } else {
+                            warn!("File metadata not found in cache for completed download: {}", file_hash);
+                        }
+                    }
+                    crate::webrtc_service::WebRTCEvent::TransferFailed { peer_id, file_hash, error } => {
+                        error!("❌ WebRTC transfer failed: {} from peer {}: {}", file_hash, peer_id, error);
+                        let _ = event_tx.send(DhtEvent::Error(format!(
+                            "WebRTC transfer failed for {}: {}", file_hash, error
+                        ))).await;
+                    }
+                    crate::webrtc_service::WebRTCEvent::FileChunkRequested { peer_id, file_hash, chunk_index } => {
+                        info!("📤 Peer {} requested chunk {} of file {}", peer_id, chunk_index, file_hash);
+
+                        // Look up file metadata and serve the chunk
+                        let cache = file_metadata_cache.lock().await;
+                        if let Some(metadata) = cache.get(&file_hash).cloned() {
+                            drop(cache); // Release lock before async operations
+
+                            // Get file data from file transfer service
+                            if let Some(ft_service) = &file_transfer_service {
+                                match ft_service.get_file_data(&file_hash).await {
+                                    Some(file_data) => {
+                                        // Calculate chunk boundaries
+                                        let start = (chunk_index as usize) * chunk_size;
+                                        let end = (start + chunk_size).min(file_data.len());
+
+                                        if start < file_data.len() {
+                                            let chunk_data = file_data[start..end].to_vec();
+
+                                            // Calculate total chunks
+                                            let total_chunks = ((file_data.len() + chunk_size - 1) / chunk_size) as u32;
+
+                                            // Calculate checksum
+                                            let checksum = {
+                                                use sha2::{Sha256, Digest};
+                                                let mut hasher = Sha256::new();
+                                                hasher.update(&chunk_data);
+                                                format!("{:x}", hasher.finalize())
+                                            };
+
+                                            // Create chunk struct
+                                            let chunk = crate::webrtc_service::FileChunk {
+                                                file_hash: file_hash.clone(),
+                                                file_name: metadata.file_name.clone(),
+                                                chunk_index,
+                                                total_chunks,
+                                                data: chunk_data,
+                                                checksum,
+                                                encrypted_key_bundle: metadata.encrypted_key_bundle.clone(),
+                                            };
+
+                                            // Send chunk to peer
+                                            if let Err(e) = webrtc.send_file_chunk(peer_id.clone(), chunk).await {
+                                                error!("Failed to send chunk {} to {}: {}", chunk_index, peer_id, e);
+                                            } else {
+                                                info!("✅ Sent chunk {} to peer {}", chunk_index, peer_id);
+                                            }
+                                        } else {
+                                            warn!("Chunk index {} out of bounds for file {}", chunk_index, file_hash);
+                                        }
+                                    }
+                                    None => {
+                                        warn!("File data not found for {}", file_hash);
+                                    }
+                                }
+                            } else {
+                                warn!("FileTransferService not available to serve chunks");
+                            }
+                        } else {
+                            warn!("File metadata not found in cache for chunk request: {}", file_hash);
+                        }
+                    }
+                    crate::webrtc_service::WebRTCEvent::ConnectionEstablished { peer_id } => {
+                        info!("WebRTC connection established with {}", peer_id);
+                    }
+                    crate::webrtc_service::WebRTCEvent::ConnectionFailed { peer_id, error } => {
+                        warn!("WebRTC connection failed with {}: {}", peer_id, error);
+                    }
+                    _ => {
+                        // Ignore other WebRTC events (signaling, ICE, etc.)
+                    }
+                }
+            }
+        }
     }
 
     connected_peers.lock().await.clear();
@@ -6211,6 +6299,7 @@ pub struct DhtService {
     file_metadata_cache: Arc<Mutex<HashMap<String, FileMetadata>>>,
     received_chunks: Arc<Mutex<HashMap<String, HashMap<u32, FileChunk>>>>,
     file_transfer_service: Option<Arc<FileTransferService>>,
+    webrtc_service: Option<Arc<crate::webrtc_service::WebRTCService>>,
     // chunk_manager: Option<Arc<ChunkManager>>, // Not needed here
     pending_webrtc_offers: Arc<
         Mutex<
@@ -6449,6 +6538,7 @@ impl DhtService {
         autonat_servers: Vec<String>,
         proxy_address: Option<String>,
         file_transfer_service: Option<Arc<FileTransferService>>,
+        webrtc_service: Option<Arc<crate::webrtc_service::WebRTCService>>,
         chunk_manager: Option<Arc<ChunkManager>>,
         chunk_size_kb: Option<usize>, // Chunk size in KB (default 256)
         cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
@@ -6971,6 +7061,7 @@ impl DhtService {
             peer_selection.clone(),
             received_chunks_clone.clone(),
             file_transfer_service.clone(),
+            webrtc_service.clone(),
             chunk_manager,
             pending_webrtc_offers.clone(),
             pending_provider_queries.clone(),
@@ -7010,6 +7101,7 @@ impl DhtService {
             file_metadata_cache: file_metadata_cache_local,
             received_chunks: received_chunks_clone,
             file_transfer_service,
+            webrtc_service,
             // chunk_manager is not stored in DhtService, only passed to the task
             pending_webrtc_offers,
             pending_key_requests,
