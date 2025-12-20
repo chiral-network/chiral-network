@@ -17,6 +17,7 @@ use crate::dht::DhtService;
 use libp2p::Multiaddr;
 use thiserror::Error;
 use crate::chiral_bittorrent_extension::{ChiralBitTorrentExtension, ChiralExtensionEvent};
+use crate::manager::ChunkManager;
 use serde::{Deserialize, Serialize};
 
 /// Progress information for a torrent
@@ -1511,8 +1512,29 @@ impl BitTorrentHandler {
 
         let magnet_link = format!("magnet:?xt=urn:btih:{}", info_hash);
 
+        // Create FileManifest using ChunkManager
+        let chunk_storage_path = self.download_directory.join("chunks");
+        let manager = ChunkManager::new(chunk_storage_path);
+        
+        // Use chunk_and_encrypt_file_canonical to generate FileManifest
+        // This will calculate chunk hashes even without encryption
+        let file_manifest_result = tokio::task::spawn_blocking({
+            let file_path_clone = file_path.clone();
+            move || {
+                manager.chunk_and_encrypt_file_canonical(Path::new(&file_path_clone))
+            }
+        }).await
+        .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
+        
+        let file_manifest = file_manifest_result
+            .map_err(|e| format!("Failed to create FileManifest: {}", e))?;
+        
+        // Serialize manifest to JSON
+        let manifest_json = serde_json::to_string(&file_manifest.manifest)
+            .map_err(|e| format!("Failed to serialize FileManifest: {}", e))?;
+
         let metadata = crate::dht::models::FileMetadata {
-            merkle_root: chiral_hash.clone(),
+            merkle_root: file_manifest.manifest.merkle_root.clone(),
             file_name: file_name.clone(),
             file_size,
             file_data: Vec::new(), // Don't include file data in DHT
@@ -1536,6 +1558,7 @@ impl BitTorrentHandler {
             is_root: false,
             parent_hash: None,
             download_path: None,
+            manifest: Some(manifest_json),
         };
 
         // Publish to DHT

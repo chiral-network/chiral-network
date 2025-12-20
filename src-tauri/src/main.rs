@@ -21,6 +21,7 @@ pub mod http_server;
 pub mod chiral_bittorrent_extension;
 pub mod net;
 pub mod pool;
+pub mod repl;
 pub mod reassembly;
 pub mod transaction_services;
 
@@ -352,6 +353,10 @@ pub struct StreamingUploadSession {
     pub file_data: Vec<u8>,
     pub price: f64,
     pub is_complete: bool,
+    /// SHA-256 hashes of each chunk for FileManifest generation
+    pub chunk_hashes: Vec<String>,
+    /// Chunk size used for this upload
+    pub chunk_size: usize,
 }
 
 /// Session for streaming WebRTC downloads - writes chunks directly to disk
@@ -3920,6 +3925,7 @@ async fn upload_file_to_network(
                             trackers: Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]),
                             ed2k_sources: None,
                             download_path: None,
+                            manifest: None,
                         };
 
                         // Publish merged metadata to DHT for discoverability
@@ -4023,6 +4029,7 @@ async fn upload_file_to_network(
                                 chunk_hashes: None,
                             }]),
                             download_path: None,
+                            manifest: None,
                         };
 
                         // Publish merged metadata to DHT for discoverability
@@ -4109,6 +4116,7 @@ async fn upload_file_to_network(
                     info_hash: None,
                     trackers: None,
                     ed2k_sources: None,
+                    manifest: None,
                     download_path: None,
                 };
 
@@ -4253,6 +4261,47 @@ async fn upload_file_to_network(
                         // Get the account address for the uploader
                         let account = get_active_account(&state).await?;
 
+                        // Create FileManifest from chunk hashes
+                        let chunk_hashes = std::mem::take(&mut session.chunk_hashes);
+                        let chunk_size = session.chunk_size;
+                        let mut manifest_chunks = Vec::new();
+                        let mut chunk_hashes_bytes: Vec<[u8; 32]> = Vec::new();
+                        
+                        for (index, hash_hex) in chunk_hashes.iter().enumerate() {
+                            // Parse hex hash to bytes for Merkle tree
+                            let hash_bytes = hex::decode(hash_hex)
+                                .ok()
+                                .and_then(|v| v.try_into().ok())
+                                .unwrap_or([0u8; 32]);
+                            chunk_hashes_bytes.push(hash_bytes);
+                            
+                            // Calculate chunk size (last chunk may be smaller)
+                            let size = if index == chunk_hashes.len() - 1 {
+                                (session.file_size - (index as u64 * chunk_size as u64)) as usize
+                            } else {
+                                chunk_size
+                            };
+                            
+                            manifest_chunks.push(crate::manager::ChunkInfo {
+                                index: index as u32,
+                                hash: hash_hex.clone(),
+                                size,
+                                encrypted_hash: String::new(), // Not encrypted in Bitswap
+                                encrypted_size: size,
+                            });
+                        }
+                        
+                        // Create FileManifest
+                        let file_manifest = crate::manager::FileManifest {
+                            merkle_root: merkle_root.clone(),
+                            chunks: manifest_chunks,
+                            encrypted_key_bundle: None,
+                        };
+                        
+                        // Serialize manifest to JSON
+                        let manifest_json = serde_json::to_string(&file_manifest)
+                            .map_err(|e| format!("Failed to serialize FileManifest: {}", e))?;
+
                         let metadata = dht::models::FileMetadata {
                             merkle_root: merkle_root.clone(), // Store Merkle root for verification
                             file_name: session.file_name.clone(),
@@ -4276,6 +4325,7 @@ async fn upload_file_to_network(
                             info_hash: None,
                             trackers: None,
                             ed2k_sources: None,
+                            manifest: Some(manifest_json),
                         };
 
                         // Publish merged metadata to DHT
@@ -4350,13 +4400,37 @@ async fn upload_file_to_network(
                             .map_err(|e| format!("Failed to read file: {}", e))?;
                         let file_hash = file_transfer::FileTransferService::calculate_file_hash(&file_data);
 
+                        // Create FileManifest using ChunkManager
+                        let chunk_storage_path = app.path()
+                            .app_data_dir()
+                            .map_err(|e| format!("Failed to get app data directory: {}", e))?
+                            .join("chunks");
+                        let manager = ChunkManager::new(chunk_storage_path);
+                        
+                        // Use chunk_and_encrypt_file_canonical to generate FileManifest
+                        // This will calculate chunk hashes even without encryption
+                        let file_manifest_result = tokio::task::spawn_blocking({
+                            let file_path_clone = file_path.clone();
+                            move || {
+                                manager.chunk_and_encrypt_file_canonical(Path::new(&file_path_clone))
+                            }
+                        }).await
+                        .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
+                        
+                        let file_manifest = file_manifest_result
+                            .map_err(|e| format!("Failed to create FileManifest: {}", e))?;
+                        
+                        // Serialize manifest to JSON
+                        let manifest_json = serde_json::to_string(&file_manifest.manifest)
+                            .map_err(|e| format!("Failed to serialize FileManifest: {}", e))?;
+
                         let created_at = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or(std::time::Duration::from_secs(0))
                             .as_secs();
 
                         let metadata = FileMetadata {
-                            merkle_root: file_hash.clone(),
+                            merkle_root: file_manifest.manifest.merkle_root.clone(),
                             is_root: true,
                             file_name: original_file_name.clone(),
                             file_size: file_data.len() as u64,
@@ -4378,6 +4452,7 @@ async fn upload_file_to_network(
                             trackers: None,
                             ed2k_sources: None,
                             download_path: None,
+                            manifest: Some(manifest_json),
                         };
 
                         dht.publish_file(metadata.clone(), None).await?;
@@ -5297,6 +5372,8 @@ async fn start_streaming_upload(
             file_data: Vec::new(),
             price,
             is_complete: false,
+            chunk_hashes: Vec::new(),
+            chunk_size: 0, // Will be set when first chunk arrives
         },
     );
 
@@ -5319,6 +5396,18 @@ async fn upload_file_chunk(
     // Update hasher with chunk data
     session.hasher.update(&chunk_data);
     session.received_chunks += 1;
+
+    // Calculate and store chunk hash for FileManifest
+    use sha2::{Digest, Sha256};
+    let mut chunk_hasher = Sha256::new();
+    chunk_hasher.update(&chunk_data);
+    let chunk_hash = hex::encode(chunk_hasher.finalize());
+    session.chunk_hashes.push(chunk_hash);
+
+    // Set chunk size on first chunk
+    if session.chunk_size == 0 {
+        session.chunk_size = chunk_data.len();
+    }
 
     // Store chunk directly in Bitswap (if DHT is available)
     if let Some(dht) = state.dht.lock().await.as_ref() {
@@ -7747,6 +7836,95 @@ async fn get_download_status_restart(
     }
 }
 
+// Interactive mode entry point
+async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::commands::bootstrap::get_bootstrap_nodes;
+
+    // Initialize services similar to headless mode
+    let download_restart_service = Arc::new(download_restart::DownloadRestartService::new(None));
+
+    // Add default bootstrap nodes if no custom ones specified
+    let mut bootstrap_nodes = args.bootstrap.clone();
+    if bootstrap_nodes.is_empty() {
+        bootstrap_nodes.extend(get_bootstrap_nodes());
+    }
+
+    let enable_autonat = !args.disable_autonat;
+    let probe_interval = if enable_autonat {
+        Some(Duration::from_secs(args.autonat_probe_interval))
+    } else {
+        None
+    };
+
+    // Optionally start local file-transfer service
+    let file_transfer_service = Some(Arc::new(file_transfer::FileTransferService::new().await.map_err(|e| {
+        format!("Failed to start file transfer service: {}", e)
+    })?));
+
+    // Finalize AutoRelay flag
+    let mut final_enable_autorelay = !args.disable_autorelay;
+    if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
+        final_enable_autorelay = false;
+    }
+
+    // Start DHT node
+    let dht_service = DhtService::new(
+        args.dht_port,
+        bootstrap_nodes.clone(),
+        args.secret,
+        args.is_bootstrap,
+        enable_autonat,
+        probe_interval,
+        args.autonat_server.clone(),
+        args.socks5_proxy,
+        file_transfer_service.clone(),
+        None, // chunk_manager
+        None, // chunk_size_kb: use default
+        None, // cache_size_mb: use default
+        final_enable_autorelay,
+        args.relay.clone(),
+        args.enable_relay,
+        true,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    let peer_id = dht_service.get_peer_id().await;
+
+    // Connect to bootstrap nodes
+    if !args.is_bootstrap {
+        for bootstrap_addr in &bootstrap_nodes {
+            let _ = dht_service.connect_peer(bootstrap_addr.clone()).await;
+        }
+    }
+
+    // Optionally start geth
+    let geth_process = if args.enable_geth {
+        let mut geth = ethereum::GethProcess::new();
+        geth.start(&args.geth_data_dir, args.miner_address.as_deref())?;
+        Some(geth)
+    } else {
+        None
+    };
+
+    let dht_arc = Arc::new(dht_service);
+
+    // Create REPL context
+    let context = repl::ReplContext {
+        dht_service: dht_arc.clone(),
+        file_transfer_service,
+        geth_process,
+        peer_id,
+    };
+
+    // Run the REPL
+    repl::run_repl(context).await?;
+
+    Ok(())
+}
+
 // #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
@@ -7791,6 +7969,22 @@ fn main() {
         // Run the headless mode
         if let Err(e) = runtime.block_on(headless::run_headless(args)) {
             eprintln!("Error in headless mode: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // For interactive mode, disable logging for clean shell
+    if args.interactive {
+        // Don't initialize tracing subscriber - keep the shell clean
+        // Logs are disabled in interactive mode for better UX
+
+        // Create a tokio runtime for async operations
+        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+        // Run the interactive mode
+        if let Err(e) = runtime.block_on(run_interactive_mode(args)) {
+            eprintln!("Error in interactive mode: {}", e);
             std::process::exit(1);
         }
         return;

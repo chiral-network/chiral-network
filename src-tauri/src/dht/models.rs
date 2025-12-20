@@ -160,6 +160,12 @@ pub struct FileMetadata {
     /// A list of BitTorrent tracker URLs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trackers: Option<Vec<String>>,
+
+    /// Serialized FileManifest JSON containing chunk hashes and metadata
+    /// This allows downloaders to verify chunk integrity using actual SHA-256 hashes
+    /// instead of placeholder hashes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
