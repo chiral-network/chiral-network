@@ -243,7 +243,6 @@ impl BandwidthController {
                 None => break,
                 Some(delay) if delay.is_zero() => break,
                 Some(delay) => {
-                    total_wait_ms += delay.as_millis() as u64;
                     sleep(delay).await;
                 }
             }

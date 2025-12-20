@@ -1686,7 +1686,7 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
            line.contains("Generating DAG") ||
            line.contains("mining") ||
            (line.contains("miner") && line.contains("start")) {
-            mining_operations += 1;
+            // Mining operation detected
         }
     }
 

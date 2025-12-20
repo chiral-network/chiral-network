@@ -5,7 +5,6 @@ use crate::ethereum::{
     get_peer_count,
 };
 use crate::get_power_consumption;
-use futures::join;
 
 #[derive(Serialize)]
 pub struct FullNetworkStats {
