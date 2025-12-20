@@ -6,6 +6,9 @@
   import { CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, FlaskConical } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
+  // Check if running inside Tauri desktop app
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
   let isExpanded = false;
   let ftpTestStatus: 'idle' | 'testing' | 'success' | 'error' = 'idle';
   let ftpTestMessage = '';
@@ -14,6 +17,8 @@
   let ed2kTestMessage = '';
 
   async function testFtpDownload() {
+
+
     ftpTestStatus = 'testing';
     ftpTestMessage = 'Downloading from ftp.gnu.org...';
 
@@ -42,6 +47,7 @@
   }
 
   async function testEd2kParsing() {
+
     ed2kTestStatus = 'testing';
     ed2kTestMessage = 'Parsing ED2K link...';
 
