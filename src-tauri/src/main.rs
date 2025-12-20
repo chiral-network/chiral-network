@@ -1623,6 +1623,12 @@ async fn start_dht_node(
         ft_guard.as_ref().cloned()
     };
 
+    // Get the WebRTC service for DHT integration
+    let webrtc_service = {
+        let webrtc_guard = state.webrtc.lock().await;
+        webrtc_guard.as_ref().cloned()
+    };
+
     // Create a ChunkManager instance
     let app_data_dir = app
         .path()
@@ -1686,7 +1692,7 @@ async fn start_dht_node(
         autonat_server_list,
         final_proxy_address,
         file_transfer_service,
-        None, // webrtc_service
+        webrtc_service,
         Some(chunk_manager.clone()), // Pass the chunk manager
         chunk_size_kb,
         cache_size_mb,
