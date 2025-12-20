@@ -17,6 +17,7 @@
   let importPrivateKey = ''
   let isImportingAccount = false
   let importedSnapshot: any = null
+  let showMnemonicRecovery = false
 
   onMount(() => {
     // Wizard initialization
@@ -185,6 +186,40 @@
       isImportingAccount = false
     }
   }
+
+  async function handleMnemonicRecovery(ev: { mnemonic: string, passphrase: string, account: { address: string, privateKeyHex: string, index: number, change: number }, name?: string }) {
+    try {
+      // Import to backend to set as active account
+      const { invoke } = await import('@tauri-apps/api/core')
+      const privateKeyWithPrefix = '0x' + ev.account.privateKeyHex
+      
+      await invoke('import_chiral_account', { privateKey: privateKeyWithPrefix })
+      
+      // Set frontend account (backend is now also set)
+      etcAccount.set({ address: ev.account.address, private_key: privateKeyWithPrefix })
+      wallet.update(w => ({ ...w, address: ev.account.address, balance: 0 }))
+
+      // Reset mining state for recovered account
+      miningState.update(state => ({
+        ...state,
+        totalRewards: 0,
+        blocksFound: 0,
+        recentBlocks: []
+      }))
+
+      // WalletService 동기화 트리거
+      await walletService.refreshTransactions()
+      await walletService.refreshBalance()
+      walletService.startProgressiveLoading()
+
+      showToast(msg('account.firstRun.importSuccess', 'Account recovered from recovery phrase'), 'success')
+      showMnemonicRecovery = false
+      onComplete()
+    } catch (error) {
+      console.error('Failed to recover from mnemonic:', error)
+      showToast(msg('account.firstRun.importError', `Recovery failed: ${error}`), 'error')
+    }
+  }
 </script>
 
 {#if mode === 'welcome'}
@@ -292,6 +327,24 @@
               : $t('account.firstRun.importWallet'))}
         </Button>
 
+        <div class="relative py-2">
+          <div class="absolute inset-0 flex items-center">
+            <span class="w-full border-t"></span>
+          </div>
+          <div class="relative flex justify-center text-xs uppercase">
+            <span class="bg-background px-2 text-muted-foreground">Or</span>
+          </div>
+        </div>
+
+        <Button
+          class="w-full"
+          variant="outline"
+          on:click={() => showMnemonicRecovery = true}
+          disabled={isImportingAccount}
+        >
+          Recover from 12-word phrase
+        </Button>
+
         <button
           class="block w-full text-center text-xs font-semibold text-primary underline underline-offset-4 decoration-dotted px-4 py-2 rounded-full transition-colors hover:text-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           type="button"
@@ -314,6 +367,15 @@
     mode="create"
     onComplete={handleMnemonicComplete}
     onCancel={handleMnemonicCancel}
+  />
+{/if}
+
+<!-- Mnemonic Recovery Modal for Login -->
+{#if showMnemonicRecovery}
+  <MnemonicWizard
+    mode="import"
+    onComplete={handleMnemonicRecovery}
+    onCancel={() => showMnemonicRecovery = false}
   />
 {/if}
 
