@@ -4083,7 +4083,15 @@ async fn run_dht_node(
                     }
                     crate::webrtc_service::WebRTCEvent::TransferCompleted { peer_id, file_hash } => {
                         info!("✅ WebRTC transfer completed: {} from peer {}", file_hash, peer_id);
-                        // TODO: Emit DhtEvent::DownloadedFile with file metadata
+
+                        // Look up file metadata and emit DownloadedFile event
+                        let cache = file_metadata_cache.lock().await;
+                        if let Some(metadata) = cache.get(&file_hash) {
+                            let _ = event_tx.send(DhtEvent::DownloadedFile(metadata.clone())).await;
+                            info!("Emitted DownloadedFile event for {}", file_hash);
+                        } else {
+                            warn!("File metadata not found in cache for completed download: {}", file_hash);
+                        }
                     }
                     crate::webrtc_service::WebRTCEvent::TransferFailed { peer_id, file_hash, error } => {
                         error!("❌ WebRTC transfer failed: {} from peer {}: {}", file_hash, peer_id, error);
