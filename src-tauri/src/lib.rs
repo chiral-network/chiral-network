@@ -19,6 +19,7 @@ pub mod ftp_client;
 pub mod ed2k_client;
 pub mod http_download;
 pub mod bittorrent_handler;
+pub mod chiral_bittorrent_extension;
 
 // Required modules for multi_source_download
 pub mod dht;

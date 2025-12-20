@@ -247,9 +247,18 @@ impl PeerSelectionService {
         if let Some(metrics) = self.metrics.get_mut(peer_id) {
             metrics.record_successful_transfer(bytes, duration_ms);
             info!(
-                "Recorded successful transfer for peer {}: {} bytes in {}ms",
+                "✅ Recorded successful transfer for peer {}: {} bytes in {}ms (success_rate: {:.2})",
+                peer_id, bytes, duration_ms, metrics.success_rate
+            );
+        } else {
+            // Create new peer metrics if not exists
+            let mut new_metrics = PeerMetrics::new(peer_id.to_string(), "unknown".to_string());
+            new_metrics.record_successful_transfer(bytes, duration_ms);
+            info!(
+                "✅ Created new peer and recorded successful transfer for {}: {} bytes in {}ms",
                 peer_id, bytes, duration_ms
             );
+            self.metrics.insert(peer_id.to_string(), new_metrics);
         }
     }
 
@@ -257,7 +266,13 @@ impl PeerSelectionService {
     pub fn record_transfer_failure(&mut self, peer_id: &str, error: &str) {
         if let Some(metrics) = self.metrics.get_mut(peer_id) {
             metrics.record_failed_transfer(error);
-            warn!("Recorded failed transfer for peer {}: {}", peer_id, error);
+            warn!("❌ Recorded failed transfer for peer {} (success_rate: {:.2}): {}", peer_id, metrics.success_rate, error);
+        } else {
+            // Create new peer metrics if not exists
+            let mut new_metrics = PeerMetrics::new(peer_id.to_string(), "unknown".to_string());
+            new_metrics.record_failed_transfer(error);
+            warn!("❌ Created new peer and recorded failed transfer for {}: {}", peer_id, error);
+            self.metrics.insert(peer_id.to_string(), new_metrics);
         }
     }
 

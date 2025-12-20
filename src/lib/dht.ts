@@ -31,6 +31,8 @@ export interface DhtConfig {
   enableRelayServer?: boolean;
   enableUpnp?: boolean;
   relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
+  pureClientMode?: boolean; // Pure DHT client mode - cannot seed files or act as DHT server
+  forceServerMode?: boolean; // Force DHT server mode - act as DHT server even behind NAT (for testing/development)
 }
 
 export interface HttpSourceInfo {
@@ -197,6 +199,12 @@ export class DhtService {
         config.relayServerAlias.trim().length > 0
       ) {
         payload.relayServerAlias = config.relayServerAlias.trim();
+      }
+      if (typeof config?.pureClientMode === "boolean") {
+        payload.pureClientMode = config.pureClientMode;
+      }
+      if (typeof config?.forceServerMode === "boolean") {
+        payload.forceServerMode = config.forceServerMode;
       }
 
       const peerId = await invoke<string>("start_dht_node", payload);

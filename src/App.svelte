@@ -37,7 +37,7 @@ import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents
 import { walletService } from '$lib/wallet';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { exit } from '@tauri-apps/plugin-process';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -539,6 +539,8 @@ function handleFirstRunComplete() {
                 chunkSizeKb: currentSettings.chunkSize,
                 cacheSizeMb: currentSettings.cacheSize,
                 enableUpnp: currentSettings.enableUPnP,
+                pureClientMode: currentSettings.pureClientMode,
+                forceServerMode: currentSettings.forceServerMode,
               });
               
               console.log("✅ DHT node auto-started successfully with peer ID:", peerId);
@@ -584,6 +586,7 @@ function handleFirstRunComplete() {
         }
         
         // Start Geth blockchain node if auto-start is enabled
+        // Pure-client mode uses partial sync (limited blocks) instead of full sync
         if (currentSettings.autoStartGeth && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
           try {
             // Check if Geth is already running
@@ -624,8 +627,26 @@ function handleFirstRunComplete() {
               }
 
               try {
-                await invoke('start_geth_node', { dataDir: './bin/geth-data' });
-                
+                // Check if in client mode (forced OR NAT-based)
+                let isClientMode = currentSettings.pureClientMode;
+                if (!isClientMode) {
+                  // Check DHT reachability to detect NAT-based client mode
+                  try {
+                    const { dhtService } = await import('./lib/dht');
+                    const health = await dhtService.getHealth();
+                    if (health && health.reachability === 'private') {
+                      isClientMode = true;
+                    }
+                  } catch (err) {
+                    console.warn('Failed to check DHT reachability for client mode:', err);
+                  }
+                }
+
+                await invoke('start_geth_node', {
+                  dataDir: './bin/geth-data',
+                  pureClientMode: isClientMode  // Combined: forced OR NAT-based
+                });
+
                 // Update geth status
                 const { gethStatus } = await import('./lib/services/gethService');
                 gethStatus.set('running');
@@ -736,7 +757,10 @@ function handleFirstRunComplete() {
       // Ctrl/Cmd + Q - Quit application
       if ((event.ctrlKey || event.metaKey) && event.key === "q") {
         event.preventDefault();
-        exit(0);
+        const appWindow = getCurrentWebviewWindow();
+        appWindow.close().catch((error) => {
+          console.error("Failed to close app window:", error);
+        });
         return;
       }
 

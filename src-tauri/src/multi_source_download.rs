@@ -6,7 +6,7 @@ use crate::download_source::{
     FtpSourceInfo as DownloadFtpSourceInfo,
 };
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
-use crate::manager::ChunkManager;
+use crate::manager::{ChunkManager, FileManifest};
 use crate::transfer_events::{
     TransferEventBus, TransferStartedEvent, SourceConnectedEvent, SourceDisconnectedEvent,
     ChunkCompletedEvent, ChunkFailedEvent, TransferProgressEvent, TransferCompletedEvent,
@@ -116,7 +116,8 @@ pub type PeerAssignment = SourceAssignment;
 #[deprecated(note = "Use SourceStatus instead")]
 pub type PeerStatus = SourceStatus;
 
-fn normalized_sha256_hex(hash: &str) -> Option<String> {
+/// Normalize and validate SHA-256 hash format (64 hex characters, lowercase)
+pub fn normalized_sha256_hex(hash: &str) -> Option<String> {
     let trimmed = hash.trim();
     if trimmed.len() != 64 {
         return None;
@@ -129,7 +130,9 @@ fn normalized_sha256_hex(hash: &str) -> Option<String> {
     }
 }
 
-fn verify_chunk_integrity(chunk: &ChunkInfo, data: &[u8]) -> Result<(), (String, String)> {
+/// Verify chunk integrity by comparing SHA-256 hash of data with expected hash from ChunkInfo
+/// Returns Ok(()) if hash matches, Err((expected, actual)) if mismatch
+pub fn verify_chunk_integrity(chunk: &ChunkInfo, data: &[u8]) -> Result<(), (String, String)> {
     let expected = match normalized_sha256_hex(&chunk.hash) {
         Some(value) => value,
         None => return Ok(()),
@@ -343,6 +346,61 @@ impl MultiSourceDownloadService {
             Some(self.calculate_progress(download))
         } else {
             None
+        }
+    }
+
+    /// Verify chunk integrity and handle failure if hash mismatch
+    /// Returns Ok(()) if verification passes, Err(()) if it fails
+    pub async fn verify_chunk_for_download(
+        &self,
+        file_hash: &str,
+        chunk_id: u32,
+        data: &[u8],
+        source_id: &str,
+    ) -> Result<(), ()> {
+        let downloads = self.active_downloads.read().await;
+        if let Some(download) = downloads.get(file_hash) {
+            if let Some(chunk_info) = download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                if let Err((expected, actual)) = verify_chunk_integrity(chunk_info, data) {
+                    drop(downloads);
+                    
+                    // Mark chunk as failed
+                    {
+                        let mut downloads = self.active_downloads.write().await;
+                        if let Some(download) = downloads.get_mut(file_hash) {
+                            download.failed_chunks.push_back(chunk_id);
+                        }
+                    }
+                    
+                    // Emit ChunkFailed event
+                    let error_msg = format!(
+                        "Chunk hash mismatch: expected {}, got {}",
+                        expected, actual
+                    );
+                    let current_timestamp = current_timestamp_ms();
+                    
+                    self.transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
+                        transfer_id: file_hash.to_string(),
+                        chunk_id,
+                        source_id: source_id.to_string(),
+                        source_type: SourceType::P2p,
+                        failed_at: current_timestamp,
+                        error: error_msg,
+                        retry_count: 0,
+                        will_retry: true,
+                        next_retry_at: None,
+                    });
+                    
+                    return Err(());
+                }
+                Ok(())
+            } else {
+                // No ChunkInfo found, skip verification
+                Ok(())
+            }
+        } else {
+            // No active download found, skip verification
+            Ok(())
         }
     }
 
@@ -635,18 +693,58 @@ impl MultiSourceDownloadService {
         Ok(())
     }
 
+    /// Extract chunk hashes from a serialized FileManifest JSON
+    /// Returns a vector of chunk hashes indexed by chunk index
+    fn extract_chunk_hashes_from_manifest(manifest_json: &str) -> Result<Vec<String>, String> {
+        let manifest: FileManifest = serde_json::from_str(manifest_json)
+            .map_err(|e| format!("Failed to parse manifest JSON: {}", e))?;
+        
+        // Create a vector with enough capacity for all chunks
+        let mut hashes = Vec::new();
+        for chunk in &manifest.chunks {
+            // Ensure we have enough capacity
+            while hashes.len() <= chunk.index as usize {
+                hashes.push(String::new());
+            }
+            hashes[chunk.index as usize] = chunk.hash.clone();
+        }
+        
+        Ok(hashes)
+    }
+
     fn calculate_chunks(&self, metadata: &FileMetadata, chunk_size: usize) -> Vec<ChunkInfo> {
         let mut chunks = Vec::new();
         let total_size = metadata.file_size as usize;
         let mut offset = 0u64;
         let mut chunk_id = 0u32;
 
+        // Try to extract chunk hashes from manifest if available
+        let chunk_hashes = if let Some(manifest_json) = &metadata.manifest {
+            match Self::extract_chunk_hashes_from_manifest(manifest_json) {
+                Ok(hashes) => {
+                    debug!("Successfully extracted {} chunk hashes from manifest", hashes.len());
+                    hashes
+                }
+                Err(e) => {
+                    warn!("Failed to parse manifest for file {}: {}. Using placeholder hashes.", metadata.merkle_root, e);
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         while offset < metadata.file_size {
             let remaining = (metadata.file_size - offset) as usize;
             let size = remaining.min(chunk_size);
 
-            // Calculate chunk hash (simplified - in real implementation this would be pre-calculated)
-            let hash = format!("{}_{}", metadata.merkle_root, chunk_id);
+            // Use actual hash from manifest if available, otherwise fallback to placeholder
+            let hash = if chunk_id < chunk_hashes.len() as u32 && !chunk_hashes[chunk_id as usize].is_empty() {
+                chunk_hashes[chunk_id as usize].clone()
+            } else {
+                // Fallback to placeholder hash for backward compatibility
+                format!("{}_{}", metadata.merkle_root, chunk_id)
+            };
 
             chunks.push(ChunkInfo {
                 chunk_id,
@@ -2278,6 +2376,36 @@ impl MultiSourceDownloadService {
                                             if end <= ed2k_chunk_data.len() {
                                                 let chunk_data = ed2k_chunk_data[start..end].to_vec();
 
+                                                // Verify SHA-256 hash for the extracted chunk
+                                                if let Err((expected, actual)) = verify_chunk_integrity(chunk_info, &chunk_data) {
+                                                    warn!(
+                                                        "ED2K chunk {} hash verification failed: expected {}, got {}",
+                                                        chunk_info.chunk_id, expected, actual
+                                                    );
+                                                    download.failed_chunks.push_back(chunk_info.chunk_id);
+                                                    
+                                                    // Emit ChunkFailed event
+                                                    let error_msg = format!(
+                                                        "Chunk hash mismatch: expected {}, got {}",
+                                                        expected, actual
+                                                    );
+                                                    let current_timestamp = current_timestamp_ms();
+                                                    
+                                                    transfer_event_bus_clone.emit_chunk_failed(ChunkFailedEvent {
+                                                        transfer_id: file_hash_inner.clone(),
+                                                        chunk_id: chunk_info.chunk_id,
+                                                        source_id: server_url_clone.clone(),
+                                                        source_type: SourceType::P2p,
+                                                        failed_at: current_timestamp,
+                                                        error: error_msg,
+                                                        retry_count: 0,
+                                                        will_retry: true,
+                                                        next_retry_at: None,
+                                                    });
+                                                    
+                                                    continue; // Skip this chunk
+                                                }
+
                                                 let completed_chunk = CompletedChunk {
                                                     chunk_id: chunk_info.chunk_id,
                                                     data: chunk_data.clone(),
@@ -2292,7 +2420,7 @@ impl MultiSourceDownloadService {
                                                 extracted_chunks.push((chunk_info.clone(), chunk_data));
                                                 
                                                 info!(
-                                                    "Ed2k chunk {} extracted from ed2k chunk {} (offset {})",
+                                                    "Ed2k chunk {} extracted and verified from ed2k chunk {} (offset {})",
                                                     chunk_info.chunk_id, ed2k_chunk_id, offset_within_ed2k
                                                 );
                                             } else {

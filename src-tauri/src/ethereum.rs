@@ -176,7 +176,7 @@ impl GethProcess {
     }
 
 
-    pub fn start(&mut self, data_dir: &str, miner_address: Option<&str>) -> Result<(), String> {
+    pub fn start(&mut self, data_dir: &str, miner_address: Option<&str>, pure_client_mode: bool) -> Result<(), String> {
         // Check if we already have a tracked child process
         if self.child.is_some() {
             return Ok(()); // Already running, no need to start again
@@ -373,15 +373,28 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg("snap")
+            .arg("snap") // Always use snap mode (light mode doesn't work for private networks)
+            // Sync performance optimizations
+            .arg("--cache")
+            .arg("2048") // Increase cache to 2GB for faster sync (default is 1024)
+            .arg("--cache.database")
+            .arg("60") // 60% of cache for database
+            .arg("--cache.trie")
+            .arg("30") // 30% for trie cache
+            .arg("--cache.gc")
+            .arg("10") // 10% for garbage collection
             .arg("--maxpeers")
-            .arg("50")
+            .arg("100") // Increase peer connections for faster sync (was 50)
             // P2P discovery settings
             .arg("--port")
             .arg("30303") // P2P listening port
             // Network address configuration
             .arg("--nat")
             .arg("any")
+            // Snapshot sync acceleration
+            .arg("--snapshot")
+            .arg("--state.scheme")
+            .arg("hash") // Use hash-based state scheme for better performance
             // Enable transaction pool gossip to propagate transactions across network
             .arg("--txpool.globalslots")
             .arg("16384") // Increase tx pool size for network-wide transactions
@@ -402,7 +415,10 @@ impl GethProcess {
             .arg("0")
             // Recommend transactions for mining (include pending txs)
             .arg("--miner.recommit")
-            .arg("500ms"); // Re-create the mining block every 500ms to include new transactions faster
+            .arg("500ms") // Re-create the mining block every 500ms to include new transactions faster
+            // Limit transaction lookup to reduce storage (partial blockchain sync)
+            .arg("--txlookuplimit")
+            .arg(if pure_client_mode { "100" } else { "10000" }); // Pure-client: 100 blocks, Normal: 10000 blocks
 
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
@@ -548,8 +564,8 @@ pub async fn start_geth_with_health_check(
     }
     
     // Start Geth (it will use the fallback bootstrap string if health check found issues)
-    geth.start(data_dir, miner_address)?;
-    
+    geth.start(data_dir, miner_address, false)?; // Use normal snap sync mode
+
     Ok(health_report)
 }
 
@@ -862,7 +878,7 @@ pub async fn get_chain_id() -> Result<u64, String> {
 pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), String> {
     // First, ensure geth is ready to accept RPC calls
     let mut attempts = 0;
-    let max_attempts = 10; // 10 seconds max wait
+    let max_attempts = 60; // 60 seconds max wait (Geth may need time to rewind blockchain)
     loop {
         // Check if geth is responding to RPC calls
         if let Ok(response) = HTTP_CLIENT
@@ -3186,18 +3202,49 @@ pub async fn get_transaction_history(
                     .and_then(|g| g.as_str())
                     .map(|s| s.to_string());
 
-                transactions.push(TransactionHistoryItem {
-                    hash: tx_hash,
-                    from: from.clone(),
-                    to,
-                    value,
-                    block_number: block_num,
-                    timestamp,
-                    status,
-                    tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
-                    gas_used,
-                    gas_price,
-                });
+                // When sending to yourself, create both sent and received transactions
+                if is_from_us && is_to_us {
+                    // Create sent transaction
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash.clone(),
+                        from: from.clone(),
+                        to: to.clone(),
+                        value: value.clone(),
+                        block_number: block_num,
+                        timestamp,
+                        status: status.clone(),
+                        tx_type: "sent".to_string(),
+                        gas_used: gas_used.clone(),
+                        gas_price: gas_price.clone(),
+                    });
+                    // Create received transaction
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash,
+                        from: from.clone(),
+                        to,
+                        value,
+                        block_number: block_num,
+                        timestamp,
+                        status,
+                        tx_type: "received".to_string(),
+                        gas_used,
+                        gas_price,
+                    });
+                } else {
+                    // Normal transaction to/from someone else
+                    transactions.push(TransactionHistoryItem {
+                        hash: tx_hash,
+                        from: from.clone(),
+                        to,
+                        value,
+                        block_number: block_num,
+                        timestamp,
+                        status,
+                        tx_type: if is_from_us { "sent" } else { "received" }.to_string(),
+                        gas_used,
+                        gas_price,
+                    });
+                }
             }
         }
     }

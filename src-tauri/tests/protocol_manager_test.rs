@@ -214,11 +214,11 @@ async fn test_protocol_manager_seed_and_stop_all() {
     // Create a mock handler that supports seeding
     let mock_bt = MockProtocolHandler::new("bittorrent", true);
     let stop_called_flag = mock_bt.stop_called.clone();
-    manager.register(Box::new(mock_bt));
+    manager.register(Arc::new(mock_bt));
 
     // Create a mock handler that does NOT support seeding
     let mock_http = MockProtocolHandler::new("http", false);
-    manager.register(Box::new(mock_http));
+    manager.register(Arc::new(mock_http));
 
     // Create a temp file
     let dir = tempdir().unwrap();

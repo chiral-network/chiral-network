@@ -80,6 +80,10 @@
   let searchQuery = "";
   let debouncedSearchQuery = ""; // Debounced version for filtering
   let isLoading = true;
+  
+  // Cache peer scores to prevent fluctuations during refreshes
+  const peerScoreCache = new Map<string, { score: number; trustLevel: TrustLevel; timestamp: number }>();
+  const SCORE_CACHE_TTL = 5000; // 5 seconds
   let showAnalytics = persistedToggles.showAnalytics;
   let showRelayLeaderboard = persistedToggles.showRelayLeaderboard;
   let currentPage = 1;
@@ -187,6 +191,7 @@
 
   // Map backend metrics to UI PeerReputation[] and analytics
   async function loadPeersFromBackend() {
+    console.log('🔄 loadPeersFromBackend() called');
     try {
       // Use the new method that gets metrics for ALL connected DHT peers
       // This ensures we show all peers, even those without transfer history
@@ -194,64 +199,58 @@
         await PeerSelectionService.getConnectedPeerMetrics();
       console.log(`📊 Loading ${metrics.length} peers from backend`);
 
+      // Load backend metrics into ReputationStore for persistence and frontend tracking
+      const repStore = (await import('$lib/reputationStore')).default.getInstance();
+      repStore.loadFromBackendMetrics(metrics.map(m => ({
+        peer_id: m.peer_id,
+        successful_transfers: m.successful_transfers,
+        failed_transfers: m.failed_transfers,
+        latency_ms: m.latency_ms,
+        last_seen: m.last_seen
+      })));
+
       // Fetch reputation verdicts sequentially with delays to prevent DHT overload
       // Loading all peers at once causes DHT disconnections
       const mappedPeers: PeerReputation[] = [];
 
       for (let i = 0; i < metrics.length; i++) {
         const m = metrics[i];
-        // let score = PeerSelectionService.compositeScoreFromMetrics(m);
-        // let totalInteractions = Math.max(1, m.transfer_count);
-        // let successfulInteractions = Math.min(totalInteractions, m.successful_transfers);
-
-        console.log(
-          `📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}`,
-        );
-
-        /*
-        // Try to get reputation verdicts to augment interaction count AND score
-        try {
-          console.log(`🔍 Fetching verdicts for peer: ${m.peer_id}`);
+        
+        // Check cache first to prevent score fluctuations
+        const now = Date.now();
+        const cached = peerScoreCache.get(m.peer_id);
+        let score: number;
+        let trustLevel: TrustLevel;
+        
+        if (cached && (now - cached.timestamp) < SCORE_CACHE_TTL) {
+          // Use cached score if recent (within 5 seconds)
+          score = cached.score;
+          trustLevel = cached.trustLevel;
+        } else {
+          // Recalculate score
+          score = PeerSelectionService.compositeScoreFromMetrics(m);
           
-          // Add timeout to prevent hanging queries
-          const timeoutPromise = new Promise<any>((_, reject) => 
-            setTimeout(() => reject(new Error('Timeout')), 3000)
-          );
+          // Determine trust level based on score
+          trustLevel = score >= 0.75 ? TrustLevel.Trusted :  // 2+ successful transfers
+                      score >= 0.6 ? TrustLevel.High :
+                      score >= 0.4 ? TrustLevel.Medium :
+                      score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
           
-          const verdictsPromise = invoke('get_reputation_verdicts', { peerId: m.peer_id });
-          const verdicts = await Promise.race([verdictsPromise, timeoutPromise]);
+          console.log(`🎯 Peer ${m.peer_id.substring(0,15)}... score: ${score.toFixed(3)} (${(score*5).toFixed(1)}/5.0) -> ${trustLevel}`);
           
-          console.log(`🔍 Got verdicts response:`, verdicts);
-          
-          if (Array.isArray(verdicts) && verdicts.length > 0) {
-            // Add verdict count to interactions
-            const verdictCount = verdicts.length;
-            const goodVerdicts = verdicts.filter((v: any) => v.outcome === 'good').length;
-            const badVerdicts = verdicts.filter((v: any) => v.outcome === 'bad').length;
-            const disputedVerdicts = verdicts.filter((v: any) => v.outcome === 'disputed').length;
-            
-            totalInteractions = Math.max(totalInteractions, verdictCount);
-            successfulInteractions = Math.max(successfulInteractions, goodVerdicts);
-            
-            // Recalculate score based on verdicts (good=1.0, disputed=0.5, bad=0.0)
-            if (verdictCount > 0) {
-              const verdictScore = (goodVerdicts * 1.0 + disputedVerdicts * 0.5 + badVerdicts * 0.0) / verdictCount;
-              // Blend verdict score with peer metrics score (70% verdicts, 30% metrics)
-              score = verdictScore * 0.7 + score * 0.3;
-            }
-            
-            console.log(`✅ Peer ${m.peer_id.substring(0, 20)}...: ${verdictCount} verdicts (${goodVerdicts} good, ${badVerdicts} bad, ${disputedVerdicts} disputed) -> score: ${score.toFixed(2)}, interactions: ${successfulInteractions}/${totalInteractions}`);
-          } else {
-            console.log(`❌ No verdicts found for peer ${m.peer_id.substring(0, 20)}...`);
-          }
-        } catch (err) {
-          console.error(`❌ Failed to fetch verdicts for ${m.peer_id}:`, err);
+          // Cache the score
+          peerScoreCache.set(m.peer_id, { score, trustLevel, timestamp: now });
         }
         
-        const trustLevel = score >= 0.75 ? TrustLevel.Trusted :  // 2+ successful transfers
-                          score >= 0.6 ? TrustLevel.High :
-                          score >= 0.4 ? TrustLevel.Medium :
-                          score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
+        let totalInteractions = Math.max(1, m.transfer_count);
+        let successfulInteractions = Math.min(totalInteractions, m.successful_transfers);
+
+        console.log(
+          `📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}, ` +
+          `success_rate: ${m.success_rate.toFixed(2)}, reliability: ${m.reliability_score.toFixed(2)}, ` +
+          `composite: ${score.toFixed(2)}, stars: ${(score * 5).toFixed(1)}/5.0, ` +
+          `cached: ${cached && (now - cached.timestamp) < SCORE_CACHE_TTL ? 'yes' : 'no'}`
+        );
 
         mappedPeers.push({
           peerId: m.peer_id,
@@ -273,47 +272,117 @@
         
         // No delay needed since we're not querying DHT anymore
       }
-      */
 
-        // Build analytics
-        const totalPeers = mappedPeers.length;
-        const trustedPeers = mappedPeers.filter(
-          (p) => p.trustLevel === TrustLevel.Trusted,
-        ).length;
-        const averageScore =
-          totalPeers > 0
-            ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers
+      // Build analytics
+      const totalPeers = mappedPeers.length;
+      const trustedPeers = mappedPeers.filter(
+        (p) => p.trustLevel === TrustLevel.Trusted,
+      ).length;
+      const averageScore =
+        totalPeers > 0
+          ? mappedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers
+          : 0;
+      const topPerformers = [...mappedPeers]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10);
+      // Build trust level distribution deterministically from the known options
+      const trustLevelDistribution = trustLevelOptions.reduce(
+        (acc, level) => {
+          acc[level] = mappedPeers.filter(
+            (p) => p.trustLevel === level,
+          ).length;
+          return acc;
+        },
+        {
+          [TrustLevel.Trusted]: 0,
+          [TrustLevel.High]: 0,
+          [TrustLevel.Medium]: 0,
+          [TrustLevel.Low]: 0,
+          [TrustLevel.Unknown]: 0,
+        } as Record<TrustLevel, number>,
+      );
+
+      analytics = {
+        totalPeers,
+        trustedPeers,
+        averageScore,
+        topPerformers,
+        recentEvents: [],
+        trustLevelDistribution,
+      };
+
+      peers = mappedPeers;
+
+      // If no peers from backend, try to load from ReputationStore
+      if (peers.length === 0) {
+        console.log('📊 No peers from backend, checking ReputationStore...');
+        const repStore = (await import('$lib/reputationStore')).default.getInstance();
+        const allStoredPeers = repStore.getAllPeers();
+        
+        const storedPeers: PeerReputation[] = [];
+        for (const [peerId, rep] of allStoredPeers) {
+          const score = repStore.composite(peerId);
+          const totalInteractions = Math.max(1, rep.alpha + rep.beta);
+          const successfulInteractions = rep.alpha;
+          
+          const trustLevel = score >= 0.75 ? TrustLevel.Trusted :
+                            score >= 0.6 ? TrustLevel.High :
+                            score >= 0.4 ? TrustLevel.Medium :
+                            score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
+          
+          storedPeers.push({
+            peerId,
+            trustLevel,
+            score,
+            totalInteractions,
+            successfulInteractions,
+            lastSeen: new Date(rep.lastSeenMs),
+            reputationHistory: [],
+            metrics: {
+              averageLatency: rep.rttMsEMA,
+              bandwidth: 0,
+              uptime: repStore.freshScore(peerId) * 100,
+              storageOffered: 0,
+              filesShared: 0,
+              encryptionSupported: false
+            }
+          });
+        }
+        
+        if (storedPeers.length > 0) {
+          console.log(`📊 Loaded ${storedPeers.length} peers from ReputationStore`);
+          peers = storedPeers;
+          
+          // Rebuild analytics
+          const totalPeers = storedPeers.length;
+          const trustedPeers = storedPeers.filter(p => p.trustLevel === TrustLevel.Trusted).length;
+          const averageScore = totalPeers > 0
+            ? storedPeers.reduce((sum, p) => sum + p.score, 0) / totalPeers
             : 0;
-        const topPerformers = [...mappedPeers]
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 10);
-        // Build trust level distribution deterministically from the known options
-        const trustLevelDistribution = trustLevelOptions.reduce(
-          (acc, level) => {
-            acc[level] = mappedPeers.filter(
-              (p) => p.trustLevel === level,
-            ).length;
-            return acc;
-          },
-          {
-            [TrustLevel.Trusted]: 0,
-            [TrustLevel.High]: 0,
-            [TrustLevel.Medium]: 0,
-            [TrustLevel.Low]: 0,
-            [TrustLevel.Unknown]: 0,
-          } as Record<TrustLevel, number>,
-        );
-
-        analytics = {
-          totalPeers,
-          trustedPeers,
-          averageScore,
-          topPerformers,
-          recentEvents: [],
-          trustLevelDistribution,
-        };
-
-        peers = mappedPeers;
+          const topPerformers = [...storedPeers].sort((a, b) => b.score - a.score).slice(0, 10);
+          const trustLevelDistribution = trustLevelOptions.reduce(
+            (acc, level) => {
+              acc[level] = storedPeers.filter(p => p.trustLevel === level).length;
+              return acc;
+            },
+            {
+              [TrustLevel.Trusted]: 0,
+              [TrustLevel.High]: 0,
+              [TrustLevel.Medium]: 0,
+              [TrustLevel.Low]: 0,
+              [TrustLevel.Unknown]: 0,
+            } as Record<TrustLevel, number>,
+          );
+          
+          analytics = {
+            totalPeers,
+            trustedPeers,
+            averageScore,
+            topPerformers,
+            recentEvents: [],
+            trustLevelDistribution,
+          };
+        }
       }
     } catch (e) {
       console.error("Failed to load peer metrics", e);

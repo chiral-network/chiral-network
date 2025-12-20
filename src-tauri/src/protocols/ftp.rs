@@ -20,6 +20,7 @@ use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use suppaftp::{FtpError, FtpStream};
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -36,16 +37,21 @@ fn get_local_ip() -> Option<String> {
     Some(local_addr.ip().to_string())
 }
 
+/// Shared holder for the event bus, allowing it to be set after handler creation
+pub type EventBusHolder = Arc<std::sync::RwLock<Option<Arc<TransferEventBus>>>>;
+
 /// FTP protocol handler implementing the enhanced ProtocolHandler trait
 pub struct FtpProtocolHandler {
     /// Underlying FTP downloader (wrapped in Arc for sharing across async tasks)
     downloader: Arc<FtpDownloader>,
+    /// FTP server for seeding files
+    ftp_server: Option<Arc<crate::ftp_server::FtpServer>>,
     /// Track active downloads
     active_downloads: Arc<Mutex<HashMap<String, FtpDownloadState>>>,
     /// Track download progress
     download_progress: Arc<Mutex<HashMap<String, DownloadProgress>>>,
-    /// Optional event bus for emitting transfer events to frontend
-    event_bus: Option<Arc<TransferEventBus>>,
+    /// Optional event bus for emitting transfer events to frontend (wrapped in RwLock for late initialization)
+    event_bus: EventBusHolder,
 }
 
 /// Internal state for an FTP download
@@ -63,13 +69,39 @@ struct FtpDownloadState {
 }
 
 impl FtpProtocolHandler {
-    /// Creates a new FTP protocol handler with default config (no event bus)
+    /// Creates a new FTP protocol handler with default config (no event bus, no server)
     pub fn new() -> Self {
         Self {
             downloader: Arc::new(FtpDownloader::new()),
+            ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: None,
+            event_bus: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    /// Creates a handler with FTP server support and returns the event bus holder for later initialization
+    pub fn with_ftp_server(ftp_server: Arc<crate::ftp_server::FtpServer>) -> (Self, EventBusHolder) {
+        let event_bus_holder = Arc::new(std::sync::RwLock::new(None));
+        let handler = Self {
+            downloader: Arc::new(FtpDownloader::new()),
+            ftp_server: Some(ftp_server),
+            active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            download_progress: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: event_bus_holder.clone(),
+        };
+        (handler, event_bus_holder)
+    }
+
+    /// Set the FTP server for seeding support
+    pub fn set_ftp_server(&mut self, ftp_server: Arc<crate::ftp_server::FtpServer>) {
+        self.ftp_server = Some(ftp_server);
+    }
+
+    /// Set the event bus for UI progress updates (call this after AppHandle is available)
+    pub fn set_event_bus_from_holder(holder: &EventBusHolder, app_handle: AppHandle) {
+        if let Ok(mut guard) = holder.write() {
+            *guard = Some(Arc::new(TransferEventBus::new(app_handle)));
         }
     }
 
@@ -77,9 +109,21 @@ impl FtpProtocolHandler {
     pub fn with_config(config: FtpDownloadConfig) -> Self {
         Self {
             downloader: Arc::new(FtpDownloader::with_config(config)),
+            ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: None,
+            event_bus: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    /// Creates a handler with FTP server and event bus for UI integration
+    pub fn with_ftp_server_and_event_bus(ftp_server: Arc<crate::ftp_server::FtpServer>, app_handle: AppHandle) -> Self {
+        Self {
+            downloader: Arc::new(FtpDownloader::new()),
+            ftp_server: Some(ftp_server),
+            active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            download_progress: Arc::new(Mutex::new(HashMap::new())),
+            event_bus: Arc::new(std::sync::RwLock::new(Some(Arc::new(TransferEventBus::new(app_handle))))),
         }
     }
 
@@ -87,9 +131,10 @@ impl FtpProtocolHandler {
     pub fn with_event_bus(app_handle: AppHandle) -> Self {
         Self {
             downloader: Arc::new(FtpDownloader::new()),
+            ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
+            event_bus: Arc::new(std::sync::RwLock::new(Some(Arc::new(TransferEventBus::new(app_handle))))),
         }
     }
 
@@ -97,10 +142,16 @@ impl FtpProtocolHandler {
     pub fn with_config_and_event_bus(config: FtpDownloadConfig, app_handle: AppHandle) -> Self {
         Self {
             downloader: Arc::new(FtpDownloader::with_config(config)),
+            ftp_server: None,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
-            event_bus: Some(Arc::new(TransferEventBus::new(app_handle))),
+            event_bus: Arc::new(std::sync::RwLock::new(Some(Arc::new(TransferEventBus::new(app_handle))))),
         }
+    }
+    
+    /// Helper to get the event bus for use in async contexts
+    fn get_event_bus(&self) -> Option<Arc<TransferEventBus>> {
+        self.event_bus.read().ok().and_then(|guard| guard.clone())
     }
 
     /// Get current timestamp
@@ -130,6 +181,92 @@ impl FtpProtocolHandler {
             .and_then(|segments| segments.last())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "unknown_file".to_string())
+    }
+
+    /// Download file with progress updates
+    async fn download_with_progress(
+        downloader: &FtpDownloader,
+        stream: &mut FtpStream,
+        remote_path: &str,
+        file_size: u64,
+        event_bus: &Option<Arc<TransferEventBus>>,
+        transfer_id: &str,
+        start_time: Instant,
+    ) -> Result<(Vec<u8>, u64, f64), String> {
+        use crate::transfer_events::TransferProgressEvent;
+
+        let mut data = Vec::new();
+        let mut downloaded_bytes = 0u64;
+        let mut last_progress_update = start_time.elapsed().as_millis() as u64;
+
+        // Use a streaming approach to download with progress
+        let result = stream.retr(remote_path, |reader| {
+            let mut temp_buf = vec![0u8; 8192]; // 8KB chunks for progress updates
+
+            loop {
+                match reader.read(&mut temp_buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        data.extend_from_slice(&temp_buf[..n]);
+                        downloaded_bytes += n as u64;
+
+                        // Send progress update every 100ms or when significant progress is made
+                        let now = start_time.elapsed().as_millis() as u64;
+                        if now - last_progress_update > 100 || downloaded_bytes == file_size {
+                            if let Some(ref bus) = event_bus {
+                                let progress_pct = if file_size > 0 {
+                                    (downloaded_bytes as f64 / file_size as f64) * 100.0
+                                } else {
+                                    0.0
+                                };
+
+                                let elapsed_secs = start_time.elapsed().as_secs();
+                                let download_speed = if elapsed_secs > 0 {
+                                    downloaded_bytes as f64 / elapsed_secs as f64
+                                } else {
+                                    0.0
+                                };
+
+                                let eta_seconds = if download_speed > 0.0 && file_size > downloaded_bytes {
+                                    Some(((file_size - downloaded_bytes) as f64 / download_speed) as u32)
+                                } else {
+                                    None
+                                };
+
+                                let _ = bus.emit_progress(TransferProgressEvent {
+                                    transfer_id: transfer_id.to_string(),
+                                    downloaded_bytes,
+                                    total_bytes: file_size,
+                                    completed_chunks: 0,
+                                    total_chunks: 1,
+                                    progress_percentage: progress_pct,
+                                    download_speed_bps: download_speed,
+                                    upload_speed_bps: 0.0,
+                                    eta_seconds,
+                                    active_sources: 1,
+                                    timestamp: current_timestamp_ms(),
+                                });
+                            }
+                            last_progress_update = now;
+                        }
+                    }
+                    Err(e) => return Err(FtpError::ConnectionError(e)),
+                }
+            }
+
+            Ok(())
+        });
+
+        result.map_err(|e| format!("RETR command failed: {}", e))?;
+
+        let download_duration_secs = start_time.elapsed().as_secs();
+        let download_speed = if download_duration_secs > 0 {
+            data.len() as f64 / download_duration_secs as f64
+        } else {
+            data.len() as f64
+        };
+
+        Ok((data, download_duration_secs, download_speed))
     }
 
     /// Parse FTP URL and extract credentials if present
@@ -228,7 +365,7 @@ impl ProtocolHandler for FtpProtocolHandler {
         let id = download_id.clone();
         let output_path = options.output_path.clone();
         let creds = credentials.clone();
-        let event_bus = self.event_bus.clone();
+        let event_bus = self.get_event_bus();
         let task_source_id = source_id.clone();
         let task_file_name = file_name.clone();
 
@@ -322,15 +459,19 @@ impl ProtocolHandler for FtpProtocolHandler {
                 });
             }
 
-            // Download the file
-            match downloader.download_full(&mut stream, remote_path).await {
-                Ok(data) => {
-                    let download_duration_secs = start_time.elapsed().as_secs();
-                    let download_speed = if download_duration_secs > 0 {
-                        data.len() as f64 / download_duration_secs as f64
-                    } else {
-                        data.len() as f64
-                    };
+            // Download the file with progress updates
+            let download_result = Self::download_with_progress(
+                &downloader,
+                &mut stream,
+                remote_path,
+                file_size,
+                &event_bus,
+                &id,
+                start_time,
+            ).await;
+
+            match download_result {
+                Ok((data, download_duration_secs, download_speed)) => {
 
                     // Write to file
                     if let Err(e) = tokio::fs::write(&output_path, &data).await {
@@ -459,33 +600,61 @@ impl ProtocolHandler for FtpProtocolHandler {
         file_path: PathBuf,
         _options: SeedOptions,
     ) -> Result<SeedingInfo, ProtocolError> {
-        info!("FTP: Seeding not directly supported - would need FTP server");
+        info!("FTP: Starting seed for file: {}", file_path.display());
 
-        // FTP "seeding" would mean uploading to an FTP server
-        // This requires server configuration which we don't have here
-        warn!("FTP seeding requires an FTP server to be configured. The generated URL will only work if you have an FTP server running.");
-
-        // Try to get the local IP address for more useful URLs
-        let host = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-        
         let file_name = file_path.file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
+            .ok_or_else(|| ProtocolError::InvalidIdentifier("Invalid file path".to_string()))?;
 
-        // Return a URL that would work if an FTP server is running on the local machine
-        // Note: For this to work, the user must have an FTP server running and serving files from the appropriate directory
-        Ok(SeedingInfo {
-            identifier: format!("ftp://{}/{}", host, file_name),
-            file_path,
-            protocol: "ftp".to_string(),
-            active_peers: 0,
-            bytes_uploaded: 0,
-        })
+        if let Some(ftp_server) = &self.ftp_server {
+            // Start FTP server if not running
+            if !ftp_server.is_running().await {
+                ftp_server.start().await
+                    .map_err(|e| ProtocolError::ProtocolSpecific(format!("Failed to start FTP server: {}", e)))?;
+            }
+
+            // Add file to FTP server
+            let ftp_url = ftp_server.add_file(&file_path, &file_name).await
+                .map_err(|e| ProtocolError::ProtocolSpecific(format!("Failed to add file to FTP server: {}", e)))?;
+
+            info!("FTP: File seeded at: {}", ftp_url);
+
+            Ok(SeedingInfo {
+                identifier: ftp_url.clone(),
+                file_path: file_path.clone(),
+                protocol: "ftp".to_string(),
+                active_peers: 0, // FTP doesn't track peers like P2P protocols
+                bytes_uploaded: 0, // Could track this in the future
+            })
+        } else {
+            // Fallback: Return a placeholder URL if no FTP server is configured
+            warn!("FTP seeding requires an FTP server to be configured. The generated URL will only work if you have an FTP server running.");
+            let host = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+
+            Ok(SeedingInfo {
+                identifier: format!("ftp://{}/{}", host, file_name),
+                file_path,
+                protocol: "ftp".to_string(),
+                active_peers: 0,
+                bytes_uploaded: 0,
+            })
+        }
     }
 
     async fn stop_seeding(&self, identifier: &str) -> Result<(), ProtocolError> {
-        warn!("FTP: stop_seeding - {}", identifier);
-        // Would delete file from FTP server
+        info!("FTP: Stopping seed for: {}", identifier);
+
+        if let Some(ftp_server) = &self.ftp_server {
+            // Extract filename from FTP URL
+            if let Ok(url) = url::Url::parse(identifier) {
+                if let Some(file_name) = url.path_segments().and_then(|segments| segments.last()) {
+                    ftp_server.remove_file(file_name).await
+                        .map_err(|e| ProtocolError::ProtocolSpecific(format!("Failed to remove file from FTP server: {}", e)))?;
+                    info!("FTP: Removed file from FTP server: {}", file_name);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -508,12 +677,12 @@ impl ProtocolHandler for FtpProtocolHandler {
             };
 
             // Emit paused event
-            if let Some(ref bus) = self.event_bus {
+            if let Some(ref bus) = self.get_event_bus() {
                 bus.emit_paused(TransferPausedEvent {
                     transfer_id: identifier.to_string(),
                     paused_at: Self::now_ms(),
                     reason: PauseReason::UserRequested,
-                    can_resume: true,
+                    can_resume: false,  // Resume not implemented
                     downloaded_bytes,
                     total_bytes: state.file_size,
                 });
@@ -564,7 +733,7 @@ impl ProtocolHandler for FtpProtocolHandler {
             };
 
             // Emit canceled event
-            if let Some(ref bus) = self.event_bus {
+            if let Some(ref bus) = self.get_event_bus() {
                 bus.emit_canceled(TransferCanceledEvent {
                     transfer_id: identifier.to_string(),
                     canceled_at: Self::now_ms(),
@@ -598,8 +767,8 @@ impl ProtocolHandler for FtpProtocolHandler {
 
     fn capabilities(&self) -> ProtocolCapabilities {
         ProtocolCapabilities {
-            supports_seeding: true,  // Via upload to FTP server
-            supports_pause_resume: true,  // Via REST command
+            supports_seeding: self.ftp_server.is_some(),  // Seeding supported when FTP server is available
+            supports_pause_resume: false,  // Pause works, but resume not fully implemented
             supports_multi_source: false,
             supports_encryption: true,  // FTPS
             supports_dht: false,

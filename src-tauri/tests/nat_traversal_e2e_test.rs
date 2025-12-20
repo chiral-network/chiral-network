@@ -65,6 +65,7 @@ async fn test_autonat_detection() {
         None,                         // blockstore_db_path
         None,
         None,
+        false,                        // pure_client_mode
     )
     .await;
 
@@ -116,6 +117,8 @@ async fn test_dht_peer_discovery() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service1");
@@ -159,6 +162,8 @@ async fn test_dht_peer_discovery() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service2");
@@ -214,6 +219,8 @@ async fn test_file_publish_and_search() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service1");
@@ -249,6 +256,8 @@ async fn test_file_publish_and_search() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service2");
@@ -310,6 +319,8 @@ async fn test_dcutr_enabled() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service");
@@ -366,6 +377,8 @@ async fn test_multiple_autonat_servers() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service");
@@ -405,6 +418,8 @@ async fn test_reachability_history_tracking() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service");
@@ -453,6 +468,8 @@ async fn test_connection_metrics_tracking() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service1");
@@ -488,6 +505,8 @@ async fn test_connection_metrics_tracking() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service2");
@@ -543,6 +562,8 @@ async fn test_nat_resilience_private_to_public() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create public peer");
@@ -587,6 +608,8 @@ async fn test_nat_resilience_private_to_public() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await
     .expect("Failed to create private peer");
@@ -653,6 +676,8 @@ async fn test_nat_resilience_connection_fallback() {
         None,       // blockstore_db_path
         None,
         None,
+        false,      // pure_client_mode
+        false,      // force_server_mode
     )
     .await;
 
