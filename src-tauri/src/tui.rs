@@ -758,8 +758,23 @@ async fn execute_command(command: &str, context: &TuiContext) -> Result<String, 
     let args = &parts[1..];
 
     match cmd {
+        "downloads" => {
+            if let Some(ft_service) = &context.file_transfer_service {
+                let metrics = ft_service.download_metrics_snapshot().await;
+                let mut result = format!("Download Metrics:\n  Success: {}\n  Failures: {}\n  Retries: {}\n\nRecent Attempts: {}\n",
+                    metrics.total_success, metrics.total_failures, metrics.total_retries, metrics.recent_attempts.len());
+
+                for attempt in metrics.recent_attempts.iter().take(5) {
+                    result.push_str(&format!("  - {} [{:?}] attempt {}/{}\n",
+                        &attempt.file_hash[..16], attempt.status, attempt.attempt, attempt.max_attempts));
+                }
+                Ok(result)
+            } else {
+                Err("File transfer service not available".to_string())
+            }
+        }
         "help" | "h" => {
-            Ok("Commands: add <path>, download <hash>, status, peers, dht status, mining status".to_string())
+            Ok("Commands:\n  add <path> - Add file (hash saved to /tmp/chiral_last_hash.txt)\n  download <hash|last> - Download by hash or 'last' for last added\n  downloads - Show download metrics and recent attempts\n  status - Node status\n  peers - Connected peers\n  dht status - DHT status\n  mining status - Mining status".to_string())
         }
         "status" | "s" => {
             let peers = context.dht_service.get_connected_peers().await;
@@ -828,16 +843,44 @@ async fn execute_command(command: &str, context: &TuiContext) -> Result<String, 
             context.dht_service.publish_file(metadata, None).await
                 .map_err(|e| format!("Failed to publish: {}", e))?;
 
-            Ok(format!("Added: {}\nHash: {}", file_name, hash))
+            // Save hash to file for easy copying
+            let hash_file = "/tmp/chiral_last_hash.txt";
+            std::fs::write(hash_file, &hash)
+                .map_err(|e| format!("Warning: couldn't save hash to {}: {}", hash_file, e))?;
+
+            Ok(format!("Added: {}\nHash: {}\nSaved to: {}", file_name, hash, hash_file))
         }
         "download" | "dl" => {
             if args.is_empty() {
-                return Err("Usage: download <file_hash>".to_string());
+                return Err("Usage: download <file_hash> (or 'last' for last added hash)".to_string());
             }
-            let hash = args[0];
-            context.dht_service.get_file(hash.to_string()).await
-                .map_err(|e| format!("Search failed: {}", e))?;
-            Ok(format!("Search initiated for: {}", hash))
+            let hash = if args[0] == "last" {
+                // Read from saved hash file
+                std::fs::read_to_string("/tmp/chiral_last_hash.txt")
+                    .map_err(|_| "No saved hash found. Add a file first.".to_string())?
+            } else {
+                args[0].to_string()
+            };
+
+            // Initiate DHT search for peers
+            context.dht_service.get_file(hash.clone()).await
+                .map_err(|e| format!("DHT search failed: {}", e))?;
+
+            // Also trigger actual download through file transfer service
+            if let Some(ft_service) = &context.file_transfer_service {
+                let output_path = format!("/tmp/download_{}", hash);
+                ft_service.download_file_with_account(
+                    hash.clone(),
+                    output_path.clone(),
+                    None,
+                    None
+                ).await
+                    .map_err(|e| format!("Download initiation failed: {}", e))?;
+
+                Ok(format!("Download started for: {}\nOutput: {}\nCheck Downloads panel for progress", hash, output_path))
+            } else {
+                Ok(format!("DHT search initiated for: {}\n(File transfer service not available)", hash))
+            }
         }
         "dht" => {
             if args.is_empty() || args[0] != "status" {
