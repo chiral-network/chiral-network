@@ -633,7 +633,7 @@ async fn cmd_add(args: &[&str], context: &ReplContext) -> Result<(), String> {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     hasher.update(&file_data);
-    let hash = format!("Qm{:x}", hasher.finalize());
+    let hash = format!("Qm{}", hex::encode(hasher.finalize()));
 
     let file_name = std::path::Path::new(&file_path)
         .file_name()

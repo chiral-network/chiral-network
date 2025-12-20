@@ -7,6 +7,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use hex;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -49,6 +50,9 @@ struct TuiState {
     active_panel: ActivePanel,
     should_quit: bool,
     last_update: Instant,
+    command_mode: bool,
+    command_input: String,
+    command_result: Option<(String, bool)>, // (message, is_error)
 }
 
 impl TuiState {
@@ -57,6 +61,9 @@ impl TuiState {
             active_panel: ActivePanel::Network,
             should_quit: false,
             last_update: Instant::now(),
+            command_mode: false,
+            command_input: String::new(),
+            command_result: None,
         }
     }
 
@@ -154,6 +161,7 @@ async fn run_app<B: ratatui::backend::Backend>(
     });
 
     let mut current_metrics: Option<LiveMetrics> = None;
+    let mut pending_command: Option<String> = None;
 
     loop {
         // Check for new metrics
@@ -161,12 +169,33 @@ async fn run_app<B: ratatui::backend::Backend>(
             current_metrics = Some(metrics);
         }
 
+        // Execute pending command if any
+        if let Some(cmd) = pending_command.take() {
+            if !cmd.is_empty() {
+                match execute_command(&cmd, context).await {
+                    Ok(result) => {
+                        state.command_result = Some((result, false));
+                    }
+                    Err(err) => {
+                        state.command_result = Some((err, true));
+                    }
+                }
+            }
+        }
+
         terminal.draw(|f| ui(f, state, context, &current_metrics))?;
 
         // Poll for events with timeout
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
+                let was_in_command_mode = state.command_mode;
                 handle_key_event(key, state);
+
+                // If we just exited command mode with Enter, execute the command
+                if was_in_command_mode && !state.command_mode && key.code == KeyCode::Enter {
+                    pending_command = Some(state.command_input.clone());
+                    state.command_input.clear();
+                }
             }
         }
 
@@ -182,32 +211,65 @@ async fn run_app<B: ratatui::backend::Backend>(
 }
 
 fn handle_key_event(key: KeyEvent, state: &mut TuiState) {
-    match key.code {
-        KeyCode::Char('q') | KeyCode::Char('Q') => {
-            state.should_quit = true;
+    if state.command_mode {
+        // In command mode - handle text input
+        match key.code {
+            KeyCode::Char(c) => {
+                state.command_input.push(c);
+            }
+            KeyCode::Backspace => {
+                state.command_input.pop();
+            }
+            KeyCode::Enter => {
+                // Command will be executed in the async context
+                // Just mark that we're done editing
+                state.command_mode = false;
+            }
+            KeyCode::Esc => {
+                // Cancel command mode
+                state.command_mode = false;
+                state.command_input.clear();
+                state.command_result = None;
+            }
+            _ => {}
         }
-        KeyCode::Char('1') => state.select_panel(0),
-        KeyCode::Char('2') => state.select_panel(1),
-        KeyCode::Char('3') => state.select_panel(2),
-        KeyCode::Char('4') => state.select_panel(3),
-        KeyCode::Tab => state.next_panel(),
-        KeyCode::BackTab => state.previous_panel(),
-        KeyCode::Right => state.next_panel(),
-        KeyCode::Left => state.previous_panel(),
-        _ => {}
+    } else {
+        // Normal mode - handle navigation and commands
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                state.should_quit = true;
+            }
+            KeyCode::Char(':') => {
+                // Enter command mode
+                state.command_mode = true;
+                state.command_input.clear();
+                state.command_result = None;
+            }
+            KeyCode::Char('1') => state.select_panel(0),
+            KeyCode::Char('2') => state.select_panel(1),
+            KeyCode::Char('3') => state.select_panel(2),
+            KeyCode::Char('4') => state.select_panel(3),
+            KeyCode::Tab => state.next_panel(),
+            KeyCode::BackTab => state.previous_panel(),
+            KeyCode::Right => state.next_panel(),
+            KeyCode::Left => state.previous_panel(),
+            _ => {}
+        }
     }
 }
 
 fn ui(f: &mut Frame, state: &TuiState, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let size = f.area();
 
-    // Main layout: header + content
+    // Main layout: header + content + command result (if any) + footer
+    let footer_height = if state.command_result.is_some() { 5 } else { 3 };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Header
-            Constraint::Min(0),     // Content
-            Constraint::Length(3),  // Footer
+            Constraint::Length(3),        // Header
+            Constraint::Min(0),           // Content
+            Constraint::Length(footer_height),  // Footer (includes command result)
         ])
         .split(size);
 
@@ -217,8 +279,8 @@ fn ui(f: &mut Frame, state: &TuiState, context: &TuiContext, metrics: &Option<Li
     // Content area with tabs
     render_content(f, chunks[1], state, context, metrics);
 
-    // Footer
-    render_footer(f, chunks[2]);
+    // Footer (includes command bar and results)
+    render_footer(f, chunks[2], state);
 }
 
 fn render_header(f: &mut Frame, area: Rect, context: &TuiContext) {
@@ -625,21 +687,176 @@ fn render_mining_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
     f.render_widget(block_list, sections[1]);
 }
 
-fn render_footer(f: &mut Frame, area: Rect) {
-    let help_text = vec![
-        Span::styled("[Q]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(" Quit  "),
-        Span::styled("[1-4]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(" Select Panel  "),
-        Span::styled("[Tab]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(" Next  "),
-        Span::styled("[←→]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(" Navigate"),
-    ];
+fn render_footer(f: &mut Frame, area: Rect, state: &TuiState) {
+    if state.command_mode {
+        // Show command input mode
+        let command_text = format!(":{}", state.command_input);
+        let command_widget = Paragraph::new(command_text)
+            .block(Block::default().borders(Borders::ALL).title("Command Mode"))
+            .style(Style::default().fg(Color::Yellow));
+        f.render_widget(command_widget, area);
+    } else if let Some((result, is_error)) = &state.command_result {
+        // Show command result
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(3),  // Result message (wrap if needed)
+                Constraint::Length(1),  // Help text
+            ])
+            .split(area);
 
-    let footer = Paragraph::new(Line::from(help_text))
-        .block(Block::default().borders(Borders::ALL))
-        .alignment(Alignment::Center);
+        let result_color = if *is_error { Color::Red } else { Color::Green };
+        let result_prefix = if *is_error { "❌ " } else { "✓ " };
+        let result_widget = Paragraph::new(format!("{}{}", result_prefix, result))
+            .block(Block::default().borders(Borders::ALL))
+            .style(Style::default().fg(result_color))
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        f.render_widget(result_widget, sections[0]);
 
-    f.render_widget(footer, area);
+        let help_text = vec![
+            Span::styled("[:]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" Command  "),
+            Span::styled("[Q]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" Quit  "),
+            Span::styled("[1-4]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" Panels"),
+        ];
+        let help_widget = Paragraph::new(Line::from(help_text))
+            .alignment(Alignment::Center);
+        f.render_widget(help_widget, sections[1]);
+    } else {
+        // Normal help text
+        let help_text = vec![
+            Span::styled("[:]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" Command  "),
+            Span::styled("[Q]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" Quit  "),
+            Span::styled("[1-4]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" Select Panel  "),
+            Span::styled("[Tab]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" Next  "),
+            Span::styled("[←→]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" Navigate"),
+        ];
+
+        let footer = Paragraph::new(Line::from(help_text))
+            .block(Block::default().borders(Borders::ALL))
+            .alignment(Alignment::Center);
+
+        f.render_widget(footer, area);
+    }
+}
+
+// Command execution
+async fn execute_command(command: &str, context: &TuiContext) -> Result<String, String> {
+    let parts: Vec<&str> = command.trim().split_whitespace().collect();
+    if parts.is_empty() {
+        return Err("Empty command".to_string());
+    }
+
+    let cmd = parts[0];
+    let args = &parts[1..];
+
+    match cmd {
+        "help" | "h" => {
+            Ok("Commands: add <path>, download <hash>, status, peers, dht status, mining status".to_string())
+        }
+        "status" | "s" => {
+            let peers = context.dht_service.get_connected_peers().await;
+            let metrics = context.dht_service.metrics_snapshot().await;
+            Ok(format!("Peers: {}, Reachability: {:?}", peers.len(), metrics.reachability))
+        }
+        "peers" => {
+            let peers = context.dht_service.get_connected_peers().await;
+            Ok(format!("Connected peers: {}", peers.len()))
+        }
+        "add" => {
+            if args.is_empty() {
+                return Err("Usage: add <file_path>".to_string());
+            }
+            let file_path = args.join(" ");
+
+            if !std::path::Path::new(&file_path).exists() {
+                return Err(format!("File not found: {}", file_path));
+            }
+
+            let file_data = std::fs::read(&file_path)
+                .map_err(|e| format!("Failed to read file: {}", e))?;
+
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(&file_data);
+            let hash_bytes = hasher.finalize();
+            let hash_hex = hex::encode(&hash_bytes);
+            let hash = format!("Qm{}", hash_hex);
+
+            let file_name = std::path::Path::new(&file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            use crate::dht::models::FileMetadata;
+            let metadata = FileMetadata {
+                merkle_root: hash.clone(),
+                file_name: file_name.clone(),
+                file_size: file_data.len() as u64,
+                file_data: file_data.clone(),
+                seeders: vec![context.peer_id.clone()],
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
+                parent_hash: None,
+                cids: None,
+                is_root: true,
+                encrypted_key_bundle: None,
+                download_path: None,
+                price: 0.0,
+                uploader_address: None,
+                ftp_sources: None,
+                http_sources: None,
+                info_hash: None,
+                trackers: None,
+                ed2k_sources: None,
+            };
+
+            context.dht_service.publish_file(metadata, None).await
+                .map_err(|e| format!("Failed to publish: {}", e))?;
+
+            Ok(format!("Added: {}\nHash: {}", file_name, hash))
+        }
+        "download" | "dl" => {
+            if args.is_empty() {
+                return Err("Usage: download <file_hash>".to_string());
+            }
+            let hash = args[0];
+            context.dht_service.get_file(hash.to_string()).await
+                .map_err(|e| format!("Search failed: {}", e))?;
+            Ok(format!("Search initiated for: {}", hash))
+        }
+        "dht" => {
+            if args.is_empty() || args[0] != "status" {
+                return Err("Usage: dht status".to_string());
+            }
+            let metrics = context.dht_service.metrics_snapshot().await;
+            Ok(format!("Reachability: {:?}, Confidence: {:?}", metrics.reachability, metrics.reachability_confidence))
+        }
+        "mining" => {
+            if context.geth_process.is_none() {
+                return Err("Mining requires --enable-geth flag".to_string());
+            }
+            if args.is_empty() || args[0] != "status" {
+                return Err("Usage: mining status (start/stop not supported in TUI yet)".to_string());
+            }
+            Ok("Mining status: (requires geth integration)".to_string())
+        }
+        _ => {
+            Err(format!("Unknown command: '{}'. Type 'help' for available commands", cmd))
+        }
+    }
 }
