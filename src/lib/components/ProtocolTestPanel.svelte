@@ -5,6 +5,7 @@
   import Card from '$lib/components/ui/card.svelte';
   import { CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, FlaskConical } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import { parseEd2kLink } from '$lib/utils/ed2kParser';
 
   // Check if running inside Tauri desktop app
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -17,7 +18,13 @@
   let ed2kTestMessage = '';
 
   async function testFtpDownload() {
-
+    // FTP requires Tauri backend - cannot work in browser
+    if (!isTauri) {
+      ftpTestStatus = 'error';
+      ftpTestMessage = '❌ FTP downloads require the Tauri desktop app. Run with: npm run tauri:dev';
+      showToast('FTP requires the desktop app', 'error');
+      return;
+    }
 
     ftpTestStatus = 'testing';
     ftpTestMessage = 'Downloading from ftp.gnu.org...';
@@ -46,19 +53,22 @@
     }
   }
 
-  async function testEd2kParsing() {
-
+  function testEd2kParsing() {
     ed2kTestStatus = 'testing';
     ed2kTestMessage = 'Parsing ED2K link...';
 
     try {
-      const result = await invoke('parse_ed2k_link', {
-        ed2kLink: 'ed2k://|file|ubuntu-22.04-desktop-amd64.iso|3654957056|31D6CFE0D16AE931B73C59D7E0C089C0|/'
-      }) as any;
+      // Use browser-native parser (works in both browser and Tauri)
+      const result = parseEd2kLink(
+        'ed2k://|file|ubuntu-22.04-desktop-amd64.iso|3654957056|31D6CFE0D16AE931B73C59D7E0C089C0|/'
+      );
 
-      ed2kTestStatus = 'success';
-      ed2kTestMessage = `✅ Success! Parsed: ${result.file_name} (${(result.file_size / 1024 / 1024 / 1024).toFixed(2)} GB)`;
-      showToast('ED2K parsing successful!', 'success');
+      if (result.type === 'file') {
+        const { file_name, file_size } = result.data;
+        ed2kTestStatus = 'success';
+        ed2kTestMessage = `✅ Success! Parsed: ${file_name} (${(file_size / 1024 / 1024 / 1024).toFixed(2)} GB)`;
+        showToast('ED2K parsing successful!', 'success');
+      }
     } catch (error) {
       ed2kTestStatus = 'error';
       ed2kTestMessage = `❌ Error: ${error}`;
