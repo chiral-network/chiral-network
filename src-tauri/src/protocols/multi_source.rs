@@ -194,8 +194,8 @@ impl MultiSourceCoordinator {
             ));
         }
 
-        // Calculate chunks
-        let chunks = self.calculate_chunks(total_size, chunk_size);
+        // Calculate chunks (no manifest available at this level)
+        let chunks = self.calculate_chunks(total_size, chunk_size, None);
         info!("Split file into {} chunks", chunks.len());
 
         // Generate unique identifier for this download
@@ -435,10 +435,49 @@ impl MultiSourceCoordinator {
         Ok(data)
     }
 
+    /// Extract chunk hashes from a serialized FileManifest JSON
+    /// Returns a vector of chunk hashes indexed by chunk index
+    fn extract_chunk_hashes_from_manifest(manifest_json: &str) -> Result<Vec<String>, String> {
+        use crate::manager::FileManifest;
+        let manifest: FileManifest = serde_json::from_str(manifest_json)
+            .map_err(|e| format!("Failed to parse manifest JSON: {}", e))?;
+        
+        // Create a vector with enough capacity for all chunks
+        let mut hashes = Vec::new();
+        for chunk in &manifest.chunks {
+            // Ensure we have enough capacity
+            while hashes.len() <= chunk.index as usize {
+                hashes.push(String::new());
+            }
+            hashes[chunk.index as usize] = chunk.hash.clone();
+        }
+        
+        Ok(hashes)
+    }
+
     /// Calculate chunk metadata for a file
-    fn calculate_chunks(&self, total_size: u64, chunk_size: usize) -> Vec<ChunkInfo> {
+    /// 
+    /// If manifest_json is provided, extracts actual chunk hashes from it.
+    /// Otherwise, uses empty hashes (backward compatibility).
+    fn calculate_chunks(&self, total_size: u64, chunk_size: usize, manifest_json: Option<&str>) -> Vec<ChunkInfo> {
         let total_chunks = ((total_size as f64) / (chunk_size as f64)).ceil() as u32;
         let mut chunks = Vec::new();
+
+        // Try to extract chunk hashes from manifest if available
+        let chunk_hashes = if let Some(manifest) = manifest_json {
+            match Self::extract_chunk_hashes_from_manifest(manifest) {
+                Ok(hashes) => {
+                    debug!("Successfully extracted {} chunk hashes from manifest", hashes.len());
+                    hashes
+                }
+                Err(e) => {
+                    warn!("Failed to parse manifest: {}. Using empty hashes.", e);
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
 
         for chunk_id in 0..total_chunks {
             let offset = (chunk_id as u64) * (chunk_size as u64);
@@ -449,11 +488,18 @@ impl MultiSourceCoordinator {
                 chunk_size
             };
 
+            // Use actual hash from manifest if available, otherwise empty string
+            let hash = if chunk_id < chunk_hashes.len() as u32 && !chunk_hashes[chunk_id as usize].is_empty() {
+                chunk_hashes[chunk_id as usize].clone()
+            } else {
+                String::new() // Backward compatibility: empty hash
+            };
+
             chunks.push(ChunkInfo {
                 chunk_id,
                 offset,
                 size,
-                hash: String::new(), // TODO: Calculate or retrieve chunk hash
+                hash,
             });
         }
 
@@ -622,7 +668,7 @@ mod tests {
     #[test]
     fn test_calculate_chunks() {
         let coordinator = MultiSourceCoordinator::new(HashMap::new());
-        let chunks = coordinator.calculate_chunks(1000, 300);
+        let chunks = coordinator.calculate_chunks(1000, 300, None);
 
         assert_eq!(chunks.len(), 4); // ceil(1000/300) = 4
         assert_eq!(chunks[0].size, 300);
@@ -638,7 +684,7 @@ mod tests {
             SourceInfo::new("http".to_string(), "https://example.com".to_string()),
         ];
 
-        let chunks = coordinator.calculate_chunks(1000, 250);
+        let chunks = coordinator.calculate_chunks(1000, 250, None);
         let assignments = coordinator
             .assign_chunks_to_sources(&sources, &chunks)
             .await

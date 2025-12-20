@@ -6,7 +6,7 @@ use crate::download_source::{
     FtpSourceInfo as DownloadFtpSourceInfo,
 };
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
-use crate::manager::ChunkManager;
+use crate::manager::{ChunkManager, FileManifest};
 use crate::transfer_events::{
     TransferEventBus, TransferStartedEvent, SourceConnectedEvent, SourceDisconnectedEvent,
     ChunkCompletedEvent, ChunkFailedEvent, TransferProgressEvent, TransferCompletedEvent,
@@ -693,18 +693,58 @@ impl MultiSourceDownloadService {
         Ok(())
     }
 
+    /// Extract chunk hashes from a serialized FileManifest JSON
+    /// Returns a vector of chunk hashes indexed by chunk index
+    fn extract_chunk_hashes_from_manifest(manifest_json: &str) -> Result<Vec<String>, String> {
+        let manifest: FileManifest = serde_json::from_str(manifest_json)
+            .map_err(|e| format!("Failed to parse manifest JSON: {}", e))?;
+        
+        // Create a vector with enough capacity for all chunks
+        let mut hashes = Vec::new();
+        for chunk in &manifest.chunks {
+            // Ensure we have enough capacity
+            while hashes.len() <= chunk.index as usize {
+                hashes.push(String::new());
+            }
+            hashes[chunk.index as usize] = chunk.hash.clone();
+        }
+        
+        Ok(hashes)
+    }
+
     fn calculate_chunks(&self, metadata: &FileMetadata, chunk_size: usize) -> Vec<ChunkInfo> {
         let mut chunks = Vec::new();
         let total_size = metadata.file_size as usize;
         let mut offset = 0u64;
         let mut chunk_id = 0u32;
 
+        // Try to extract chunk hashes from manifest if available
+        let chunk_hashes = if let Some(manifest_json) = &metadata.manifest {
+            match Self::extract_chunk_hashes_from_manifest(manifest_json) {
+                Ok(hashes) => {
+                    debug!("Successfully extracted {} chunk hashes from manifest", hashes.len());
+                    hashes
+                }
+                Err(e) => {
+                    warn!("Failed to parse manifest for file {}: {}. Using placeholder hashes.", metadata.merkle_root, e);
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         while offset < metadata.file_size {
             let remaining = (metadata.file_size - offset) as usize;
             let size = remaining.min(chunk_size);
 
-            // Calculate chunk hash (simplified - in real implementation this would be pre-calculated)
-            let hash = format!("{}_{}", metadata.merkle_root, chunk_id);
+            // Use actual hash from manifest if available, otherwise fallback to placeholder
+            let hash = if chunk_id < chunk_hashes.len() as u32 && !chunk_hashes[chunk_id as usize].is_empty() {
+                chunk_hashes[chunk_id as usize].clone()
+            } else {
+                // Fallback to placeholder hash for backward compatibility
+                format!("{}_{}", metadata.merkle_root, chunk_id)
+            };
 
             chunks.push(ChunkInfo {
                 chunk_id,
