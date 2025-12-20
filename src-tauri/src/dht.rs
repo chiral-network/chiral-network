@@ -4067,6 +4067,28 @@ async fn run_dht_node(
                         break 'outer;
                     }
                 }
+
+        // Poll WebRTC events for file chunk reception and download completion
+        if let Some(webrtc) = &webrtc_service {
+            let events = webrtc.drain_events(100).await;
+            for event in events {
+                match event {
+                    crate::webrtc_service::WebRTCEvent::FileChunkReceived { peer_id, chunk } => {
+                        info!("📥 Received WebRTC chunk {} from peer {}", chunk.chunk_index, peer_id);
+                        // TODO: Track progress and emit DownloadProgress events
+                    }
+                    crate::webrtc_service::WebRTCEvent::ConnectionEstablished { peer_id } => {
+                        info!("WebRTC connection established with {}", peer_id);
+                    }
+                    crate::webrtc_service::WebRTCEvent::ConnectionFailed { peer_id, error } => {
+                        warn!("WebRTC connection failed with {}: {}", peer_id, error);
+                    }
+                    _ => {
+                        // Ignore other WebRTC events for now
+                    }
+                }
+            }
+        }
     }
 
     connected_peers.lock().await.clear();
