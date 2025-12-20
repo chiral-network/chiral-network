@@ -9014,6 +9014,7 @@ mod tests {
             None,
             None,
             None,
+            None,       // chunk_manager
             Some(256),  // chunk_size_kb
             Some(1024), // cache_size_mb
             false,      // enable_autorelay
@@ -9022,8 +9023,9 @@ mod tests {
             false,      // enable_upnp (disabled for testing)
             None,
             None,
-            None,
+            None,       // last_autorelay_disabled_at
             false,      // pure_client_mode
+            false,      // force_server_mode
         )
         .await
         {
