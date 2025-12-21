@@ -265,7 +265,42 @@ impl GethProcess {
                 .to_path_buf()
         };
 
-        let genesis_path = project_dir.join("genesis.json");
+        // Resolve genesis.json path robustly across:
+        // - dev builds (repo root)
+        // - release/headless builds (binary under src-tauri/target/release/)
+        // - custom deployments (env override)
+        let genesis_candidates: Vec<PathBuf> = {
+            let mut v = Vec::new();
+            if let Ok(p) = std::env::var("CHIRAL_GENESIS_PATH") {
+                if !p.trim().is_empty() {
+                    v.push(PathBuf::from(p.trim()));
+                }
+            }
+            // Common locations
+            v.push(project_dir.join("genesis.json"));
+            if let Some(parent) = project_dir.parent() {
+                v.push(parent.join("genesis.json")); // repo root when project_dir == src-tauri
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                v.push(cwd.join("genesis.json"));
+            }
+            v
+        };
+
+        let genesis_path = genesis_candidates
+            .iter()
+            .find(|p| p.exists())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "genesis.json not found. Tried: {}. You can override with CHIRAL_GENESIS_PATH=/path/to/genesis.json",
+                    genesis_candidates
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
 
         // Resolve data directory relative to the executable dir if it's relative
         let data_path = self.resolve_data_dir(data_dir)?;
@@ -1390,7 +1425,7 @@ pub async fn get_network_difficulty_as_u64() -> Result<u64, String> {
     });
 
     let response = client
-        .post("http://127.0.0.1:8545")
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -2545,8 +2580,8 @@ pub async fn send_transaction(
         Err(e) => tracing::error!("   Failed to get peer count: {}", e),
     }
 
-    let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
-        .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+    let provider = Provider::<Http>::try_from(NETWORK_CONFIG.rpc_endpoint.as_str())
+        .map_err(|e| format!("Failed to connect to RPC ({}): {}", NETWORK_CONFIG.rpc_endpoint, e))?;
 
     let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
@@ -2919,7 +2954,7 @@ pub async fn get_block_details_by_number(
     });
 
     let response = client
-        .post("http://127.0.0.1:8545")
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await

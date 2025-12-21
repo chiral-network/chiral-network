@@ -245,7 +245,12 @@ class RealE2ETestFramework {
     });
 
     if (!response.ok) {
-      throw new Error(`Upload failed: ${response.statusText}`);
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Upload failed: ${response.status} ${response.statusText}${
+          body ? ` - ${body}` : ""
+        }`
+      );
     }
 
     const result = await response.json();
@@ -262,23 +267,41 @@ class RealE2ETestFramework {
 
     console.log(`🔍 Searching for file: ${fileHash}`);
 
-    const response = await fetch(`${this.downloaderConfig.apiBaseUrl}/api/search`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fileHash,
-        timeoutMs: timeout,
-      }),
-    });
+    const start = Date.now();
+    const pollIntervalMs = 750;
 
-    if (!response.ok) {
-      throw new Error(`Search failed: ${response.statusText}`);
+    // DHT propagation is not instantaneous across real networks.
+    // Poll until we get a non-null metadata (or until timeout).
+    while (Date.now() - start < timeout) {
+      const response = await fetch(`${this.downloaderConfig.apiBaseUrl}/api/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileHash,
+          // Give each attempt a modest budget; overall timeout is controlled by this loop.
+          timeoutMs: Math.min(3000, timeout),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Search failed: ${response.statusText}`);
+      }
+
+      const metadata = await response.json();
+      if (metadata) {
+        console.log(
+          `✅ File found. Seeders: ${metadata.seeders?.length || 0}`
+        );
+        return metadata;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
 
-    const metadata = await response.json();
-    console.log(`✅ File found. Seeders: ${metadata.seeders?.length || 0}`);
-
-    return metadata;
+    throw new Error(
+      `Search timed out after ${timeout}ms (metadata not found). ` +
+        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and uploader port 4001 firewall.`
+    );
   }
 
   /**
@@ -481,7 +504,12 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ uploaderAddress, price }),
       });
-      if (!payRes.ok) throw new Error(`Pay failed: ${payRes.statusText}`);
+      if (!payRes.ok) {
+        const body = await payRes.text().catch(() => "");
+        throw new Error(
+          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+        );
+      }
       const payJson = await payRes.json();
       const txHash: string = payJson.txHash;
       expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
@@ -494,7 +522,12 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ txHash }),
         });
-        if (!r.ok) throw new Error(`Receipt failed: ${r.statusText}`);
+        if (!r.ok) {
+          const body = await r.text().catch(() => "");
+          throw new Error(
+            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+          );
+        }
         const receipt = await r.json();
         if (receipt.status === "success") return receipt;
         if (receipt.status === "failed") throw new Error("Transaction failed");
