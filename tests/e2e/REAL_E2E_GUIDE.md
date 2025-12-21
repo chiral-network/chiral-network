@@ -27,6 +27,58 @@ Located in: `tests/e2e/real-network.test.ts`
 
 ## Running Real E2E Tests
 
+## Option1: Attach Mode (Recommended, Cross-Machine, Real Network + Real Chain)
+
+In this mode, you **run the Uploader/Downloader nodes separately**, then execute the test suite from **one machine only** (typically the Downloader side) to validate the full flow:
+**upload → DHT search → HTTP Range download → payment (tx receipt)**.
+
+### 1) Node environment variables (common)
+
+- `CHIRAL_HEADLESS=true`
+- `CHIRAL_E2E_API_PORT=<PORT>`: E2E control API port for the node
+- `CHIRAL_PRIVATE_KEY=0x...`: node wallet private key (**do not print this in logs**)
+- `CHIRAL_RPC_ENDPOINT=http://...`: both nodes should point to the same chain/RPC
+
+### 2) Uploader (VM / public-IP machine)
+
+- `CHIRAL_PUBLIC_IP=<VM_PUBLIC_IP>`: used to build dialable URLs/addresses for other peers
+
+```bash
+export CHIRAL_HEADLESS=true
+export CHIRAL_E2E_API_PORT=8081
+export CHIRAL_PUBLIC_IP=<VM_PUBLIC_IP>
+export CHIRAL_PRIVATE_KEY=0x...
+export CHIRAL_RPC_ENDPOINT=http://...
+npm run tauri dev
+```
+
+### 3) Downloader (laptop / local)
+
+```bash
+export CHIRAL_HEADLESS=true
+export CHIRAL_E2E_API_PORT=8082
+export CHIRAL_PRIVATE_KEY=0x...
+export CHIRAL_RPC_ENDPOINT=http://...
+npm run tauri dev
+```
+
+### 4) Run the test (Attach)
+
+On the Downloader machine:
+
+```bash
+export E2E_ATTACH=true
+export E2E_UPLOADER_API_URL=http://<VM_PUBLIC_IP>:8081
+export E2E_DOWNLOADER_API_URL=http://127.0.0.1:8082
+npm run test:e2e:real
+```
+
+### 5) Quick sanity checks
+
+- Uploader: `GET /api/health`
+- Downloader: `GET /api/health`
+- DHT connectivity: Downloader `GET /api/dht/peers` should return a non-empty array
+
 ### Single Machine (Two Local Nodes)
 
 Run both uploader and downloader on the same machine:

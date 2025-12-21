@@ -26,6 +26,7 @@ pub mod repl;
 pub mod tui;
 pub mod reassembly;
 pub mod transaction_services;
+pub mod e2e_api;
 
 // Re-export modules from the lib crate
 use chiral_network::{
@@ -9178,6 +9179,63 @@ fn main() {
                             .set_app_handle(app_handle_for_bandwidth)
                             .await;
                     });
+                }
+            }
+
+            // --------------------------------------------------------------------
+            // Real E2E (attach) support:
+            // - Auto-import account from CHIRAL_PRIVATE_KEY
+            // - Start E2E control HTTP API if CHIRAL_E2E_API_PORT is set
+            // --------------------------------------------------------------------
+            if let Ok(pk) = std::env::var("CHIRAL_PRIVATE_KEY") {
+                if !pk.trim().is_empty() {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(state) = app_handle.try_state::<AppState>() {
+                            match get_account_from_private_key(&pk) {
+                                Ok(account) => {
+                                    {
+                                        let mut active_account = state.active_account.lock().await;
+                                        *active_account = Some(account.address.clone());
+                                    }
+                                    {
+                                        let mut active_key = state.active_account_private_key.lock().await;
+                                        *active_key = Some(account.private_key.clone());
+                                    }
+                                    tracing::info!("E2E: imported account from CHIRAL_PRIVATE_KEY");
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "E2E: failed to import account from CHIRAL_PRIVATE_KEY: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::warn!("E2E: AppState unavailable; cannot import CHIRAL_PRIVATE_KEY");
+                        }
+                    });
+                }
+            }
+
+            if let Ok(port_str) = std::env::var("CHIRAL_E2E_API_PORT") {
+                if let Ok(port) = port_str.trim().parse::<u16>() {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        match crate::e2e_api::start_e2e_api_server(app_handle, port).await {
+                            Ok(bound) => {
+                                tracing::info!("E2E API server listening on http://{}", bound);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to start E2E API server: {}", e);
+                            }
+                        }
+                    });
+                } else {
+                    tracing::warn!(
+                        "CHIRAL_E2E_API_PORT is set but not a valid u16: {}",
+                        port_str
+                    );
                 }
             }
 
