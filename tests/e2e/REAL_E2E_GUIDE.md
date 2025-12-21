@@ -32,6 +32,9 @@ Located in: `tests/e2e/real-network.test.ts`
 In this mode, you **run the Uploader/Downloader nodes separately**, then execute the test suite from **one machine only** (typically the Downloader side) to validate the full flow:
 **upload → DHT search → HTTP Range download → payment (tx receipt)**.
 
+> Note (Local chain): By default, Chiral uses a **local Geth chain** (chainId/networkId: `98765`) with RPC at `http://127.0.0.1:8545`.
+> For real cross-machine attach mode with payments, you typically run Geth on the **Uploader VM** and make the Downloader access it via **SSH local port forwarding** (no public RPC exposure).
+
 ### 1) Node environment variables (common)
 
 - `CHIRAL_HEADLESS=true`
@@ -49,17 +52,40 @@ export CHIRAL_E2E_API_PORT=8081
 export CHIRAL_PUBLIC_IP=<VM_PUBLIC_IP>
 export CHIRAL_PRIVATE_KEY=0x...
 export CHIRAL_RPC_ENDPOINT=http://...
-npm run tauri dev
+
+# VM-friendly headless mode (recommended)
+cd src-tauri
+cargo run --release -- --headless
 ```
 
 ### 3) Downloader (laptop / local)
+
+**Important:** The Downloader is the one sending the payment (`/api/pay`), so it must load a wallet too:
+- `CHIRAL_PRIVATE_KEY` is required (otherwise `/api/pay` returns 400).
+
+#### If the chain RPC is on the Uploader VM (recommended): SSH tunnel for RPC
+On the Downloader machine, open a local port forward so `http://127.0.0.1:8545` forwards to the VM’s local geth RPC:
+
+1) (One-time) generate SSH config via gcloud:
+```bash
+gcloud compute config-ssh
+```
+
+2) Open the tunnel (keep this terminal open):
+```bash
+ssh -N -L 8545:127.0.0.1:8545 <VM_SSH_HOSTNAME>
+```
+
+Now set the Downloader node to use the local forwarded RPC:
 
 ```bash
 export CHIRAL_HEADLESS=true
 export CHIRAL_E2E_API_PORT=8082
 export CHIRAL_PRIVATE_KEY=0x...
-export CHIRAL_RPC_ENDPOINT=http://...
-npm run tauri dev
+export CHIRAL_RPC_ENDPOINT=http://127.0.0.1:8545
+
+cd src-tauri
+cargo run --release -- --headless
 ```
 
 ### 4) Run the test (Attach)
@@ -78,6 +104,47 @@ npm run test:e2e:real
 - Uploader: `GET /api/health`
 - Downloader: `GET /api/health`
 - DHT connectivity: Downloader `GET /api/dht/peers` should return a non-empty array
+
+### 6) Funding the Downloader wallet (required for payment on local chain)
+If `/api/pay` fails with `Insufficient balance`, the local chain likely has **no prefunded accounts**.
+You must mine a few blocks to fund the Downloader address.
+
+**PowerShell tip:** Prefer `Invoke-RestMethod` to avoid quoting issues.
+
+Example checks (Downloader machine, RPC forwarded at `http://127.0.0.1:8545`):
+
+```powershell
+# Block number
+$body = @{ jsonrpc="2.0"; method="eth_blockNumber"; params=@(); id=1 } | ConvertTo-Json -Compress
+Invoke-RestMethod "http://127.0.0.1:8545" -Method Post -ContentType "application/json" -Body $body
+
+# Mining status
+$body = @{ jsonrpc="2.0"; method="eth_mining"; params=@(); id=2 } | ConvertTo-Json -Compress
+Invoke-RestMethod "http://127.0.0.1:8545" -Method Post -ContentType "application/json" -Body $body
+
+# Coinbase (mining reward address)
+$body = @{ jsonrpc="2.0"; method="eth_coinbase"; params=@(); id=4 } | ConvertTo-Json -Compress
+Invoke-RestMethod "http://127.0.0.1:8545" -Method Post -ContentType "application/json" -Body $body
+```
+
+To mine to your Downloader address, set coinbase (etherbase) then start mining:
+
+```powershell
+$addr = "<DOWNLOADER_ADDRESS>"
+
+$body = @{ jsonrpc="2.0"; method="miner_setEtherbase"; params=@($addr); id=10 } | ConvertTo-Json -Compress
+Invoke-RestMethod "http://127.0.0.1:8545" -Method Post -ContentType "application/json" -Body $body
+
+$body = @{ jsonrpc="2.0"; method="miner_start"; params=@(1); id=11 } | ConvertTo-Json -Compress
+Invoke-RestMethod "http://127.0.0.1:8545" -Method Post -ContentType "application/json" -Body $body
+```
+
+Then confirm balance is non-zero:
+
+```powershell
+$body = @{ jsonrpc="2.0"; method="eth_getBalance"; params=@($addr,"latest"); id=12 } | ConvertTo-Json -Compress
+Invoke-RestMethod "http://127.0.0.1:8545" -Method Post -ContentType "application/json" -Body $body
+```
 
 ### Single Machine (Two Local Nodes)
 
