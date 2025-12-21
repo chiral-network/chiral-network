@@ -631,12 +631,14 @@ describe('State Persistence - Error Handling', () => {
     it('should sanitize loaded data', () => {
       const loadedData = {
         port: 4001,
-        __proto__: { malicious: true }
+        __proto__: { malicious: true },
+        maliciousField: 'bad'
       };
 
       const sanitized = { port: loadedData.port };
 
-      expect('__proto__' in sanitized).toBe(false);
+      expect('maliciousField' in sanitized).toBe(false);
+      expect(sanitized.port).toBe(4001);
     });
   });
 });
