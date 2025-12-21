@@ -47,3 +47,8 @@ pub mod payment_checkpoint;
 
 // Logger module for file-based logging
 pub mod logger;
+
+// Ethereum/Geth integration
+pub mod ethereum;
+pub mod geth_downloader;
+pub mod geth_bootstrap;
