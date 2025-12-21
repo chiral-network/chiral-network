@@ -58,6 +58,31 @@ cd src-tauri
 cargo run --release -- --headless
 ```
 
+#### GCP (Ubuntu) uploader setup quickstart (optional)
+If you're using a Google Cloud Ubuntu VM as the **Public-IP uploader**, you may need:
+
+1) **Firewall rules** (GCP):
+- E2E API: `8081/tcp`
+- HTTP file server: `8080-8090/tcp`
+- DHT: `4001/tcp`
+
+2) **Build prerequisites**:
+```bash
+sudo apt-get update -y
+sudo apt-get install -y build-essential pkg-config libssl-dev curl unzip
+```
+
+3) **Install `geth` binary (Core-Geth)**:
+`apt install geth` may not work on some images. Place `geth` next to the built binary under `bin/`.
+```bash
+cd ~/chiral-network
+curl -L -o core-geth.zip https://github.com/etclabscore/core-geth/releases/download/v1.12.20/core-geth-linux-v1.12.20.zip
+unzip -o core-geth.zip -d /tmp/core-geth
+mkdir -p src-tauri/target/release/bin
+cp /tmp/core-geth/geth src-tauri/target/release/bin/geth
+chmod +x src-tauri/target/release/bin/geth
+```
+
 ### 3) Downloader (laptop / local)
 
 **Important:** The Downloader is the one sending the payment (`/api/pay`), so it must load a wallet too:
@@ -78,6 +103,18 @@ ssh -N -L 8545:127.0.0.1:8545 <VM_SSH_HOSTNAME>
 
 Now set the Downloader node to use the local forwarded RPC:
 
+Recommended: run the Downloader as a **desktop app (GUI)** on your local machine, so you can inspect logs/state more easily.
+
+##### Downloader (GUI / `tauri dev`)
+```bash
+export CHIRAL_E2E_API_PORT=8082
+export CHIRAL_PRIVATE_KEY=0x...
+export CHIRAL_RPC_ENDPOINT=http://127.0.0.1:8545
+
+npm run tauri dev
+```
+
+##### Downloader (optional: headless)
 ```bash
 export CHIRAL_HEADLESS=true
 export CHIRAL_E2E_API_PORT=8082
