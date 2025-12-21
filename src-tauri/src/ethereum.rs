@@ -423,11 +423,9 @@ impl GethProcess {
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
 
-        // Add miner address if provided
-        if let Some(address) = miner_address {
-            // Set the etherbase (coinbase) for mining rewards
-            cmd.arg("--miner.etherbase").arg(address);
-        }
+        // Note: We don't set --miner.etherbase here due to Core-Geth parsing issues
+        // Instead, we'll set it via RPC call in start_mining()
+        // The miner_address will be stored and used when mining starts
 
         // Create log file for geth output
         let log_path = data_path.join("geth.log");
@@ -443,6 +441,7 @@ impl GethProcess {
         cmd.stdout(Stdio::from(log_file_clone))
             .stderr(Stdio::from(log_file));
 
+        eprintln!("DEBUG: Full geth command: {:?}", cmd);
         let child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start geth: {}", e))?;
@@ -913,12 +912,21 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
     }
 
     tracing::info!("🔧 Setting up mining with etherbase: {}", miner_address);
-    
+
+    // Ensure address has 0x prefix and is lowercase for consistency
+    let formatted_address = if miner_address.starts_with("0x") {
+        miner_address.to_lowercase()
+    } else {
+        format!("0x{}", miner_address.to_lowercase())
+    };
+
+    eprintln!("DEBUG: Formatted miner address: {} (len: {})", formatted_address, formatted_address.len());
+
     // First try to set the etherbase using miner_setEtherbase
     let set_etherbase = json!({
         "jsonrpc": "2.0",
         "method": "miner_setEtherbase",
-        "params": [miner_address],
+        "params": [formatted_address],
         "id": 1
     });
 
