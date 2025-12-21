@@ -381,7 +381,7 @@ fn print_help() {
     println!("  │ {:<54} │", "  config set <key> <val>  Set setting value");
     println!("  │ {:<54} │", "  config reset <key>      Reset to default");
     println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {} │", "Advanced Features (Phase 4)".bright_cyan());
+    println!("  │ {:<54} │", "Advanced Features");
     println!("  ├────────────────────────────────────────────────────────┤");
     println!("  │ {:<54} │", "  export <target> [opts]  Export data to file");
     println!("  │ {:<54} │", "    metrics/peers/downloads/all");
