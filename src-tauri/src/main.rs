@@ -27,6 +27,7 @@ pub mod tui;
 pub mod reassembly;
 pub mod transaction_services;
 pub mod e2e_api;
+pub mod e2e_api_headless;
 
 // Re-export modules from the lib crate
 use chiral_network::{

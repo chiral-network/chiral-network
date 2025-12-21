@@ -2,8 +2,10 @@
 use crate::commands::bootstrap::get_bootstrap_nodes;
 use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtService};
 use crate::download_restart::{DownloadRestartService, StartDownloadRequest};
+use crate::e2e_api_headless::{start_headless_e2e_api_server, HeadlessE2eState};
 use crate::ethereum::GethProcess;
 use crate::file_transfer::FileTransferService;
+use crate::http_server;
 use clap::Parser;
 use std::{sync::Arc, time::Duration};
 use tokio::signal;
@@ -245,7 +247,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         false, // force_server_mode: disabled by default
     )
     .await?;
-    let peer_id = dht_service.get_peer_id().await;
+    let dht_arc = Arc::new(dht_service);
+    let peer_id = dht_arc.get_peer_id().await;
 
     // DHT is already running in a spawned background task
 
@@ -316,18 +319,18 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
             manifest: None,
         };
 
-        dht_service.publish_file(example_metadata, None).await?;
+        dht_arc.publish_file(example_metadata, None).await?;
         info!("Published bootstrap file metadata");
     } else {
         info!("Connecting to bootstrap nodes: {:?}", bootstrap_nodes);
         for bootstrap_addr in &bootstrap_nodes {
-            match dht_service.connect_peer(bootstrap_addr.clone()).await {
+            match dht_arc.connect_peer(bootstrap_addr.clone()).await {
                 Ok(_) => {
                     info!("Connected to bootstrap: {}", bootstrap_addr);
                     
                     // Verify the connection by checking if we have any connected peers
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    let connected_peers = dht_service.get_connected_peers().await;
+                    let connected_peers = dht_arc.get_connected_peers().await;
                     if connected_peers.is_empty() {
                         warn!("Bootstrap connection to {} succeeded but no peers connected yet", bootstrap_addr);
                     } else {
@@ -339,8 +342,89 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         }
     }
 
+    // --------------------------------------------------------------------
+    // Headless Real-E2E support (VM-friendly, no GUI):
+    // - Start HTTP file server (8080-8090) for Range downloads
+    // - Start E2E control API if CHIRAL_E2E_API_PORT is set
+    // - Load wallet from CHIRAL_PRIVATE_KEY (required for upload/pay in option1)
+    // --------------------------------------------------------------------
+    let storage_dir = std::env::var("CHIRAL_STORAGE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap().join("files"));
+    let _ = std::fs::create_dir_all(&storage_dir);
+
+    let http_server_state = Arc::new(http_server::HttpServerState::new(storage_dir.clone()));
+    http_server_state.set_dht(dht_arc.clone()).await;
+
+    // Start HTTP file server on a free port in 8080..=8090 and keep shutdown sender alive.
+    let mut http_base_url: Option<String> = None;
+    let mut http_shutdown_tx_keepalive: Option<tokio::sync::oneshot::Sender<()>> = None;
+    for port in 8080u16..=8090u16 {
+        let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        match http_server::start_server(http_server_state.clone(), bind_addr, shutdown_rx).await {
+            Ok(bound) => {
+                let host = std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
+                http_base_url = Some(format!("http://{}:{}", host, bound.port()));
+                http_shutdown_tx_keepalive = Some(shutdown_tx);
+                info!("HTTP file server listening on http://{} (advertised host={})", bound, host);
+                break;
+            }
+            Err(e) => {
+                // Try next port
+                tracing::debug!("HTTP file server port {} failed: {}", port, e);
+            }
+        }
+    }
+
+    if http_base_url.is_none() {
+        warn!("Could not start HTTP file server on any port (8080-8090). Downloads will fail.");
+    }
+
+    // Load account from CHIRAL_PRIVATE_KEY (headless has no GUI login).
+    let (uploader_address, private_key) = match std::env::var("CHIRAL_PRIVATE_KEY") {
+        Ok(pk) if !pk.trim().is_empty() => match crate::ethereum::get_account_from_private_key(&pk) {
+            Ok(acct) => (Some(acct.address), Some(acct.private_key)),
+            Err(e) => {
+                warn!("Invalid CHIRAL_PRIVATE_KEY: {}", e);
+                (None, None)
+            }
+        },
+        _ => (None, None),
+    };
+
+    // Start headless E2E API if requested.
+    let mut e2e_shutdown_tx_keepalive: Option<tokio::sync::oneshot::Sender<()>> = None;
+    if let Ok(port_str) = std::env::var("CHIRAL_E2E_API_PORT") {
+        if let Ok(port) = port_str.trim().parse::<u16>() {
+            if let Some(ref http_base_url) = http_base_url {
+                let state = HeadlessE2eState {
+                    dht: dht_arc.clone(),
+                    http_server_state: http_server_state.clone(),
+                    http_base_url: http_base_url.clone(),
+                    storage_dir: storage_dir.clone(),
+                    uploader_address: uploader_address.clone(),
+                    private_key: private_key.clone(),
+                };
+                match start_headless_e2e_api_server(state, port).await {
+                    Ok((bound, shutdown_tx)) => {
+                        e2e_shutdown_tx_keepalive = Some(shutdown_tx);
+                        info!("E2E API server listening on http://{}", bound);
+                    }
+                    Err(e) => error!("Failed to start E2E API server: {}", e),
+                }
+            } else {
+                warn!("CHIRAL_E2E_API_PORT is set but HTTP file server base URL is unavailable.");
+            }
+        } else {
+            warn!("CHIRAL_E2E_API_PORT is set but not a valid u16: {}", port_str);
+        }
+    }
+
+    // Keep the service running (and keep shutdown senders alive)
     info!("Bootstrap node is running. Press Ctrl+C to stop.");
-    let dht_arc = Arc::new(dht_service);
+    let _keep_http = http_shutdown_tx_keepalive;
+    let _keep_e2e = e2e_shutdown_tx_keepalive;
 
     if args.show_reachability {
         let snapshot = dht_arc.metrics_snapshot().await;
