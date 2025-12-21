@@ -128,22 +128,237 @@ Full-screen terminal dashboard with live updates.
 - Event-driven architecture
 - 1-second refresh rate
 
-### Phase 4: Advanced Features 💡 **FUTURE**
+### Phase 4: Advanced Features ✅ **COMPLETED**
+
+**Status:** Released in v0.1.0
 
 **Target:** v0.4.0+
 
 Advanced monitoring and management capabilities.
 
-**Ideas Under Consideration:**
+**Implemented Features:**
 
-- Custom REPL scripts and macros
-- Plugin system for custom commands
-- Remote REPL access (secure RPC)
+- ✅ Export metrics to files (JSON, CSV)
+- ✅ Custom REPL scripts and macros
+- ✅ Plugin system for custom commands (framework ready)
+- ✅ Advanced analytics and reporting
+- ✅ Remote REPL access (secure RPC with token auth)
+- ✅ Webhook notifications for events
+
+**Technical Implementation:**
+
+- Export command with JSON/CSV formats for metrics, peers, downloads
+- Script execution system (.chiral scripts) - read script files and execute commands
+- Plugin loading framework (dynamic library support ready)
+- Comprehensive report generation (summary/full modes)
+- Remote REPL server with TCP and token-based authentication
+- Webhook manager with persistent storage and HTTP POST notifications
+
+**New Commands:**
+
+- `export <target> [--format json|csv] [--output <path>]` - Export data to files
+- `script run <path>` / `script list` - Run and manage REPL scripts
+- `plugin load <path>` / `plugin list` - Load and manage plugins
+- `report [summary|full]` - Generate comprehensive reports
+- `remote start [addr] [token]` / `remote stop` / `remote status` - Remote REPL access
+- `webhook add <event> <url>` / `webhook list` / `webhook test <id>` - Webhook notifications
+
+**Files:**
+
+- `src-tauri/src/remote_repl.rs` - Remote REPL server implementation
+- `src-tauri/src/webhook_manager.rs` - Webhook management system
+- Enhanced `src-tauri/src/repl.rs` with Phase 4 commands
+
+**Future Enhancements:**
+
 - Multi-node management from single shell
-- Advanced analytics and reporting
-- Export metrics to files (JSON, CSV)
 - Integration with monitoring tools (Prometheus, Grafana)
-- Webhook notifications for events
+- Advanced plugin API with custom command registration
+- Real-time script debugging and profiling
+
+### Phase 5: Mining Integration 📅 **PLANNED**
+
+**Target:** v0.5.0
+
+**Goal:** Fully integrate mining capabilities into the interactive shell with real-time monitoring and control.
+
+**Current Status:**
+
+- Mining commands exist in REPL but show placeholders only
+- Backend functions fully implemented in `ethereum.rs`:
+  - `start_mining(miner_address, threads)`
+  - `stop_mining()`
+  - `get_mining_status()`
+  - `get_mining_performance(data_dir)`
+  - `get_mining_logs(data_dir, lines)`
+  - `get_total_mining_rewards(miner_address)`
+- Ready for integration
+
+**Planned Features:**
+
+#### 5.1: Core Mining Integration (High Priority)
+
+Connect REPL mining commands to actual Geth mining functions.
+
+- ⏳ Update `cmd_mining()` to call real mining functions
+- ⏳ Display real mining status (hash rate, blocks found)
+- ⏳ Implement mining start/stop with thread control
+- ⏳ Add error handling for mining operations
+- ⏳ Wallet/miner address management
+
+**Code Example:**
+```rust
+// mining start 4
+crate::ethereum::start_mining(&miner_address, 4).await?;
+println!("✓ Mining started with 4 thread(s)");
+
+// mining status
+let is_mining = crate::ethereum::get_mining_status().await?;
+let (hash_rate, blocks) = crate::ethereum::get_mining_performance(&data_dir).await?;
+println!("Hash Rate: {:.2} MH/s | Blocks: {}", hash_rate, blocks);
+```
+
+#### 5.2: Mining Dashboard (Medium Priority)
+
+Real-time mining statistics and monitoring.
+
+- ⏳ Live updating mining dashboard
+- ⏳ Hash rate trends and history
+- ⏳ Block discovery notifications
+- ⏳ Mining rewards accumulator
+- ⏳ Thread utilization display
+- ⏳ Mining uptime tracking
+
+**New Commands:**
+- `mining dashboard` - Real-time mining view with auto-refresh
+- `mining stats [--live]` - Detailed mining statistics
+- `mining logs [--tail 50]` - View recent mining logs
+
+#### 5.3: Mining History & Analytics (Medium Priority)
+
+Track and analyze mining performance over time.
+
+- ⏳ Session mining history with timestamps
+- ⏳ Total rewards calculation per address
+- ⏳ Performance trends and charts
+- ⏳ Export mining data to JSON/CSV (integrate with Phase 4)
+- ⏳ Mining efficiency metrics
+
+**New Commands:**
+- `mining history [--limit 10]` - Recent mining sessions
+- `mining rewards [--address]` - Total rewards earned
+- `export mining --format json` - Export mining data (Phase 4 integration)
+
+#### 5.4: Advanced Mining Configuration (Low Priority)
+
+Persistent mining configuration and optimization.
+
+- ⏳ Thread configuration with persistence
+- ⏳ Mining intensity presets (high/medium/low)
+- ⏳ Etherbase (coinbase) address management
+- ⏳ Hardware auto-tuning based on CPU/GPU capabilities
+- ⏳ Configuration validation and testing
+
+**New Commands:**
+- `mining config list` - Show all mining settings
+- `mining config set threads <n>` - Set mining threads
+- `mining config set intensity <high|medium|low>` - Set mining intensity
+- `mining config set etherbase <address>` - Set mining reward address
+- `mining autotune` - Auto-optimize settings for hardware
+
+#### 5.5: Smart Mining Features (Low Priority)
+
+Intelligent mining with scheduling and conditions.
+
+- ⏳ Time-based mining schedules (mine during off-peak hours)
+- ⏳ Conditional mining (only mine when peers > threshold)
+- ⏳ Profitability calculator (estimate vs electricity cost)
+- ⏳ Power consumption tracking and estimates
+- ⏳ Temperature monitoring (if sensors available)
+- ⏳ Automatic shutdown on overheating
+
+**New Commands:**
+- `mining schedule add --time "02:00-06:00" --days "Mon,Tue,Wed"` - Add schedule
+- `mining schedule list` - List all schedules
+- `mining schedule remove <id>` - Remove schedule
+- `mining threshold set --min-peers 5` - Set minimum peers requirement
+- `mining profitability --electricity-cost 0.12` - Calculate profitability
+
+#### 5.6: TUI Mining Panel (Low Priority, depends on Phase 3)
+
+Dedicated mining panel in TUI mode with live visualization.
+
+- ⏳ Real-time hash rate graph (line chart)
+- ⏳ Block discovery timeline
+- ⏳ Thread utilization bars
+- ⏳ Temperature/power monitoring gauges
+- ⏳ Live earnings counter
+- ⏳ Mining event log (blocks found, errors)
+
+**TUI Layout Example:**
+```
+┌─────────────────────────────────────────────────────┐
+│ Mining Status                   [Active: Yes]       │
+├─────────────────────────────────────────────────────┤
+│ Hash Rate: 45.2 MH/s            Blocks: 127         │
+│ Rewards: 2,540.00 CHR          Uptime: 2h 34m      │
+├─────────────────────────────────────────────────────┤
+│ Hash Rate History (Last Hour)                       │
+│  50 │     ╭──╮                                      │
+│  40 │  ╭──╯  ╰─╮  ╭──                               │
+│  30 │──╯       ╰──╯                                 │
+│     └────────────────────────────────────           │
+├─────────────────────────────────────────────────────┤
+│ Recent Blocks                                       │
+│  #1234 - 2 min ago - 20.0 CHR                       │
+│  #1233 - 8 min ago - 20.0 CHR                       │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 5.7: Mining Webhook Integration
+
+Integrate mining events with Phase 4 webhook system.
+
+- ⏳ `mining_started` webhook event
+- ⏳ `mining_stopped` webhook event
+- ⏳ `block_found` webhook event (already in Phase 4)
+- ⏳ `mining_error` webhook event
+- ⏳ Mining performance alerts via webhooks
+
+**Dependencies:**
+
+- Geth process running with `--enable-geth` flag
+- Wallet with miner address configured
+- Network connection for blockchain sync
+- (Optional) Power monitoring for consumption tracking
+- (Optional) Temperature sensors for overheating protection
+
+**Implementation Order:**
+
+1. Phase 5.1 - Core mining integration (Week 1)
+2. Phase 5.2 - Mining dashboard (Week 2)
+3. Phase 5.3 - History & analytics (Week 2)
+4. Phase 5.4 - Advanced configuration (Week 3)
+5. Phase 5.5 - Smart mining features (Week 4)
+6. Phase 5.6 - TUI panel (After Phase 3 completion)
+7. Phase 5.7 - Webhook integration (After Phase 5.1)
+
+**Security Considerations:**
+
+- Never log miner private keys
+- Validate addresses before use
+- CPU throttling to prevent overheating
+- Memory limits for mining operations
+- Automatic shutdown on critical errors
+- Rate limiting for RPC calls
+
+**Testing Requirements:**
+
+- Unit tests for command parsing and validation
+- Integration tests for mining start/stop cycles
+- Manual tests on different hardware configurations
+- Performance benchmarking
+- Power consumption validation
 
 ---
 
@@ -576,6 +791,67 @@ TUI mode is planned for a future release after REPL mode is stable. Implementati
 | `config get <key>`         | Get setting value      | `config get max_peers`      |
 | `config set <key> <value>` | Update setting         | `config set max_peers 100`  |
 | `config reset <key>`       | Reset to default       | `config reset max_peers`    |
+
+### Phase 4: Advanced Commands
+
+#### Export Commands
+
+| Command                               | Description           | Example                                        |
+| ------------------------------------- | --------------------- | ---------------------------------------------- |
+| `export metrics [opts]`               | Export network stats  | `export metrics --format json`                 |
+| `export peers [opts]`                 | Export peer list      | `export peers --format csv --output peers.csv` |
+| `export downloads [opts]`             | Export download stats | `export downloads --format json`               |
+| `export all [opts]`                   | Export all data       | `export all --format json`                     |
+
+**Export Options:**
+- `--format json|csv` - Output format (default: json)
+- `--output <path>` - Custom file path (default: auto-generated with timestamp)
+
+#### Script Commands
+
+| Command            | Description              | Example                  |
+| ------------------ | ------------------------ | ------------------------ |
+| `script run <path>`| Run REPL script          | `script run monitor.chiral` |
+| `script list`      | List available scripts   | `script list`            |
+
+**Script Format:** Create `.chiral` files with one command per line in `.chiral/scripts/` directory.
+
+#### Plugin Commands
+
+| Command              | Description        | Example                       |
+| -------------------- | ------------------ | ----------------------------- |
+| `plugin load <path>` | Load plugin        | `plugin load ./my-plugin.so`  |
+| `plugin unload <name>`| Unload plugin     | `plugin unload my-plugin`     |
+| `plugin list`        | List loaded plugins| `plugin list`                 |
+
+#### Webhook Commands
+
+| Command                     | Description         | Example                                              |
+| --------------------------- | ------------------- | ---------------------------------------------------- |
+| `webhook add <evt> <url>`   | Add webhook         | `webhook add peer_connected https://example.com/hook`|
+| `webhook remove <id>`       | Remove webhook      | `webhook remove webhook_1234567890`                  |
+| `webhook list`              | List webhooks       | `webhook list`                                       |
+| `webhook test <id>`         | Test webhook        | `webhook test webhook_1234567890`                    |
+| `webhook events`            | Show event types    | `webhook events`                                     |
+
+**Webhook Events:** `peer_connected`, `peer_disconnected`, `download_started`, `download_completed`, `download_failed`, `file_added`, `mining_started`, `mining_stopped`, `block_found`
+
+#### Reporting Commands
+
+| Command          | Description                  | Example         |
+| ---------------- | ---------------------------- | --------------- |
+| `report summary` | Generate summary report      | `report summary`|
+| `report full`    | Generate comprehensive report| `report full`   |
+
+#### Remote Access Commands
+
+| Command                      | Description              | Example                            |
+| ---------------------------- | ------------------------ | ---------------------------------- |
+| `remote start [addr] [token]`| Start remote REPL server | `remote start 127.0.0.1:7777`      |
+| `remote stop`                | Stop remote server       | `remote stop`                      |
+| `remote status`              | Show server status       | `remote status`                    |
+
+**Security Note:** Remote REPL uses token-based authentication. Use SSH port forwarding for production deployments.
 
 ---
 
