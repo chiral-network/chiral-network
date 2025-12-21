@@ -7,7 +7,7 @@
 - [Mode Comparison](#mode-comparison)
 - [Getting Started](#getting-started)
 - [REPL Mode](#repl-mode)
-- [TUI Mode (Future)](#tui-mode-future)
+- [TUI Mode](#tui-mode)
 - [Command Reference](#command-reference)
 - [Use Cases](#use-cases)
 - [Troubleshooting](#troubleshooting)
@@ -104,29 +104,43 @@ Advanced REPL capabilities and improved UX.
 - `indicatif = "0.17"` - Progress bars (for future use)
 - `strsim = "0.11"` - Levenshtein distance for suggestions
 
-### Phase 3: TUI Mode 🚧 **IN PLANNING**
+### Phase 3: TUI Mode ✅ **COMPLETED**
 
-**Target:** v0.3.0
+**Status:** Released in v0.1.0
 
 Full-screen terminal dashboard with live updates.
 
-**Planned Features:**
+**Implemented Features:**
 
-- ⏳ Live dashboard with multiple panels
-- ⏳ Real-time network metrics visualization
-- ⏳ Progress bars for active downloads
-- ⏳ Panel switching (Network, Downloads, Peers, Mining)
-- ⏳ Mouse support (optional)
-- ⏳ Charts and graphs (bandwidth, peers over time)
-- ⏳ Keyboard shortcuts (hjkl navigation)
-- ⏳ Customizable layout and themes
+- ✅ Live dashboard with automatic 1-second refresh
+- ✅ Real-time network metrics visualization
+- ✅ Multiple panels (Network, Downloads, Peers, Mining)
+- ✅ Tab-based panel switching with indicators
+- ✅ Keyboard navigation (number keys, Tab, arrows)
+- ✅ Command mode (press `:` to enter commands)
+- ✅ Real-time peer list display
+- ✅ Download tracking with status colors
+- ✅ Mining panel with stats display
+- ✅ Command execution with result feedback
+- ✅ Mouse support via crossterm
+- ✅ Clean terminal rendering with proper cleanup
 
 **Technology Stack:**
 
-- `ratatui` - Modern Rust TUI framework
-- `crossterm` - Cross-platform terminal handling
-- Event-driven architecture
-- 1-second refresh rate
+- `ratatui = "0.28"` - Modern Rust TUI framework
+- `crossterm = "0.28"` - Cross-platform terminal handling
+- Event-driven async architecture
+- 1-second auto-refresh rate
+- Live metrics channel with tokio
+
+**Technical Implementation:**
+
+- `src-tauri/src/tui.rs` - Main TUI implementation
+- Background metrics polling with tokio channels
+- Panel system with `ActivePanel` enum
+- Real-time data from `DhtService` and `FileTransferService`
+- Command parser integrated with TUI display
+- Graceful terminal state management (raw mode, alternate screen)
 
 ### Phase 4: Advanced Features ✅ **COMPLETED**
 
@@ -428,7 +442,7 @@ cargo build --release
 # Binary location
 cd src-tauri
 ./target/release/chiral-network --interactive  # REPL mode
-./target/release/chiral-network --tui          # TUI mode (future)
+./target/release/chiral-network --tui          # TUI mode
 ```
 
 ### Common CLI Flags
@@ -666,22 +680,22 @@ COMMANDS
 
 ---
 
-## TUI Mode (Future)
+## TUI Mode
 
-> **Status:** Planned for future release
+> **Status:** ✅ Available in v0.1.0
 >
-> TUI (Terminal User Interface) mode will provide a full-screen dashboard with live updates, similar to `htop` or `btop`.
+> TUI (Terminal User Interface) mode provides a full-screen dashboard with live updates, similar to `htop` or `btop`.
 
-### Planned Features
+### Features
 
-- 📊 **Live Dashboard** - Real-time network stats
+- 📊 **Live Dashboard** - Real-time network stats with 1-second refresh
 - 🎨 **Multiple Panels** - Network, downloads, peers, mining
-- ⌨️ **Keyboard Navigation** - Switch between panels
-- 🖱️ **Mouse Support** - Optional click interactions
-- 📈 **Charts & Graphs** - Visual representation of metrics
-- 🎯 **Panel Focus** - Zoom into specific sections
+- ⌨️ **Keyboard Navigation** - Switch between panels with number keys, Tab, or arrows
+- 🖱️ **Mouse Support** - Crossterm-based mouse interactions
+- 📋 **Command Mode** - Press `:` to execute commands from TUI
+- 🎯 **Panel Indicators** - Visual tabs showing current panel
 
-### Planned Interface Layout
+### Interface Layout
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -703,36 +717,89 @@ COMMANDS
 Command: █                    [Tab] for autocomplete
 ```
 
-### Planned Keybindings
+### Keybindings
 
-| Key         | Action               |
-| ----------- | -------------------- |
-| `1-5`       | Switch to panel      |
-| `q`         | Quit                 |
-| `h` or `F1` | Help                 |
-| `r`         | Refresh              |
-| `↑↓←→`      | Navigate             |
-| `Enter`     | Select/Activate      |
-| `Tab`       | Command autocomplete |
+| Key         | Action                          |
+| ----------- | ------------------------------- |
+| `1-4`       | Switch to panel (1=Network, 2=Downloads, 3=Peers, 4=Mining) |
+| `q` or `Q`  | Quit TUI                        |
+| `:`         | Enter command mode              |
+| `Tab`       | Next panel                      |
+| `Shift+Tab` | Previous panel                  |
+| `←`         | Previous panel                  |
+| `→`         | Next panel                      |
+| `Esc`       | Cancel command mode (when in `:` mode) |
+| `Enter`     | Execute command (when in `:` mode) |
+| `Backspace` | Delete character (when in `:` mode) |
 
-### Starting TUI Mode (Future)
+### Command Mode
+
+Press `:` to enter command mode (similar to vi/vim). Available commands:
+
+- `help` or `h` - Show available commands
+- `status` or `s` - Node status summary
+- `peers` - Show connected peer count
+- `add <path>` - Add file to share (hash saved to `/tmp/chiral_last_hash.txt`)
+- `download <hash>` or `download last` - Download file by hash or last added
+- `downloads` - Show detailed download metrics
+- `dht status` - DHT reachability info
+- `mining status` - Mining status (requires `--enable-geth`)
+
+Press `Enter` to execute, `Esc` to cancel.
+
+### Starting TUI Mode
 
 ```bash
 # Basic usage
 ./target/release/chiral-network --tui
 
-# With options
-./target/release/chiral-network --tui --dht-port 5001 --enable-geth
+# With custom port
+./target/release/chiral-network --tui --dht-port 5001
+
+# With mining enabled
+./target/release/chiral-network --tui --enable-geth
+
+# With custom bootstrap nodes
+./target/release/chiral-network --tui \
+  --bootstrap /ip4/134.199.240.145/tcp/4001/p2p/12D3KooW...
 ```
 
-### Implementation Timeline
+### TUI Features In Detail
 
-TUI mode is planned for a future release after REPL mode is stable. Implementation will use:
+**Network Panel** - Real-time network monitoring:
+- Connected peer count (live updated)
+- Reachability status (Public/Private/Unknown)
+- NAT status and traversal info
+- AutoNAT configuration
+- Circuit Relay status with peer ID
+- DCUtR hole punching success rate
+- DHT reachability and confidence
+- Observed addresses count
+- Download success/failure/retry stats
 
-- **ratatui** - Modern Rust TUI framework
-- **crossterm** - Cross-platform terminal manipulation
-- **Live updates** - 1-second refresh rate
-- **Panel system** - Modular layout design
+**Downloads Panel** - Active download tracking:
+- Recent download attempts with color-coded status
+- File hash (truncated for display)
+- Success (green), Failed (red), Retrying (yellow) indicators
+- Attempt count (current/max)
+- Real-time updates from `FileTransferService`
+
+**Peers Panel** - Connected peer list:
+- Live peer list (updates every second)
+- Peer ID display (truncated with ellipsis)
+- Shows up to 20 most recent peers
+- Total peer count in panel title
+
+**Mining Panel** - Mining statistics:
+- Mining status (Active/Inactive)
+- Hash rate display
+- Thread count
+- Blocks found count
+- Total rewards earned
+- Power consumption estimate
+- Recent block list with timestamps
+
+All panels update automatically every second with fresh data from the backend services.
 
 ---
 
@@ -1109,4 +1176,4 @@ cargo build --release
 **Last Updated:** December 2024
 **Version:** v0.1.0
 **REPL Status:** ✅ Available
-**TUI Status:** 📋 Planned
+**TUI Status:** ✅ Available
