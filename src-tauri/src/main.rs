@@ -1227,7 +1227,23 @@ async fn start_miner(
         Ok(_) => Ok(()),
         Err(e) if e.contains("-32601") || e.to_lowercase().contains("does not exist") => {
             // miner_setEtherbase method doesn't exist, need to restart with etherbase
-            warn!("miner_setEtherbase not supported, restarting geth with miner address...");
+            // IMPORTANT: We can only restart geth if this app instance actually started/manages it.
+            // If the user is using an external/remote RPC via SSH port-forward, restarting would fail
+            // (port is occupied) and is conceptually the wrong thing to do.
+            let is_managed = {
+                let geth = state.geth.lock().await;
+                geth.is_managed()
+            };
+            if !is_managed {
+                return Err(
+                    "Mining RPC requires setting etherbase, but the connected Geth does not support miner_setEtherbase. \
+This app is currently connected to an external/remote RPC (not a managed local Geth), so it cannot restart Geth automatically. \
+Fix: restart your Geth with `--miner.etherbase <YOUR_ADDRESS>` (or run a Geth build that supports `miner_setEtherbase`)."
+                        .to_string(),
+                );
+            }
+
+            warn!("miner_setEtherbase not supported, restarting managed geth with miner address...");
             restart_geth_and_wait(&state, &data_dir).await?;
 
             // Try mining again without setting etherbase (it's set via command line now)

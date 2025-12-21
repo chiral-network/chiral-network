@@ -58,6 +58,14 @@ pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .expect("Failed to create HTTP client")
 });
 
+// Shared blocking HTTP client for sync status checks (e.g. `is_running()`).
+pub static HTTP_CLIENT_BLOCKING: Lazy<reqwest::blocking::Client> = Lazy::new(|| {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(1))
+        .build()
+        .expect("Failed to create blocking HTTP client")
+});
+
 //Structs
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EthAccount {
@@ -96,44 +104,37 @@ impl GethProcess {
         GethProcess { child: None }
     }
 
+    /// Returns true if this process was started and is managed by this app instance.
+    /// Note: `is_running()` may return true even when unmanaged (e.g., SSH port-forward to a remote RPC),
+    /// because it checks whether the configured RPC endpoint is reachable.
+    pub fn is_managed(&self) -> bool {
+        self.child.is_some()
+    }
+
     pub fn is_running(&self) -> bool {
         // First check if we have a tracked child process
         if self.child.is_some() {
             return true;
         }
 
-        // Check if geth is actually running by trying an RPC call
-        // This is more reliable than just checking if port 8545 is listening
-        use std::net::TcpStream;
-        use std::time::Duration;
-
-        // First check if port is listening (quick check)
-        let port_open = TcpStream::connect_timeout(
-            &"127.0.0.1:8545".parse().unwrap(),
-            Duration::from_millis(500)
-        ).is_ok();
-
-        if !port_open {
-            return false;
-        }
-
-        // Port is open, now verify it's actually Geth responding correctly
-        // Try a simple RPC call with a short timeout
-        match std::process::Command::new("curl")
-            .args([
-                "-s",
-                "-m", "1",  // 1 second timeout
-                "-X", "POST",
-                "-H", "Content-Type: application/json",
-                "--data", r#"{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}"#,
-                "http://127.0.0.1:8545"
-            ])
-            .output()
+        // Check if geth is actually running by trying an RPC call against the configured endpoint.
+        // This is more reliable than checking whether a fixed localhost port is listening.
+        let payload =
+            r#"{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}"#;
+        match HTTP_CLIENT_BLOCKING
+            .post(&NETWORK_CONFIG.rpc_endpoint)
+            .header("Content-Type", "application/json")
+            .body(payload)
+            .send()
         {
-            Ok(output) => {
-                // Check if we got a valid JSON-RPC response
-                let response = String::from_utf8_lossy(&output.stdout);
-                response.contains("\"jsonrpc\"") && response.contains("\"result\"")
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    return false;
+                }
+                match resp.text() {
+                    Ok(body) => body.contains("\"jsonrpc\"") && body.contains("\"result\""),
+                    Err(_) => false,
+                }
             }
             Err(_) => false,
         }
