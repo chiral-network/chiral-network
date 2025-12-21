@@ -750,7 +750,7 @@
               // Check if node is in pure-client mode (cannot seed files)
               if ($settings.pureClientMode) {
                 showToast(
-                  "Cannot upload files in pure-client mode. File seeding is disabled when the node is configured as client-only. Please disable pure-client mode in Settings to upload files.",
+                  tr("toasts.upload.pureClientMode"),
                   "error",
                 );
                 blockedCount++;
@@ -1091,7 +1091,7 @@
     // STEP 3: Check if node is in pure-client mode (cannot seed files)
     if ($settings.pureClientMode) {
       showToast(
-        "Cannot upload files in pure-client mode. File seeding is disabled when the node is configured as client-only. Please disable pure-client mode in Settings to upload files.",
+        tr("toasts.upload.pureClientMode"),
         "error",
       );
       clearTimeout(forceResetTimeout);

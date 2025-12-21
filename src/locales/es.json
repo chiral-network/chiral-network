@@ -1597,6 +1597,7 @@
       "loginRequired": "Inicia sesión en tu cuenta antes de subir archivos",
       "verifyAccountFailed": "No se pudo verificar el estado de la cuenta. Intenta iniciar sesión nuevamente.",
       "dhtDisconnected": "La red DHT no está conectada. Inicia la red DHT antes de subir archivos.",
+      "pureClientMode": "No se pueden subir archivos en modo cliente puro. La distribución de archivos está deshabilitada cuando el nodo está configurado solo como cliente. Desactiva el modo cliente puro en Configuración para subir archivos.",
       "fileSuccess": "{name} se subió correctamente",
       "torrentSeeding": "{name} ahora está compartiendo como torrent"
     },
