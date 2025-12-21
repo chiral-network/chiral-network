@@ -26,6 +26,7 @@ async fn test_start_download_fallback_to_public() {
             vec![],                       // No custom AutoNAT servers
             None,                         // No proxy
             None,                         // No file transfer service
+            None,                         // No webrtc_service
             None,                         // No chunk manager
             Some(256),                    // chunk_size_kb
             Some(1024),                   // cache_size_mb
@@ -34,8 +35,8 @@ async fn test_start_download_fallback_to_public() {
             false,                        // enable_relay_server
             false,                        // enable_upnp
             None,                         // blockstore_db_path
-            None,
-            None,
+            None,                         // last_autorelay_enabled_at
+            None,                         // last_autorelay_disabled_at
             false,                        // pure_client_mode
             false,                        // force_server_mode
         )
@@ -82,6 +83,7 @@ async fn test_integration_protocol_handler_download_linux_distro() {
             vec![],                       // No custom AutoNAT servers
             None,                         // No proxy
             None,                         // No file transfer service
+            None,                         // No webrtc_service
             None,                         // No chunk manager
             Some(256),                    // chunk_size_kb
             Some(1024),                   // cache_size_mb
@@ -90,8 +92,8 @@ async fn test_integration_protocol_handler_download_linux_distro() {
             false,                        // enable_relay_server
             false,                        // enable_upnp
             None,                         // blockstore_db_path
-            None,
-            None,
+            None,                         // last_autorelay_enabled_at
+            None,                         // last_autorelay_disabled_at
             false,                        // pure_client_mode
             false,                        // force_server_mode
         )
@@ -143,6 +145,7 @@ async fn test_integration_seed_file() {
             vec![],                       // No custom AutoNAT servers
             None,                         // No proxy
             None,                         // No file transfer service
+            None,                         // No webrtc_service
             None,                         // No chunk manager
             Some(256),                    // chunk_size_kb
             Some(1024),                   // cache_size_mb
@@ -151,8 +154,8 @@ async fn test_integration_seed_file() {
             false,                        // enable_relay_server
             false,                        // enable_upnp
             None,                         // blockstore_db_path
-            None,
-            None,
+            None,                         // last_autorelay_enabled_at
+            None,                         // last_autorelay_disabled_at
             false,                        // pure_client_mode
             false,                        // force_server_mode
         )

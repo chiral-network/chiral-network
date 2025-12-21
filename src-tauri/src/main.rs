@@ -20,6 +20,7 @@ pub mod headless;
 pub mod http_server;
 pub mod chiral_bittorrent_extension;
 pub mod net;
+pub mod payment_checkpoint;
 pub mod pool;
 pub mod repl;
 pub mod tui;
@@ -50,6 +51,7 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
+use crate::payment_checkpoint::PaymentCheckpointService;
 use bandwidth::BandwidthController;
 use chiral_network::transfer_events::{
     current_timestamp_ms, ErrorCategory, SourceInfo, SourceType, TransferCompletedEvent,
@@ -396,6 +398,7 @@ struct AppState {
     socks5_proxy_cli: Mutex<Option<String>>,
     analytics: Arc<analytics::AnalyticsService>,
     bandwidth: Arc<BandwidthController>,
+    payment_checkpoint: Arc<PaymentCheckpointService>,
 
     // New fields for transaction queue
     transaction_queue: Arc<Mutex<VecDeque<QueuedTransaction>>>,
@@ -8020,6 +8023,142 @@ async fn run_tui_mode(args: headless::CliArgs) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+// ============================================================================
+// Payment Checkpoint Commands
+// ============================================================================
+
+/// Initialize a payment checkpoint session for a file download
+#[tauri::command]
+async fn init_payment_checkpoint(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    file_hash: String,
+    file_size: u64,
+    seeder_address: String,
+    seeder_peer_id: String,
+    price_per_mb: f64,
+    payment_mode: String,
+) -> Result<(), String> {
+    state.payment_checkpoint
+        .init_session(
+            session_id,
+            file_hash,
+            file_size,
+            seeder_address,
+            seeder_peer_id,
+            price_per_mb,
+            payment_mode,
+        )
+        .await
+}
+
+/// Update download progress and check for payment checkpoints
+#[tauri::command]
+async fn update_payment_checkpoint_progress(
+    state: tauri::State<'_, AppState>,
+    window: tauri::Window,
+    session_id: String,
+    bytes_transferred: u64,
+) -> Result<String, String> {
+    let checkpoint_state = state.payment_checkpoint
+        .update_progress(&session_id, bytes_transferred)
+        .await?;
+
+    // Emit event if checkpoint reached
+    if let crate::payment_checkpoint::CheckpointState::WaitingForPayment { checkpoint_mb, amount_chiral } = &checkpoint_state {
+        let info = state.payment_checkpoint.get_checkpoint_info(&session_id).await?;
+
+        window.emit("payment_checkpoint_reached", serde_json::json!({
+            "sessionId": session_id,
+            "fileHash": info.file_hash,
+            "checkpointMb": checkpoint_mb,
+            "amountChiral": amount_chiral,
+            "bytesTransferred": bytes_transferred,
+            "seederAddress": info.seeder_address,
+            "seederPeerId": info.seeder_peer_id,
+        })).map_err(|e| format!("Failed to emit checkpoint event: {}", e))?;
+    }
+
+    // Return state as string
+    Ok(match checkpoint_state {
+        crate::payment_checkpoint::CheckpointState::Active => "active".to_string(),
+        crate::payment_checkpoint::CheckpointState::WaitingForPayment { .. } => "waiting_for_payment".to_string(),
+        crate::payment_checkpoint::CheckpointState::PaymentReceived { .. } => "payment_received".to_string(),
+        crate::payment_checkpoint::CheckpointState::PaymentFailed { .. } => "payment_failed".to_string(),
+        crate::payment_checkpoint::CheckpointState::Completed => "completed".to_string(),
+    })
+}
+
+/// Record a checkpoint payment
+#[tauri::command]
+async fn record_checkpoint_payment(
+    state: tauri::State<'_, AppState>,
+    window: tauri::Window,
+    session_id: String,
+    transaction_hash: String,
+    amount_paid: f64,
+) -> Result<(), String> {
+    state.payment_checkpoint
+        .record_payment(&session_id, transaction_hash.clone(), amount_paid)
+        .await?;
+
+    // Emit payment confirmation event
+    window.emit("payment_checkpoint_paid", serde_json::json!({
+        "sessionId": session_id,
+        "transactionHash": transaction_hash,
+        "amountPaid": amount_paid,
+    })).map_err(|e| format!("Failed to emit payment event: {}", e))?;
+
+    Ok(())
+}
+
+/// Check if download should pause for payment
+#[tauri::command]
+async fn check_should_pause_serving(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<bool, String> {
+    state.payment_checkpoint.should_pause_serving(&session_id).await
+}
+
+/// Get checkpoint information for a session
+#[tauri::command]
+async fn get_payment_checkpoint_info(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<serde_json::Value, String> {
+    let info = state.payment_checkpoint.get_checkpoint_info(&session_id).await?;
+    serde_json::to_value(&info).map_err(|e| format!("Failed to serialize checkpoint info: {}", e))
+}
+
+/// Mark a checkpoint payment as failed
+#[tauri::command]
+async fn mark_checkpoint_payment_failed(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    reason: String,
+) -> Result<(), String> {
+    state.payment_checkpoint.mark_payment_failed(&session_id, reason).await
+}
+
+/// Mark a checkpoint session as completed
+#[tauri::command]
+async fn mark_checkpoint_completed(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    state.payment_checkpoint.mark_completed(&session_id).await
+}
+
+/// Remove a checkpoint session
+#[tauri::command]
+async fn remove_payment_checkpoint_session(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    state.payment_checkpoint.remove_session(&session_id).await
+}
+
 // #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
@@ -8313,6 +8452,7 @@ fn main() {
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
             analytics: Arc::new(analytics::AnalyticsService::new()),
             bandwidth: Arc::new(BandwidthController::new()),
+            payment_checkpoint: Arc::new(PaymentCheckpointService::new()),
 
             // Initialize transaction queue
             transaction_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -8614,7 +8754,16 @@ fn main() {
             start_download_restart,
             pause_download_restart,
             resume_download_restart,
-            get_download_status_restart
+            get_download_status_restart,
+            // Payment checkpoint commands
+            init_payment_checkpoint,
+            update_payment_checkpoint_progress,
+            record_checkpoint_payment,
+            check_should_pause_serving,
+            get_payment_checkpoint_info,
+            mark_checkpoint_payment_failed,
+            mark_checkpoint_completed,
+            remove_payment_checkpoint_session
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

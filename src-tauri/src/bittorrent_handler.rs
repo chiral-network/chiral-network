@@ -2029,6 +2029,7 @@ mod tests {
                 vec![],                       // No custom AutoNAT servers
                 None,                         // No proxy
                 None,                         // No file transfer service
+                None,                         // No webrtc_service
                 None,                         // No chunk manager
                 Some(256),                    // chunk_size_kb
                 Some(1024),                   // cache_size_mb
@@ -2037,8 +2038,8 @@ mod tests {
                 false,                        // enable_relay_server
                 false,                        // enable_upnp
                 None,                         // blockstore_db_path
-                None,
-                None,
+                None,                         // last_autorelay_enabled_at
+                None,                         // last_autorelay_disabled_at
                 false,                        // pure_client_mode
                 false,                        // force_server_mode
             )
@@ -2101,6 +2102,7 @@ mod tests {
                 vec![],                       // No custom AutoNAT servers
                 None,                         // No proxy
                 None,                         // No file transfer service
+                None,                         // No webrtc_service
                 None,                         // No chunk manager
                 Some(256),                    // chunk_size_kb
                 Some(1024),                   // cache_size_mb
@@ -2109,8 +2111,8 @@ mod tests {
                 false,                        // enable_relay_server
                 false,                        // enable_upnp
                 None,                         // blockstore_db_path
-                None,
-                None,
+                None,                         // last_autorelay_enabled_at
+                None,                         // last_autorelay_disabled_at
                 false,                        // pure_client_mode
                 false,                        // force_server_mode
             )
@@ -2161,6 +2163,7 @@ mod tests {
                 vec![],                       // No custom AutoNAT servers
                 None,                         // No proxy
                 None,                         // No file transfer service
+                None,                         // No webrtc_service
                 None,                         // No chunk manager
                 Some(256),                    // chunk_size_kb
                 Some(1024),                   // cache_size_mb
@@ -2169,8 +2172,8 @@ mod tests {
                 false,                        // enable_relay_server
                 false,                        // enable_upnp
                 None,                         // blockstore_db_path
-                None,
-                None,
+                None,                         // last_autorelay_enabled_at
+                None,                         // last_autorelay_disabled_at
                 false,                        // pure_client_mode
                 false,                        // force_server_mode
             )
@@ -2378,8 +2381,8 @@ mod torrent_state_manager_tests {
             priority: 1,
         };
 
-        manager.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
-        manager.torrents.insert(torrent2.info_hash.clone(), torrent2.clone());
+        manager.state.torrents.insert(torrent1.info_hash.clone(), torrent1.clone());
+        manager.state.torrents.insert(torrent2.info_hash.clone(), torrent2.clone());
 
         let all_torrents = manager.get_all_torrents_vec();
         assert_eq!(all_torrents.len(), 2);
