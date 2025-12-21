@@ -112,10 +112,11 @@ export class TestDataFactory {
     success: boolean = true,
     amount: number = 0.001
   ): MockPaymentResult {
+    const hex = Math.random().toString(16).replace(/^0\./, "").padEnd(64, "0").slice(0, 64);
     return {
       success,
       transactionId: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      transactionHash: `0x${Math.random().toString(16).substr(2, 64)}`,
+      transactionHash: `0x${hex}`,
       amount,
       error: success ? undefined : "Payment failed",
     };
@@ -384,7 +385,10 @@ export class DownloadProgressSimulator {
    * Simulate downloading a chunk
    */
   async downloadChunk(chunkIndex: number, delayMs: number = 10): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    // Avoid per-chunk timer overhead when delay is 0 (or negative).
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
     
     if (chunkIndex >= 0 && chunkIndex < this.totalChunks) {
       this.downloadedChunks.add(chunkIndex);
