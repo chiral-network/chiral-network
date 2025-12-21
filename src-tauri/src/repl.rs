@@ -19,6 +19,8 @@ pub struct ReplContext {
     pub file_transfer_service: Option<Arc<FileTransferService>>,
     pub geth_process: Option<GethProcess>,
     pub peer_id: String,
+    pub miner_address: Option<String>,
+    pub geth_data_dir: String,
 }
 
 // REPL helper for completion, highlighting, and validation
@@ -33,7 +35,7 @@ impl ReplHelper {
         subcommands.insert("peers", vec!["count", "list"]);
         subcommands.insert("dht", vec!["status", "get"]);
         subcommands.insert("list", vec!["files", "downloads"]);
-        subcommands.insert("mining", vec!["status", "start", "stop"]);
+        subcommands.insert("mining", vec!["status", "start", "stop", "dashboard", "logs", "rewards", "performance"]);
         subcommands.insert("config", vec!["get", "set", "list", "reset"]);
         subcommands.insert("reputation", vec!["list", "info"]);
         subcommands.insert("versions", vec!["list", "info"]);
@@ -373,6 +375,10 @@ fn print_help() {
     println!("  │ {:<54} │", "  mining status           Show mining status");
     println!("  │ {:<54} │", "  mining start [threads]  Start mining (geth)");
     println!("  │ {:<54} │", "  mining stop             Stop mining");
+    println!("  │ {:<54} │", "  mining dashboard        Live mining dashboard");
+    println!("  │ {:<54} │", "  mining logs [lines]     View mining logs");
+    println!("  │ {:<54} │", "  mining rewards          Total rewards & history");
+    println!("  │ {:<54} │", "  mining performance      Performance metrics");
     println!("  ├────────────────────────────────────────────────────────┤");
     println!("  │ {:<54} │", "Configuration");
     println!("  ├────────────────────────────────────────────────────────┤");
@@ -814,7 +820,7 @@ async fn cmd_dht(args: &[&str], context: &ReplContext) -> Result<(), String> {
 
 async fn cmd_mining(args: &[&str], context: &ReplContext) -> Result<(), String> {
     if args.is_empty() {
-        return Err("Usage: mining <status|start|stop>".to_string());
+        return Err("Usage: mining <status|start|stop|dashboard|logs|rewards|performance>".to_string());
     }
 
     if context.geth_process.is_none() {
@@ -824,26 +830,381 @@ async fn cmd_mining(args: &[&str], context: &ReplContext) -> Result<(), String> 
     match args[0] {
         "status" => {
             println!("\n⛏️  Mining Status:");
-            println!("  (Mining status requires geth integration)");
+            println!("  ┌────────────────────────────────────────────────────────┐");
+
+            // Get actual mining status from Geth
+            match crate::ethereum::get_mining_status().await {
+                Ok(is_mining) => {
+                    let status_text = if is_mining { "Active" } else { "Inactive" };
+                    let status_color = if is_mining { "🟢" } else { "🔴" };
+                    println!("  │ {:<54} │", format!("Status: {} {}", status_color, status_text));
+
+                    // Get coinbase/etherbase address
+                    match crate::ethereum::get_coinbase().await {
+                        Ok(coinbase) => {
+                            println!("  │ {:<54} │", format!("Miner Address: {}", coinbase));
+                        }
+                        Err(_) => {
+                            if let Some(addr) = &context.miner_address {
+                                println!("  │ {:<54} │", format!("Miner Address: {}", addr));
+                            }
+                        }
+                    }
+
+                    // Get hash rate and blocks if mining is active
+                    if is_mining {
+                        match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
+                            Ok((blocks_found, hash_rate)) => {
+                                println!("  │ {:<54} │", format!("Hash Rate: {:.2} MH/s", hash_rate));
+                                println!("  │ {:<54} │", format!("Blocks Found: {}", blocks_found));
+                            }
+                            Err(e) => {
+                                println!("  │ {:<54} │", format!("Performance: {}", e));
+                            }
+                        }
+
+                        // Get total rewards if miner address is available
+                        let miner_addr = context.miner_address.as_ref()
+                            .or_else(|| {
+                                // Try to get from coinbase
+                                None
+                            });
+
+                        if let Some(addr) = miner_addr {
+                            match crate::ethereum::get_total_mining_rewards(addr).await {
+                                Ok(total) => {
+                                    println!("  │ {:<54} │", format!("Total Rewards: {:.4} ETC", total));
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  │ {:<54} │", format!("Error: {}", e));
+                }
+            }
+
+            println!("  └────────────────────────────────────────────────────────┘");
             println!();
         }
         "start" => {
             let threads = args.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
+
+            // Get miner address
+            let miner_addr = context.miner_address.as_ref()
+                .ok_or("No miner address configured. Set via --miner-address flag")?;
+
             println!("\n⛏️  Starting mining with {} thread(s)...", threads);
-            println!("  (Mining start requires geth integration)");
-            println!();
+
+            match crate::ethereum::start_mining(miner_addr, threads).await {
+                Ok(_) => {
+                    println!("✓ Mining started successfully!");
+                    println!("  Miner Address: {}", miner_addr);
+                    println!("  Threads: {}", threads);
+                    println!();
+                    println!("  Use {} to check status", "mining status".cyan());
+                    println!();
+                }
+                Err(e) => {
+                    return Err(format!("Failed to start mining: {}", e));
+                }
+            }
         }
         "stop" => {
             println!("\n⛏️  Stopping mining...");
-            println!("  (Mining stop requires geth integration)");
-            println!();
+
+            match crate::ethereum::stop_mining().await {
+                Ok(_) => {
+                    println!("✓ Mining stopped successfully!");
+                    println!();
+                }
+                Err(e) => {
+                    return Err(format!("Failed to stop mining: {}", e));
+                }
+            }
+        }
+        "dashboard" => {
+            cmd_mining_dashboard(context).await?;
+        }
+        "logs" => {
+            let lines = args.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(50);
+            cmd_mining_logs(context, lines).await?;
+        }
+        "rewards" => {
+            cmd_mining_rewards(context).await?;
+        }
+        "performance" | "perf" => {
+            cmd_mining_performance(context).await?;
         }
         _ => {
-            return Err(format!("Unknown mining subcommand: '{}'", args[0]));
+            return Err(format!("Unknown mining subcommand: '{}'\nUse: status, start [threads], stop, dashboard, logs [lines], rewards, performance", args[0]));
         }
     }
 
     Ok(())
+}
+
+// Mining dashboard with live stats
+async fn cmd_mining_dashboard(context: &ReplContext) -> Result<(), String> {
+    println!("\n⛏️  Mining Dashboard:");
+    println!("  ┌────────────────────────────────────────────────────────┐");
+
+    // Get mining status
+    let is_mining = crate::ethereum::get_mining_status().await
+        .unwrap_or(false);
+
+    let status_text = if is_mining { "🟢 Active" } else { "🔴 Inactive" };
+    println!("  │ {:<54} │", format!("Mining: {}", status_text));
+    println!("  ├────────────────────────────────────────────────────────┤");
+
+    if is_mining {
+        // Get performance metrics
+        match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
+            Ok((blocks_found, hash_rate)) => {
+                println!("  │ {:<54} │", format!("Hash Rate: {:.2} MH/s", hash_rate));
+                println!("  │ {:<54} │", format!("Blocks Found: {}", blocks_found));
+            }
+            Err(e) => {
+                println!("  │ {:<54} │", format!("Performance Error: {}", e));
+            }
+        }
+
+        // Get miner address and rewards
+        if let Some(addr) = &context.miner_address {
+            println!("  │ {:<54} │", format!("Miner: {}...", &addr[..16]));
+
+            match crate::ethereum::get_total_mining_rewards(addr).await {
+                Ok(total) => {
+                    println!("  │ {:<54} │", format!("Total Rewards: {:.4} ETC", total));
+                }
+                Err(_) => {}
+            }
+        }
+
+        println!("  ├────────────────────────────────────────────────────────┤");
+        println!("  │ {:<54} │", "Recent Activity:");
+
+        // Get recent blocks if available
+        if let Some(addr) = &context.miner_address {
+            match crate::ethereum::get_recent_mined_blocks(addr, 100, 3).await {
+                Ok(blocks) => {
+                    if blocks.is_empty() {
+                        println!("  │ {:<54} │", "  No recent blocks found");
+                    } else {
+                        for block in blocks {
+                            let time_ago = format_time_ago(block.timestamp);
+                            let reward_str = block.reward.map(|r| format!("{:.2} ETC", r))
+                                .unwrap_or_else(|| "0.00 ETC".to_string());
+                            println!("  │ {:<54} │",
+                                format!("  Block #{} - {} - {}",
+                                block.number, reward_str, time_ago));
+                        }
+                    }
+                }
+                Err(_) => {
+                    println!("  │ {:<54} │", "  Unable to fetch recent blocks");
+                }
+            }
+        }
+    } else {
+        println!("  │ {:<54} │", "Mining is not currently active");
+        println!("  │ {:<54} │", "");
+        println!("  │ {:<54} │", format!("Use {} to start", "mining start [threads]".cyan()));
+    }
+
+    println!("  └────────────────────────────────────────────────────────┘");
+    println!();
+    println!("  Refresh: Run {} again for updated stats", "mining dashboard".cyan());
+    println!();
+
+    Ok(())
+}
+
+// Mining logs viewer
+async fn cmd_mining_logs(context: &ReplContext, lines: usize) -> Result<(), String> {
+    println!("\n📋 Mining Logs (last {} lines):", lines);
+    println!("  ┌────────────────────────────────────────────────────────┐");
+
+    match crate::ethereum::get_mining_logs(&context.geth_data_dir, lines) {
+        Ok(log_lines) => {
+            if log_lines.is_empty() {
+                println!("  │ {:<54} │", "No logs available");
+            } else {
+                for line in log_lines {
+                    // Truncate long lines to fit in box
+                    let display_line = if line.len() > 54 {
+                        format!("{}...", &line[..51])
+                    } else {
+                        line
+                    };
+                    println!("  │ {:<54} │", display_line);
+                }
+            }
+        }
+        Err(e) => {
+            println!("  │ {:<54} │", format!("Error reading logs: {}", e));
+        }
+    }
+
+    println!("  └────────────────────────────────────────────────────────┘");
+    println!();
+    println!("  Tip: Use {} for more lines", "mining logs 100".cyan());
+    println!();
+
+    Ok(())
+}
+
+// Mining rewards summary
+async fn cmd_mining_rewards(context: &ReplContext) -> Result<(), String> {
+    println!("\n💰 Mining Rewards:");
+    println!("  ┌────────────────────────────────────────────────────────┐");
+
+    let miner_addr = context.miner_address.as_ref()
+        .ok_or("No miner address configured")?;
+
+    println!("  │ {:<54} │", format!("Address: {}", miner_addr));
+    println!("  ├────────────────────────────────────────────────────────┤");
+
+    // Get total rewards
+    println!("  │ {:<54} │", "Calculating total rewards...");
+    match crate::ethereum::get_total_mining_rewards(miner_addr).await {
+        Ok(total) => {
+            println!("  │ {:<54} │", format!("Total Rewards: {:.6} ETC", total));
+        }
+        Err(e) => {
+            println!("  │ {:<54} │", format!("Error: {}", e));
+        }
+    }
+
+    // Get performance metrics
+    match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
+        Ok((blocks_found, _hash_rate)) => {
+            println!("  │ {:<54} │", format!("Blocks Found: {}", blocks_found));
+
+            // Calculate average reward per block (if blocks > 0)
+            if blocks_found > 0 {
+                match crate::ethereum::get_total_mining_rewards(miner_addr).await {
+                    Ok(total) => {
+                        let avg_reward = total / blocks_found as f64;
+                        println!("  │ {:<54} │", format!("Avg Reward/Block: {:.6} ETC", avg_reward));
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        Err(_) => {}
+    }
+
+    println!("  ├────────────────────────────────────────────────────────┤");
+    println!("  │ {:<54} │", "Recent Blocks:");
+
+    // Get recent blocks with rewards
+    match crate::ethereum::get_recent_mined_blocks(miner_addr, 100, 10).await {
+        Ok(blocks) => {
+            if blocks.is_empty() {
+                println!("  │ {:<54} │", "  No blocks found yet");
+            } else {
+                for block in blocks {
+                    let time_ago = format_time_ago(block.timestamp);
+                    let reward_str = block.reward.map(|r| format!("{:.4} ETC", r))
+                        .unwrap_or_else(|| "0.0000 ETC".to_string());
+                    println!("  │ {:<54} │",
+                        format!("  #{:<8} {}  {}",
+                        block.number, reward_str, time_ago));
+                }
+            }
+        }
+        Err(e) => {
+            println!("  │ {:<54} │", format!("Error: {}", e));
+        }
+    }
+
+    println!("  └────────────────────────────────────────────────────────┘");
+    println!();
+
+    Ok(())
+}
+
+// Mining performance metrics
+async fn cmd_mining_performance(context: &ReplContext) -> Result<(), String> {
+    println!("\n📊 Mining Performance:");
+    println!("  ┌────────────────────────────────────────────────────────┐");
+
+    match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
+        Ok((blocks_found, hash_rate)) => {
+            println!("  │ {:<54} │", format!("Hash Rate: {:.2} MH/s", hash_rate));
+            println!("  │ {:<54} │", format!("Blocks Found: {}", blocks_found));
+
+            // Calculate hashes per block if we have blocks
+            if blocks_found > 0 {
+                // This is a rough estimate based on difficulty
+                println!("  │ {:<54} │", format!("Efficiency: {:.0} MH/block", hash_rate / blocks_found as f64));
+            }
+
+            // Get mining status
+            match crate::ethereum::get_mining_status().await {
+                Ok(is_mining) => {
+                    let status = if is_mining { "🟢 Active" } else { "🔴 Inactive" };
+                    println!("  │ {:<54} │", format!("Status: {}", status));
+                }
+                Err(_) => {}
+            }
+
+            // Get current difficulty (if available)
+            match crate::ethereum::get_network_difficulty_as_u64().await {
+                Ok(difficulty) => {
+                    println!("  │ {:<54} │", format!("Network Difficulty: {}", format_number(difficulty)));
+                }
+                Err(_) => {}
+            }
+        }
+        Err(e) => {
+            println!("  │ {:<54} │", format!("Error: {}", e));
+        }
+    }
+
+    println!("  └────────────────────────────────────────────────────────┘");
+    println!();
+
+    Ok(())
+}
+
+// Helper function to format timestamps as "X time ago"
+fn format_time_ago(timestamp: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let diff = now.saturating_sub(timestamp);
+
+    if diff < 60 {
+        format!("{}s ago", diff)
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else {
+        format!("{}d ago", diff / 86400)
+    }
+}
+
+// Helper function to format large numbers with separators
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let mut count = 0;
+
+    for c in s.chars().rev() {
+        if count > 0 && count % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+        count += 1;
+    }
+
+    result.chars().rev().collect()
 }
 
 async fn cmd_downloads(_context: &ReplContext) -> Result<(), String> {

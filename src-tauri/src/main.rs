@@ -7927,6 +7927,8 @@ async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std
         file_transfer_service,
         geth_process,
         peer_id,
+        miner_address: args.miner_address.clone(),
+        geth_data_dir: args.geth_data_dir.clone(),
     };
 
     // Run the REPL
@@ -8018,6 +8020,8 @@ async fn run_tui_mode(args: headless::CliArgs) -> Result<(), Box<dyn std::error:
         file_transfer_service,
         geth_process,
         peer_id,
+        miner_address: args.miner_address.clone(),
+        geth_data_dir: args.geth_data_dir.clone(),
     };
 
     // Run the TUI
