@@ -390,7 +390,7 @@ async fn api_upload_generate(
         // Note: upload_file_to_network returns immediately for some protocols; we'll wait on DHT visibility below.
         if let Err(e) = crate::upload_file_to_network(
             state.app.clone(),
-            app_state,
+            state.app.state::<crate::AppState>(),
             tmp_path.to_string_lossy().to_string(),
             Some(price),
             Some(protocol_norm.to_string()),

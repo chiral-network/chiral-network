@@ -221,7 +221,10 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     };
 
     let webrtc_service: Option<Arc<WebRTCService>> = if enable_p2p {
-        let Some(ref ft) = file_transfer_service else { None }?;
+        let Some(ref ft) = file_transfer_service else {
+            error!("P2P enabled but FileTransferService is not available");
+            return Ok(());
+        };
         let keystore = Arc::new(Mutex::new(Keystore::load().unwrap_or_default()));
         let bandwidth = Arc::new(BandwidthController::new());
         match WebRTCService::new_headless(ft.clone(), keystore, bandwidth, None).await {

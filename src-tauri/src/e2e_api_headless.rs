@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use multihash_codetable::Code;
+use rs_merkle::Hasher;
 use rs_merkle::MerkleTree;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;

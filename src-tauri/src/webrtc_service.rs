@@ -444,8 +444,12 @@ impl WebRTCService {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 WebRTCCommand::EstablishConnection { peer_id, offer } => {
+                    let Some(app_handle) = app_handle.as_ref() else {
+                        warn!("WebRTC establish_connection requested in headless mode (no AppHandle). Skipping.");
+                        continue;
+                    };
                     Self::handle_establish_connection_with_retry(
-                        &app_handle,
+                        app_handle,
                         &peer_id,
                         &offer,
                         &event_tx,
@@ -494,8 +498,12 @@ impl WebRTCService {
                     Self::handle_close_connection(&peer_id, &connections, &connection_manager).await;
                 }
                 WebRTCCommand::RetryConnection { peer_id, offer } => {
+                    let Some(app_handle) = app_handle.as_ref() else {
+                        warn!("WebRTC retry_connection requested in headless mode (no AppHandle). Skipping.");
+                        continue;
+                    };
                     Self::handle_retry_connection(
-                        &app_handle,
+                        app_handle,
                         &peer_id,
                         offer.as_deref(),
                         &event_tx,
@@ -788,7 +796,7 @@ impl WebRTCService {
                     &connections,
                     &keystore,
                     &active_private_key,
-                    app_handle_for_task,
+                    Some(app_handle_for_task),
                     bandwidth,
                     multi_source_service.as_ref(),
                     &payment_checkpoint,
@@ -1533,7 +1541,7 @@ impl WebRTCService {
                             peer_id,
                             keystore,
                             &active_private_key,
-                            &app_handle,
+                            app_handle.as_ref(),
                             &bandwidth,
                             multi_source_service,
                         )
