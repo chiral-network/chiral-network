@@ -441,7 +441,6 @@ impl GethProcess {
         cmd.stdout(Stdio::from(log_file_clone))
             .stderr(Stdio::from(log_file));
 
-        eprintln!("DEBUG: Full geth command: {:?}", cmd);
         let child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start geth: {}", e))?;
@@ -919,8 +918,6 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
     } else {
         format!("0x{}", miner_address.to_lowercase())
     };
-
-    eprintln!("DEBUG: Formatted miner address: {} (len: {})", formatted_address, formatted_address.len());
 
     // First try to set the etherbase using miner_setEtherbase
     let set_etherbase = json!({
@@ -1449,20 +1446,15 @@ struct MiningSessionData {
 
 // Helper function to write debug messages to mining logs
 fn log_to_mining_logs(data_dir: &str, message: &str) {
-    // For debugging, also print to stdout so we can see if the function is called
-    println!("DEBUG LOG: {}", message);
-
     // Resolve data directory
     let exe_dir = match std::env::current_exe() {
         Ok(exe) => match exe.parent() {
             Some(parent) => parent.to_path_buf(),
             None => {
-                println!("DEBUG LOG: Failed to get exe parent directory");
                 return;
             }
         },
-        Err(e) => {
-            println!("DEBUG LOG: Failed to get exe path: {}", e);
+        Err(_) => {
             return;
         }
     };
@@ -1474,7 +1466,6 @@ fn log_to_mining_logs(data_dir: &str, message: &str) {
     };
 
     let log_path = data_path.join("geth.log");
-    println!("DEBUG LOG: Attempting to write to: {:?}", log_path);
 
     // Create log directory if it doesn't exist
     if let Some(parent) = log_path.parent() {
@@ -1482,16 +1473,10 @@ fn log_to_mining_logs(data_dir: &str, message: &str) {
     }
 
     // Append message to log file
-    match OpenOptions::new().create(true).append(true).open(&log_path) {
-        Ok(mut file) => {
-            let timestamp = chrono::Utc::now().format("%Y-%m-%d|%H:%M:%S");
-            let log_line = format!("INFO [{}] DEBUG: {}\n", timestamp, message);
-            match file.write_all(log_line.as_bytes()) {
-                Ok(_) => println!("DEBUG LOG: Successfully wrote to log file"),
-                Err(e) => println!("DEBUG LOG: Failed to write to log file: {}", e),
-            }
-        }
-        Err(e) => println!("DEBUG LOG: Failed to open log file: {}", e),
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d|%H:%M:%S");
+        let log_line = format!("INFO [{}] DEBUG: {}\n", timestamp, message);
+        let _ = file.write_all(log_line.as_bytes());
     }
 }
 
@@ -2339,13 +2324,11 @@ pub async fn calculate_accurate_totals(
 
                     // Check if this is a received transaction
                     if to == target_address && value_chiral > 0.0 {
-                        println!("DEBUG: Received transaction: {} Chiral (from: {}, to: {})", value_chiral, from, to);
                         total_received += value_chiral;
                     }
 
                     // Check if this is a sent transaction
                     if from == target_address && value_chiral > 0.0 {
-                        println!("DEBUG: Sent transaction: {} Chiral (from: {}, to: {})", value_chiral, from, to);
                         total_sent += value_chiral;
                     }
                 }
@@ -2362,8 +2345,6 @@ pub async fn calculate_accurate_totals(
             percentage: 100,
         },
     );
-
-    println!("DEBUG: Accurate totals calculation complete - blocks_mined: {}, total_received: {}, total_sent: {}", blocks_mined, total_received, total_sent);
 
     Ok(AccurateTotals {
         blocks_mined,
