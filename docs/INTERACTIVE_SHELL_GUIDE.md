@@ -7,7 +7,7 @@
 - [Mode Comparison](#mode-comparison)
 - [Getting Started](#getting-started)
 - [REPL Mode](#repl-mode)
-- [TUI Mode (Future)](#tui-mode-future)
+- [TUI Mode](#tui-mode)
 - [Command Reference](#command-reference)
 - [Use Cases](#use-cases)
 - [Troubleshooting](#troubleshooting)
@@ -104,46 +104,275 @@ Advanced REPL capabilities and improved UX.
 - `indicatif = "0.17"` - Progress bars (for future use)
 - `strsim = "0.11"` - Levenshtein distance for suggestions
 
-### Phase 3: TUI Mode 🚧 **IN PLANNING**
+### Phase 3: TUI Mode ✅ **COMPLETED**
 
-**Target:** v0.3.0
+**Status:** Released in v0.1.0
 
 Full-screen terminal dashboard with live updates.
 
-**Planned Features:**
+**Implemented Features:**
 
-- ⏳ Live dashboard with multiple panels
-- ⏳ Real-time network metrics visualization
-- ⏳ Progress bars for active downloads
-- ⏳ Panel switching (Network, Downloads, Peers, Mining)
-- ⏳ Mouse support (optional)
-- ⏳ Charts and graphs (bandwidth, peers over time)
-- ⏳ Keyboard shortcuts (hjkl navigation)
-- ⏳ Customizable layout and themes
+- ✅ Live dashboard with automatic 1-second refresh
+- ✅ Real-time network metrics visualization
+- ✅ Multiple panels (Network, Downloads, Peers, Mining)
+- ✅ Tab-based panel switching with indicators
+- ✅ Keyboard navigation (number keys, Tab, arrows)
+- ✅ Command mode (press `:` to enter commands)
+- ✅ Real-time peer list display
+- ✅ Download tracking with status colors
+- ✅ Mining panel with stats display
+- ✅ Command execution with result feedback
+- ✅ Mouse support via crossterm
+- ✅ Clean terminal rendering with proper cleanup
 
 **Technology Stack:**
 
-- `ratatui` - Modern Rust TUI framework
-- `crossterm` - Cross-platform terminal handling
-- Event-driven architecture
-- 1-second refresh rate
+- `ratatui = "0.28"` - Modern Rust TUI framework
+- `crossterm = "0.28"` - Cross-platform terminal handling
+- Event-driven async architecture
+- 1-second auto-refresh rate
+- Live metrics channel with tokio
 
-### Phase 4: Advanced Features 💡 **FUTURE**
+**Technical Implementation:**
+
+- `src-tauri/src/tui.rs` - Main TUI implementation
+- Background metrics polling with tokio channels
+- Panel system with `ActivePanel` enum
+- Real-time data from `DhtService` and `FileTransferService`
+- Command parser integrated with TUI display
+- Graceful terminal state management (raw mode, alternate screen)
+
+### Phase 4: Advanced Features ✅ **COMPLETED**
+
+**Status:** Released in v0.1.0
 
 **Target:** v0.4.0+
 
 Advanced monitoring and management capabilities.
 
-**Ideas Under Consideration:**
+**Implemented Features:**
 
-- Custom REPL scripts and macros
-- Plugin system for custom commands
-- Remote REPL access (secure RPC)
+- ✅ Export metrics to files (JSON, CSV)
+- ✅ Custom REPL scripts and macros
+- ✅ Plugin system for custom commands (framework ready)
+- ✅ Advanced analytics and reporting
+- ✅ Remote REPL access (secure RPC with token auth)
+- ✅ Webhook notifications for events
+
+**Technical Implementation:**
+
+- Export command with JSON/CSV formats for metrics, peers, downloads
+- Script execution system (.chiral scripts) - read script files and execute commands
+- Plugin loading framework (dynamic library support ready)
+- Comprehensive report generation (summary/full modes)
+- Remote REPL server with TCP and token-based authentication
+- Webhook manager with persistent storage and HTTP POST notifications
+
+**New Commands:**
+
+- `export <target> [--format json|csv] [--output <path>]` - Export data to files
+- `script run <path>` / `script list` - Run and manage REPL scripts
+- `plugin load <path>` / `plugin list` - Load and manage plugins
+- `report [summary|full]` - Generate comprehensive reports
+- `remote start [addr] [token]` / `remote stop` / `remote status` - Remote REPL access
+- `webhook add <event> <url>` / `webhook list` / `webhook test <id>` - Webhook notifications
+
+**Files:**
+
+- `src-tauri/src/remote_repl.rs` - Remote REPL server implementation
+- `src-tauri/src/webhook_manager.rs` - Webhook management system
+- Enhanced `src-tauri/src/repl.rs` with Phase 4 commands
+
+**Future Enhancements:**
+
 - Multi-node management from single shell
-- Advanced analytics and reporting
-- Export metrics to files (JSON, CSV)
 - Integration with monitoring tools (Prometheus, Grafana)
-- Webhook notifications for events
+- Advanced plugin API with custom command registration
+- Real-time script debugging and profiling
+
+### Phase 5: Mining Integration 📅 **PLANNED**
+
+**Target:** v0.5.0
+
+**Goal:** Fully integrate mining capabilities into the interactive shell with real-time monitoring and control.
+
+**Current Status:**
+
+- Mining commands exist in REPL but show placeholders only
+- Backend functions fully implemented in `ethereum.rs`:
+  - `start_mining(miner_address, threads)`
+  - `stop_mining()`
+  - `get_mining_status()`
+  - `get_mining_performance(data_dir)`
+  - `get_mining_logs(data_dir, lines)`
+  - `get_total_mining_rewards(miner_address)`
+- Ready for integration
+
+**Planned Features:**
+
+#### 5.1: Core Mining Integration (High Priority)
+
+Connect REPL mining commands to actual Geth mining functions.
+
+- ⏳ Update `cmd_mining()` to call real mining functions
+- ⏳ Display real mining status (hash rate, blocks found)
+- ⏳ Implement mining start/stop with thread control
+- ⏳ Add error handling for mining operations
+- ⏳ Wallet/miner address management
+
+**Code Example:**
+```rust
+// mining start 4
+crate::ethereum::start_mining(&miner_address, 4).await?;
+println!("✓ Mining started with 4 thread(s)");
+
+// mining status
+let is_mining = crate::ethereum::get_mining_status().await?;
+let (hash_rate, blocks) = crate::ethereum::get_mining_performance(&data_dir).await?;
+println!("Hash Rate: {:.2} MH/s | Blocks: {}", hash_rate, blocks);
+```
+
+#### 5.2: Mining Dashboard (Medium Priority)
+
+Real-time mining statistics and monitoring.
+
+- ⏳ Live updating mining dashboard
+- ⏳ Hash rate trends and history
+- ⏳ Block discovery notifications
+- ⏳ Mining rewards accumulator
+- ⏳ Thread utilization display
+- ⏳ Mining uptime tracking
+
+**New Commands:**
+- `mining dashboard` - Real-time mining view with auto-refresh
+- `mining stats [--live]` - Detailed mining statistics
+- `mining logs [--tail 50]` - View recent mining logs
+
+#### 5.3: Mining History & Analytics (Medium Priority)
+
+Track and analyze mining performance over time.
+
+- ⏳ Session mining history with timestamps
+- ⏳ Total rewards calculation per address
+- ⏳ Performance trends and charts
+- ⏳ Export mining data to JSON/CSV (integrate with Phase 4)
+- ⏳ Mining efficiency metrics
+
+**New Commands:**
+- `mining history [--limit 10]` - Recent mining sessions
+- `mining rewards [--address]` - Total rewards earned
+- `export mining --format json` - Export mining data (Phase 4 integration)
+
+#### 5.4: Advanced Mining Configuration (Low Priority)
+
+Persistent mining configuration and optimization.
+
+- ⏳ Thread configuration with persistence
+- ⏳ Mining intensity presets (high/medium/low)
+- ⏳ Etherbase (coinbase) address management
+- ⏳ Hardware auto-tuning based on CPU/GPU capabilities
+- ⏳ Configuration validation and testing
+
+**New Commands:**
+- `mining config list` - Show all mining settings
+- `mining config set threads <n>` - Set mining threads
+- `mining config set intensity <high|medium|low>` - Set mining intensity
+- `mining config set etherbase <address>` - Set mining reward address
+- `mining autotune` - Auto-optimize settings for hardware
+
+#### 5.5: Smart Mining Features (Low Priority)
+
+Intelligent mining with scheduling and conditions.
+
+- ⏳ Time-based mining schedules (mine during off-peak hours)
+- ⏳ Conditional mining (only mine when peers > threshold)
+- ⏳ Profitability calculator (estimate vs electricity cost)
+- ⏳ Power consumption tracking and estimates
+- ⏳ Temperature monitoring (if sensors available)
+- ⏳ Automatic shutdown on overheating
+
+**New Commands:**
+- `mining schedule add --time "02:00-06:00" --days "Mon,Tue,Wed"` - Add schedule
+- `mining schedule list` - List all schedules
+- `mining schedule remove <id>` - Remove schedule
+- `mining threshold set --min-peers 5` - Set minimum peers requirement
+- `mining profitability --electricity-cost 0.12` - Calculate profitability
+
+#### 5.6: TUI Mining Panel (Low Priority, depends on Phase 3)
+
+Dedicated mining panel in TUI mode with live visualization.
+
+- ⏳ Real-time hash rate graph (line chart)
+- ⏳ Block discovery timeline
+- ⏳ Thread utilization bars
+- ⏳ Temperature/power monitoring gauges
+- ⏳ Live earnings counter
+- ⏳ Mining event log (blocks found, errors)
+
+**TUI Layout Example:**
+```
+┌─────────────────────────────────────────────────────┐
+│ Mining Status                   [Active: Yes]       │
+├─────────────────────────────────────────────────────┤
+│ Hash Rate: 45.2 MH/s            Blocks: 127         │
+│ Rewards: 2,540.00 CHR          Uptime: 2h 34m      │
+├─────────────────────────────────────────────────────┤
+│ Hash Rate History (Last Hour)                       │
+│  50 │     ╭──╮                                      │
+│  40 │  ╭──╯  ╰─╮  ╭──                               │
+│  30 │──╯       ╰──╯                                 │
+│     └────────────────────────────────────           │
+├─────────────────────────────────────────────────────┤
+│ Recent Blocks                                       │
+│  #1234 - 2 min ago - 20.0 CHR                       │
+│  #1233 - 8 min ago - 20.0 CHR                       │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 5.7: Mining Webhook Integration
+
+Integrate mining events with Phase 4 webhook system.
+
+- ⏳ `mining_started` webhook event
+- ⏳ `mining_stopped` webhook event
+- ⏳ `block_found` webhook event (already in Phase 4)
+- ⏳ `mining_error` webhook event
+- ⏳ Mining performance alerts via webhooks
+
+**Dependencies:**
+
+- Geth process running with `--enable-geth` flag
+- Wallet with miner address configured
+- Network connection for blockchain sync
+- (Optional) Power monitoring for consumption tracking
+- (Optional) Temperature sensors for overheating protection
+
+**Implementation Order:**
+
+1. Phase 5.1 - Core mining integration (Week 1)
+2. Phase 5.2 - Mining dashboard (Week 2)
+3. Phase 5.3 - History & analytics (Week 2)
+4. Phase 5.4 - Advanced configuration (Week 3)
+5. Phase 5.5 - Smart mining features (Week 4)
+6. Phase 5.6 - TUI panel (After Phase 3 completion)
+7. Phase 5.7 - Webhook integration (After Phase 5.1)
+
+**Security Considerations:**
+
+- Never log miner private keys
+- Validate addresses before use
+- CPU throttling to prevent overheating
+- Memory limits for mining operations
+- Automatic shutdown on critical errors
+- Rate limiting for RPC calls
+
+**Testing Requirements:**
+
+- Unit tests for command parsing and validation
+- Integration tests for mining start/stop cycles
+- Manual tests on different hardware configurations
+- Performance benchmarking
+- Power consumption validation
 
 ---
 
@@ -213,7 +442,7 @@ cargo build --release
 # Binary location
 cd src-tauri
 ./target/release/chiral-network --interactive  # REPL mode
-./target/release/chiral-network --tui          # TUI mode (future)
+./target/release/chiral-network --tui          # TUI mode
 ```
 
 ### Common CLI Flags
@@ -451,22 +680,22 @@ COMMANDS
 
 ---
 
-## TUI Mode (Future)
+## TUI Mode
 
-> **Status:** Planned for future release
+> **Status:** ✅ Available in v0.1.0
 >
-> TUI (Terminal User Interface) mode will provide a full-screen dashboard with live updates, similar to `htop` or `btop`.
+> TUI (Terminal User Interface) mode provides a full-screen dashboard with live updates, similar to `htop` or `btop`.
 
-### Planned Features
+### Features
 
-- 📊 **Live Dashboard** - Real-time network stats
+- 📊 **Live Dashboard** - Real-time network stats with 1-second refresh
 - 🎨 **Multiple Panels** - Network, downloads, peers, mining
-- ⌨️ **Keyboard Navigation** - Switch between panels
-- 🖱️ **Mouse Support** - Optional click interactions
-- 📈 **Charts & Graphs** - Visual representation of metrics
-- 🎯 **Panel Focus** - Zoom into specific sections
+- ⌨️ **Keyboard Navigation** - Switch between panels with number keys, Tab, or arrows
+- 🖱️ **Mouse Support** - Crossterm-based mouse interactions
+- 📋 **Command Mode** - Press `:` to execute commands from TUI
+- 🎯 **Panel Indicators** - Visual tabs showing current panel
 
-### Planned Interface Layout
+### Interface Layout
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -488,36 +717,89 @@ COMMANDS
 Command: █                    [Tab] for autocomplete
 ```
 
-### Planned Keybindings
+### Keybindings
 
-| Key         | Action               |
-| ----------- | -------------------- |
-| `1-5`       | Switch to panel      |
-| `q`         | Quit                 |
-| `h` or `F1` | Help                 |
-| `r`         | Refresh              |
-| `↑↓←→`      | Navigate             |
-| `Enter`     | Select/Activate      |
-| `Tab`       | Command autocomplete |
+| Key         | Action                          |
+| ----------- | ------------------------------- |
+| `1-4`       | Switch to panel (1=Network, 2=Downloads, 3=Peers, 4=Mining) |
+| `q` or `Q`  | Quit TUI                        |
+| `:`         | Enter command mode              |
+| `Tab`       | Next panel                      |
+| `Shift+Tab` | Previous panel                  |
+| `←`         | Previous panel                  |
+| `→`         | Next panel                      |
+| `Esc`       | Cancel command mode (when in `:` mode) |
+| `Enter`     | Execute command (when in `:` mode) |
+| `Backspace` | Delete character (when in `:` mode) |
 
-### Starting TUI Mode (Future)
+### Command Mode
+
+Press `:` to enter command mode (similar to vi/vim). Available commands:
+
+- `help` or `h` - Show available commands
+- `status` or `s` - Node status summary
+- `peers` - Show connected peer count
+- `add <path>` - Add file to share (hash saved to `/tmp/chiral_last_hash.txt`)
+- `download <hash>` or `download last` - Download file by hash or last added
+- `downloads` - Show detailed download metrics
+- `dht status` - DHT reachability info
+- `mining status` - Mining status (requires `--enable-geth`)
+
+Press `Enter` to execute, `Esc` to cancel.
+
+### Starting TUI Mode
 
 ```bash
 # Basic usage
 ./target/release/chiral-network --tui
 
-# With options
-./target/release/chiral-network --tui --dht-port 5001 --enable-geth
+# With custom port
+./target/release/chiral-network --tui --dht-port 5001
+
+# With mining enabled
+./target/release/chiral-network --tui --enable-geth
+
+# With custom bootstrap nodes
+./target/release/chiral-network --tui \
+  --bootstrap /ip4/134.199.240.145/tcp/4001/p2p/12D3KooW...
 ```
 
-### Implementation Timeline
+### TUI Features In Detail
 
-TUI mode is planned for a future release after REPL mode is stable. Implementation will use:
+**Network Panel** - Real-time network monitoring:
+- Connected peer count (live updated)
+- Reachability status (Public/Private/Unknown)
+- NAT status and traversal info
+- AutoNAT configuration
+- Circuit Relay status with peer ID
+- DCUtR hole punching success rate
+- DHT reachability and confidence
+- Observed addresses count
+- Download success/failure/retry stats
 
-- **ratatui** - Modern Rust TUI framework
-- **crossterm** - Cross-platform terminal manipulation
-- **Live updates** - 1-second refresh rate
-- **Panel system** - Modular layout design
+**Downloads Panel** - Active download tracking:
+- Recent download attempts with color-coded status
+- File hash (truncated for display)
+- Success (green), Failed (red), Retrying (yellow) indicators
+- Attempt count (current/max)
+- Real-time updates from `FileTransferService`
+
+**Peers Panel** - Connected peer list:
+- Live peer list (updates every second)
+- Peer ID display (truncated with ellipsis)
+- Shows up to 20 most recent peers
+- Total peer count in panel title
+
+**Mining Panel** - Mining statistics:
+- Mining status (Active/Inactive)
+- Hash rate display
+- Thread count
+- Blocks found count
+- Total rewards earned
+- Power consumption estimate
+- Recent block list with timestamps
+
+All panels update automatically every second with fresh data from the backend services.
 
 ---
 
@@ -576,6 +858,67 @@ TUI mode is planned for a future release after REPL mode is stable. Implementati
 | `config get <key>`         | Get setting value      | `config get max_peers`      |
 | `config set <key> <value>` | Update setting         | `config set max_peers 100`  |
 | `config reset <key>`       | Reset to default       | `config reset max_peers`    |
+
+### Phase 4: Advanced Commands
+
+#### Export Commands
+
+| Command                               | Description           | Example                                        |
+| ------------------------------------- | --------------------- | ---------------------------------------------- |
+| `export metrics [opts]`               | Export network stats  | `export metrics --format json`                 |
+| `export peers [opts]`                 | Export peer list      | `export peers --format csv --output peers.csv` |
+| `export downloads [opts]`             | Export download stats | `export downloads --format json`               |
+| `export all [opts]`                   | Export all data       | `export all --format json`                     |
+
+**Export Options:**
+- `--format json|csv` - Output format (default: json)
+- `--output <path>` - Custom file path (default: auto-generated with timestamp)
+
+#### Script Commands
+
+| Command            | Description              | Example                  |
+| ------------------ | ------------------------ | ------------------------ |
+| `script run <path>`| Run REPL script          | `script run monitor.chiral` |
+| `script list`      | List available scripts   | `script list`            |
+
+**Script Format:** Create `.chiral` files with one command per line in `.chiral/scripts/` directory.
+
+#### Plugin Commands
+
+| Command              | Description        | Example                       |
+| -------------------- | ------------------ | ----------------------------- |
+| `plugin load <path>` | Load plugin        | `plugin load ./my-plugin.so`  |
+| `plugin unload <name>`| Unload plugin     | `plugin unload my-plugin`     |
+| `plugin list`        | List loaded plugins| `plugin list`                 |
+
+#### Webhook Commands
+
+| Command                     | Description         | Example                                              |
+| --------------------------- | ------------------- | ---------------------------------------------------- |
+| `webhook add <evt> <url>`   | Add webhook         | `webhook add peer_connected https://example.com/hook`|
+| `webhook remove <id>`       | Remove webhook      | `webhook remove webhook_1234567890`                  |
+| `webhook list`              | List webhooks       | `webhook list`                                       |
+| `webhook test <id>`         | Test webhook        | `webhook test webhook_1234567890`                    |
+| `webhook events`            | Show event types    | `webhook events`                                     |
+
+**Webhook Events:** `peer_connected`, `peer_disconnected`, `download_started`, `download_completed`, `download_failed`, `file_added`, `mining_started`, `mining_stopped`, `block_found`
+
+#### Reporting Commands
+
+| Command          | Description                  | Example         |
+| ---------------- | ---------------------------- | --------------- |
+| `report summary` | Generate summary report      | `report summary`|
+| `report full`    | Generate comprehensive report| `report full`   |
+
+#### Remote Access Commands
+
+| Command                      | Description              | Example                            |
+| ---------------------------- | ------------------------ | ---------------------------------- |
+| `remote start [addr] [token]`| Start remote REPL server | `remote start 127.0.0.1:7777`      |
+| `remote stop`                | Stop remote server       | `remote stop`                      |
+| `remote status`              | Show server status       | `remote status`                    |
+
+**Security Note:** Remote REPL uses token-based authentication. Use SSH port forwarding for production deployments.
 
 ---
 
@@ -833,4 +1176,4 @@ cargo build --release
 **Last Updated:** December 2024
 **Version:** v0.1.0
 **REPL Status:** ✅ Available
-**TUI Status:** 📋 Planned
+**TUI Status:** ✅ Available

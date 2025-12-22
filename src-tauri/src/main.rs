@@ -13,6 +13,7 @@ pub mod commands {
     pub mod network;
     pub mod proxy;
 }
+pub mod config;
 pub mod ethereum;
 pub mod geth_bootstrap;
 pub mod geth_downloader;
@@ -23,16 +24,18 @@ pub mod net;
 pub mod payment_checkpoint;
 pub mod pool;
 pub mod repl;
+pub mod remote_repl;
 pub mod tui;
 pub mod reassembly;
 pub mod transaction_services;
+pub mod webhook_manager;
 
 // Re-export modules from the lib crate
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source,
     ed2k_client, encryption, file_transfer, ftp_client, http_download, keystore,
-    logger, manager, multi_source_download, peer_selection, protocols, reputation,
-    stream_auth, webrtc_service,
+    logger, manager, multi_source_download, peer_selection, protocols,
+    reputation, stream_auth, webrtc_service,
 };
 
 use protocols::{

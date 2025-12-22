@@ -1,4 +1,4 @@
-use chiral_network::config::{CHAIN_ID, NETWORK_ID};
+use crate::config::{CHAIN_ID, NETWORK_ID};
 use chrono;
 use ethers::prelude::*;
 use once_cell::sync::Lazy;

@@ -1,0 +1,18 @@
+{
+  "dcutr": {
+    "enabled": true,
+    "hole_punch_attempts": 0,
+    "hole_punch_successes": 0,
+    "success_rate": 0.0
+  },
+  "network": {
+    "active_relay": null,
+    "autonat_enabled": true,
+    "connected_peers": 0,
+    "observed_addresses": [],
+    "reachability": "Unknown",
+    "reachability_confidence": "Low"
+  },
+  "peer_id": "12D3KooWQcwViHBA88SmZjs7MVSx64J6QRY8upKbgPQUqrLqyU3v",
+  "timestamp": "2025-12-21T03:04:32.365173+00:00"
+}
