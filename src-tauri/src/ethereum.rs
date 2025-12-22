@@ -12,8 +12,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::net::TcpStream;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tauri::Emitter;
+use url::Url;
 
 // ============================================================================
 // Configuration & Shared Resources
@@ -56,14 +59,6 @@ pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .expect("Failed to create HTTP client")
-});
-
-// Shared blocking HTTP client for sync status checks (e.g. `is_running()`).
-pub static HTTP_CLIENT_BLOCKING: Lazy<reqwest::blocking::Client> = Lazy::new(|| {
-    reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(1))
-        .build()
-        .expect("Failed to create blocking HTTP client")
 });
 
 //Structs
@@ -117,25 +112,21 @@ impl GethProcess {
             return true;
         }
 
-        // Check if geth is actually running by trying an RPC call against the configured endpoint.
-        // This is more reliable than checking whether a fixed localhost port is listening.
-        let payload =
-            r#"{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}"#;
-        match HTTP_CLIENT_BLOCKING
-            .post(&NETWORK_CONFIG.rpc_endpoint)
-            .header("Content-Type", "application/json")
-            .body(payload)
-            .send()
-        {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    return false;
-                }
-                match resp.text() {
-                    Ok(body) => body.contains("\"jsonrpc\"") && body.contains("\"result\""),
-                    Err(_) => false,
-                }
-            }
+        // IMPORTANT:
+        // This method is called from async contexts (tauri commands / startup tasks).
+        // Using `reqwest::blocking` here can panic ("Cannot drop a runtime...") because it creates
+        // an internal runtime that gets dropped on a tokio worker thread. So we keep this check
+        // lightweight and runtime-free: parse the URL and do a TCP connect.
+        let Ok(url) = Url::parse(&NETWORK_CONFIG.rpc_endpoint) else {
+            return false;
+        };
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let port = url.port_or_known_default().unwrap_or(8545);
+        let addr = format!("{host}:{port}");
+        match addr.parse() {
+            Ok(sock_addr) => TcpStream::connect_timeout(&sock_addr, Duration::from_millis(500)).is_ok(),
             Err(_) => false,
         }
     }
