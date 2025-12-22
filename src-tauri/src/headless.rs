@@ -6,9 +6,13 @@ use crate::e2e_api_headless::{start_headless_e2e_api_server, HeadlessE2eState};
 use crate::ethereum::GethProcess;
 use crate::file_transfer::FileTransferService;
 use crate::http_server;
+use crate::keystore::Keystore;
+use crate::webrtc_service::{set_webrtc_service, WebRTCService};
+use crate::{bandwidth::BandwidthController, manager::ChunkManager};
 use clap::Parser;
 use std::{sync::Arc, time::Duration};
 use tokio::signal;
+use tokio::sync::Mutex;
 
 use tracing::{error, info, warn};
 
@@ -194,11 +198,43 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         }
     }
 
-    // Optionally start local file-transfer service for metrics insight
-    let file_transfer_service = if args.show_downloads {
+    // For real P2P transfers (WebRTC/Bitswap), we need FileTransfer + ChunkManager (+ WebRTCService).
+    // Enable automatically when running the headless E2E API (Attach-mode tests), or when explicitly requested.
+    let enable_p2p = std::env::var("CHIRAL_E2E_API_PORT").ok().is_some()
+        || std::env::var("CHIRAL_ENABLE_P2P").ok().as_deref() == Some("1")
+        || args.show_downloads;
+
+    let file_transfer_service = if enable_p2p {
         Some(Arc::new(FileTransferService::new().await.map_err(|e| {
             format!("Failed to start file transfer service: {}", e)
         })?))
+    } else {
+        None
+    };
+
+    let chunk_manager: Option<Arc<ChunkManager>> = if enable_p2p {
+        let chunk_storage_path = std::env::temp_dir().join("chiral-chunks");
+        let _ = std::fs::create_dir_all(&chunk_storage_path);
+        Some(Arc::new(ChunkManager::new(chunk_storage_path)))
+    } else {
+        None
+    };
+
+    let webrtc_service: Option<Arc<WebRTCService>> = if enable_p2p {
+        let Some(ref ft) = file_transfer_service else { None }?;
+        let keystore = Arc::new(Mutex::new(Keystore::load().unwrap_or_default()));
+        let bandwidth = Arc::new(BandwidthController::new());
+        match WebRTCService::new_headless(ft.clone(), keystore, bandwidth, None).await {
+            Ok(svc) => {
+                let arc = Arc::new(svc);
+                set_webrtc_service(arc.clone()).await;
+                Some(arc)
+            }
+            Err(e) => {
+                error!("Failed to initialize WebRTCService in headless mode: {}", e);
+                None
+            }
+        }
     } else {
         None
     };
@@ -232,8 +268,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         args.autonat_server.clone(),
         args.socks5_proxy,
         file_transfer_service.clone(),
-        None, // webrtc_service
-        None, // chunk_manager
+        webrtc_service.clone(),
+        chunk_manager.clone(),
         None, // chunk_size_kb: use default
         None, // cache_size_mb: use default
         final_enable_autorelay,
@@ -405,6 +441,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
                     storage_dir: storage_dir.clone(),
                     uploader_address: uploader_address.clone(),
                     private_key: private_key.clone(),
+                    file_transfer_service: file_transfer_service.clone(),
+                    chunk_manager: chunk_manager.clone(),
                 };
                 match start_headless_e2e_api_server(state, port).await {
                     Ok((bound, shutdown_tx)) => {

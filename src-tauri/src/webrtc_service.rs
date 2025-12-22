@@ -279,7 +279,8 @@ pub struct WebRTCService {
     event_rx: Arc<Mutex<mpsc::Receiver<WebRTCEvent>>>,
     connections: Arc<Mutex<HashMap<String, PeerConnection>>>,
     file_transfer_service: Arc<FileTransferService>,
-    app_handle: tauri::AppHandle,
+    // Optional: in headless mode we don't have a Tauri AppHandle, so we skip emitting UI events.
+    app_handle: Option<tauri::AppHandle>,
     keystore: Arc<Mutex<Keystore>>,
     active_private_key: Arc<Mutex<Option<String>>>,
     bandwidth: Arc<BandwidthController>,
@@ -298,20 +299,58 @@ impl WebRTCService {
         keystore: Arc<Mutex<Keystore>>,
         bandwidth: Arc<BandwidthController>,
     ) -> Result<Self, String> {
-        Self::new_with_multi_source(
-            app_handle,
+        Self::new_with_multi_source_opt(
+            Some(app_handle),
             file_transfer_service,
             keystore,
             bandwidth,
             None,
             None,
-        ).await
+        )
+        .await
     }
 
     /// Create a new WebRTCService with optional MultiSourceDownloadService for hash verification
     /// and optional PaymentCheckpointService for incremental payments
     pub async fn new_with_multi_source(
         app_handle: tauri::AppHandle,
+        file_transfer_service: Arc<FileTransferService>,
+        keystore: Arc<Mutex<Keystore>>,
+        bandwidth: Arc<BandwidthController>,
+        multi_source_service: Option<Arc<MultiSourceDownloadService>>,
+        payment_checkpoint: Option<Arc<PaymentCheckpointService>>,
+    ) -> Result<Self, String> {
+        Self::new_with_multi_source_opt(
+            Some(app_handle),
+            file_transfer_service,
+            keystore,
+            bandwidth,
+            multi_source_service,
+            payment_checkpoint,
+        )
+        .await
+    }
+
+    /// Headless constructor: no AppHandle, so no UI events are emitted.
+    pub async fn new_headless(
+        file_transfer_service: Arc<FileTransferService>,
+        keystore: Arc<Mutex<Keystore>>,
+        bandwidth: Arc<BandwidthController>,
+        multi_source_service: Option<Arc<MultiSourceDownloadService>>,
+    ) -> Result<Self, String> {
+        Self::new_with_multi_source_opt(
+            None,
+            file_transfer_service,
+            keystore,
+            bandwidth,
+            multi_source_service,
+            None,
+        )
+        .await
+    }
+
+    async fn new_with_multi_source_opt(
+        app_handle: Option<tauri::AppHandle>,
         file_transfer_service: Arc<FileTransferService>,
         keystore: Arc<Mutex<Keystore>>,
         bandwidth: Arc<BandwidthController>,
@@ -390,7 +429,7 @@ impl WebRTCService {
     }
 
     async fn run_webrtc_service(
-        app_handle: tauri::AppHandle,
+        app_handle: Option<tauri::AppHandle>,
         mut cmd_rx: mpsc::Receiver<WebRTCCommand>,
         event_tx: mpsc::Sender<WebRTCEvent>,
         connections: Arc<Mutex<HashMap<String, PeerConnection>>>,
@@ -1295,7 +1334,7 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
-        app_handle: tauri::AppHandle,
+        app_handle: Option<tauri::AppHandle>,
         bandwidth: Arc<BandwidthController>,
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
         payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
@@ -1319,7 +1358,7 @@ impl WebRTCService {
                     peer_id,
                     keystore,
                     &active_private_key,
-                    &app_handle,
+                    app_handle.as_ref(),
                     &bandwidth,
                     multi_source_service,
                 )
@@ -2001,7 +2040,7 @@ impl WebRTCService {
         peer_id: &str,
         keystore: &Arc<Mutex<Keystore>>,
         active_private_key: &Arc<Mutex<Option<String>>>,
-        app_handle: &tauri::AppHandle,
+        app_handle: Option<&tauri::AppHandle>,
         bandwidth: &Arc<BandwidthController>,
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
     ) {
@@ -2092,15 +2131,17 @@ impl WebRTCService {
                 let bytes_received = chunks.len() as u64 * CHUNK_SIZE as u64;
                 let estimated_total_size = total_chunks as u64 * CHUNK_SIZE as u64;
 
-                if let Err(e) = app_handle.emit("webrtc_download_progress", serde_json::json!({
-                    "fileHash": chunk.file_hash,
-                    "progress": progress_percentage,
-                    "chunksReceived": chunks.len(),
-                    "totalChunks": total_chunks,
-                    "bytesReceived": bytes_received,
-                    "totalBytes": estimated_total_size,
-                })) {
-                    warn!("Failed to emit progress event: {}", e);
+                if let Some(app_handle) = app_handle {
+                    if let Err(e) = app_handle.emit("webrtc_download_progress", serde_json::json!({
+                        "fileHash": chunk.file_hash,
+                        "progress": progress_percentage,
+                        "chunksReceived": chunks.len(),
+                        "totalChunks": total_chunks,
+                        "bytesReceived": bytes_received,
+                        "totalBytes": estimated_total_size,
+                    })) {
+                        warn!("Failed to emit progress event: {}", e);
+                    }
                 }
 
                 if chunks.len() == total_chunks as usize {
@@ -2111,7 +2152,7 @@ impl WebRTCService {
                         file_transfer_service,
                         event_tx,
                         peer_id,
-                        &app_handle,
+                        app_handle,
                     )
                     .await;
                 }
@@ -2143,7 +2184,7 @@ impl WebRTCService {
     _file_transfer_service: &Arc<FileTransferService>,
     event_tx: &mpsc::Sender<WebRTCEvent>,
     peer_id: &str,
-    app_handle: &tauri::AppHandle, // Add this parameter
+    app_handle: Option<&tauri::AppHandle>,
     ) {
     // Sort chunks by index
     let mut sorted_chunks: Vec<_> = chunks.values().collect();
@@ -2169,13 +2210,15 @@ impl WebRTCService {
     // 3. The frontend handles saving the file with proper name via webrtc_download_complete event
 
     // Emit event to frontend with complete file data - frontend will save the file
-    if let Err(e) = app_handle.emit("webrtc_download_complete", serde_json::json!({
-        "fileHash": file_hash,
-        "fileName": file_name,
-        "fileSize": file_size,
-        "data": file_data, // Send the actual file data
-    })) {
-        error!("Failed to emit webrtc_download_complete event: {}", e);
+    if let Some(app_handle) = app_handle {
+        if let Err(e) = app_handle.emit("webrtc_download_complete", serde_json::json!({
+            "fileHash": file_hash,
+            "fileName": file_name,
+            "fileSize": file_size,
+            "data": file_data, // Send the actual file data
+        })) {
+            error!("Failed to emit webrtc_download_complete event: {}", e);
+        }
     }
 
     let _ = event_tx

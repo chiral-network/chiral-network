@@ -53,6 +53,9 @@ export CHIRAL_PUBLIC_IP=<VM_PUBLIC_IP>
 export CHIRAL_PRIVATE_KEY=0x...
 export CHIRAL_RPC_ENDPOINT=http://...
 
+# Enable P2P services (WebRTC/Bitswap) in headless mode (required for non-HTTP protocols)
+export CHIRAL_ENABLE_P2P=1
+
 # VM-friendly headless mode (recommended)
 cd src-tauri
 cargo run --release -- --headless

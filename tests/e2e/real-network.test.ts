@@ -235,13 +235,13 @@ class RealE2ETestFramework {
       )}MB) via ${protocol}`
     );
 
-    // Option1: uploader generates deterministic bytes and publishes metadata with httpSources.
+    // Uploader generates deterministic bytes and publishes metadata.
     const response = await fetch(`${this.uploaderConfig.apiBaseUrl}/api/upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sizeMb: Math.max(1, Math.round(file.size / 1024 / 1024)),
-        protocol: "HTTP",
+        protocol,
         price: 0.001,
         fileName: file.name,
       }),
@@ -565,7 +565,179 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
     }, 300000);
   });
 
-  describe.skip("Bitswap Real Communication", () => {});
+  describe("WebRTC Real Communication (Attach)", () => {
+    it("should upload, search, download (WebRTC), and pay (tx receipt success)", async () => {
+      const testFile = framework.createTestFile("real-test-webrtc.bin", 5);
+
+      // Use real P2P publish path on uploader
+      const fileHash = await framework.uploadFile(testFile, "WebRTC");
+      expect(fileHash).toBeTruthy();
+
+      const metadata = await framework.searchFile(fileHash, 30_000);
+      expect(metadata).toBeTruthy();
+
+      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
+      const price = metadata.price ?? 0.001;
+      expect(typeof uploaderAddress).toBe("string");
+
+      // Trigger WebRTC P2P download on downloader node
+      const downloadPath = await (async () => {
+        if (!framework["downloaderConfig"]) throw new Error("Config not initialized");
+        const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+        const response = await fetch(`${downloaderApi}/api/download`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileHash,
+            fileName: testFile.name,
+            protocol: "WebRTC",
+          }),
+        });
+        if (!response.ok) {
+          const body = await response.text().catch(() => "");
+          throw new Error(
+            `Download failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`
+          );
+        }
+        const result = await response.json();
+        if (!result.verified) {
+          throw new Error("Downloaded file failed verification on node");
+        }
+        return result.downloadPath;
+      })();
+
+      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
+      expect(verified).toBe(true);
+
+      // Final payment + receipt
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+      const receipt = await (async () => {
+        // reuse helper inside HTTP describe via access (copy minimal here)
+        if (!framework["downloaderConfig"]) throw new Error("Config not initialized");
+        const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+        const payRes = await fetch(`${downloaderApi}/api/pay`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uploaderAddress, price }),
+        });
+        if (!payRes.ok) {
+          const body = await payRes.text().catch(() => "");
+          throw new Error(
+            `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+          );
+        }
+        const payJson = await payRes.json();
+        const txHash: string = payJson.txHash;
+        expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+
+        const start = Date.now();
+        const timeoutMs = 120_000;
+        while (Date.now() - start < timeoutMs) {
+          const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ txHash }),
+          });
+          if (!r.ok) {
+            const body = await r.text().catch(() => "");
+            throw new Error(
+              `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+            );
+          }
+          const receipt = await r.json();
+          if (receipt.status === "success") return receipt;
+          if (receipt.status === "failed") throw new Error("Transaction failed");
+          await new Promise((res) => setTimeout(res, 1000));
+        }
+        throw new Error("Timed out waiting for tx receipt");
+      })();
+      expect(receipt.status).toBe("success");
+    }, 600000);
+  });
+
+  describe("Bitswap Real Communication (Attach)", () => {
+    it("should upload, search, download (Bitswap), and pay (tx receipt success)", async () => {
+      const testFile = framework.createTestFile("real-test-bitswap.bin", 5);
+
+      const fileHash = await framework.uploadFile(testFile, "Bitswap");
+      expect(fileHash).toBeTruthy();
+
+      const metadata = await framework.searchFile(fileHash, 30_000);
+      expect(metadata).toBeTruthy();
+
+      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
+      const price = metadata.price ?? 0.001;
+      expect(typeof uploaderAddress).toBe("string");
+
+      const downloadPath = await (async () => {
+        if (!framework["downloaderConfig"]) throw new Error("Config not initialized");
+        const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+        const response = await fetch(`${downloaderApi}/api/download`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileHash,
+            fileName: testFile.name,
+            protocol: "Bitswap",
+          }),
+        });
+        if (!response.ok) {
+          const body = await response.text().catch(() => "");
+          throw new Error(
+            `Download failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`
+          );
+        }
+        const result = await response.json();
+        if (!result.verified) {
+          throw new Error("Downloaded file failed verification on node");
+        }
+        return result.downloadPath;
+      })();
+
+      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
+      expect(verified).toBe(true);
+
+      // Final payment + receipt
+      const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+      const payRes = await fetch(`${downloaderApi}/api/pay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploaderAddress, price }),
+      });
+      if (!payRes.ok) {
+        const body = await payRes.text().catch(() => "");
+        throw new Error(
+          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+        );
+      }
+      const payJson = await payRes.json();
+      const txHash: string = payJson.txHash;
+      expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+
+      const start = Date.now();
+      const timeoutMs = 120_000;
+      while (Date.now() - start < timeoutMs) {
+        const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ txHash }),
+        });
+        if (!r.ok) {
+          const body = await r.text().catch(() => "");
+          throw new Error(
+            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+          );
+        }
+        const receipt = await r.json();
+        if (receipt.status === "success") break;
+        if (receipt.status === "failed") throw new Error("Transaction failed");
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+    }, 600000);
+  });
+
+  // Payment checkpoint automation is currently UI-driven and not wired into the real-network harness yet.
+  // We'll add it once the checkpoint signals are exposed via the E2E API and integrated with the download pipeline.
   describe.skip("Payment Checkpoint Real Communication", () => {});
 
   describe("Network Resilience", () => {

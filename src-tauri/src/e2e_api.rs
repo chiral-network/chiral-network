@@ -16,6 +16,7 @@ use tauri::Manager;
 use crate::download_source::HttpSourceInfo;
 use crate::http_download::HttpDownloadClient;
 use crate::http_server;
+use crate::manager::ChunkManager;
 use crate::transaction_services;
 
 #[derive(Clone)]
@@ -44,7 +45,7 @@ struct PeersResponse {
 struct UploadRequest {
     /// Size in MB for generated file
     size_mb: u64,
-    /// Protocol string - for option1 we use HTTP for real network transfer
+    /// Protocol string - supported: HTTP (range), WebRTC (P2P), Bitswap (blocks)
     protocol: Option<String>,
     price: Option<f64>,
     file_name: Option<String>,
@@ -185,31 +186,34 @@ async fn api_upload_generate(
     Json(req): Json<UploadRequest>,
 ) -> impl IntoResponse {
     let protocol = req.protocol.unwrap_or_else(|| "HTTP".to_string());
-    if protocol.to_uppercase() != "HTTP" {
-        return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: "Option1 currently supports protocol=HTTP only".to_string(),
-        }))
-        .into_response();
-    }
+    let protocol_norm = protocol.trim();
+    let protocol_upper = protocol_norm.to_uppercase();
 
     // Determine the seeder base URL (public IP if provided; otherwise localhost).
     let app_state = state.app.state::<crate::AppState>();
-    let bound_addr = app_state.http_server_addr.lock().await.clone();
-    let Some(bound_addr) = bound_addr else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-            error: "HTTP file server is not running (no bound address)".to_string(),
-        }))
-        .into_response();
-    };
-    let seeder_url = if let Ok(v) = std::env::var("CHIRAL_FILE_SERVER_URL") {
-        if !v.trim().is_empty() {
-            v.trim().to_string()
+
+    // For HTTP uploads, we need a running HTTP file server to serve range requests.
+    let seeder_url = if protocol_upper == "HTTP" {
+        let bound_addr = app_state.http_server_addr.lock().await.clone();
+        let Some(bound_addr) = bound_addr else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                error: "HTTP file server is not running (no bound address)".to_string(),
+            }))
+            .into_response();
+        };
+        if let Ok(v) = std::env::var("CHIRAL_FILE_SERVER_URL") {
+            if !v.trim().is_empty() {
+                v.trim().to_string()
+            } else {
+                format!("http://127.0.0.1:{}", bound_addr.port())
+            }
         } else {
-            format!("http://127.0.0.1:{}", bound_addr.port())
+            let host = std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
+            format!("http://{}:{}", host, bound_addr.port())
         }
     } else {
-        let host = std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
-        format!("http://{}:{}", host, bound_addr.port())
+        // For P2P protocols, this is not used.
+        String::new()
     };
 
     let file_name = req.file_name.unwrap_or_else(|| {
@@ -266,81 +270,176 @@ async fn api_upload_generate(
 
     let file_hash = format!("{:x}", hasher.finalize());
 
-    // Move into provider storage dir and register with HTTP file server state.
-    let permanent_path = app_state.http_server_state.storage_dir.join(&file_hash);
-    if let Err(e) = tokio::fs::rename(&tmp_path, &permanent_path).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-            error: format!("Failed to move file into storage: {}", e),
-        }))
-        .into_response();
-    }
-
-    app_state
-        .http_server_state
-        .register_file(http_server::HttpFileMetadata {
-            hash: file_hash.clone(),      // merkle_root used as lookup key
-            file_hash: file_hash.clone(), // storage filename (sha256)
-            name: file_name.clone(),
-            size: file_size,
-            encrypted: false,
-        })
-        .await;
-
-    // Publish metadata to DHT with HTTP source pointing at seeder base URL.
-    let dht = { app_state.dht.lock().await.as_ref().cloned() };
-    if let Some(dht) = dht {
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let meta = crate::dht::models::FileMetadata {
-            merkle_root: file_hash.clone(),
-            file_name: file_name.clone(),
-            file_size,
-            file_data: vec![],
-            seeders: vec![],
-            created_at,
-            mime_type: None,
-            is_encrypted: false,
-            encryption_method: None,
-            key_fingerprint: None,
-            parent_hash: None,
-            cids: None,
-            encrypted_key_bundle: None,
-            ftp_sources: None,
-            ed2k_sources: None,
-            http_sources: Some(vec![HttpSourceInfo {
-                url: seeder_url.clone(),
-                auth_header: None,
-                verify_ssl: true,
-                headers: None,
-                timeout_secs: None,
-            }]),
-            is_root: true,
-            download_path: None,
-            price,
-            uploader_address: uploader_address.clone(),
-            info_hash: None,
-            trackers: None,
-            manifest: None,
-        };
-        if let Err(e) = dht.publish_file(meta, None).await {
+    // Protocol-specific handling:
+    // - HTTP: move into HTTP file server storage and publish metadata with http_sources
+    // - WebRTC/Bitswap: invoke the app's upload command so protocol services publish correct metadata
+    let published_key: String = if protocol_upper == "HTTP" {
+        // Move into provider storage dir and register with HTTP file server state.
+        let permanent_path = app_state.http_server_state.storage_dir.join(&file_hash);
+        if let Err(e) = tokio::fs::rename(&tmp_path, &permanent_path).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Failed to publish metadata to DHT: {}", e),
+                error: format!("Failed to move file into storage: {}", e),
             }))
             .into_response();
         }
+
+        app_state
+            .http_server_state
+            .register_file(http_server::HttpFileMetadata {
+                hash: file_hash.clone(),      // merkle_root used as lookup key
+                file_hash: file_hash.clone(), // storage filename (sha256)
+                name: file_name.clone(),
+                size: file_size,
+                encrypted: false,
+            })
+            .await;
+
+        // Publish metadata to DHT with HTTP source pointing at seeder base URL.
+        let dht = { app_state.dht.lock().await.as_ref().cloned() };
+        if let Some(dht) = dht {
+            let created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let meta = crate::dht::models::FileMetadata {
+                merkle_root: file_hash.clone(),
+                file_name: file_name.clone(),
+                file_size,
+                file_data: vec![],
+                seeders: vec![],
+                created_at,
+                mime_type: None,
+                is_encrypted: false,
+                encryption_method: None,
+                key_fingerprint: None,
+                parent_hash: None,
+                cids: None,
+                encrypted_key_bundle: None,
+                ftp_sources: None,
+                ed2k_sources: None,
+                http_sources: Some(vec![HttpSourceInfo {
+                    url: seeder_url.clone(),
+                    auth_header: None,
+                    verify_ssl: true,
+                    headers: None,
+                    timeout_secs: None,
+                }]),
+                is_root: true,
+                download_path: None,
+                price,
+                uploader_address: uploader_address.clone(),
+                info_hash: None,
+                trackers: None,
+                manifest: None,
+            };
+            if let Err(e) = dht.publish_file(meta, None).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                    error: format!("Failed to publish metadata to DHT: {}", e),
+                }))
+                .into_response();
+            }
+        } else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                error: "DHT is not running".to_string(),
+            }))
+            .into_response();
+        }
+        file_hash.clone()
+    } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" {
+        // Pre-compute the DHT key for the published metadata so we can wait until it's discoverable.
+        // WebRTC uses a manifest Merkle root; Bitswap uses a sha256-like content root (matching the file hash).
+        let expected_merkle_root = if protocol_upper == "WEBRTC" {
+            // Use the same ChunkManager logic as upload_file_to_network (but without secrets) to get the merkle root.
+            let chunk_storage_path = match state.app.path().app_data_dir() {
+                Ok(p) => p.join("chunks"),
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                        error: format!("Failed to get app data dir for chunk storage: {}", e),
+                    }))
+                    .into_response();
+                }
+            };
+            let manager = ChunkManager::new(chunk_storage_path);
+            let tmp_path_clone = tmp_path.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                manager.chunk_and_encrypt_file_canonical(std::path::Path::new(&tmp_path_clone))
+            })
+            .await
+            .map_err(|e| format!("Failed to spawn blocking chunking task: {}", e));
+
+            match result {
+                Ok(Ok(canon)) => canon.manifest.merkle_root,
+                Ok(Err(e)) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                        error: format!("Failed to compute WebRTC merkle root: {}", e),
+                    }))
+                    .into_response();
+                }
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                        error: e,
+                    }))
+                    .into_response();
+                }
+            }
+        } else {
+            file_hash.clone()
+        };
+
+        // Invoke the normal upload command (seeds + publishes protocol-correct metadata).
+        // Note: upload_file_to_network returns immediately for some protocols; we'll wait on DHT visibility below.
+        if let Err(e) = crate::upload_file_to_network(
+            state.app.clone(),
+            app_state,
+            tmp_path.to_string_lossy().to_string(),
+            Some(price),
+            Some(protocol_norm.to_string()),
+            Some(file_name.clone()),
+        )
+        .await
+        {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e }))
+                .into_response();
+        }
+
+        // Wait until the metadata is visible on this node's DHT (best-effort, avoids race in tests).
+        let dht = { app_state.dht.lock().await.as_ref().cloned() };
+        let Some(dht) = dht else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                error: "DHT is not running".to_string(),
+            }))
+            .into_response();
+        };
+        let mut found = None;
+        for _ in 0..40 {
+            match dht.synchronous_search_metadata(expected_merkle_root.clone(), 1500).await {
+                Ok(m) if m.is_some() => {
+                    found = m;
+                    break;
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+            }
+        }
+        if found.is_none() {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                error: format!("Upload completed but metadata not visible yet for {}", expected_merkle_root),
+            }))
+            .into_response();
+        }
+
+        expected_merkle_root
     } else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-            error: "DHT is not running".to_string(),
+        return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
+            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, or Bitswap.", protocol_norm),
         }))
         .into_response();
-    }
+    };
 
     (
         StatusCode::OK,
         Json(UploadResponse {
-            file_hash: file_hash.clone(),
+            // For all protocols, return the DHT lookup key as fileHash (merkle_root / content root).
+            file_hash: published_key,
             file_name,
             file_size,
             seeder_url,
@@ -397,8 +496,6 @@ async fn api_download(
     };
 
     let out_name = req.file_name.unwrap_or_else(|| meta.file_name.clone());
-    let output_path = app_state.http_server_state.storage_dir.join(&out_name);
-
     let protocol_upper = req
         .protocol
         .as_deref()
@@ -422,6 +519,11 @@ async fn api_download(
         None
     };
 
+    // Use a stable downloads dir under temp for E2E.
+    let downloads_dir = std::env::temp_dir().join("chiral-e2e-downloads");
+    let _ = tokio::fs::create_dir_all(&downloads_dir).await;
+    let output_path = downloads_dir.join(&out_name);
+
     if protocol_upper == "HTTP" {
         // Include downloader peer id for provider metrics if available.
         let peer_id = Some(dht.get_peer_id().await);
@@ -434,10 +536,7 @@ async fn api_download(
         }
     } else if protocol_upper == "WEBRTC" {
         let output_path_str = output_path.to_string_lossy().to_string();
-        if let Err(e) =
-            crate::download_file_from_network(app_state, meta.merkle_root.clone(), output_path_str)
-                .await
-        {
+        if let Err(e) = crate::download_file_from_network(app_state, meta.merkle_root.clone(), output_path_str).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
         }
     } else if protocol_upper == "BITSWAP" {
@@ -485,6 +584,7 @@ async fn api_download(
     (StatusCode::OK, Json(DownloadResponse {
         download_path: output_path.to_string_lossy().to_string(),
         verified,
+        bytes: bytes_len,
         bytes: bytes_len,
     }))
     .into_response()
