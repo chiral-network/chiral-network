@@ -130,6 +130,7 @@ fn test_file_metadata_with_ed2k_sources() {
         http_sources: None,
         info_hash: None,
         trackers: None,
+        manifest: None,
         is_root: true,
         download_path: None,
         price: 0.0,
@@ -179,6 +180,7 @@ fn test_multiple_ed2k_sources() {
         http_sources: None,
         info_hash: None,
         trackers: None,
+        manifest: None,
         is_root: true,
         download_path: None,
         price: 0.0,
@@ -199,7 +201,7 @@ fn test_empty_none_source_lists() {
         file_name: String::new(), file_size: 0, file_data: vec![], seeders: vec![], created_at: 0,
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
         parent_hash: None, cids: None, encrypted_key_bundle: None,
-        ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
+        ftp_sources: None, http_sources: None, info_hash: None, trackers: None, manifest: None, is_root: true,
         download_path: None, price: 0.0, uploader_address: None,
     };
     let metadata_none = FileMetadata {
@@ -208,7 +210,7 @@ fn test_empty_none_source_lists() {
         file_name: String::new(), file_size: 0, file_data: vec![], seeders: vec![], created_at: 0,
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
         parent_hash: None, cids: None, encrypted_key_bundle: None,
-        ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
+        ftp_sources: None, http_sources: None, info_hash: None, trackers: None, manifest: None, is_root: true,
         download_path: None, price: 0.0, uploader_address: None,
     };
     let json_empty = serde_json::to_string(&metadata_empty).unwrap();
@@ -267,7 +269,7 @@ fn test_dht_storage_round_trip() {
         file_name: "test.iso".to_string(), file_size: 12345, file_data: vec![], seeders: vec![], created_at: 0,
         mime_type: None, is_encrypted: false, encryption_method: None, key_fingerprint: None,
         parent_hash: None, cids: None, encrypted_key_bundle: None,
-        ftp_sources: None, http_sources: None, info_hash: None, trackers: None, is_root: true,
+        ftp_sources: None, http_sources: None, info_hash: None, trackers: None, manifest: None, is_root: true,
         download_path: None, price: 0.0, uploader_address: None,
     };
 

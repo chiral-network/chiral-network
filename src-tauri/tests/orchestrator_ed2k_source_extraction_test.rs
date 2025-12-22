@@ -36,6 +36,7 @@ fn test_extract_ed2k_sources_from_metadata_empty() {
         uploader_address: None,
         info_hash: None,
         trackers: None,
+        manifest: None,
     };
 
     // Test that metadata has no ed2k sources
@@ -78,6 +79,7 @@ fn test_extract_ed2k_sources_from_metadata_single() {
         uploader_address: None,
         info_hash: None,
         trackers: None,
+        manifest: None,
     };
 
     // Test that metadata contains ed2k source
@@ -136,6 +138,7 @@ fn test_extract_ed2k_sources_from_metadata_multiple() {
         uploader_address: None,
         info_hash: None,
         trackers: None,
+        manifest: None,
     };
 
     // Test that metadata contains multiple ed2k sources
@@ -183,6 +186,7 @@ fn test_calculate_chunk_size_with_ed2k_source() {
         uploader_address: None,
         info_hash: None,
         trackers: None,
+        manifest: None,
     };
 
     // Test that ed2k chunk size is 9.28 MB
@@ -219,6 +223,7 @@ fn test_calculate_chunk_size_without_ed2k_source() {
         uploader_address: None,
         info_hash: None,
         trackers: None,
+        manifest: None,
     };
 
     // Default chunk size should be 256 KB
