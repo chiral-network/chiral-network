@@ -1679,7 +1679,7 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
 
     // Try to estimate real-time hash rate from mining activity patterns
     // Count recent mining operations in the logs
-    let mut mining_operations = 0;
+    let mining_operations = 0;
     for line in &lines {
         // Look for various mining activity indicators
         if line.contains("Commit new sealing work") ||

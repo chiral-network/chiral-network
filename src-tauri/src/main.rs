@@ -118,7 +118,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::{
     io::AsyncReadExt,
     sync::Mutex,
@@ -7227,22 +7226,32 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
 }
 
 fn prompt_close_confirmation(app_handle: &tauri::AppHandle) {
-    let handle = app_handle.clone();
-
-    app_handle
-        .dialog()
-        .message("Close Chiral Network? Active downloads and uploads will stop.")
-        .title("Confirm Exit")
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Stay".into()))
-        .show(move |should_quit| {
-            if should_quit {
-                let app_handle = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    shutdown_application(app_handle).await;
-                });
-            }
+    if let Some(window) = app_handle.get_webview_window("main") {
+        // Bring window to front to ensure the in-app prompt is visible
+        let _ = window.show();
+        let _ = window.set_focus();
+        if let Err(err) = window.emit("show_exit_prompt", ()) {
+            tracing::warn!(
+                "Failed to emit exit prompt event to frontend, shutting down immediately: {}",
+                err
+            );
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                shutdown_application(handle).await;
+            });
+        }
+    } else {
+        let handle = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            shutdown_application(handle).await;
         });
+    }
+}
+
+#[tauri::command]
+async fn confirm_exit(app_handle: tauri::AppHandle) -> Result<(), String> {
+    shutdown_application(app_handle).await;
+    Ok(())
 }
 
 // ============================================================================
@@ -8753,6 +8762,7 @@ fn main() {
             get_multiaddresses,
             clear_seed_list,
             get_full_network_stats,
+            confirm_exit,
             // Download restart commands
             start_download_restart,
             pause_download_restart,
