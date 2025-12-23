@@ -33,6 +33,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 lazy_static::lazy_static! {
     /// Global map of progress bars for active downloads, keyed by file hash
     static ref DOWNLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
+
+    /// Global map of progress bars for active uploads, keyed by (peer_id, file_hash)
+    static ref UPLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
 }
 
 const CHUNK_SIZE: usize = 4096; // 4KB chunks - safe size for WebRTC data channel max message size (~16KB after JSON serialization)
@@ -1192,12 +1195,6 @@ impl WebRTCService {
         // Serialize chunk and send over data channel
         match serde_json::to_string(chunk) {
             Ok(chunk_json) => {
-                let chunk_len = chunk_json.len();
-                // Log for first 100 chunks
-                if chunk.chunk_index < 100 {
-                    info!("📤 SEND_TEXT_START: chunk {} ({} bytes) for peer {}", chunk.chunk_index, chunk_len, peer_id);
-                }
-                
                 // Check buffer before sending - wait if buffer is too full
                 // This prevents overwhelming the data channel's internal buffer
                 let max_buffered: usize = 256 * 1024; // 256KB max buffer
@@ -1211,22 +1208,14 @@ impl WebRTCService {
                         error!("❌ Timeout waiting for data channel buffer to drain (buffered: {} bytes)", buffered);
                         return Err("Data channel buffer timeout".to_string());
                     }
-                    if chunk.chunk_index < 100 {
-                        info!("⏳ Waiting for buffer to drain: {} bytes buffered for chunk {}", buffered, chunk.chunk_index);
-                    }
                     sleep(Duration::from_millis(10)).await;
                 }
-                
+
                 if let Err(e) = dc.send_text(chunk_json).await {
                     error!("Failed to send chunk over data channel: {}", e);
                     return Err(format!("Failed to send chunk: {}", e));
                 }
-                
-                // Log buffer state after send
-                if chunk.chunk_index < 100 {
-                    let buffered_after = dc.buffered_amount().await;
-                    info!("📤 SEND_TEXT_DONE: chunk {} for peer {}, buffer now: {} bytes", chunk.chunk_index, peer_id, buffered_after);
-                }
+
                 Ok(())
             }
             Err(e) => {
@@ -1809,10 +1798,23 @@ impl WebRTCService {
                 encrypted_key_bundle,
             };
 
-            // Send chunk via WebRTC data channel - abort transfer if send fails
-            if chunk_index < 100 {
-                info!("🔄 Chunk {}: About to call handle_send_chunk", chunk_index);
+            // Create or update upload progress bar
+            {
+                let pb_key = format!("{}:{}", peer_id, &request.file_hash);
+                let mut bars = UPLOAD_PROGRESS_BARS.lock().await;
+                let pb = bars.entry(pb_key).or_insert_with(|| {
+                    let pb = ProgressBar::new(total_chunks as u64);
+                    pb.set_style(ProgressStyle::default_bar()
+                        .template("📤 {msg} [{bar:40.green/blue}] {pos}/{len} ({percent}%)")
+                        .unwrap()
+                        .progress_chars("=>-"));
+                    pb.set_message(format!("Uploading {}", &request.file_hash[..8]));
+                    pb
+                });
+                pb.set_position(chunk_index as u64);
             }
+
+            // Send chunk via WebRTC data channel - abort transfer if send fails
             if let Err(e) = Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await {
                 error!("Failed to send chunk {}/{} to peer {}: {}", chunk_index, total_chunks, peer_id, e);
                 let _ = event_tx
@@ -1823,9 +1825,6 @@ impl WebRTCService {
                     })
                     .await;
                 return Err(format!("Transfer aborted: {}", e));
-            }
-            if chunk_index < 100 {
-                info!("🔄 Chunk {}: handle_send_chunk completed successfully", chunk_index);
             }
 
             // Increment pending ACK count (only if send succeeded)
@@ -1864,18 +1863,11 @@ impl WebRTCService {
             // Send progress event OUTSIDE the lock to avoid deadlock
             // Use try_send to avoid blocking if channel is full - progress events are not critical
             if let Some(progress) = progress_to_send {
-                if chunk_index < 100 {
-                    info!("📊 Sending progress event for chunk {}", chunk_index);
-                }
                 match event_tx.try_send(WebRTCEvent::TransferProgress {
                     peer_id: peer_id.to_string(),
                     progress,
                 }) {
-                    Ok(_) => {
-                        if chunk_index < 100 {
-                            info!("📊 Progress event sent for chunk {}", chunk_index);
-                        }
-                    }
+                    Ok(_) => {},
                     Err(e) => {
                         // Channel full - skip this progress event, not critical
                         if chunk_index < 100 || chunk_index % 100 == 0 {
@@ -1897,10 +1889,13 @@ impl WebRTCService {
             } else {
                 sleep(Duration::from_millis(5)).await;
             }
-            
-            // Log end of loop iteration for first 100 chunks
-            if chunk_index < 100 {
-                info!("🔁 LOOP_END: Finished chunk {} for peer {}, going to next", chunk_index, peer_id);
+        }
+
+        // Finish and remove upload progress bar
+        {
+            let pb_key = format!("{}:{}", peer_id, &request.file_hash);
+            if let Some(pb) = UPLOAD_PROGRESS_BARS.lock().await.remove(&pb_key) {
+                pb.finish_with_message(format!("✓ Uploaded {}", &request.file_hash[..8]));
             }
         }
 
