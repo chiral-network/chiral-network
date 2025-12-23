@@ -1283,13 +1283,13 @@ impl WebRTCService {
                     let pb = bars.entry(chunk.file_hash.clone()).or_insert_with(|| {
                         let pb = ProgressBar::new(chunk.total_chunks as u64);
                         pb.set_style(ProgressStyle::default_bar()
-                            .template("📦 {msg} [{bar:40.cyan/blue}] {pos}/{len} ({percent}%)")
+                            .template("📦 {msg} [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {bytes_per_sec} ETA: {eta}")
                             .unwrap()
                             .progress_chars("=>-"));
                         pb.set_message(format!("Downloading {}", &chunk.file_hash[..8]));
                         pb
                     });
-                    pb.set_position((chunk.chunk_index + 1) as u64);
+                    pb.inc(1); // Increment by 1 so indicatif can calculate speed
                 }
 
                 // Handle received chunk
@@ -1805,13 +1805,13 @@ impl WebRTCService {
                 let pb = bars.entry(pb_key).or_insert_with(|| {
                     let pb = ProgressBar::new(total_chunks as u64);
                     pb.set_style(ProgressStyle::default_bar()
-                        .template("📤 {msg} [{bar:40.green/blue}] {pos}/{len} ({percent}%)")
+                        .template("📤 {msg} [{bar:40.green/blue}] {pos}/{len} ({percent}%) {bytes_per_sec} ETA: {eta}")
                         .unwrap()
                         .progress_chars("=>-"));
                     pb.set_message(format!("Uploading {}", &request.file_hash[..8]));
                     pb
                 });
-                pb.set_position(chunk_index as u64);
+                pb.inc(1); // Increment by 1 so indicatif can calculate speed
             }
 
             // Send chunk via WebRTC data channel - abort transfer if send fails
