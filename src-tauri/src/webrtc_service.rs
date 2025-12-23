@@ -38,7 +38,7 @@ lazy_static::lazy_static! {
     static ref UPLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
 }
 
-const CHUNK_SIZE: usize = 65536; // 64KB chunks - optimal for WebRTC (max is 256KB, but 64KB balances throughput and latency)
+const CHUNK_SIZE: usize = 16384; // 16KB chunks - safe for WebRTC data channels (max message size is typically 16-64KB including JSON overhead)
 
 /// Maximum connection retry attempts before giving up
 const MAX_CONNECTION_RETRIES: u32 = 3;
