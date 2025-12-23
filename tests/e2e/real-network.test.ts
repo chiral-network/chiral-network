@@ -362,6 +362,9 @@ class RealE2ETestFramework {
 
     const start = Date.now();
     const pollIntervalMs = 750;
+    const perAttemptTimeoutMs = Number(
+      process.env.E2E_SEARCH_ATTEMPT_TIMEOUT_MS || "10000"
+    );
 
     // DHT propagation is not instantaneous across real networks.
     // Poll until we get a non-null metadata (or until timeout).
@@ -372,7 +375,10 @@ class RealE2ETestFramework {
         body: JSON.stringify({
           fileHash,
           // Give each attempt a modest budget; overall timeout is controlled by this loop.
-          timeoutMs: Math.min(3000, timeout),
+          timeoutMs: Math.max(
+            1000,
+            Math.min(perAttemptTimeoutMs, Math.max(0, timeout - (Date.now() - start)))
+          ),
         }),
       });
 
@@ -393,7 +399,8 @@ class RealE2ETestFramework {
 
     throw new Error(
       `Search timed out after ${timeout}ms (metadata not found). ` +
-        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and uploader port 4001 firewall.`
+        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and ${this.uploaderConfig.apiBaseUrl}/api/dht/peers. ` +
+        `Also confirm the uploader's libp2p port (default tcp/4001) is reachable (firewall/NAT/relay).`
     );
   }
 
@@ -695,38 +702,16 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       const fileHash = await framework.uploadFile(testFile, "WebRTC");
       expect(fileHash).toBeTruthy();
 
-      const metadata = await framework.searchFile(fileHash, 30_000);
+      const metadata = await framework.searchFile(fileHash, 60_000);
       expect(metadata).toBeTruthy();
 
       const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
       const price = metadata.price ?? 0.001;
       expect(typeof uploaderAddress).toBe("string");
 
-      // Trigger WebRTC P2P download on downloader node
-      const downloadPath = await (async () => {
-        if (!framework["downloaderConfig"]) throw new Error("Config not initialized");
-        const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
-        const response = await fetch(`${downloaderApi}/api/download`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileHash,
-            fileName: testFile.name,
-            protocol: "WebRTC",
-          }),
-        });
-        if (!response.ok) {
-          const body = await response.text().catch(() => "");
-          throw new Error(
-            `Download failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`
-          );
-        }
-        const result = await response.json();
-        if (!result.verified) {
-          throw new Error("Downloaded file failed verification on node");
-        }
-        return result.downloadPath;
-      })();
+      // Trigger WebRTC P2P download on downloader node.
+      // WebRTC downloads are async (202 + downloadId) so always go through the framework helper.
+      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "WebRTC");
 
       const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
       expect(verified).toBe(true);
@@ -784,37 +769,16 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       const fileHash = await framework.uploadFile(testFile, "Bitswap");
       expect(fileHash).toBeTruthy();
 
-      const metadata = await framework.searchFile(fileHash, 30_000);
+      // Bitswap metadata propagation can be slower than WebRTC/HTTP on real networks.
+      const metadata = await framework.searchFile(fileHash, 90_000);
       expect(metadata).toBeTruthy();
 
       const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
       const price = metadata.price ?? 0.001;
       expect(typeof uploaderAddress).toBe("string");
 
-      const downloadPath = await (async () => {
-        if (!framework["downloaderConfig"]) throw new Error("Config not initialized");
-        const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
-        const response = await fetch(`${downloaderApi}/api/download`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileHash,
-            fileName: testFile.name,
-            protocol: "Bitswap",
-          }),
-        });
-        if (!response.ok) {
-          const body = await response.text().catch(() => "");
-          throw new Error(
-            `Download failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`
-          );
-        }
-        const result = await response.json();
-        if (!result.verified) {
-          throw new Error("Downloaded file failed verification on node");
-        }
-        return result.downloadPath;
-      })();
+      // Bitswap downloads are async (202 + downloadId) so always go through the framework helper.
+      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "Bitswap");
 
       const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
       expect(verified).toBe(true);
