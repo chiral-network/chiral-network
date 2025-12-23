@@ -75,6 +75,8 @@ struct DownloadRequest {
     seeder_url: Option<String>,
     /// Optional output file name; defaults to metadata.fileName.
     file_name: Option<String>,
+    /// Optional protocol override. supported: HTTP, WebRTC, Bitswap
+    protocol: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
