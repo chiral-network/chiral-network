@@ -2945,7 +2945,7 @@ async function loadAndResumeDownloads() {
                 {#if detectedProtocol === 'Bitswap' && file.totalChunks}
                   <div class="w-full bg-border rounded-full h-2 overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
                     <div
-                      class="h-2 bg-green-500 transition-all duration-300"
+                      class="h-2 bg-green-500 transition-all duration-75"
                       style="width: {file.progress || 0}%"
                     ></div>
                   </div>
@@ -2966,7 +2966,7 @@ async function loadAndResumeDownloads() {
                           <span class="w-20 truncate">{peerAssignment.source.type === 'p2p' ? peerAssignment.source.p2p.peerId.slice(0, 8) : 'N/A'}...</span>
                           <div class="flex-1 bg-muted rounded-full h-1">
                             <div
-                              class="bg-purple-500 h-1 rounded-full transition-all duration-300"
+                              class="bg-purple-500 h-1 rounded-full transition-all duration-75"
                               style="width: {peerAssignment.status === 'Completed' ? 100 : peerAssignment.status === 'Downloading' ? 50 : 0}%"
                             ></div>
                           </div>

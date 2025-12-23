@@ -19,7 +19,7 @@
   {...$$restProps}
 >
   <div
-    class={cn('h-full rounded-full transition-all duration-200', indicatorClass)}
+    class={cn('h-full rounded-full transition-all duration-75', indicatorClass)}
     style="width: {percentage}%"
     role="progressbar"
     aria-valuemin={0}
