@@ -223,13 +223,16 @@ class RealE2ETestFramework {
   /**
    * Upload file from uploader node
    */
-  async uploadFile(file: TestFile, protocol: "WebRTC" | "Bitswap"): Promise<string> {
+  async uploadFile(
+    file: TestFile,
+    protocol: "HTTP" | "WebRTC" | "Bitswap"
+  ): Promise<string> {
     if (!this.uploaderConfig) throw new Error("Config not initialized");
 
     console.log(
       `📤 Uploading file (generated on uploader): ${file.name} (${Math.round(
         file.size / 1024 / 1024
-      )}MB) via HTTP`
+      )}MB) via ${protocol}`
     );
 
     // Option1: uploader generates deterministic bytes and publishes metadata with httpSources.
@@ -310,11 +313,11 @@ class RealE2ETestFramework {
   async downloadFile(
     fileHash: string,
     fileName: string,
-    protocol: "WebRTC" | "Bitswap"
+    protocol: "HTTP" | "WebRTC" | "Bitswap"
   ): Promise<string> {
     if (!this.downloaderConfig) throw new Error("Config not initialized");
 
-    console.log(`📥 Downloading file via HTTP Range: ${fileName}`);
+    console.log(`📥 Downloading file via ${protocol}: ${fileName}`);
 
     const response = await fetch(`${this.downloaderConfig.apiBaseUrl}/api/download`, {
       method: "POST",
@@ -322,11 +325,15 @@ class RealE2ETestFramework {
       body: JSON.stringify({
         fileHash,
         fileName,
+        protocol,
       }),
     });
 
     if (!response.ok) {
-      throw new Error(`Download failed: ${response.statusText}`);
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Download failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`
+      );
     }
 
     const result = await response.json();
@@ -539,7 +546,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
     it("should upload, search, download, and pay (tx receipt success)", async () => {
       const testFile = framework.createTestFile("real-test-http.bin", 50);
 
-      const fileHash = await framework.uploadFile(testFile, "WebRTC");
+      const fileHash = await framework.uploadFile(testFile, "HTTP");
       expect(fileHash).toBeTruthy();
 
       const metadata = await framework.searchFile(fileHash);
@@ -549,7 +556,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       const price = metadata.price ?? 0.001;
       expect(typeof uploaderAddress).toBe("string");
 
-      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "WebRTC");
+      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "HTTP");
       const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
       expect(verified).toBe(true);
 

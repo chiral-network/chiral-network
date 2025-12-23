@@ -394,49 +394,96 @@ async fn api_download(
         .into_response();
     };
 
-    let seeder_url = req
-        .seeder_url
-        .or_else(|| meta.http_sources.as_ref().and_then(|v| v.first()).map(|s| s.url.clone()))
-        .ok_or_else(|| "No httpSources in metadata".to_string());
-    let seeder_url = match seeder_url {
-        Ok(v) => v,
-        Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse { error: e })).into_response();
-        }
-    };
-
     let out_name = req.file_name.unwrap_or_else(|| meta.file_name.clone());
     let output_path = app_state.http_server_state.storage_dir.join(&out_name);
 
-    // Include downloader peer id for provider metrics if available.
-    let peer_id = Some(dht.get_peer_id().await);
-    let client = HttpDownloadClient::new_with_peer_id(peer_id);
-    if let Err(e) = client
-        .download_file(&seeder_url, &meta.merkle_root, &output_path, None)
-        .await
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+    let protocol_upper = req
+        .protocol
+        .as_deref()
+        .unwrap_or("HTTP")
+        .trim()
+        .to_uppercase();
+
+    // Only HTTP downloads require an HTTP seeder URL / httpSources.
+    let seeder_url = if protocol_upper == "HTTP" {
+        let seeder_url = req
+            .seeder_url
+            .or_else(|| meta.http_sources.as_ref().and_then(|v| v.first()).map(|s| s.url.clone()))
+            .ok_or_else(|| "No httpSources in metadata".to_string());
+        match seeder_url {
+            Ok(v) => Some(v),
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+            }
+        }
+    } else {
+        None
+    };
+
+    if protocol_upper == "HTTP" {
+        // Include downloader peer id for provider metrics if available.
+        let peer_id = Some(dht.get_peer_id().await);
+        let client = HttpDownloadClient::new_with_peer_id(peer_id);
+        if let Err(e) = client
+            .download_file(seeder_url.as_ref().unwrap(), &meta.merkle_root, &output_path, None)
+            .await
+        {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+        }
+    } else if protocol_upper == "WEBRTC" {
+        let output_path_str = output_path.to_string_lossy().to_string();
+        if let Err(e) =
+            crate::download_file_from_network(app_state, meta.merkle_root.clone(), output_path_str)
+                .await
+        {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+        }
+    } else if protocol_upper == "BITSWAP" {
+        let output_path_str = output_path.to_string_lossy().to_string();
+        if let Err(e) = crate::download_blocks_from_network(app_state, meta.clone(), output_path_str).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+        }
+    } else {
+        return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
+            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, or Bitswap.", protocol_upper),
+        }))
+        .into_response();
     }
 
-    // Verify by hashing file content (sha256 == merkle_root in option1)
-    let bytes = match tokio::fs::read(&output_path).await {
-        Ok(b) => b,
+    // Verify existence + size (protocol-independent light check).
+    let bytes_len = match tokio::fs::metadata(&output_path).await {
+        Ok(m) => m.len(),
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Failed to read downloaded file: {}", e),
+                error: format!("Download finished but output file is missing: {}", e),
             }))
             .into_response();
         }
     };
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(&bytes);
-    let computed = format!("{:x}", hasher.finalize());
-    let verified = computed == meta.merkle_root;
+
+    let verified = if protocol_upper == "HTTP" {
+        // Option1: sha256(file) == merkle_root (used as fileHash).
+        let bytes = match tokio::fs::read(&output_path).await {
+            Ok(b) => b,
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                    error: format!("Failed to read downloaded file: {}", e),
+                }))
+                .into_response();
+            }
+        };
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&bytes);
+        let computed = format!("{:x}", hasher.finalize());
+        computed == meta.merkle_root
+    } else {
+        bytes_len == meta.file_size
+    };
 
     (StatusCode::OK, Json(DownloadResponse {
         download_path: output_path.to_string_lossy().to_string(),
         verified,
-        bytes: bytes.len() as u64,
+        bytes: bytes_len,
     }))
     .into_response()
 }
