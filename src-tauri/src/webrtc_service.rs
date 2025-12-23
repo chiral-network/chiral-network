@@ -1517,7 +1517,7 @@ impl WebRTCService {
                     peer_id,
                     keystore,
                     &active_private_key,
-                    app_handle.as_ref(),
+                    &app_handle,
                     &bandwidth,
                     multi_source_service,
                 )
