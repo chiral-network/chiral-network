@@ -38,7 +38,7 @@ lazy_static::lazy_static! {
     static ref UPLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
 }
 
-const CHUNK_SIZE: usize = 4096; // 4KB chunks - safe size for WebRTC data channel max message size (~16KB after JSON serialization)
+const CHUNK_SIZE: usize = 65536; // 64KB chunks - optimal for WebRTC (max is 256KB, but 64KB balances throughput and latency)
 
 /// Maximum connection retry attempts before giving up
 const MAX_CONNECTION_RETRIES: u32 = 3;
@@ -1197,7 +1197,7 @@ impl WebRTCService {
             Ok(chunk_json) => {
                 // Check buffer before sending - wait if buffer is too full
                 // This prevents overwhelming the data channel's internal buffer
-                let max_buffered: usize = 256 * 1024; // 256KB max buffer
+                let max_buffered: usize = 2 * 1024 * 1024; // 2MB max buffer (increased from 256KB)
                 let start_wait = Instant::now();
                 loop {
                     let buffered = dc.buffered_amount().await;
@@ -1208,7 +1208,7 @@ impl WebRTCService {
                         error!("❌ Timeout waiting for data channel buffer to drain (buffered: {} bytes)", buffered);
                         return Err("Data channel buffer timeout".to_string());
                     }
-                    sleep(Duration::from_millis(10)).await;
+                    sleep(Duration::from_millis(1)).await; // Reduced from 10ms to 1ms
                 }
 
                 if let Err(e) = dc.send_text(chunk_json).await {
@@ -1624,8 +1624,8 @@ impl WebRTCService {
         }
 
         // Flow control constants
-        const BATCH_SIZE: u32 = 10; // Send 10 chunks before waiting for ACKs
-        const MAX_PENDING_ACKS: u32 = 20; // Maximum unacked chunks before pausing
+        const BATCH_SIZE: u32 = 100; // Send 100 chunks before checking ACKs (increased from 10)
+        const MAX_PENDING_ACKS: u32 = 200; // Maximum unacked chunks before pausing (increased from 20)
         const ACK_WAIT_TIMEOUT_MS: u64 = 5000; // Timeout waiting for ACKs
 
         // Initialize pending ACK counter
@@ -1882,12 +1882,9 @@ impl WebRTCService {
                 info!("✅ Chunk {} sent and tracked successfully for peer {}", chunk_index, peer_id);
             }
 
-            // Small delay between chunks in a batch
-            if (chunk_index + 1) % BATCH_SIZE == 0 {
-                // After a batch, give more time for ACKs
-                sleep(Duration::from_millis(50)).await;
-            } else {
-                sleep(Duration::from_millis(5)).await;
+            // Only yield to other tasks every 10 chunks (no artificial delays)
+            if (chunk_index + 1) % 10 == 0 {
+                tokio::task::yield_now().await;
             }
         }
 
