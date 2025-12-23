@@ -590,10 +590,26 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     fileHash: string;
     fileName: string;
     fileSize: number;
-    data: number[]; // Array of bytes
+    // New (preferred): backend already saved the file and provides the final path
+    outputPath?: string;
+    // Legacy: raw bytes over IPC (slow for large files)
+    data?: number[];
   };
 
   try {
+    // Fast-path: backend already wrote the file to disk.
+    if (data.outputPath) {
+      fileLogger.downloadStarted(data.fileName);
+      fileLogger.downloadCompleted(data.fileName);
+
+      files.update(f => f.map(file =>
+        file.hash === data.fileHash && file.status === 'downloading'
+          ? { ...file, status: 'completed', progress: 100, downloadPath: data.outputPath }
+          : file
+      ));
+      return;
+    }
+
     // ✅ GET SETTINGS PATH
     const stored = localStorage.getItem("chiralSettings");
     if (!stored) {
@@ -641,6 +657,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
     // Write the file to disk
     const { writeFile } = await import('@tauri-apps/plugin-fs');
+    if (!data.data) {
+      throw new Error('Missing file data in webrtc_download_complete payload');
+    }
     const fileData = new Uint8Array(data.data);
     await writeFile(outputPath, fileData);
 

@@ -2346,30 +2346,70 @@ impl WebRTCService {
     sorted_chunks.sort_by_key(|c| c.chunk_index);
 
     // Get file name from the first chunk
-    let file_name = sorted_chunks
+    let raw_file_name = sorted_chunks
         .first()
         .map(|c| c.file_name.clone()) // Use file_name instead of file_hash
         .unwrap_or_else(|| format!("downloaded_{}", file_hash));
 
-    // Concatenate chunk data
-    let mut file_data = Vec::new();
-    for chunk in sorted_chunks {
-        file_data.extend_from_slice(&chunk.data);
+    // Ensure we only use a safe basename (avoid path traversal / separators).
+    let file_name = std::path::Path::new(&raw_file_name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("downloaded_{}", file_hash));
+
+    // Compute final size without concatenating into a giant Vec<u8>.
+    let file_size: usize = sorted_chunks.iter().map(|c| c.data.len()).sum();
+
+    // Resolve download directory (same single source of truth as the frontend command).
+    let storage_path = match crate::download_paths::get_download_directory(app_handle) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to resolve download directory: {}", e);
+            return;
+        }
+    };
+
+    // Ensure directory exists
+    if let Err(e) = crate::download_paths::ensure_directory_exists(&storage_path).await {
+        error!("Failed to ensure download directory exists ({}): {}", storage_path, e);
+        return;
     }
 
-    let file_size = file_data.len();
+    let output_path = std::path::Path::new(&storage_path).join(&file_name);
+
+    // Stream chunks to disk in order (avoid IPC + JSON serialization of raw bytes).
+    use tokio::io::AsyncWriteExt;
+    let file = match tokio::fs::File::create(&output_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            error!("Failed to create output file {:?}: {}", output_path, e);
+            return;
+        }
+    };
+    let mut writer = tokio::io::BufWriter::with_capacity(1024 * 1024, file); // 1MB buffer
+    for chunk in &sorted_chunks {
+        if let Err(e) = writer.write_all(&chunk.data).await {
+            error!("Failed to write chunk {} to {:?}: {}", chunk.chunk_index, output_path, e);
+            return;
+        }
+    }
+    if let Err(e) = writer.flush().await {
+        error!("Failed to flush output file {:?}: {}", output_path, e);
+        return;
+    }
 
     // NOTE: We do NOT call store_file_data here because:
     // 1. That function is for uploading/seeding files, not downloads
     // 2. It creates hash-named files + .meta files in storage
     // 3. The frontend handles saving the file with proper name via webrtc_download_complete event
 
-    // Emit event to frontend with complete file data - frontend will save the file
+    // Emit event to frontend with final output path (no huge byte array over IPC).
     if let Err(e) = app_handle.emit("webrtc_download_complete", serde_json::json!({
         "fileHash": file_hash,
         "fileName": file_name,
         "fileSize": file_size,
-        "data": file_data, // Send the actual file data
+        "outputPath": output_path.to_string_lossy().to_string(),
     })) {
         error!("Failed to emit webrtc_download_complete event: {}", e);
     }
