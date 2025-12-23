@@ -1,14 +1,16 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
 
 use sha2::Digest;
 use tauri::Manager;
@@ -22,6 +24,17 @@ use crate::transaction_services;
 #[derive(Clone)]
 pub struct E2eApiState {
     pub app: tauri::AppHandle,
+    downloads: Arc<Mutex<HashMap<String, DownloadJob>>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadJob {
+    status: String, // "running" | "success" | "failed"
+    download_path: String,
+    verified: bool,
+    bytes: u64,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +99,10 @@ struct DownloadResponse {
     download_path: String,
     verified: bool,
     bytes: u64,
+    /// Present for async downloads (WebRTC/Bitswap). Use /api/download/status/:id to poll.
+    download_id: Option<String>,
+    /// "running" | "success" | "failed"
+    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,7 +125,10 @@ struct ReceiptRequest {
 }
 
 pub async fn start_e2e_api_server(app: tauri::AppHandle, port: u16) -> Result<SocketAddr, String> {
-    let state = E2eApiState { app };
+    let state = E2eApiState {
+        app,
+        downloads: Arc::new(Mutex::new(HashMap::new())),
+    };
     let router = create_router(state);
 
     let bind_addr: SocketAddr = ([0, 0, 0, 0], port).into();
@@ -132,9 +152,27 @@ fn create_router(state: E2eApiState) -> Router {
         .route("/api/upload", post(api_upload_generate))
         .route("/api/search", post(api_search))
         .route("/api/download", post(api_download))
+        .route("/api/download/status/:id", get(api_download_status))
         .route("/api/pay", post(api_pay))
         .route("/api/tx/receipt", post(api_tx_receipt))
         .with_state(Arc::new(state))
+}
+
+async fn api_download_status(
+    State(state): State<Arc<E2eApiState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let jobs = state.downloads.lock().await;
+    let Some(job) = jobs.get(&id).cloned() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(crate::http_server::ErrorResponse {
+                error: "Download not found".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    (StatusCode::OK, Json(job)).into_response()
 }
 
 async fn api_health(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse {
@@ -552,16 +590,123 @@ async fn api_download(
         {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
         }
-    } else if protocol_upper == "WEBRTC" {
-        let output_path_str = output_path.to_string_lossy().to_string();
-        if let Err(e) = crate::download_file_from_network(app_state, meta.merkle_root.clone(), output_path_str).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+    } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" {
+        // IMPORTANT: WebRTC/Bitswap downloads can take a long time and the node test runner (undici fetch)
+        // can time out waiting for response headers. So we run the download asynchronously and return
+        // a downloadId immediately; the client polls /api/download/status/:id.
+        let download_id = format!(
+            "dl-{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            meta.merkle_root.chars().take(8).collect::<String>()
+        );
+        let out_path_str = output_path.to_string_lossy().to_string();
+
+        {
+            let mut jobs = state.downloads.lock().await;
+            jobs.insert(
+                download_id.clone(),
+                DownloadJob {
+                    status: "running".to_string(),
+                    download_path: out_path_str.clone(),
+                    verified: false,
+                    bytes: 0,
+                    error: None,
+                },
+            );
         }
-    } else if protocol_upper == "BITSWAP" {
-        let output_path_str = output_path.to_string_lossy().to_string();
-        if let Err(e) = crate::download_blocks_from_network(app_state, meta.clone(), output_path_str).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
-        }
+
+        let downloads_map = state.downloads.clone();
+        let download_id_for_task = download_id.clone();
+        let out_path_for_task = out_path_str.clone();
+        let app_handle_for_task = state.app.clone();
+        let meta_for_task = meta.clone();
+        let protocol_upper_for_task = protocol_upper.clone();
+
+        tauri::async_runtime::spawn(async move {
+            let timeout_ms: u64 = std::env::var("E2E_DOWNLOAD_WAIT_TIMEOUT_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(600_000); // default 10 minutes for real P2P
+
+            let result: Result<u64, String> = async {
+                let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
+                if protocol_upper_for_task == "WEBRTC" {
+                    if let Err(e) = crate::download_file_from_network(
+                        app_state_for_task,
+                        meta_for_task.merkle_root.clone(),
+                        out_path_for_task.clone(),
+                    )
+                    .await
+                    {
+                        return Err(e);
+                    }
+                } else {
+                    if let Err(e) = crate::download_blocks_from_network(
+                        app_state_for_task,
+                        meta_for_task.clone(),
+                        out_path_for_task.clone(),
+                    )
+                    .await
+                    {
+                        return Err(e);
+                    }
+                }
+
+                let start = std::time::Instant::now();
+                loop {
+                    match tokio::fs::metadata(&out_path_for_task).await {
+                        Ok(m) => {
+                            let len = m.len();
+                            if len == meta_for_task.file_size {
+                                return Ok(len);
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                    if start.elapsed().as_millis() as u64 >= timeout_ms {
+                        return Err(format!(
+                            "Download output file missing or incomplete after {}ms (expected {} bytes): {}",
+                            timeout_ms, meta_for_task.file_size, out_path_for_task
+                        ));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+            }
+            .await;
+
+            let mut jobs = downloads_map.lock().await;
+            if let Some(job) = jobs.get_mut(&download_id_for_task) {
+                match result {
+                    Ok(bytes) => {
+                        job.status = "success".to_string();
+                        job.bytes = bytes;
+                        job.verified = bytes == meta_for_task.file_size;
+                        job.error = None;
+                    }
+                    Err(e) => {
+                        job.status = "failed".to_string();
+                        job.bytes = 0;
+                        job.verified = false;
+                        job.error = Some(e);
+                    }
+                }
+            }
+        });
+
+        return (
+            StatusCode::ACCEPTED,
+            Json(DownloadResponse {
+                download_path: out_path_str,
+                verified: false,
+                bytes: 0,
+                download_id: Some(download_id),
+                status: Some("running".to_string()),
+            }),
+        )
+            .into_response();
     } else {
         return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
             error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, or Bitswap.", protocol_upper),
@@ -569,60 +714,38 @@ async fn api_download(
         .into_response();
     }
 
-    // Verify existence + size (protocol-independent light check).
-    // NOTE: WebRTC/Bitswap downloads can complete asynchronously; wait for the output file to be written.
-    let timeout_ms: u64 = std::env::var("E2E_DOWNLOAD_WAIT_TIMEOUT_MS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(120_000);
-    let start = std::time::Instant::now();
-    let bytes_len: u64 = loop {
-        match tokio::fs::metadata(&output_path).await {
-            Ok(m) => {
-                let len = m.len();
-                if protocol_upper == "HTTP" || len == meta.file_size {
-                    break len;
-                }
-            }
-            Err(_) => {}
-        }
-        if start.elapsed().as_millis() as u64 >= timeout_ms {
+    // HTTP path returns synchronously.
+    let bytes_len = match tokio::fs::metadata(&output_path).await {
+        Ok(m) => m.len(),
+        Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!(
-                    "Download finished but output file is missing or incomplete after {}ms (expected {} bytes): {}",
-                    timeout_ms,
-                    meta.file_size,
-                    output_path.to_string_lossy()
-                ),
+                error: format!("Download finished but output file is missing: {}", e),
             }))
             .into_response();
         }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     };
 
-    let verified = if protocol_upper == "HTTP" {
-        // Option1: sha256(file) == merkle_root (used as fileHash).
-        let bytes = match tokio::fs::read(&output_path).await {
-            Ok(b) => b,
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                    error: format!("Failed to read downloaded file: {}", e),
-                }))
-                .into_response();
-            }
-        };
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(&bytes);
-        let computed = format!("{:x}", hasher.finalize());
-        computed == meta.merkle_root
-    } else {
-        bytes_len == meta.file_size
+    // Option1: sha256(file) == merkle_root (used as fileHash).
+    let bytes = match tokio::fs::read(&output_path).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
+                error: format!("Failed to read downloaded file: {}", e),
+            }))
+            .into_response();
+        }
     };
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&bytes);
+    let computed = format!("{:x}", hasher.finalize());
+    let verified = computed == meta.merkle_root;
 
     (StatusCode::OK, Json(DownloadResponse {
         download_path: output_path.to_string_lossy().to_string(),
         verified,
         bytes: bytes_len,
+        download_id: None,
+        status: Some("success".to_string()),
     }))
     .into_response()
 }

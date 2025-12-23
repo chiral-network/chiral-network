@@ -427,11 +427,43 @@ class RealE2ETestFramework {
     }
 
     const result = await response.json();
-    if (!result.verified) {
-      throw new Error("Downloaded file failed hash verification on node");
+
+    // HTTP returns synchronously with verified=true.
+    // WebRTC/Bitswap may return 202 + downloadId; poll /api/download/status/:id until completion.
+    const downloadPath: string = result.downloadPath;
+    const downloadId: string | undefined = result.downloadId;
+
+    if (protocol === "HTTP" || !downloadId) {
+      if (!result.verified) throw new Error("Downloaded file failed verification on node");
+      console.log(`✅ File downloaded to: ${downloadPath}`);
+      return downloadPath;
     }
-    console.log(`✅ File downloaded to: ${result.downloadPath}`);
-    return result.downloadPath;
+
+    console.log(`⏳ Download started (id=${downloadId})`);
+    const waitTimeoutMs = Number(process.env.E2E_P2P_DOWNLOAD_TIMEOUT_MS || "600000"); // 10min
+    const start = Date.now();
+    while (Date.now() - start < waitTimeoutMs) {
+      const st = await fetch(
+        `${this.downloaderConfig.apiBaseUrl}/api/download/status/${downloadId}`
+      );
+      if (!st.ok) {
+        const body = await st.text().catch(() => "");
+        throw new Error(
+          `Download status failed: ${st.status} ${st.statusText}${body ? ` - ${body}` : ""}`
+        );
+      }
+      const job = await st.json();
+      if (job.status === "success") {
+        if (!job.verified) throw new Error("Downloaded file failed verification on node");
+        console.log(`✅ File downloaded to: ${job.downloadPath}`);
+        return job.downloadPath;
+      }
+      if (job.status === "failed") {
+        throw new Error(`Download failed: ${job.error ?? "unknown error"}`);
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error(`Timed out waiting for download ${downloadId}`);
   }
 
   /**
