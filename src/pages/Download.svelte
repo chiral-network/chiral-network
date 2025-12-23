@@ -551,13 +551,37 @@
             totalBytes: number;
           };
 
-          // Update file progress (FileItem uses 'hash' property)
-          // Only update files that are actively downloading, not seeding files with the same hash
-          files.update(f => f.map(file =>
-            file.hash === data.fileHash && file.status === 'downloading'
-              ? { ...file, status: data.progress >= 100 ? 'completed' : 'downloading', progress: data.progress }
-              : file
-          ));
+          // Update file progress with speed and ETA calculation
+          files.update(f => f.map(file => {
+            if (file.hash === data.fileHash && file.status === 'downloading') {
+              const now = Date.now();
+              const downloadStartTime = file.downloadStartTime || now;
+              const elapsedSeconds = (now - downloadStartTime) / 1000;
+
+              // Calculate speed (bytes per second)
+              const speed = elapsedSeconds > 0 ? data.bytesReceived / elapsedSeconds : 0;
+              const speedFormatted = speed > 0 ? `${toHumanReadableSize(speed)}/s` : '0 B/s';
+
+              // Calculate ETA (seconds)
+              const remainingBytes = data.totalBytes - data.bytesReceived;
+              const etaSeconds = speed > 0 ? remainingBytes / speed : 0;
+              const etaFormatted = etaSeconds > 0
+                ? `${Math.floor(etaSeconds / 60)}m ${Math.floor(etaSeconds % 60)}s`
+                : 'N/A';
+
+              return {
+                ...file,
+                status: data.progress >= 100 ? 'completed' : 'downloading',
+                progress: data.progress,
+                speed: speedFormatted,
+                eta: data.progress >= 100 ? 'Complete' : etaFormatted,
+                downloadedChunks: data.chunksReceived,
+                totalChunks: data.totalChunks,
+                downloadStartTime: downloadStartTime
+              };
+            }
+            return file;
+          }));
         });
 
         // Listen for WebRTC download completion
