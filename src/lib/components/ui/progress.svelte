@@ -6,8 +6,12 @@
   let className: string | null | undefined = undefined
   export let indicatorClass: string | null | undefined = 'bg-primary'
   export { className as class }
-  
-  $: percentage = Math.min(100, Math.max(0, (value / max) * 100))
+
+  // When max=100, assume value is already a percentage (0-100)
+  // Otherwise, calculate percentage from value/max ratio
+  $: percentage = max === 100 && value <= 100
+    ? Math.min(100, Math.max(0, value))
+    : Math.min(100, Math.max(0, (value / max) * 100))
 </script>
 
 <div
