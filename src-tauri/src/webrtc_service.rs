@@ -28,6 +28,12 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
+use indicatif::{ProgressBar, ProgressStyle};
+
+lazy_static::lazy_static! {
+    /// Global map of progress bars for active downloads, keyed by file hash
+    static ref DOWNLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
+}
 
 const CHUNK_SIZE: usize = 4096; // 4KB chunks - safe size for WebRTC data channel max message size (~16KB after JSON serialization)
 
@@ -1282,13 +1288,21 @@ impl WebRTCService {
             
             // Try to parse as FileChunk first (most common)
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
-                // Only log every 10th chunk, first chunk, or last chunk to reduce spam
-                if chunk.chunk_index == 0
-                    || chunk.chunk_index + 1 == chunk.total_chunks
-                    || (chunk.chunk_index + 1) % 10 == 0 {
-                    info!("📦 Received chunk {}/{} for file {} from peer {}",
-                        chunk.chunk_index + 1, chunk.total_chunks, chunk.file_hash, peer_id);
+                // Create or update progress bar
+                {
+                    let mut bars = DOWNLOAD_PROGRESS_BARS.lock().await;
+                    let pb = bars.entry(chunk.file_hash.clone()).or_insert_with(|| {
+                        let pb = ProgressBar::new(chunk.total_chunks as u64);
+                        pb.set_style(ProgressStyle::default_bar()
+                            .template("📦 {msg} [{bar:40.cyan/blue}] {pos}/{len} ({percent}%)")
+                            .unwrap()
+                            .progress_chars("=>-"));
+                        pb.set_message(format!("Downloading {}", &chunk.file_hash[..8]));
+                        pb
+                    });
+                    pb.set_position((chunk.chunk_index + 1) as u64);
                 }
+
                 // Handle received chunk
                 Self::process_incoming_chunk(
                     &chunk,
@@ -2021,6 +2035,11 @@ impl WebRTCService {
                 }
 
                 if chunks.len() == total_chunks as usize {
+                    // Finish and remove progress bar
+                    if let Some(pb) = DOWNLOAD_PROGRESS_BARS.lock().await.remove(&chunk.file_hash) {
+                        pb.finish_with_message(format!("✓ Downloaded {}", &chunk.file_hash[..8]));
+                    }
+
                     // Assemble file
                     Self::assemble_file_from_chunks(
                         &chunk.file_hash,
@@ -2044,13 +2063,6 @@ impl WebRTCService {
             };
             let ack_message = WebRTCMessage::ChunkAck(ack);
             if let Ok(ack_json) = serde_json::to_string(&ack_message) {
-                // Only log every 10th ACK, first ACK, or last ACK to reduce spam
-                if chunk.chunk_index == 0
-                    || chunk.chunk_index + 1 == chunk.total_chunks
-                    || (chunk.chunk_index + 1) % 10 == 0 {
-                    info!("📤 Sending ACK for chunk {}/{} of file {} to peer",
-                        chunk.chunk_index + 1, chunk.total_chunks, chunk.file_hash);
-                }
                 if let Err(e) = dc.send_text(ack_json).await {
                     error!("❌ Failed to send ACK for chunk {}: {}", chunk.chunk_index, e);
                 }
