@@ -1282,8 +1282,13 @@ impl WebRTCService {
             
             // Try to parse as FileChunk first (most common)
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
-                info!("📦 Received chunk {}/{} for file {} from peer {}", 
-                    chunk.chunk_index + 1, chunk.total_chunks, chunk.file_hash, peer_id);
+                // Only log every 10th chunk, first chunk, or last chunk to reduce spam
+                if chunk.chunk_index == 0
+                    || chunk.chunk_index + 1 == chunk.total_chunks
+                    || (chunk.chunk_index + 1) % 10 == 0 {
+                    info!("📦 Received chunk {}/{} for file {} from peer {}",
+                        chunk.chunk_index + 1, chunk.total_chunks, chunk.file_hash, peer_id);
+                }
                 // Handle received chunk
                 Self::process_incoming_chunk(
                     &chunk,
@@ -2039,7 +2044,13 @@ impl WebRTCService {
             };
             let ack_message = WebRTCMessage::ChunkAck(ack);
             if let Ok(ack_json) = serde_json::to_string(&ack_message) {
-                info!("📤 Sending ACK for chunk {} of file {} to peer", chunk.chunk_index, chunk.file_hash);
+                // Only log every 10th ACK, first ACK, or last ACK to reduce spam
+                if chunk.chunk_index == 0
+                    || chunk.chunk_index + 1 == chunk.total_chunks
+                    || (chunk.chunk_index + 1) % 10 == 0 {
+                    info!("📤 Sending ACK for chunk {}/{} of file {} to peer",
+                        chunk.chunk_index + 1, chunk.total_chunks, chunk.file_hash);
+                }
                 if let Err(e) = dc.send_text(ack_json).await {
                     error!("❌ Failed to send ACK for chunk {}: {}", chunk.chunk_index, e);
                 }
