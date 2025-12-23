@@ -236,9 +236,20 @@ async fn api_upload_generate(
     }
 
     // Create temp file, stream-write deterministic bytes and compute sha256.
+    // IMPORTANT: include file_name + protocol in the deterministic byte pattern so
+    // different test cases don't collide on the same hash (e.g. 5MB WebRTC vs 5MB Bitswap).
     let tmp_dir = std::env::temp_dir().join("chiral-e2e");
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
     let tmp_path = tmp_dir.join(&file_name);
+
+    let seed: u64 = {
+        let mut h = sha2::Sha256::new();
+        h.update(file_name.as_bytes());
+        h.update(b"|");
+        h.update(protocol_norm.as_bytes());
+        let digest = h.finalize();
+        u64::from_le_bytes(digest[0..8].try_into().unwrap_or([0u8; 8]))
+    };
 
     let mut hasher = sha2::Sha256::new();
     let mut f = match tokio::fs::File::create(&tmp_path).await {
@@ -254,7 +265,14 @@ async fn api_upload_generate(
     let mut buf = vec![0u8; 64 * 1024];
     while written < file_size {
         for (i, b) in buf.iter_mut().enumerate() {
-            *b = ((written as usize + i) % 256) as u8;
+            let pos = written.wrapping_add(i as u64);
+            // xorshift64* (deterministic, fast)
+            let mut x = pos ^ seed;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            let y = x.wrapping_mul(0x2545F4914F6CDD1D);
+            *b = (y & 0xFF) as u8;
         }
         let to_write = std::cmp::min(buf.len() as u64, file_size - written) as usize;
         if let Err(e) = f.write_all(&buf[..to_write]).await {
@@ -552,14 +570,34 @@ async fn api_download(
     }
 
     // Verify existence + size (protocol-independent light check).
-    let bytes_len = match tokio::fs::metadata(&output_path).await {
-        Ok(m) => m.len(),
-        Err(e) => {
+    // NOTE: WebRTC/Bitswap downloads can complete asynchronously; wait for the output file to be written.
+    let timeout_ms: u64 = std::env::var("E2E_DOWNLOAD_WAIT_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(120_000);
+    let start = std::time::Instant::now();
+    let bytes_len: u64 = loop {
+        match tokio::fs::metadata(&output_path).await {
+            Ok(m) => {
+                let len = m.len();
+                if protocol_upper == "HTTP" || len == meta.file_size {
+                    break len;
+                }
+            }
+            Err(_) => {}
+        }
+        if start.elapsed().as_millis() as u64 >= timeout_ms {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Download finished but output file is missing: {}", e),
+                error: format!(
+                    "Download finished but output file is missing or incomplete after {}ms (expected {} bytes): {}",
+                    timeout_ms,
+                    meta.file_size,
+                    output_path.to_string_lossy()
+                ),
             }))
             .into_response();
         }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     };
 
     let verified = if protocol_upper == "HTTP" {
@@ -584,7 +622,6 @@ async fn api_download(
     (StatusCode::OK, Json(DownloadResponse {
         download_path: output_path.to_string_lossy().to_string(),
         verified,
-        bytes: bytes_len,
         bytes: bytes_len,
     }))
     .into_response()

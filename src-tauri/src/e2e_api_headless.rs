@@ -197,9 +197,20 @@ async fn api_upload_generate(
     let seeder_url = state.http_base_url.clone();
 
     // Create temp file, stream-write deterministic bytes and compute sha256.
+    // IMPORTANT: include file_name + protocol in the deterministic byte pattern so
+    // different test cases don't collide on the same hash (e.g. 5MB WebRTC vs 5MB Bitswap).
     let tmp_dir = std::env::temp_dir().join("chiral-e2e");
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
     let tmp_path = tmp_dir.join(&file_name);
+
+    let seed: u64 = {
+        let mut h = sha2::Sha256::new();
+        h.update(file_name.as_bytes());
+        h.update(b"|");
+        h.update(protocol.trim().as_bytes());
+        let digest = h.finalize();
+        u64::from_le_bytes(digest[0..8].try_into().unwrap_or([0u8; 8]))
+    };
 
     let mut hasher = sha2::Sha256::new();
     let mut f = match tokio::fs::File::create(&tmp_path).await {
@@ -219,7 +230,14 @@ async fn api_upload_generate(
     let mut buf = vec![0u8; 64 * 1024];
     while written < file_size {
         for (i, b) in buf.iter_mut().enumerate() {
-            *b = ((written as usize + i) % 256) as u8;
+            let pos = written.wrapping_add(i as u64);
+            // xorshift64* (deterministic, fast)
+            let mut x = pos ^ seed;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            let y = x.wrapping_mul(0x2545F4914F6CDD1D);
+            *b = (y & 0xFF) as u8;
         }
         let to_write = std::cmp::min(buf.len() as u64, file_size - written) as usize;
         if let Err(e) = f.write_all(&buf[..to_write]).await {

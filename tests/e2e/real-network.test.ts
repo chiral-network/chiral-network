@@ -20,6 +20,19 @@ import path from "path";
 import os from "os";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
+function npmCommand(): string {
+  // On Windows, `npm` is `npm.cmd` (spawn() won't resolve it automatically).
+  return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+function spawnNpm(args: string[], opts: Parameters<typeof spawn>[2]): ChildProcess {
+  // On Windows, `.cmd` needs to be invoked through `cmd.exe /c`.
+  if (process.platform === "win32") {
+    return spawn("cmd.exe", ["/c", npmCommand(), ...args], opts);
+  }
+  return spawn(npmCommand(), args, opts);
+}
+
 interface NodeConfig {
   nodeId: string;
   apiBaseUrl: string;
@@ -39,6 +52,7 @@ class RealE2ETestFramework {
   private downloaderConfig: NodeConfig | null = null;
   private testDir: string = "";
   private crossMachine: boolean = false;
+  private requirePayment: boolean = false;
 
   constructor(crossMachine: boolean = false) {
     this.crossMachine = crossMachine;
@@ -51,6 +65,7 @@ class RealE2ETestFramework {
     console.log("🚀 Setting up real E2E test environment...");
 
     const attach = process.env.E2E_ATTACH === "true";
+    this.requirePayment = attach || process.env.E2E_REQUIRE_PAYMENT === "true";
     if (attach) {
       const uploaderApi = process.env.E2E_UPLOADER_API_URL;
       const downloaderApi = process.env.E2E_DOWNLOADER_API_URL;
@@ -92,22 +107,25 @@ class RealE2ETestFramework {
     if (!this.uploaderConfig) throw new Error("Config not initialized");
     if (process.env.E2E_ATTACH === "true") return;
 
+    const startupTimeoutMs = Number(
+      process.env.E2E_NODE_STARTUP_TIMEOUT_MS || "180000"
+    );
+
+    const nodeEnv = await this.buildNodeEnv("uploader", this.uploaderConfig);
+
     // Launch node process
     // Note: Adjust command based on your build setup
-    this.uploaderNode = spawn("npm", ["run", "tauri", "dev"], {
+    this.uploaderNode = spawnNpm(["run", "tauri", "dev"], {
       cwd: process.cwd(),
       env: {
-        ...process.env,
-        CHIRAL_NODE_ID: this.uploaderConfig.nodeId,
-        CHIRAL_E2E_API_PORT: new URL(this.uploaderConfig.apiBaseUrl).port,
-        CHIRAL_HEADLESS: "true", // Run without UI for testing
+        ...nodeEnv,
       },
     });
 
     this.setupNodeLogging(this.uploaderNode, "UPLOADER");
 
     // Wait for node to be ready
-    await this.waitForNodeReady(this.uploaderConfig.apiBaseUrl, 30000);
+    await this.waitForNodeReady(this.uploaderConfig.apiBaseUrl, startupTimeoutMs);
     console.log("✅ Uploader node ready");
   }
 
@@ -120,20 +138,23 @@ class RealE2ETestFramework {
     if (!this.downloaderConfig) throw new Error("Config not initialized");
     if (process.env.E2E_ATTACH === "true") return;
 
-    this.downloaderNode = spawn("npm", ["run", "tauri", "dev"], {
+    const startupTimeoutMs = Number(
+      process.env.E2E_NODE_STARTUP_TIMEOUT_MS || "180000"
+    );
+
+    const nodeEnv = await this.buildNodeEnv("downloader", this.downloaderConfig);
+
+    this.downloaderNode = spawnNpm(["run", "tauri", "dev"], {
       cwd: process.cwd(),
       env: {
-        ...process.env,
-        CHIRAL_NODE_ID: this.downloaderConfig.nodeId,
-        CHIRAL_E2E_API_PORT: new URL(this.downloaderConfig.apiBaseUrl).port,
-        CHIRAL_HEADLESS: "true",
+        ...nodeEnv,
       },
     });
 
     this.setupNodeLogging(this.downloaderNode, "DOWNLOADER");
 
     // Wait for node to be ready
-    await this.waitForNodeReady(this.downloaderConfig.apiBaseUrl, 30000);
+    await this.waitForNodeReady(this.downloaderConfig.apiBaseUrl, startupTimeoutMs);
     console.log("✅ Downloader node ready");
 
     // Wait for DHT connection
@@ -164,6 +185,73 @@ class RealE2ETestFramework {
     node.on("exit", (code) => {
       console.log(`[${prefix}] Process exited with code ${code}`);
     });
+  }
+
+  private async buildNodeEnv(
+    role: "uploader" | "downloader",
+    cfg: NodeConfig
+  ): Promise<NodeJS.ProcessEnv> {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CHIRAL_NODE_ID: cfg.nodeId,
+      CHIRAL_E2E_API_PORT: new URL(cfg.apiBaseUrl).port,
+      CHIRAL_HEADLESS: "true",
+    };
+
+    // Spawn mode runs both nodes on the same machine. We must isolate:
+    // - Tauri app data dir (APPDATA/LOCALAPPDATA on Windows) to avoid DB/file locks
+    // - download directory (~ expansion uses USERPROFILE/HOME), because BitTorrent session persistence writes there
+    // - storage dir for HTTP file server (headless.rs reads CHIRAL_STORAGE_DIR)
+    if (this.testDir) {
+      const nodeRoot = path.join(this.testDir, role);
+      const appDataDir = path.join(nodeRoot, "appdata");
+      const localAppDataDir = path.join(nodeRoot, "localappdata");
+      const storageDir = path.join(nodeRoot, "files");
+      const downloadDir = path.join(nodeRoot, "downloads");
+
+      await fs.mkdir(appDataDir, { recursive: true });
+      await fs.mkdir(localAppDataDir, { recursive: true });
+      await fs.mkdir(storageDir, { recursive: true });
+      await fs.mkdir(downloadDir, { recursive: true });
+
+      env.CHIRAL_STORAGE_DIR = storageDir;
+
+      if (process.platform === "win32") {
+        env.APPDATA = appDataDir;
+        env.LOCALAPPDATA = localAppDataDir;
+        // IMPORTANT: Do NOT override USERPROFILE here — it breaks rustup/toolchain discovery for spawned `cargo`.
+        // Instead, write per-node `settings.json` so get_download_directory() resolves to a unique folder.
+        const tauriAppDataDir = path.join(appDataDir, "com.chiralnetwork");
+        await fs.mkdir(tauriAppDataDir, { recursive: true });
+        const settingsPath = path.join(tauriAppDataDir, "settings.json");
+        await fs.writeFile(
+          settingsPath,
+          JSON.stringify(
+            {
+              storagePath: downloadDir,
+              enableFileLogging: false,
+              maxLogSizeMb: 10,
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        // Best-effort isolation for non-Windows spawn mode.
+        env.HOME = nodeRoot;
+      }
+
+      // In spawn mode, ensure both nodes have wallets loaded so upload/download can proceed.
+      // Users can still override by exporting CHIRAL_PRIVATE_KEY before running the tests.
+      if (!env.CHIRAL_PRIVATE_KEY) {
+        env.CHIRAL_PRIVATE_KEY =
+          role === "uploader"
+            ? "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            : "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+      }
+    }
+
+    return env;
   }
 
   /**
@@ -242,7 +330,9 @@ class RealE2ETestFramework {
       body: JSON.stringify({
         sizeMb: Math.max(1, Math.round(file.size / 1024 / 1024)),
         protocol,
-        price: 0.001,
+        // In spawn mode, default to price=0 to avoid requiring mining/funding.
+        // In attach mode (or when explicitly requested), keep payment enabled.
+        price: this.requirePayment ? 0.001 : 0,
         fileName: file.name,
       }),
     });
@@ -495,7 +585,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         throw new Error("E2E_NODE_ROLE must be set to 'uploader' or 'downloader' in cross-machine mode");
       }
     }
-  }, 60000); // 60 second timeout for node startup
+  }, process.env.E2E_ATTACH === "true" ? 120000 : 300000);
 
   afterAll(async () => {
     await framework.cleanup();

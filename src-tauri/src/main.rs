@@ -8349,13 +8349,12 @@ fn main() {
             port_range.start, port_range.end
         );
 
-        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+        let bittorrent_handler = create_bt_handler_with_fallback(
             download_dir.clone(),
             dht_service_for_bt,
-            Some(port_range),
+            port_range,
         )
-        .await
-        .expect("Failed to create BitTorrent handler");
+        .await;
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
         // Create FTP server for seeding support
@@ -9299,6 +9298,10 @@ async fn create_bt_handler_with_fallback(
     }
 
     // Fallback: random range
+    eprintln!(
+        "Default BitTorrent port range {}-{} unavailable. Falling back to a random high port range...",
+        port_range.start, port_range.end
+    );
     let mut rng = rand::thread_rng();
 
     loop {
@@ -9312,6 +9315,7 @@ async fn create_bt_handler_with_fallback(
         )
         .await
         {
+            println!("Using BitTorrent fallback port range: {}-{}", start, start + 10);
             return h;
         }
     }
