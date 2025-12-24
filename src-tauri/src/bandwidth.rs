@@ -205,7 +205,7 @@ impl BandwidthController {
 
         let throttle_start = Instant::now();
         let mut was_throttled = false;
-        let mut total_wait_ms: u64 = 0;
+        let total_wait_ms: u64 = 0;
 
         loop {
             let wait = {

@@ -34,6 +34,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub bootstrap: Vec<String>,
 
+    /// Download Geth binary and exit
+    #[arg(long)]
+    pub download_geth: bool,
+
     /// Enable geth node
     #[arg(long)]
     pub enable_geth: bool,
@@ -100,6 +104,17 @@ pub struct CliArgs {
     /// Preferred relay nodes (multiaddr form, can be specified multiple times)
     #[arg(long)]
     pub relay: Vec<String>,
+
+    /// Enable pure DHT client mode (cannot seed files or act as DHT server)
+    /// This mode uses minimal blockchain sync (~100 blocks instead of ~10,000)
+    /// Useful for lightweight clients or hard NAT environments
+    #[arg(long)]
+    pub pure_client_mode: bool,
+
+    /// Force DHT server mode even if behind NAT (for testing/development)
+    /// WARNING: May cause connectivity issues if behind strict NAT/firewall
+    #[arg(long)]
+    pub force_server_mode: bool,
 
     /// Start a restartable HTTP download when the node boots
     #[arg(long)]
@@ -241,8 +256,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         None,
         None,
         None,
-        false, // pure_client_mode: disabled by default
-        false, // force_server_mode: disabled by default
+        args.pure_client_mode,
+        args.force_server_mode,
     )
     .await?;
     let peer_id = dht_service.get_peer_id().await;
@@ -275,8 +290,12 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     let geth_handle = if args.enable_geth {
         info!("Starting geth node...");
         let mut geth = GethProcess::new();
-        geth.start(&args.geth_data_dir, args.miner_address.as_deref(), false)?; // Use normal snap sync in headless mode
-        info!("✅ Geth node started");
+        geth.start(&args.geth_data_dir, args.miner_address.as_deref(), args.pure_client_mode)?;
+        if args.pure_client_mode {
+            info!("✅ Geth node started in pure-client mode (minimal blockchain sync: ~100 blocks)");
+        } else {
+            info!("✅ Geth node started (full blockchain sync: ~10,000 blocks)");
+        }
         Some(geth)
     } else {
         None

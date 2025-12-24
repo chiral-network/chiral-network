@@ -54,8 +54,12 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
+<<<<<<< HEAD
 use chiral_network::download_paths;
 use crate::payment_checkpoint::PaymentCheckpointService;
+=======
+use chiral_network::payment_checkpoint::PaymentCheckpointService;
+>>>>>>> 45e1f380c970536dd472b958574a4039e683c076
 use bandwidth::BandwidthController;
 use chiral_network::transfer_events::{
     current_timestamp_ms, ErrorCategory, SourceInfo, SourceType, TransferCompletedEvent,
@@ -119,7 +123,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::{
     io::AsyncReadExt,
     sync::Mutex,
@@ -3633,6 +3636,7 @@ async fn start_file_transfer_service(
             state.keystore.clone(),
             state.bandwidth.clone(),
             Some(multi_source_arc.clone()),
+            Some(state.payment_checkpoint.clone()),
         )
         .await
         .map_err(|e| format!("Failed to recreate WebRTC service with multi-source: {}", e))?;
@@ -7133,22 +7137,32 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
 }
 
 fn prompt_close_confirmation(app_handle: &tauri::AppHandle) {
-    let handle = app_handle.clone();
-
-    app_handle
-        .dialog()
-        .message("Close Chiral Network? Active downloads and uploads will stop.")
-        .title("Confirm Exit")
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Stay".into()))
-        .show(move |should_quit| {
-            if should_quit {
-                let app_handle = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    shutdown_application(app_handle).await;
-                });
-            }
+    if let Some(window) = app_handle.get_webview_window("main") {
+        // Bring window to front to ensure the in-app prompt is visible
+        let _ = window.show();
+        let _ = window.set_focus();
+        if let Err(err) = window.emit("show_exit_prompt", ()) {
+            tracing::warn!(
+                "Failed to emit exit prompt event to frontend, shutting down immediately: {}",
+                err
+            );
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                shutdown_application(handle).await;
+            });
+        }
+    } else {
+        let handle = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            shutdown_application(handle).await;
         });
+    }
+}
+
+#[tauri::command]
+async fn confirm_exit(app_handle: tauri::AppHandle) -> Result<(), String> {
+    shutdown_application(app_handle).await;
+    Ok(())
 }
 
 // ============================================================================
@@ -7833,6 +7847,8 @@ async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std
         file_transfer_service,
         geth_process,
         peer_id,
+        miner_address: args.miner_address.clone(),
+        geth_data_dir: args.geth_data_dir.clone(),
     };
 
     // Run the REPL
@@ -7924,6 +7940,8 @@ async fn run_tui_mode(args: headless::CliArgs) -> Result<(), Box<dyn std::error:
         file_transfer_service,
         geth_process,
         peer_id,
+        miner_address: args.miner_address.clone(),
+        geth_data_dir: args.geth_data_dir.clone(),
     };
 
     // Run the TUI
@@ -7974,7 +7992,7 @@ async fn update_payment_checkpoint_progress(
         .await?;
 
     // Emit event if checkpoint reached
-    if let crate::payment_checkpoint::CheckpointState::WaitingForPayment { checkpoint_mb, amount_chiral } = &checkpoint_state {
+    if let chiral_network::payment_checkpoint::CheckpointState::WaitingForPayment { checkpoint_mb, amount_chiral } = &checkpoint_state {
         let info = state.payment_checkpoint.get_checkpoint_info(&session_id).await?;
 
         window.emit("payment_checkpoint_reached", serde_json::json!({
@@ -7990,11 +8008,11 @@ async fn update_payment_checkpoint_progress(
 
     // Return state as string
     Ok(match checkpoint_state {
-        crate::payment_checkpoint::CheckpointState::Active => "active".to_string(),
-        crate::payment_checkpoint::CheckpointState::WaitingForPayment { .. } => "waiting_for_payment".to_string(),
-        crate::payment_checkpoint::CheckpointState::PaymentReceived { .. } => "payment_received".to_string(),
-        crate::payment_checkpoint::CheckpointState::PaymentFailed { .. } => "payment_failed".to_string(),
-        crate::payment_checkpoint::CheckpointState::Completed => "completed".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::Active => "active".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::WaitingForPayment { .. } => "waiting_for_payment".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::PaymentReceived { .. } => "payment_received".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::PaymentFailed { .. } => "payment_failed".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::Completed => "completed".to_string(),
     })
 }
 
@@ -8076,6 +8094,44 @@ fn main() {
     // Parse command line arguments
     use clap::Parser;
     let args = headless::CliArgs::parse();
+
+    // Handle --download-geth flag
+    if args.download_geth {
+        use crate::geth_downloader::GethDownloader;
+        println!("🔽 Downloading Geth binary...");
+
+        let downloader = GethDownloader::new();
+
+        if downloader.is_geth_installed() {
+            println!("✓ Geth is already installed at: {}", downloader.geth_path().display());
+            std::process::exit(0);
+        }
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            downloader.download_geth(|progress| {
+                println!("  Progress: {:.1}% ({} / {} bytes) - {}",
+                    progress.percentage,
+                    progress.downloaded,
+                    progress.total,
+                    progress.status
+                );
+            }).await
+        });
+
+        match result {
+            Ok(_) => {
+                println!("✓ Geth downloaded successfully to: {}", downloader.geth_path().display());
+                println!("\nYou can now run mining commands:");
+                println!("  ./target/release/chiral-network --interactive --enable-geth");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to download Geth: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     // For headless mode, initialize basic console logging
     if args.headless {
@@ -8659,6 +8715,7 @@ fn main() {
             get_multiaddresses,
             clear_seed_list,
             get_full_network_stats,
+            confirm_exit,
             // Download restart commands
             start_download_restart,
             pause_download_restart,
