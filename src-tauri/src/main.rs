@@ -31,6 +31,7 @@ pub mod transaction_services;
 pub mod e2e_api;
 pub mod e2e_api_headless;
 pub mod webhook_manager;
+pub mod storage_manager;
 
 // Re-export modules from the lib crate
 use chiral_network::{
@@ -152,6 +153,14 @@ struct BackendSettings {
     enable_file_logging: bool,
     #[serde(rename = "maxLogSizeMB")]
     max_log_size_mb: u64,
+    #[serde(rename = "maxStorageSize")]
+    max_storage_size: Option<u64>, // GB
+    #[serde(rename = "autoCleanup")]
+    auto_cleanup: Option<bool>,
+    #[serde(rename = "cleanupThreshold")]
+    cleanup_threshold: Option<u64>, // %
+    #[serde(rename = "cacheSize")]
+    cache_size: Option<u64>, // MB
 }
 
 impl Default for BackendSettings {
@@ -160,6 +169,10 @@ impl Default for BackendSettings {
             storage_path: "".to_string(), // No hardcoded default - get_download_directory handles this
             enable_file_logging: false,
             max_log_size_mb: 10,
+            max_storage_size: Some(100), // 100 GB default
+            auto_cleanup: Some(true),
+            cleanup_threshold: Some(90), // 90% default
+            cache_size: Some(1024), // 1024 MB default
         }
     }
 }
@@ -6203,6 +6216,105 @@ fn get_disk_space_robust(path: &std::path::Path) -> Result<f64, String> {
     Err("Unable to determine available disk space".to_string())
 }
 
+// ============================================================================
+// Storage Management Commands
+// ============================================================================
+
+/// Get current storage usage across all locations
+#[tauri::command]
+async fn get_storage_usage(app_handle: tauri::AppHandle) -> Result<storage_manager::StorageUsage, String> {
+    use storage_manager::{StorageManager, StorageConfig};
+
+    let config = create_storage_config(&app_handle).await
+        .map_err(|e| format!("Failed to create storage config: {}", e))?;
+
+    let manager = StorageManager::new(config);
+    manager.calculate_usage().await
+        .map_err(|e| format!("Failed to calculate storage usage: {}", e))
+}
+
+/// Trigger manual cleanup (ignores autoCleanup setting)
+#[tauri::command]
+async fn force_storage_cleanup(app_handle: tauri::AppHandle) -> Result<storage_manager::CleanupReport, String> {
+    use storage_manager::{StorageManager, StorageConfig};
+
+    tracing::info!("Manual storage cleanup requested");
+
+    let config = create_storage_config(&app_handle).await
+        .map_err(|e| format!("Failed to create storage config: {}", e))?;
+
+    let manager = StorageManager::new(config);
+    manager.force_cleanup().await
+        .map_err(|e| format!("Failed to perform cleanup: {}", e))
+}
+
+/// Check if cleanup is needed and perform it if auto-cleanup is enabled
+#[tauri::command]
+async fn check_and_cleanup_storage(app_handle: tauri::AppHandle) -> Result<Option<storage_manager::CleanupReport>, String> {
+    use storage_manager::{StorageManager, StorageConfig};
+
+    let config = create_storage_config(&app_handle).await
+        .map_err(|e| format!("Failed to create storage config: {}", e))?;
+
+    let manager = StorageManager::new(config);
+    manager.check_and_cleanup().await
+        .map_err(|e| format!("Failed to check and cleanup storage: {}", e))
+}
+
+/// Helper function to create StorageConfig from app settings
+async fn create_storage_config(app_handle: &tauri::AppHandle) -> Result<storage_manager::StorageConfig, String> {
+    use std::path::PathBuf;
+
+    // Load settings from the store
+    let settings_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("settings.json");
+
+    let settings: BackendSettings = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("Failed to read settings: {}", e))?;
+        serde_json::from_str(&contents)
+            .map_err(|e| format!("Failed to parse settings: {}", e))?
+    } else {
+        BackendSettings::default()
+    };
+
+    // Get download directory
+    let download_path = if settings.storage_path.is_empty() {
+        let default_dir = chiral_network::download_paths::get_default_download_directory()
+            .map_err(|e| format!("Failed to get default download directory: {}", e))?;
+        PathBuf::from(default_dir)
+    } else {
+        PathBuf::from(&settings.storage_path)
+    };
+
+    // Get blockstore path
+    let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+        .ok_or_else(|| "Failed to determine project directories".to_string())?;
+    let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+
+    // Get temp path
+    let temp_path = std::env::temp_dir().join("chiral_transfers");
+
+    // Get chunk storage path
+    let chunk_storage_path = proj_dirs.data_dir().join("chunk_storage");
+
+    Ok(storage_manager::StorageConfig {
+        max_storage_size_gb: settings.max_storage_size.unwrap_or(100),
+        auto_cleanup: settings.auto_cleanup.unwrap_or(true),
+        cleanup_threshold: settings.cleanup_threshold.unwrap_or(90),
+        cache_size_mb: settings.cache_size.unwrap_or(1024),
+        download_path,
+        blockstore_path,
+        temp_path,
+        chunk_storage_path,
+    })
+}
+
+// ============================================================================
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GethStatusPayload {
@@ -8742,7 +8854,11 @@ fn main() {
             get_payment_checkpoint_info,
             mark_checkpoint_payment_failed,
             mark_checkpoint_completed,
-            remove_payment_checkpoint_session
+            remove_payment_checkpoint_session,
+            // Storage management commands
+            get_storage_usage,
+            force_storage_cleanup,
+            check_and_cleanup_storage
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
