@@ -3633,20 +3633,43 @@ impl MultiSourceDownloadService {
 
         if let Some(download) = download {
             // Assemble file from chunks
-            let mut file_data = vec![0u8; download.file_metadata.file_size as usize];
-
-            for chunk_info in &download.chunks {
-                if let Some(completed_chunk) = download.completed_chunks.get(&chunk_info.chunk_id) {
-                    let start = chunk_info.offset as usize;
-                    let end = start + completed_chunk.data.len();
-                    file_data[start..end].copy_from_slice(&completed_chunk.data);
-                }
+            // Stream assembly directly to disk (avoid allocating a full-file Vec<u8>).
+            let output_path = std::path::Path::new(&download.output_path);
+            if let Some(parent) = output_path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| format!("Failed to create output directory: {}", e))?;
             }
 
-            // Write file to disk
-            tokio::fs::write(&download.output_path, file_data)
+            use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+            use std::io::SeekFrom;
+
+            let mut file = tokio::fs::File::create(output_path)
                 .await
-                .map_err(|e| format!("Failed to write file: {}", e))?;
+                .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+            // Pre-allocate file size to reduce fragmentation and improve write performance.
+            file.set_len(download.file_metadata.file_size)
+                .await
+                .map_err(|e| format!("Failed to set output file size: {}", e))?;
+
+            for chunk_info in &download.chunks {
+                let completed_chunk = download.completed_chunks.get(&chunk_info.chunk_id).ok_or_else(|| {
+                    format!("Missing chunk {} during finalization", chunk_info.chunk_id)
+                })?;
+
+                file.seek(SeekFrom::Start(chunk_info.offset))
+                    .await
+                    .map_err(|e| format!("Failed to seek output file: {}", e))?;
+
+                file.write_all(&completed_chunk.data)
+                    .await
+                    .map_err(|e| format!("Failed to write chunk {}: {}", chunk_info.chunk_id, e))?;
+            }
+
+            file.flush()
+                .await
+                .map_err(|e| format!("Failed to flush output file: {}", e))?;
 
             let duration = download.start_time.elapsed();
             let average_speed = download.file_metadata.file_size as f64 / duration.as_secs_f64();

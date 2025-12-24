@@ -553,13 +553,37 @@
             totalBytes: number;
           };
 
-          // Update file progress (FileItem uses 'hash' property)
-          // Only update files that are actively downloading, not seeding files with the same hash
-          files.update(f => f.map(file =>
-            file.hash === data.fileHash && file.status === 'downloading'
-              ? { ...file, status: data.progress >= 100 ? 'completed' : 'downloading', progress: data.progress }
-              : file
-          ));
+          // Update file progress with speed and ETA calculation
+          files.update(f => f.map(file => {
+            if (file.hash === data.fileHash && file.status === 'downloading') {
+              const now = Date.now();
+              const downloadStartTime = file.downloadStartTime || now;
+              const elapsedSeconds = (now - downloadStartTime) / 1000;
+
+              // Calculate speed (bytes per second)
+              const speed = elapsedSeconds > 0 ? data.bytesReceived / elapsedSeconds : 0;
+              const speedFormatted = speed > 0 ? `${toHumanReadableSize(speed)}/s` : '0 B/s';
+
+              // Calculate ETA (seconds)
+              const remainingBytes = data.totalBytes - data.bytesReceived;
+              const etaSeconds = speed > 0 ? remainingBytes / speed : 0;
+              const etaFormatted = etaSeconds > 0
+                ? `${Math.floor(etaSeconds / 60)}m ${Math.floor(etaSeconds % 60)}s`
+                : 'N/A';
+
+              return {
+                ...file,
+                status: data.progress >= 100 ? 'completed' : 'downloading',
+                progress: data.progress,
+                speed: speedFormatted,
+                eta: data.progress >= 100 ? 'Complete' : etaFormatted,
+                downloadedChunks: data.chunksReceived,
+                totalChunks: data.totalChunks,
+                downloadStartTime: downloadStartTime
+              };
+            }
+            return file;
+          }));
         });
 
         // Listen for WebRTC download completion
@@ -568,10 +592,26 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     fileHash: string;
     fileName: string;
     fileSize: number;
-    data: number[]; // Array of bytes
+    // New (preferred): backend already saved the file and provides the final path
+    outputPath?: string;
+    // Legacy: raw bytes over IPC (slow for large files)
+    data?: number[];
   };
 
   try {
+    // Fast-path: backend already wrote the file to disk.
+    if (data.outputPath) {
+      fileLogger.downloadStarted(data.fileName);
+      fileLogger.downloadCompleted(data.fileName);
+
+      files.update(f => f.map(file =>
+        file.hash === data.fileHash && file.status === 'downloading'
+          ? { ...file, status: 'completed', progress: 100, downloadPath: data.outputPath }
+          : file
+      ));
+      return;
+    }
+
     // ✅ GET SETTINGS PATH
     const stored = localStorage.getItem("chiralSettings");
     if (!stored) {
@@ -619,6 +659,9 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
     // Write the file to disk
     const { writeFile } = await import('@tauri-apps/plugin-fs');
+    if (!data.data) {
+      throw new Error('Missing file data in webrtc_download_complete payload');
+    }
     const fileData = new Uint8Array(data.data);
     await writeFile(outputPath, fileData);
 
@@ -2990,7 +3033,7 @@ async function loadAndResumeDownloads() {
                 {#if detectedProtocol === 'Bitswap' && file.totalChunks}
                   <div class="w-full bg-border rounded-full h-2 overflow-hidden" title={`Chunks: ${file.downloadedChunks?.length || 0} / ${file.totalChunks || '?'}`}>
                     <div
-                      class="h-2 bg-green-500 transition-all duration-300"
+                      class="h-2 bg-green-500 transition-all duration-75"
                       style="width: {file.progress || 0}%"
                     ></div>
                   </div>
@@ -3011,7 +3054,7 @@ async function loadAndResumeDownloads() {
                           <span class="w-20 truncate">{peerAssignment.source.type === 'p2p' ? peerAssignment.source.p2p.peerId.slice(0, 8) : 'N/A'}...</span>
                           <div class="flex-1 bg-muted rounded-full h-1">
                             <div
-                              class="bg-purple-500 h-1 rounded-full transition-all duration-300"
+                              class="bg-purple-500 h-1 rounded-full transition-all duration-75"
                               style="width: {peerAssignment.status === 'Completed' ? 100 : peerAssignment.status === 'Downloading' ? 50 : 0}%"
                             ></div>
                           </div>
