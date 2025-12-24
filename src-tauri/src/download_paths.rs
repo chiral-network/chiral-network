@@ -44,7 +44,26 @@ pub fn get_download_directory(app_handle: &tauri::AppHandle) -> Result<String, S
             .ok_or_else(|| "Failed to convert path to string".to_string());
     }
 
-    // Cross-platform default
+    get_default_download_directory()
+}
+
+/// Resolve the download directory when an `AppHandle` may not exist (e.g. headless mode).
+pub fn get_download_directory_opt(app_handle: Option<&tauri::AppHandle>) -> Result<String, String> {
+    if let Some(app_handle) = app_handle {
+        if let Some(storage_path) = load_storage_path_from_settings(app_handle) {
+            let expanded = expand_tilde(&storage_path);
+            return expanded
+                .to_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| "Failed to convert path to string".to_string());
+        }
+    }
+
+    get_default_download_directory()
+}
+
+/// Cross-platform default download directory (string path).
+pub fn get_default_download_directory() -> Result<String, String> {
     let default_path = "~/Downloads/Chiral-Network-Storage";
     let expanded = expand_tilde(default_path);
     expanded

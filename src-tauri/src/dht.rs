@@ -1816,9 +1816,10 @@ async fn run_dht_node(
                                 let connected_peers_count = connected_peers.lock().await.len();
                                 let replication_factor = 3; // Must match kad_cfg.set_replication_factor
 
-                                let quorum = if connected_peers_count >= 10*replication_factor {
-                                    // Use N(3) for better reliability - requires majority, not all
-                                    // This tolerates slow/offline peers while ensuring redundancy
+                                // IMPORTANT: If we only use Quorum::One, the record may effectively stay local
+                                // and other nodes (GUI on another machine) may never discover it.
+                                // As soon as we have enough connected peers, replicate to N(replication_factor).
+                                let quorum = if connected_peers_count >= replication_factor {
                                     if let Some(n) = std::num::NonZeroUsize::new(replication_factor) {
                                         kad::Quorum::N(n)
                                     } else {
@@ -2045,6 +2046,45 @@ async fn run_dht_node(
                                     }
                                 }
 
+                                // --------------------------------------------------------------------
+                                // Bitswap download path (requires cids + enabled bitswap handler)
+                                // --------------------------------------------------------------------
+                                let enable_bitswap = std::env::var("CHIRAL_ENABLE_BITSWAP").ok().is_some()
+                                    || std::env::var("CHIRAL_E2E_API_PORT").ok().is_some();
+
+                                if enable_bitswap {
+                                    if let Some(cids) = &file_metadata.cids {
+                                        if !cids.is_empty() {
+                                            if file_metadata.seeders.is_empty() {
+                                                let _ = event_tx.send(DhtEvent::Error("No seeders found".to_string())).await;
+                                                continue;
+                                            }
+
+                                            // Set the target path so the bitswap handler can write to disk.
+                                            file_metadata.download_path = Some(download_path.clone());
+
+                                            // Request the root CID (contains the list of chunk CIDs).
+                                            let root_cid = cids[0].clone();
+                                            let peer_id = match PeerId::from_str(&file_metadata.seeders[0]) {
+                                                Ok(id) => id,
+                                                Err(e) => {
+                                                    let _ = event_tx.send(DhtEvent::Error(format!("Invalid seeder peer id: {}", e))).await;
+                                                    continue;
+                                                }
+                                            };
+
+                                            let query_id = swarm.behaviour_mut().bitswap.get_from(&root_cid, peer_id);
+                                            root_query_mapping.lock().await.insert(query_id, file_metadata.clone());
+
+                                            info!(
+                                                "🎬 Started Bitswap download: rootCid={} queryId={:?} file={}",
+                                                root_cid, query_id, file_metadata.merkle_root
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                }
+
                                 // Calculate total chunks from cids or file size
                                 let total_chunks = if let Some(cids) = &file_metadata.cids {
                                     cids.len() as u32
@@ -2198,18 +2238,22 @@ async fn run_dht_node(
                                 let connected_peers_count = connected_peers.lock().await.len();
                                 let replication_factor = 3; // Must match kad_cfg.set_replication_factor
 
-                                let quorum = if connected_peers_count >= 10*replication_factor {
+                                let quorum = if connected_peers_count >= replication_factor {
                                     // Use N(3) for better reliability in heartbeat updates
                                     if let Some(n) = std::num::NonZeroUsize::new(replication_factor) {
-                                        debug!("Using Quorum::N({}) for heartbeat update of {} ({} peers available)",
-                                            replication_factor, file_hash, connected_peers_count);
+                                        debug!(
+                                            "Using Quorum::N({}) for heartbeat update of {} ({} peers available)",
+                                            replication_factor, file_hash, connected_peers_count
+                                        );
                                         kad::Quorum::N(n)
                                     } else {
                                         kad::Quorum::One
                                     }
                                 } else {
-                                    debug!("Using Quorum::One for heartbeat update of {} (only {} peers available)",
-                                        file_hash, connected_peers_count);
+                                    debug!(
+                                        "Using Quorum::One for heartbeat update of {} (only {} peers available)",
+                                        file_hash, connected_peers_count
+                                    );
                                     kad::Quorum::One
                                 };
 
@@ -3103,8 +3147,13 @@ async fn run_dht_node(
                                     _ => {}
                                 }
                             }
-                            // Bitswap event handler disabled - using WebRTC for file transfers instead
-                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap)) if !is_bootstrap && false => match bitswap {
+                            // Bitswap handler is enabled in E2E runs (or when CHIRAL_ENABLE_BITSWAP is set).
+                            // This is required for Bitswap-based downloads to complete.
+                            SwarmEvent::Behaviour(DhtBehaviourEvent::Bitswap(bitswap))
+                                if !is_bootstrap
+                                    && (std::env::var("CHIRAL_ENABLE_BITSWAP").ok().is_some()
+                                        || std::env::var("CHIRAL_E2E_API_PORT").ok().is_some()) =>
+                            match bitswap {
                                 beetswap::Event::GetQueryResponse { query_id, data } => {
                                     info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
 
@@ -4620,10 +4669,24 @@ async fn handle_kademlia_event(
                                 info!("🔍 Raw metadata JSON: {}", metadata_json);
 
                                 // Construct FileMetadata from the JSON
-                                let merkle_root = metadata_json.get("merkle_root").and_then(|v| v.as_str());
-                                let file_name = metadata_json.get("file_name").and_then(|v| v.as_str());
-                                let file_size = metadata_json.get("file_size").and_then(|v| v.as_u64());
-                                let created_at = metadata_json.get("created_at").and_then(|v| v.as_u64());
+                                // NOTE: We accept both snake_case and camelCase because different publish paths
+                                // historically stored different key styles (e.g., Bitswap vs legacy paths).
+                                let merkle_root = metadata_json
+                                    .get("merkle_root")
+                                    .and_then(|v| v.as_str())
+                                    .or_else(|| metadata_json.get("merkleRoot").and_then(|v| v.as_str()));
+                                let file_name = metadata_json
+                                    .get("file_name")
+                                    .and_then(|v| v.as_str())
+                                    .or_else(|| metadata_json.get("fileName").and_then(|v| v.as_str()));
+                                let file_size = metadata_json
+                                    .get("file_size")
+                                    .and_then(|v| v.as_u64())
+                                    .or_else(|| metadata_json.get("fileSize").and_then(|v| v.as_u64()));
+                                let created_at = metadata_json
+                                    .get("created_at")
+                                    .and_then(|v| v.as_u64())
+                                    .or_else(|| metadata_json.get("createdAt").and_then(|v| v.as_u64()));
 
                                 info!("🔍 Parsed fields - merkleRoot: {:?}, fileName: {:?}, fileSize: {:?}, createdAt: {:?}", merkle_root, file_name, file_size, created_at);
 

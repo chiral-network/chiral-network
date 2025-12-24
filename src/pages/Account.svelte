@@ -649,15 +649,35 @@
 
   async function calculateAccurateTotals() {
     try {
+      accurateTotalsError = null;
       await walletService.calculateAccurateTotals();
       console.debug('Accurate totals calculated successfully');
     } catch (error) {
       console.error('Failed to calculate accurate totals:', error);
+      accurateTotalsError = String(error);
     }
   }
 
   // Automatically calculate accurate totals when account is loaded
-  $: if ($etcAccount && isGethRunning && !$accurateTotals && !$isCalculatingAccurateTotals) {
+  let didAutoCalculateAccurateTotals = false;
+  let lastAccurateTotalsAddress: string | null = null;
+  let accurateTotalsError: string | null = null;
+
+  // Reset auto-trigger when account changes
+  $: if ($etcAccount?.address && $etcAccount.address !== lastAccurateTotalsAddress) {
+    lastAccurateTotalsAddress = $etcAccount.address;
+    didAutoCalculateAccurateTotals = false;
+    accurateTotalsError = null;
+  }
+
+  $: if (
+    $etcAccount &&
+    isGethRunning &&
+    !$accurateTotals &&
+    !$isCalculatingAccurateTotals &&
+    !didAutoCalculateAccurateTotals
+  ) {
+    didAutoCalculateAccurateTotals = true;
     calculateAccurateTotals();
   }
 
@@ -1836,6 +1856,18 @@
                 Block {$accurateTotalsProgress.currentBlock.toLocaleString()} / {$accurateTotalsProgress.totalBlocks.toLocaleString()}
               </p>
             {/if}
+          </div>
+        {:else if !$accurateTotals && accurateTotalsError}
+          <div class="mt-4 flex items-center justify-between gap-3 text-sm">
+            <span class="text-destructive truncate">Accurate totals failed: {accurateTotalsError}</span>
+            <button
+              on:click={calculateAccurateTotals}
+              class="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 whitespace-nowrap"
+              title="Retry accurate totals"
+            >
+              <RefreshCw class="h-3 w-3" />
+              Retry
+            </button>
           </div>
         {:else if $accurateTotals}
           <div class="mt-2 flex items-center justify-end">

@@ -28,6 +28,8 @@ pub mod remote_repl;
 pub mod tui;
 pub mod reassembly;
 pub mod transaction_services;
+pub mod e2e_api;
+pub mod e2e_api_headless;
 pub mod webhook_manager;
 
 // Re-export modules from the lib crate
@@ -1167,7 +1169,23 @@ async fn start_miner(
         Ok(_) => Ok(()),
         Err(e) if e.contains("-32601") || e.to_lowercase().contains("does not exist") => {
             // miner_setEtherbase method doesn't exist, need to restart with etherbase
-            warn!("miner_setEtherbase not supported, restarting geth with miner address...");
+            // IMPORTANT: We can only restart geth if this app instance actually started/manages it.
+            // If the user is using an external/remote RPC via SSH port-forward, restarting would fail
+            // (port is occupied) and is conceptually the wrong thing to do.
+            let is_managed = {
+                let geth = state.geth.lock().await;
+                geth.is_managed()
+            };
+            if !is_managed {
+                return Err(
+                    "Mining RPC requires setting etherbase, but the connected Geth does not support miner_setEtherbase. \
+This app is currently connected to an external/remote RPC (not a managed local Geth), so it cannot restart Geth automatically. \
+Fix: restart your Geth with `--miner.etherbase <YOUR_ADDRESS>` (or run a Geth build that supports `miner_setEtherbase`)."
+                        .to_string(),
+                );
+            }
+
+            warn!("miner_setEtherbase not supported, restarting managed geth with miner address...");
             restart_geth_and_wait(&state, &data_dir).await?;
 
             // Try mining again without setting etherbase (it's set via command line now)
@@ -8288,13 +8306,12 @@ fn main() {
             port_range.start, port_range.end
         );
 
-        let bittorrent_handler = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+        let bittorrent_handler = create_bt_handler_with_fallback(
             download_dir.clone(),
             dht_service_for_bt,
-            Some(port_range),
+            port_range,
         )
-        .await
-        .expect("Failed to create BitTorrent handler");
+        .await;
         let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
         // Create FTP server for seeding support
@@ -9186,6 +9203,63 @@ fn main() {
                 }
             }
 
+            // --------------------------------------------------------------------
+            // Real E2E (attach) support:
+            // - Auto-import account from CHIRAL_PRIVATE_KEY
+            // - Start E2E control HTTP API if CHIRAL_E2E_API_PORT is set
+            // --------------------------------------------------------------------
+            if let Ok(pk) = std::env::var("CHIRAL_PRIVATE_KEY") {
+                if !pk.trim().is_empty() {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(state) = app_handle.try_state::<AppState>() {
+                            match get_account_from_private_key(&pk) {
+                                Ok(account) => {
+                                    {
+                                        let mut active_account = state.active_account.lock().await;
+                                        *active_account = Some(account.address.clone());
+                                    }
+                                    {
+                                        let mut active_key = state.active_account_private_key.lock().await;
+                                        *active_key = Some(account.private_key.clone());
+                                    }
+                                    tracing::info!("E2E: imported account from CHIRAL_PRIVATE_KEY");
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "E2E: failed to import account from CHIRAL_PRIVATE_KEY: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::warn!("E2E: AppState unavailable; cannot import CHIRAL_PRIVATE_KEY");
+                        }
+                    });
+                }
+            }
+
+            if let Ok(port_str) = std::env::var("CHIRAL_E2E_API_PORT") {
+                if let Ok(port) = port_str.trim().parse::<u16>() {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        match crate::e2e_api::start_e2e_api_server(app_handle, port).await {
+                            Ok(bound) => {
+                                tracing::info!("E2E API server listening on http://{}", bound);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to start E2E API server: {}", e);
+                            }
+                        }
+                    });
+                } else {
+                    tracing::warn!(
+                        "CHIRAL_E2E_API_PORT is set but not a valid u16: {}",
+                        port_str
+                    );
+                }
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -9226,6 +9300,10 @@ async fn create_bt_handler_with_fallback(
     }
 
     // Fallback: random range
+    eprintln!(
+        "Default BitTorrent port range {}-{} unavailable. Falling back to a random high port range...",
+        port_range.start, port_range.end
+    );
     let mut rng = rand::thread_rng();
 
     loop {
@@ -9239,6 +9317,7 @@ async fn create_bt_handler_with_fallback(
         )
         .await
         {
+            println!("Using BitTorrent fallback port range: {}-{}", start, start + 10);
             return h;
         }
     }

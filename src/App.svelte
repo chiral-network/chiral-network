@@ -56,6 +56,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
     
 let currentPage = getPathName(window.location.pathname);
 let loading = true;
+let initError: string | null = null;
 let schedulerRunning = false;
 let unsubscribeScheduler: (() => void) | null = null;
 let unsubscribeBandwidth: (() => void) | null = null;
@@ -204,10 +205,20 @@ async function handleConfirmExit() {
     pushBandwidthLimits(get(activeBandwidthLimits));
 
     (async () => {
-      // Subscribe to transfer events from backend
+      // If any init step hangs (e.g., backend invoke), don't leave the UI stuck on the loading screen.
+      const loadingSafetyTimer = window.setTimeout(() => {
+        if (loading) {
+          console.warn("[App] init is taking too long; leaving loading screen to avoid a stuck UI");
+          loading = false;
+        }
+      }, 2500);
+
       try {
-        transferEventsUnsubscribe = await subscribeToTransferEvents();
-        transferStoreUnsubscribe = transferStore.subscribe(($store) => {
+      // Subscribe to transfer events from backend (non-blocking)
+      subscribeToTransferEvents()
+        .then((unsub) => {
+          transferEventsUnsubscribe = unsub;
+          transferStoreUnsubscribe = transferStore.subscribe(($store) => {
 
           if (!$store || !$store.transfers) {
             return;
@@ -230,15 +241,21 @@ async function handleConfirmExit() {
               notifiedCompletedTransfers.delete(transferId);
             }
           }
+          });
+        })
+        .catch((error) => {
+          console.warn("Failed to subscribe to transfer events:", error);
         });
-      } catch (error) {
-        console.warn('Failed to subscribe to transfer events:', error);
-      }
 
-      // Initialize payment service to load wallet and transactions
-      await paymentService.initialize();
-      // Initialize wallet service early so imports/polls populate balance/tx history
-      await walletService.initialize();
+      // Initialize services (non-blocking; do not block UI)
+      try {
+        paymentService.initialize();
+      } catch (error) {
+        console.warn("Payment service init failed:", error);
+      }
+      walletService.initialize().catch((error) => {
+        console.warn("Wallet service init failed:", error);
+      });
 
       // When geth starts running, immediately sync wallet state (balance + txs)
       unsubscribeGethStatus = gethStatus.subscribe(async (status) => {
@@ -256,13 +273,11 @@ async function handleConfirmExit() {
         }
       });
 
-      // Listen for payment notifications from backend
+      // Listen for payment notifications from backend (non-blocking)
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
           // Listener for BitTorrent protocol payments
-          const torrentUnlisten = await listen(
-            "torrent_seeder_payment_received",
-            async (event: any) => {
+          listen("torrent_seeder_payment_received", async (event: any) => {
               const payload = event.payload;
               console.log(
                 "💰 Torrent seeder payment notification received:",
@@ -300,15 +315,17 @@ async function handleConfirmExit() {
                   result.error,
                 );
               }
-            },
-          );
-          unlistenTorrentPayment = torrentUnlisten;
+            })
+            .then((unlisten) => {
+              unlistenTorrentPayment = unlisten;
+            })
+            .catch((error) => {
+              console.error("Failed to setup torrent payment listener:", error);
+            });
 
-          const unlisten = await listen(
-            "seeder_payment_received",
-            async (event: any) => {
-              const payload = event.payload;
-              console.log("💰 Seeder payment notification received:", payload);
+          listen("seeder_payment_received", async (event: any) => {
+            const payload = event.payload;
+            console.log("💰 Seeder payment notification received:", payload);
 
               // Only credit the payment if we are the seeder (not the downloader)
               const currentWalletAddress = get(wallet).address;
@@ -352,9 +369,13 @@ async function handleConfirmExit() {
                   result.error,
                 );
               }
-            },
-          );
-          unlistenSeederPayment = unlisten;
+            })
+            .then((unlisten) => {
+              unlistenSeederPayment = unlisten;
+            })
+            .catch((error) => {
+              console.error("Failed to setup payment listener:", error);
+            });
         } catch (error) {
           console.error("Failed to setup payment listener:", error);
         }
@@ -449,6 +470,14 @@ async function handleConfirmExit() {
 
         // Set loading to false AFTER wizard check to prevent race conditions
         loading = false;
+      } catch (error) {
+        console.error("App initialization failed:", error);
+        initError = error instanceof Error ? error.message : String(error);
+      } finally {
+        window.clearTimeout(loadingSafetyTimer);
+        // Never leave the app in a "blank screen" state.
+        loading = false;
+      }
 
       let storedLocation: string | null = null;
       try {
@@ -463,6 +492,7 @@ async function handleConfirmExit() {
       } catch (error) {
         console.warn("Failed to load stored user location:", error);
       }
+
       try {
         const currentLocation = get(userLocation);
         const shouldAutoDetect =
@@ -704,16 +734,16 @@ async function handleConfirmExit() {
         // Unexpected error in the initialization block
         console.error("⚠️ Unexpected error during service initialization:", error);
       }
-
-      // set the currentPage var
-      syncFromUrl();
-
-      // Start network monitoring
-      stopNetworkMonitoring = startNetworkMonitoring();
-
-      // Start Geth monitoring
-      stopGethMonitoring = startGethMonitoring();
     })();
+
+    // set the currentPage var
+    syncFromUrl();
+
+    // Start network monitoring
+    stopNetworkMonitoring = startNetworkMonitoring();
+
+    // Start Geth monitoring
+    stopGethMonitoring = startGethMonitoring();
 
       // popstate - event that tracks history of current tab
       // const onPop = () => syncFromUrl();
@@ -989,7 +1019,31 @@ async function handleConfirmExit() {
 </script>
 
 <div class="flex bg-background h-full">
-  {#if !loading}
+  {#if loading}
+    <div class="w-full h-full flex items-center justify-center">
+      <div
+        class="max-w-lg w-full mx-6 p-6 rounded-lg border border-border bg-card text-card-foreground"
+      >
+        {#if initError}
+          <h2 class="text-lg font-semibold mb-2">App initialization failed</h2>
+          <p class="text-sm text-muted-foreground mb-4 break-words">
+            {initError}
+          </p>
+          <button
+            class="px-4 py-2 rounded bg-primary text-primary-foreground"
+            on:click={() => window.location.reload()}
+          >
+            Retry
+          </button>
+        {:else}
+          <h2 class="text-lg font-semibold mb-2">Loading…</h2>
+          <p class="text-sm text-muted-foreground">
+            If this takes too long, check the console for errors. Please wait.
+          </p>
+        {/if}
+      </div>
+    </div>
+  {:else}
     <!-- Desktop Sidebar -->
     <!-- Make the sidebar sticky so it stays visible while the main content scrolls -->
     <div

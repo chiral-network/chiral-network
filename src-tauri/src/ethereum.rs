@@ -12,8 +12,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::net::TcpStream;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tauri::Emitter;
+use url::Url;
 
 // ============================================================================
 // Configuration & Shared Resources
@@ -96,45 +99,34 @@ impl GethProcess {
         GethProcess { child: None }
     }
 
+    /// Returns true if this process was started and is managed by this app instance.
+    /// Note: `is_running()` may return true even when unmanaged (e.g., SSH port-forward to a remote RPC),
+    /// because it checks whether the configured RPC endpoint is reachable.
+    pub fn is_managed(&self) -> bool {
+        self.child.is_some()
+    }
+
     pub fn is_running(&self) -> bool {
         // First check if we have a tracked child process
         if self.child.is_some() {
             return true;
         }
 
-        // Check if geth is actually running by trying an RPC call
-        // This is more reliable than just checking if port 8545 is listening
-        use std::net::TcpStream;
-        use std::time::Duration;
-
-        // First check if port is listening (quick check)
-        let port_open = TcpStream::connect_timeout(
-            &"127.0.0.1:8545".parse().unwrap(),
-            Duration::from_millis(500)
-        ).is_ok();
-
-        if !port_open {
+        // IMPORTANT:
+        // This method is called from async contexts (tauri commands / startup tasks).
+        // Using `reqwest::blocking` here can panic ("Cannot drop a runtime...") because it creates
+        // an internal runtime that gets dropped on a tokio worker thread. So we keep this check
+        // lightweight and runtime-free: parse the URL and do a TCP connect.
+        let Ok(url) = Url::parse(&NETWORK_CONFIG.rpc_endpoint) else {
             return false;
-        }
-
-        // Port is open, now verify it's actually Geth responding correctly
-        // Try a simple RPC call with a short timeout
-        match std::process::Command::new("curl")
-            .args([
-                "-s",
-                "-m", "1",  // 1 second timeout
-                "-X", "POST",
-                "-H", "Content-Type: application/json",
-                "--data", r#"{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}"#,
-                "http://127.0.0.1:8545"
-            ])
-            .output()
-        {
-            Ok(output) => {
-                // Check if we got a valid JSON-RPC response
-                let response = String::from_utf8_lossy(&output.stdout);
-                response.contains("\"jsonrpc\"") && response.contains("\"result\"")
-            }
+        };
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let port = url.port_or_known_default().unwrap_or(8545);
+        let addr = format!("{host}:{port}");
+        match addr.parse() {
+            Ok(sock_addr) => TcpStream::connect_timeout(&sock_addr, Duration::from_millis(500)).is_ok(),
             Err(_) => false,
         }
     }
@@ -265,7 +257,42 @@ impl GethProcess {
                 .to_path_buf()
         };
 
-        let genesis_path = project_dir.join("genesis.json");
+        // Resolve genesis.json path robustly across:
+        // - dev builds (repo root)
+        // - release/headless builds (binary under src-tauri/target/release/)
+        // - custom deployments (env override)
+        let genesis_candidates: Vec<PathBuf> = {
+            let mut v = Vec::new();
+            if let Ok(p) = std::env::var("CHIRAL_GENESIS_PATH") {
+                if !p.trim().is_empty() {
+                    v.push(PathBuf::from(p.trim()));
+                }
+            }
+            // Common locations
+            v.push(project_dir.join("genesis.json"));
+            if let Some(parent) = project_dir.parent() {
+                v.push(parent.join("genesis.json")); // repo root when project_dir == src-tauri
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                v.push(cwd.join("genesis.json"));
+            }
+            v
+        };
+
+        let genesis_path = genesis_candidates
+            .iter()
+            .find(|p| p.exists())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "genesis.json not found. Tried: {}. You can override with CHIRAL_GENESIS_PATH=/path/to/genesis.json",
+                    genesis_candidates
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
 
         // Resolve data directory relative to the executable dir if it's relative
         let data_path = self.resolve_data_dir(data_dir)?;
@@ -1395,7 +1422,7 @@ pub async fn get_network_difficulty_as_u64() -> Result<u64, String> {
     });
 
     let response = client
-        .post("http://127.0.0.1:8545")
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -2534,8 +2561,8 @@ pub async fn send_transaction(
         Err(e) => tracing::error!("   Failed to get peer count: {}", e),
     }
 
-    let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
-        .map_err(|e| format!("Failed to connect to Geth: {}", e))?;
+    let provider = Provider::<Http>::try_from(NETWORK_CONFIG.rpc_endpoint.as_str())
+        .map_err(|e| format!("Failed to connect to RPC ({}): {}", NETWORK_CONFIG.rpc_endpoint, e))?;
 
     let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
@@ -2908,7 +2935,7 @@ pub async fn get_block_details_by_number(
     });
 
     let response = client
-        .post("http://127.0.0.1:8545")
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
