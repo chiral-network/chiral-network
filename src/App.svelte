@@ -18,7 +18,7 @@
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
 import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
-    import {onMount, setContext} from 'svelte';
+    import {onMount, onDestroy, setContext} from 'svelte';
     import { tick } from 'svelte';
     import { get } from 'svelte/store';
     import { setupI18n } from './i18n/i18n';
@@ -27,6 +27,7 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
     import KeyboardShortcutsPanel from './lib/components/KeyboardShortcutsPanel.svelte';
     import CommandPalette from './lib/components/CommandPalette.svelte';
+import ExitPrompt from './lib/components/ExitPrompt.svelte';
 import { startNetworkMonitoring } from './lib/services/networkService';
 import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
@@ -62,7 +63,11 @@ let lastAppliedBandwidthSignature: string | null = null;
 let showFirstRunWizard = false;
 let showShortcutsPanel = false;
 let showCommandPalette = false;
+let showExitPrompt = false;
+let isExiting = false;
+let exitError: string | null = null;
 let transferStoreUnsubscribe: (() => void) | null = null;
+let unlistenExitPrompt: (() => void) | null = null;
 const notifiedCompletedTransfers = new Set<string>();
 const scrollPositions: Record<string, number> = {};
 
@@ -162,6 +167,26 @@ function handleFirstRunComplete() {
   showFirstRunWizard = false;
   // Navigate to account page after completing wizard
   navigateTo('account', '/account');
+}
+
+function handleStayInApp() {
+  exitError = null;
+  isExiting = false;
+  showExitPrompt = false;
+}
+
+async function handleConfirmExit() {
+  if (isExiting) return;
+  isExiting = true;
+  exitError = null;
+
+  try {
+    await invoke('confirm_exit');
+  } catch (error) {
+    console.error('Failed to exit app:', error);
+    exitError = 'Could not close the app. Please try again.';
+    isExiting = false;
+  }
 }
 
 
@@ -332,6 +357,16 @@ function handleFirstRunComplete() {
           unlistenSeederPayment = unlisten;
         } catch (error) {
           console.error("Failed to setup payment listener:", error);
+        }
+
+        try {
+          unlistenExitPrompt = await listen('show_exit_prompt', () => {
+            exitError = null;
+            isExiting = false;
+            showExitPrompt = true;
+          });
+        } catch (error) {
+          console.error('Failed to set up exit prompt listener:', error);
         }
       }
 
@@ -944,6 +979,13 @@ function handleFirstRunComplete() {
     //   component: ProxySelfTest
     // },
   ];
+
+  onDestroy(() => {
+    unlistenExitPrompt?.();
+    unsubscribeScheduler?.();
+    unsubscribeBandwidth?.();
+    transferStoreUnsubscribe?.();
+  });
 </script>
 
 <div class="flex bg-background h-full">
@@ -1155,6 +1197,15 @@ function handleFirstRunComplete() {
   isOpen={showCommandPalette}
   onClose={() => showCommandPalette = false}
 />
+
+{#if showExitPrompt}
+  <ExitPrompt
+    isExiting={isExiting}
+    error={exitError}
+    onStay={handleStayInApp}
+    onExit={handleConfirmExit}
+  />
+{/if}
 
   <!-- add Toast  -->
 <SimpleToast />

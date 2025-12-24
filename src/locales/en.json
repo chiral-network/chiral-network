@@ -1757,6 +1757,7 @@
       "loginRequired": "Please log in to your account before uploading files",
       "verifyAccountFailed": "Failed to verify account status. Please try logging in again.",
       "dhtDisconnected": "DHT network is not connected. Please start the DHT network before uploading files.",
+      "pureClientMode": "Cannot upload files in pure-client mode. File seeding is disabled when the node is configured as client-only. Please disable pure-client mode in Settings to upload files.",
       "fileSuccess": "{name} uploaded successfully",
       "torrentSeeding": "{name} is now seeding as a torrent"
     },

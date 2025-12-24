@@ -423,11 +423,9 @@ impl GethProcess {
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
 
-        // Add miner address if provided
-        if let Some(address) = miner_address {
-            // Set the etherbase (coinbase) for mining rewards
-            cmd.arg("--miner.etherbase").arg(address);
-        }
+        // Note: We don't set --miner.etherbase here due to Core-Geth parsing issues
+        // Instead, we'll set it via RPC call in start_mining()
+        // The miner_address will be stored and used when mining starts
 
         // Create log file for geth output
         let log_path = data_path.join("geth.log");
@@ -913,12 +911,19 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
     }
 
     tracing::info!("🔧 Setting up mining with etherbase: {}", miner_address);
-    
+
+    // Ensure address has 0x prefix and is lowercase for consistency
+    let formatted_address = if miner_address.starts_with("0x") {
+        miner_address.to_lowercase()
+    } else {
+        format!("0x{}", miner_address.to_lowercase())
+    };
+
     // First try to set the etherbase using miner_setEtherbase
     let set_etherbase = json!({
         "jsonrpc": "2.0",
         "method": "miner_setEtherbase",
-        "params": [miner_address],
+        "params": [formatted_address],
         "id": 1
     });
 
@@ -1441,20 +1446,15 @@ struct MiningSessionData {
 
 // Helper function to write debug messages to mining logs
 fn log_to_mining_logs(data_dir: &str, message: &str) {
-    // For debugging, also print to stdout so we can see if the function is called
-    println!("DEBUG LOG: {}", message);
-
     // Resolve data directory
     let exe_dir = match std::env::current_exe() {
         Ok(exe) => match exe.parent() {
             Some(parent) => parent.to_path_buf(),
             None => {
-                println!("DEBUG LOG: Failed to get exe parent directory");
                 return;
             }
         },
-        Err(e) => {
-            println!("DEBUG LOG: Failed to get exe path: {}", e);
+        Err(_) => {
             return;
         }
     };
@@ -1466,7 +1466,6 @@ fn log_to_mining_logs(data_dir: &str, message: &str) {
     };
 
     let log_path = data_path.join("geth.log");
-    println!("DEBUG LOG: Attempting to write to: {:?}", log_path);
 
     // Create log directory if it doesn't exist
     if let Some(parent) = log_path.parent() {
@@ -1474,16 +1473,10 @@ fn log_to_mining_logs(data_dir: &str, message: &str) {
     }
 
     // Append message to log file
-    match OpenOptions::new().create(true).append(true).open(&log_path) {
-        Ok(mut file) => {
-            let timestamp = chrono::Utc::now().format("%Y-%m-%d|%H:%M:%S");
-            let log_line = format!("INFO [{}] DEBUG: {}\n", timestamp, message);
-            match file.write_all(log_line.as_bytes()) {
-                Ok(_) => println!("DEBUG LOG: Successfully wrote to log file"),
-                Err(e) => println!("DEBUG LOG: Failed to write to log file: {}", e),
-            }
-        }
-        Err(e) => println!("DEBUG LOG: Failed to open log file: {}", e),
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d|%H:%M:%S");
+        let log_line = format!("INFO [{}] DEBUG: {}\n", timestamp, message);
+        let _ = file.write_all(log_line.as_bytes());
     }
 }
 
@@ -1679,7 +1672,7 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
 
     // Try to estimate real-time hash rate from mining activity patterns
     // Count recent mining operations in the logs
-    let mut mining_operations = 0;
+    let mining_operations = 0;
     for line in &lines {
         // Look for various mining activity indicators
         if line.contains("Commit new sealing work") ||
@@ -2331,13 +2324,11 @@ pub async fn calculate_accurate_totals(
 
                     // Check if this is a received transaction
                     if to == target_address && value_chiral > 0.0 {
-                        println!("DEBUG: Received transaction: {} Chiral (from: {}, to: {})", value_chiral, from, to);
                         total_received += value_chiral;
                     }
 
                     // Check if this is a sent transaction
                     if from == target_address && value_chiral > 0.0 {
-                        println!("DEBUG: Sent transaction: {} Chiral (from: {}, to: {})", value_chiral, from, to);
                         total_sent += value_chiral;
                     }
                 }
@@ -2354,8 +2345,6 @@ pub async fn calculate_accurate_totals(
             percentage: 100,
         },
     );
-
-    println!("DEBUG: Accurate totals calculation complete - blocks_mined: {}, total_received: {}, total_sent: {}", blocks_mined, total_received, total_sent);
 
     Ok(AccurateTotals {
         blocks_mined,

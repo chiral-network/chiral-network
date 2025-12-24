@@ -7916,31 +7916,24 @@ impl DhtService {
 
     /// Record successful transfer for peer metrics
     pub async fn record_transfer_success(&self, peer_id: &str, bytes: u64, duration_ms: u64) {
-        println!("🔥 DEBUG: record_transfer_success called for peer: {}, bytes: {}", peer_id, bytes);
         let mut peer_selection = self.peer_selection.lock().await;
         peer_selection.record_transfer_success(peer_id, bytes, duration_ms);
-        
+
         // Automatically publish a positive reputation verdict after successful transfer
         drop(peer_selection); // Release lock before async work
-        println!("🔥 DEBUG: About to publish verdict for peer: {}", peer_id);
         if let Err(e) = self.publish_transfer_verdict(peer_id, VerdictOutcome::Good, bytes).await {
             tracing::warn!("Failed to publish reputation verdict for {}: {}", peer_id, e);
-            println!("❌ DEBUG: Failed to publish verdict: {}", e);
-        } else {
-            println!("✅ DEBUG: Successfully published verdict for peer: {}", peer_id);
         }
     }
 
     /// Publish a reputation verdict for a peer after a transfer
     async fn publish_transfer_verdict(&self, peer_id: &str, outcome: VerdictOutcome, bytes: u64) -> Result<(), String> {
-        println!("🔥 DEBUG: publish_transfer_verdict START for peer: {}", peer_id);
         // Create verdict
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
-        println!("🔥 DEBUG: Creating verdict struct...");
+
         let mut verdict = TransactionVerdict {
             target_id: peer_id.to_string(),
             tx_hash: None, // File transfers don't have blockchain transactions
@@ -7958,26 +7951,21 @@ impl DhtService {
             tx_receipt: None,
             evidence_blobs: None,
         };
-        
-        println!("🔥 DEBUG: Creating signing key...");
+
         // Sign the verdict using the stored ed25519 secret key
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&*self.ed25519_secret_key);
-        
-        println!("🔥 DEBUG: Signing verdict...");
+
         // Sign the verdict
         verdict.sign_with(&signing_key, &self.peer_id, 0)
             .map_err(|e| format!("Failed to sign verdict: {}", e))?;
-        
-        println!("🔥 DEBUG: Computing DHT key...");
+
         // Use target-only key so all verdicts about a peer are stored in one place
         let dht_key = TransactionVerdict::dht_key_for_target(peer_id);
-        
-        println!("🔥 DEBUG: Serializing verdict...");
+
         // Serialize verdict to JSON
         let verdict_json = serde_json::to_vec(&verdict)
             .map_err(|e| format!("Failed to serialize verdict: {}", e))?;
-        
-        println!("🔥 DEBUG: Sending DHT command...");
+
         // Store in DHT using PutDhtValue command
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(DhtCommand::PutDhtValue {
@@ -7985,12 +7973,9 @@ impl DhtService {
             value: verdict_json,
             sender: tx,
         }).await.map_err(|e| format!("Failed to send DHT command: {}", e))?;
-        
-        println!("🔥 DEBUG: Waiting for DHT response...");
+
         // Wait for result
         rx.await.map_err(|e| format!("Failed to receive DHT response: {}", e))??;
-        
-        println!("✅ DEBUG: Verdict published successfully!");
         tracing::info!("✅ Published {} verdict for peer {} (key: {}...)", 
             match outcome {
                 VerdictOutcome::Good => "positive",

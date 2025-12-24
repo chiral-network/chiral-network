@@ -1613,6 +1613,7 @@
       "loginRequired": "在上传文件之前请先登录您的账户",
       "verifyAccountFailed": "无法验证账户状态。请重新登录。",
       "dhtDisconnected": "DHT 网络未连接。请在上传文件前启动 DHT 网络。",
+      "pureClientMode": "无法在纯客户端模式下上传文件。当节点配置为仅客户端时，文件共享功能被禁用。请在设置中禁用纯客户端模式以上传文件。",
       "fileSuccess": "{name} 上传成功",
       "torrentSeeding": "{name} 现在作为种子进行分享"
     },

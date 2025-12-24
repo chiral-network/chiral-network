@@ -163,9 +163,6 @@ impl Ed2kProtocolHandler {
 
             let chunk_data = &buffer[..bytes_read];
 
-            // DEBUG PRINT THE ACTUAL DATA BEING HASHED
-            info!("DEBUG: Hashing data (first 5 bytes): {:?}", &chunk_data[0..std::cmp::min(5, chunk_data.len())]);
-
             // Calculate MD4 hash for the chunk
             let mut md4_hasher = Md4::new();
             md4_hasher.update(chunk_data);

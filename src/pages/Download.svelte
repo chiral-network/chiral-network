@@ -24,6 +24,8 @@
   import { showToast } from '$lib/toast'
   import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
   import DownloadRestartControls from '$lib/components/download/DownloadRestartControls.svelte'
+  import PaymentCheckpointModal from '$lib/components/download/PaymentCheckpointModal.svelte'
+  import { paymentCheckpointService, type PaymentCheckpointEvent } from '$lib/services/paymentCheckpointService'
   // Import transfer events store for centralized transfer state management
   import {
     transferStore,
@@ -800,6 +802,28 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
     setupEventListeners()
 
+    // Listen for payment checkpoint events
+    paymentCheckpointService.listenToCheckpoints(async (event) => {
+      console.log('💰 Payment checkpoint reached:', event)
+
+      // Find the file name from the file hash
+      const file = $files.find(f => f.hash === event.fileHash)
+      currentCheckpointFileName = file?.name || event.fileHash
+
+      currentCheckpoint = event
+      showPaymentModal = true
+    }).catch(err => {
+      console.error('Failed to listen to payment checkpoints:', err)
+    })
+
+    paymentCheckpointService.listenToPayments(async (event) => {
+      console.log('✅ Payment confirmed:', event)
+      showPaymentModal = false
+      showToast(`Payment confirmed: ${event.amountPaid} Chiral`, 'success')
+    }).catch(err => {
+      console.error('Failed to listen to payment events:', err)
+    })
+
     // Smart Resume: Load and auto-resume interrupted downloads
     loadAndResumeDownloads()
   })
@@ -900,6 +924,10 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   // Track which files have already had payment processed
   let paidFiles = new Set<string>()
 
+  // Payment Checkpoint state
+  let showPaymentModal = false
+  let currentCheckpoint: PaymentCheckpointEvent | null = null
+  let currentCheckpointFileName: string = ''
 
   // Download History state
   let showHistory = false
@@ -1273,6 +1301,47 @@ async function loadAndResumeDownloads() {
       maxConcurrentDownloads = validValue
       lastValidMaxConcurrent = validValue // Store as the new last valid value
     }
+  }
+
+  // Payment checkpoint handlers
+  async function handlePaymentCheckpoint(event: CustomEvent<{ transactionHash: string; amount: number }>) {
+    if (!currentCheckpoint) return
+
+    try {
+      await paymentCheckpointService.recordPayment(
+        currentCheckpoint.sessionId,
+        event.detail.transactionHash,
+        event.detail.amount
+      )
+
+      console.log(`✅ Payment recorded for checkpoint: ${currentCheckpoint.sessionId}`)
+      showToast(`Payment recorded: ${event.detail.amount} Chiral`, 'success')
+
+      // Close modal
+      showPaymentModal = false
+      currentCheckpoint = null
+    } catch (error) {
+      console.error('Failed to record checkpoint payment:', error)
+      showToast('Failed to record payment', 'error')
+    }
+  }
+
+  function handlePaymentCancel() {
+    if (currentCheckpoint) {
+      paymentCheckpointService.markPaymentFailed(
+        currentCheckpoint.sessionId,
+        'User canceled payment'
+      ).catch(err => {
+        console.error('Failed to mark payment as failed:', err)
+      })
+    }
+
+    showPaymentModal = false
+    currentCheckpoint = null
+  }
+
+  function handlePaymentClose() {
+    showPaymentModal = false
   }
 
   // Function to handle input and only allow positive numbers
@@ -3348,3 +3417,15 @@ async function loadAndResumeDownloads() {
     {/if}
   </Card>
 </div>
+
+<!-- Payment Checkpoint Modal -->
+{#if showPaymentModal && currentCheckpoint}
+  <PaymentCheckpointModal
+    checkpointEvent={currentCheckpoint}
+    fileName={currentCheckpointFileName}
+    show={showPaymentModal}
+    on:pay={handlePaymentCheckpoint}
+    on:cancel={handlePaymentCancel}
+    on:close={handlePaymentClose}
+  />
+{/if}
