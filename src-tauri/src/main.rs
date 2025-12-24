@@ -54,12 +54,8 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
-<<<<<<< HEAD
 use chiral_network::download_paths;
-use crate::payment_checkpoint::PaymentCheckpointService;
-=======
 use chiral_network::payment_checkpoint::PaymentCheckpointService;
->>>>>>> 45e1f380c970536dd472b958574a4039e683c076
 use bandwidth::BandwidthController;
 use chiral_network::transfer_events::{
     current_timestamp_ms, ErrorCategory, SourceInfo, SourceType, TransferCompletedEvent,
