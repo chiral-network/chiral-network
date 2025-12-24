@@ -5,6 +5,7 @@ use crate::keystore::Keystore;
 use crate::bandwidth::BandwidthController;
 use crate::manager::{ChunkInfo, FileManifest};
 use crate::multi_source_download::MultiSourceDownloadService;
+use crate::payment_checkpoint::PaymentCheckpointService;
 use aes_gcm::aead::Aead;
 use aes_gcm::{AeadCore, KeyInit};
 use serde::{Deserialize, Serialize};
@@ -286,6 +287,8 @@ pub struct WebRTCService {
     connection_manager: Arc<ConnectionManager>,
     /// Multi-source download service for hash verification and chunk management
     multi_source_service: Option<Arc<MultiSourceDownloadService>>,
+    /// Payment checkpoint service for incremental payments during file transfers
+    payment_checkpoint: Option<Arc<PaymentCheckpointService>>,
 }
 
 impl WebRTCService {
@@ -301,16 +304,19 @@ impl WebRTCService {
             keystore,
             bandwidth,
             None,
+            None,
         ).await
     }
 
     /// Create a new WebRTCService with optional MultiSourceDownloadService for hash verification
+    /// and optional PaymentCheckpointService for incremental payments
     pub async fn new_with_multi_source(
         app_handle: tauri::AppHandle,
         file_transfer_service: Arc<FileTransferService>,
         keystore: Arc<Mutex<Keystore>>,
         bandwidth: Arc<BandwidthController>,
         multi_source_service: Option<Arc<MultiSourceDownloadService>>,
+        payment_checkpoint: Option<Arc<PaymentCheckpointService>>,
     ) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(1000); // Increased capacity for high-throughput transfers
@@ -323,6 +329,7 @@ impl WebRTCService {
         // Spawn the WebRTC service task
         let connection_manager_clone = connection_manager.clone();
         let multi_source_service_clone = multi_source_service.clone();
+        let payment_checkpoint_clone = payment_checkpoint.clone();
         tokio::spawn(Self::run_webrtc_service(
             app_handle.clone(),
             cmd_rx,
@@ -334,6 +341,7 @@ impl WebRTCService {
             bandwidth.clone(),
             connection_manager_clone,
             multi_source_service_clone,
+            payment_checkpoint_clone,
         ));
 
         Ok(WebRTCService {
@@ -348,6 +356,7 @@ impl WebRTCService {
             bandwidth,
             connection_manager,
             multi_source_service,
+            payment_checkpoint,
         })
     }
 
@@ -391,6 +400,7 @@ impl WebRTCService {
         bandwidth: Arc<BandwidthController>,
         connection_manager: Arc<ConnectionManager>,
         multi_source_service: Option<Arc<MultiSourceDownloadService>>,
+        payment_checkpoint: Option<Arc<PaymentCheckpointService>>,
     ) {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -407,6 +417,7 @@ impl WebRTCService {
                         &bandwidth,
                         &connection_manager,
                         multi_source_service.as_ref(),
+                        &payment_checkpoint,
                     )
                     .await;
                 }
@@ -456,6 +467,7 @@ impl WebRTCService {
                         &bandwidth,
                         &connection_manager,
                         multi_source_service.as_ref(),
+                        &payment_checkpoint,
                     )
                     .await;
                 }
@@ -476,11 +488,12 @@ impl WebRTCService {
         bandwidth: &Arc<BandwidthController>,
         connection_manager: &Arc<ConnectionManager>,
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
+        payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
         // Get or create tracker for this peer
         let mut tracker = connection_manager.get_or_create(peer_id).await;
         tracker.start_retry();
-        
+
         // Attempt connection
         let result = Self::handle_establish_connection_internal(
             app_handle,
@@ -493,6 +506,7 @@ impl WebRTCService {
             active_private_key,
             bandwidth,
             multi_source_service,
+            payment_checkpoint,
         )
         .await;
         
@@ -547,6 +561,7 @@ impl WebRTCService {
         bandwidth: &Arc<BandwidthController>,
         connection_manager: &Arc<ConnectionManager>,
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
+        payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
         let tracker = connection_manager.get_or_create(peer_id).await;
         
@@ -586,7 +601,7 @@ impl WebRTCService {
         };
         
         info!("Retrying connection to peer {} (attempt {})", peer_id, tracker.consecutive_failures + 1);
-        
+
         Self::handle_establish_connection_with_retry(
             app_handle,
             peer_id,
@@ -599,6 +614,7 @@ impl WebRTCService {
             bandwidth,
             connection_manager,
             multi_source_service,
+            payment_checkpoint,
         )
         .await;
     }
@@ -615,6 +631,7 @@ impl WebRTCService {
         active_private_key: &Arc<Mutex<Option<String>>>,
         bandwidth: &Arc<BandwidthController>,
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
+        payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) -> Result<(), String> {
         // Call the existing implementation but return Result
         Self::handle_establish_connection(
@@ -628,6 +645,7 @@ impl WebRTCService {
             active_private_key,
             bandwidth,
             multi_source_service,
+            payment_checkpoint,
         )
         .await;
         
@@ -655,6 +673,7 @@ impl WebRTCService {
         active_private_key: &Arc<Mutex<Option<String>>>,
         bandwidth: &Arc<BandwidthController>,
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
+        payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
         info!("Establishing WebRTC connection with peer: {}", peer_id);
 
@@ -704,6 +723,7 @@ impl WebRTCService {
         let active_private_key_clone = Arc::new(active_private_key.clone());
         let bandwidth_clone = bandwidth.clone();
         let multi_source_service_clone = multi_source_service.cloned();
+        let payment_checkpoint_clone = payment_checkpoint.clone();
 
         let app_handle_clone = app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -715,6 +735,7 @@ impl WebRTCService {
             let active_private_key = active_private_key_clone.clone();
             let bandwidth = bandwidth_clone.clone();
             let multi_source_service = multi_source_service_clone.clone();
+            let payment_checkpoint = payment_checkpoint_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
             // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
@@ -731,6 +752,7 @@ impl WebRTCService {
                     app_handle_for_task,
                     bandwidth,
                     multi_source_service.as_ref(),
+                    &payment_checkpoint,
                 )
                 .await;
             });
@@ -1054,6 +1076,7 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         keystore: &Arc<Mutex<Keystore>>,
         bandwidth: &Arc<BandwidthController>,
+        payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
         info!(
             "📥 Handling file request from peer {}: {} (file_name: {})",
@@ -1084,6 +1107,7 @@ impl WebRTCService {
             let connections = connections.clone();
             let keystore = keystore.clone();
             let bandwidth = bandwidth.clone();
+            let payment_checkpoint = payment_checkpoint.clone();
 
             tokio::spawn(async move {
                 info!("🚀 Spawned file transfer task for {} to peer {}", request.file_hash, peer_id);
@@ -1095,6 +1119,7 @@ impl WebRTCService {
                     &connections,
                     &keystore,
                     &bandwidth,
+                    &payment_checkpoint,
                 )
                 .await
                 {
@@ -1273,6 +1298,7 @@ impl WebRTCService {
         app_handle: tauri::AppHandle,
         bandwidth: Arc<BandwidthController>,
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
+        payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
         debug!("📩 Data channel message received from peer {}: {} bytes", peer_id, msg.data.len());
         if let Ok(text) = std::str::from_utf8(&msg.data) {
@@ -1322,6 +1348,7 @@ impl WebRTCService {
                     connections,
                     keystore,
                     &bandwidth,
+                    &payment_checkpoint,
                 )
                 .await;
             }
@@ -1343,6 +1370,7 @@ impl WebRTCService {
                             connections,
                             keystore,
                             &bandwidth,
+                            &payment_checkpoint,
                         )
                         .await;
                     }
@@ -1513,6 +1541,7 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         keystore: &Arc<Mutex<Keystore>>,
         bandwidth: &Arc<BandwidthController>,
+        payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) -> Result<(), String> {
         // Wait for data channel to be available (race condition fix)
         // The on_data_channel callback stores the channel in a spawned task,
@@ -1588,6 +1617,24 @@ impl WebRTCService {
             peer_id
         );
 
+        // Initialize payment checkpoint session if service available
+        if let Some(checkpoint_service) = payment_checkpoint {
+            let session_id = format!("{}_{}", request.file_hash, peer_id);
+            let file_size = file_data.len() as u64;
+
+            checkpoint_service.init_session(
+                session_id.clone(),
+                request.file_hash.clone(),
+                file_size,
+                "seeder_address".to_string(), // TODO: Get from request or config
+                peer_id.to_string(),
+                0.001, // TODO: Get price from request or config
+                "exponential".to_string(),
+            ).await.map_err(|e| format!("Failed to init checkpoint: {}", e))?;
+
+            info!("✅ Payment checkpoint session initialized: {}", session_id);
+        }
+
         // NOTE: HMAC authentication is disabled for WebRTC transfers.
         // WebRTC already provides transport-level security via DTLS.
         // The previous HMAC implementation had a key exchange race condition
@@ -1656,20 +1703,39 @@ impl WebRTCService {
             if chunk_index < 100 {
                 info!("🔁 LOOP: Starting chunk {} for peer {}", chunk_index, peer_id);
             }
-            
+
             // Log first few chunks, last chunk, and every 50th chunk
             if chunk_index < 10 || chunk_index == total_chunks - 1 || chunk_index % 50 == 0 {
                 info!("📤 Processing chunk {}/{} for peer {}", chunk_index + 1, total_chunks, peer_id);
             }
-            
+
             // Log every 20 chunks to track progress
             if chunk_index % 20 == 0 {
-                info!("📊 Transfer progress: chunk {}/{} ({}%) to peer {}", 
-                    chunk_index, total_chunks, 
+                info!("📊 Transfer progress: chunk {}/{} ({}%) to peer {}",
+                    chunk_index, total_chunks,
                     (chunk_index as f32 / total_chunks as f32 * 100.0) as u32,
                     peer_id);
             }
-            
+
+            // Check if should pause for payment checkpoint
+            if let Some(checkpoint_service) = payment_checkpoint {
+                let session_id = format!("{}_{}", request.file_hash, peer_id);
+
+                loop {
+                    let should_pause = checkpoint_service
+                        .should_pause_serving(&session_id)
+                        .await
+                        .unwrap_or(false);
+
+                    if !should_pause {
+                        break;
+                    }
+
+                    info!("⏸️  Paused at chunk {} - waiting for payment", chunk_index);
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+
             // Flow control: wait if too many pending ACKs
             let wait_start = Instant::now();
             let mut timeout_count = 0;
@@ -1809,6 +1875,17 @@ impl WebRTCService {
                 info!("🔄 Chunk {}: handle_send_chunk completed successfully", chunk_index);
             }
 
+            // Update payment checkpoint progress after sending chunk
+            if let Some(checkpoint_service) = payment_checkpoint {
+                let session_id = format!("{}_{}", request.file_hash, peer_id);
+                let bytes_transferred = ((chunk_index as u64 + 1) * CHUNK_SIZE as u64).min(file_data.len() as u64);
+
+                checkpoint_service
+                    .update_progress(&session_id, bytes_transferred)
+                    .await
+                    .map_err(|e| format!("Failed to update checkpoint progress: {}", e))?;
+            }
+
             // Increment pending ACK count (only if send succeeded)
             // IMPORTANT: Don't hold lock while sending events to avoid deadlock
             let progress_to_send = {
@@ -1894,6 +1971,17 @@ impl WebRTCService {
                     transfer.bytes_sent = file_data.len() as u64;
                 }
             }
+        }
+
+        // Mark payment checkpoint session as completed
+        if let Some(checkpoint_service) = payment_checkpoint {
+            let session_id = format!("{}_{}", request.file_hash, peer_id);
+            checkpoint_service
+                .mark_completed(&session_id)
+                .await
+                .map_err(|e| format!("Failed to mark checkpoint complete: {}", e))?;
+
+            info!("✅ Payment checkpoint session completed: {}", session_id);
         }
 
         let _ = event_tx
@@ -2157,6 +2245,7 @@ impl WebRTCService {
         let active_private_key_clone = Arc::new(self.active_private_key.clone());
         let bandwidth_clone = self.bandwidth.clone();
         let multi_source_service_clone = self.multi_source_service.clone();
+        let payment_checkpoint_clone = self.payment_checkpoint.clone();
 
         let app_handle_clone = self.app_handle.clone();
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -2168,6 +2257,7 @@ impl WebRTCService {
             let active_private_key = active_private_key_clone.clone();
             let bandwidth = bandwidth_clone.clone();
             let multi_source_service = multi_source_service_clone.clone();
+            let payment_checkpoint = payment_checkpoint_clone.clone();
 
             let app_handle_for_task = app_handle_clone.clone();
             // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
@@ -2183,6 +2273,7 @@ impl WebRTCService {
                     app_handle_for_task,
                     bandwidth,
                     multi_source_service.as_ref(),
+                    &payment_checkpoint,
                 )
                 .await;
             });
@@ -2408,6 +2499,7 @@ impl WebRTCService {
         let bandwidth_for_dc = self.bandwidth.clone();
         let app_handle_for_dc = self.app_handle.clone();
         let multi_source_service_for_dc = self.multi_source_service.clone();
+        let payment_checkpoint_for_dc = self.payment_checkpoint.clone();
 
         info!("Setting up on_data_channel callback for peer: {}", peer_id);
 
@@ -2423,6 +2515,7 @@ impl WebRTCService {
             let bandwidth = bandwidth_for_dc.clone();
             let app_handle = app_handle_for_dc.clone();
             let multi_source_service = multi_source_service_for_dc.clone();
+            let payment_checkpoint = payment_checkpoint_for_dc.clone();
 
             // Set up message handler for received data channel
             // IMPORTANT: Spawn the handler as a separate task to avoid blocking the data channel
@@ -2436,6 +2529,7 @@ impl WebRTCService {
                 let bandwidth = bandwidth.clone();
                 let app_handle_for_task = app_handle.clone();
                 let multi_source_service = multi_source_service.clone();
+                let payment_checkpoint = payment_checkpoint.clone();
 
                 tokio::spawn(async move {
                     Self::handle_data_channel_message(
@@ -2449,6 +2543,7 @@ impl WebRTCService {
                         app_handle_for_task,
                         bandwidth,
                         multi_source_service.as_ref(),
+                        &payment_checkpoint,
                     )
                     .await;
                 });

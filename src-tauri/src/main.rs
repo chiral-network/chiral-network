@@ -54,7 +54,7 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
-use crate::payment_checkpoint::PaymentCheckpointService;
+use chiral_network::payment_checkpoint::PaymentCheckpointService;
 use bandwidth::BandwidthController;
 use chiral_network::transfer_events::{
     current_timestamp_ms, ErrorCategory, SourceInfo, SourceType, TransferCompletedEvent,
@@ -3727,6 +3727,7 @@ async fn start_file_transfer_service(
             state.keystore.clone(),
             state.bandwidth.clone(),
             Some(multi_source_arc.clone()),
+            Some(state.payment_checkpoint.clone()),
         )
         .await
         .map_err(|e| format!("Failed to recreate WebRTC service with multi-source: {}", e))?;
@@ -8068,7 +8069,7 @@ async fn update_payment_checkpoint_progress(
         .await?;
 
     // Emit event if checkpoint reached
-    if let crate::payment_checkpoint::CheckpointState::WaitingForPayment { checkpoint_mb, amount_chiral } = &checkpoint_state {
+    if let chiral_network::payment_checkpoint::CheckpointState::WaitingForPayment { checkpoint_mb, amount_chiral } = &checkpoint_state {
         let info = state.payment_checkpoint.get_checkpoint_info(&session_id).await?;
 
         window.emit("payment_checkpoint_reached", serde_json::json!({
@@ -8084,11 +8085,11 @@ async fn update_payment_checkpoint_progress(
 
     // Return state as string
     Ok(match checkpoint_state {
-        crate::payment_checkpoint::CheckpointState::Active => "active".to_string(),
-        crate::payment_checkpoint::CheckpointState::WaitingForPayment { .. } => "waiting_for_payment".to_string(),
-        crate::payment_checkpoint::CheckpointState::PaymentReceived { .. } => "payment_received".to_string(),
-        crate::payment_checkpoint::CheckpointState::PaymentFailed { .. } => "payment_failed".to_string(),
-        crate::payment_checkpoint::CheckpointState::Completed => "completed".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::Active => "active".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::WaitingForPayment { .. } => "waiting_for_payment".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::PaymentReceived { .. } => "payment_received".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::PaymentFailed { .. } => "payment_failed".to_string(),
+        chiral_network::payment_checkpoint::CheckpointState::Completed => "completed".to_string(),
     })
 }
 
