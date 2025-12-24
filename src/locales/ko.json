@@ -734,7 +734,26 @@
     "multipleLoginsDesc": "5분 이내에 다른 국가에서 로그인했습니다",
     "failedDownloads": "실패한 다운로드",
     "failedDownloadsDesc": "여러 번의 실패한 다운로드 시도가 감지되었습니다",
-    "latencyNoNodes": "연결된 프록시 노드가 없습니다. 연결하면 지연 시간 데이터가 여기에 표시됩니다."
+    "latencyNoNodes": "연결된 프록시 노드가 없습니다. 연결하면 지연 시간 데이터가 여기에 표시됩니다.",
+    "storage": {
+      "title": "스토리지 분석",
+      "totalUsage": "총 사용량",
+      "cleanupNeeded": "정리 권장",
+      "cleanupHint": "스토리지 사용량이 {threshold}% 임계값을 초과했습니다",
+      "cleaning": "정리 중...",
+      "cleanupNow": "스토리지 정리",
+      "lastCleanup": "마지막 정리 보고서",
+      "filesDeleted": "삭제된 파일",
+      "spaceFreed": "확보된 공간",
+      "errors": "오류",
+      "noData": "사용 가능한 스토리지 데이터가 없습니다",
+      "breakdown": "스토리지 세부 정보",
+      "noFilesStored": "아직 저장된 파일이 없습니다",
+      "autoCleanup": "자동 정리",
+      "enabled": "활성화됨",
+      "disabled": "비활성화됨",
+      "threshold": "임계값"
+    }
   },
   "proxy": {
     "title": "프록시 네트워크",

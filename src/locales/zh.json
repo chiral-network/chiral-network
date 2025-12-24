@@ -758,7 +758,26 @@
     "multipleLoginsDesc": "用户在 5 分钟内从不同国家登录",
     "failedDownloads": "下载失败",
     "failedDownloadsDesc": "检测到多次下载失败尝试",
-    "latencyNoNodes": "没有已连接的代理节点。连接后延迟数据将显示在此处。"
+    "latencyNoNodes": "没有已连接的代理节点。连接后延迟数据将显示在此处。",
+    "storage": {
+      "title": "存储分析",
+      "totalUsage": "总使用量",
+      "cleanupNeeded": "建议清理",
+      "cleanupHint": "存储使用量超过 {threshold}% 阈值",
+      "cleaning": "清理中...",
+      "cleanupNow": "清理存储",
+      "lastCleanup": "上次清理报告",
+      "filesDeleted": "已删除文件",
+      "spaceFreed": "已释放空间",
+      "errors": "错误",
+      "noData": "无可用存储数据",
+      "breakdown": "存储分类",
+      "noFilesStored": "尚无存储文件",
+      "autoCleanup": "自动清理",
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "threshold": "阈值"
+    }
   },
   "proxy": {
     "title": "代理网络",
