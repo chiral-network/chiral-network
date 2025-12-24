@@ -275,6 +275,19 @@ impl StorageManager {
             }
         }
 
+        // Step 5: Cleanup blockstore if still need space (most aggressive)
+        if freed < bytes_to_free {
+            match self.cleanup_blockstore().await {
+                Ok(bytes) => {
+                    freed += bytes;
+                    tracing::info!("Cleaned blockstore: {}", StorageUsage::format_bytes(bytes));
+                }
+                Err(e) => {
+                    report.add_error(format!("Failed to clean blockstore: {}", e));
+                }
+            }
+        }
+
         report.bytes_freed = freed;
 
         if let Ok(elapsed) = start.elapsed() {
@@ -465,6 +478,26 @@ impl StorageManager {
     pub async fn force_cleanup(&self) -> Result<CleanupReport> {
         let usage = self.calculate_usage().await?;
         self.perform_cleanup(&usage).await
+    }
+
+    /// Clean up blockstore using auto-cleanup (old files first)
+    async fn cleanup_blockstore(&self) -> Result<u64> {
+        use crate::blockstore_manager::BlockstoreManager;
+
+        let blockstore_manager = BlockstoreManager::new(
+            self.config.blockstore_path.clone(),
+            self.config.cache_size_mb,
+        );
+
+        // Use auto-cleanup which progressively cleans old files
+        match blockstore_manager.auto_cleanup_if_needed() {
+            Ok(Some(report)) => Ok(report.bytes_freed),
+            Ok(None) => Ok(0), // No cleanup needed
+            Err(e) => {
+                tracing::warn!("Blockstore cleanup failed: {}", e);
+                Ok(0) // Don't fail entire cleanup if blockstore cleanup fails
+            }
+        }
     }
 }
 

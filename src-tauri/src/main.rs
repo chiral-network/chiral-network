@@ -32,6 +32,7 @@ pub mod e2e_api;
 pub mod e2e_api_headless;
 pub mod webhook_manager;
 pub mod storage_manager;
+pub mod blockstore_manager;
 
 // Re-export modules from the lib crate
 use chiral_network::{
@@ -6314,6 +6315,134 @@ async fn create_storage_config(app_handle: &tauri::AppHandle) -> Result<storage_
 }
 
 // ============================================================================
+// Blockstore Management Commands
+// ============================================================================
+
+/// Get blockstore statistics
+#[tauri::command]
+async fn get_blockstore_stats(app_handle: tauri::AppHandle) -> Result<blockstore_manager::BlockstoreStats, String> {
+    let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+        .ok_or_else(|| "Failed to determine project directories".to_string())?;
+
+    let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+
+    // Get cache size from settings
+    let settings_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("settings.json");
+
+    let cache_limit_mb = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("Failed to read settings: {}", e))?;
+        let settings: BackendSettings = serde_json::from_str(&contents)
+            .map_err(|e| format!("Failed to parse settings: {}", e))?;
+        settings.cache_size.unwrap_or(1024)
+    } else {
+        1024 // Default 1GB
+    };
+
+    let manager = blockstore_manager::BlockstoreManager::new(blockstore_path, cache_limit_mb);
+    manager.get_stats()
+        .map_err(|e| format!("Failed to get blockstore stats: {}", e))
+}
+
+/// Clear entire blockstore (WARNING: requires re-downloading all files)
+#[tauri::command]
+async fn clear_blockstore(app_handle: tauri::AppHandle) -> Result<blockstore_manager::BlockstoreCleanupReport, String> {
+    let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+        .ok_or_else(|| "Failed to determine project directories".to_string())?;
+
+    let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+
+    tracing::warn!("Clearing entire blockstore at {:?}", blockstore_path);
+
+    let settings_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("settings.json");
+
+    let cache_limit_mb = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("Failed to read settings: {}", e))?;
+        let settings: BackendSettings = serde_json::from_str(&contents)
+            .map_err(|e| format!("Failed to parse settings: {}", e))?;
+        settings.cache_size.unwrap_or(1024)
+    } else {
+        1024
+    };
+
+    let manager = blockstore_manager::BlockstoreManager::new(blockstore_path, cache_limit_mb);
+    manager.clear_blockstore()
+        .map_err(|e| format!("Failed to clear blockstore: {}", e))
+}
+
+/// Cleanup old blockstore files
+#[tauri::command]
+async fn cleanup_old_blockstore_files(
+    app_handle: tauri::AppHandle,
+    max_age_days: u64
+) -> Result<blockstore_manager::BlockstoreCleanupReport, String> {
+    let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+        .ok_or_else(|| "Failed to determine project directories".to_string())?;
+
+    let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+
+    tracing::info!("Cleaning up blockstore files older than {} days", max_age_days);
+
+    let settings_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("settings.json");
+
+    let cache_limit_mb = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("Failed to read settings: {}", e))?;
+        let settings: BackendSettings = serde_json::from_str(&contents)
+            .map_err(|e| format!("Failed to parse settings: {}", e))?;
+        settings.cache_size.unwrap_or(1024)
+    } else {
+        1024
+    };
+
+    let manager = blockstore_manager::BlockstoreManager::new(blockstore_path, cache_limit_mb);
+    manager.cleanup_old_blocks(max_age_days)
+        .map_err(|e| format!("Failed to cleanup old blockstore files: {}", e))
+}
+
+/// Auto-cleanup blockstore if it exceeds size limit
+#[tauri::command]
+async fn auto_cleanup_blockstore(app_handle: tauri::AppHandle) -> Result<Option<blockstore_manager::BlockstoreCleanupReport>, String> {
+    let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+        .ok_or_else(|| "Failed to determine project directories".to_string())?;
+
+    let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+
+    let settings_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("settings.json");
+
+    let cache_limit_mb = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("Failed to read settings: {}", e))?;
+        let settings: BackendSettings = serde_json::from_str(&contents)
+            .map_err(|e| format!("Failed to parse settings: {}", e))?;
+        settings.cache_size.unwrap_or(1024)
+    } else {
+        1024
+    };
+
+    let manager = blockstore_manager::BlockstoreManager::new(blockstore_path, cache_limit_mb);
+    manager.auto_cleanup_if_needed()
+        .map_err(|e| format!("Failed to auto-cleanup blockstore: {}", e))
+}
+
+// ============================================================================
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -8858,7 +8987,12 @@ fn main() {
             // Storage management commands
             get_storage_usage,
             force_storage_cleanup,
-            check_and_cleanup_storage
+            check_and_cleanup_storage,
+            // Blockstore management commands
+            get_blockstore_stats,
+            clear_blockstore,
+            cleanup_old_blockstore_files,
+            auto_cleanup_blockstore
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
