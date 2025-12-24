@@ -2,12 +2,12 @@
   import { createEventDispatcher } from 'svelte';
   import type { PaymentCheckpointEvent } from '$lib/services/paymentCheckpointService';
   import Modal from '$lib/components/Modal.svelte';
-  import { wallet, settings } from '$lib/stores';
+  import { wallet } from '$lib/stores';
   import { paymentService } from '$lib/services/paymentService';
 
   export let checkpointEvent: PaymentCheckpointEvent | null = null;
   export let fileName: string = '';
-  export let show: boolean = false;
+  export let showModal: boolean = false;
 
   const dispatch = createEventDispatcher<{
     pay: { transactionHash: string; amount: number };
@@ -19,8 +19,7 @@
   let error: string = '';
   let paymentMode: 'incremental' | 'remaining' | 'upfront' = 'incremental';
 
-  $: currentBalance = $wallet?.balance || 0;
-  $: availableBalance = $wallet?.availableBalance || 0;
+  $: availableBalance = $wallet?.balance || 0;
 
   $: incrementalAmount = checkpointEvent?.amountChiral || 0;
   $: canAffordIncremental = availableBalance >= incrementalAmount;
@@ -54,7 +53,7 @@
           transactionHash: result.transactionHash,
           amount: incrementalAmount,
         });
-        show = false;
+        showModal = false;
       } else {
         error = result.error || 'Payment failed';
       }
@@ -86,7 +85,7 @@
           transactionHash: result.transactionHash,
           amount: estimatedRemainingCost,
         });
-        show = false;
+        showModal = false;
       } else {
         error = result.error || 'Payment failed';
       }
@@ -99,12 +98,12 @@
 
   function handleCancel() {
     dispatch('cancel');
-    show = false;
+    showModal = false;
   }
 
   function handleClose() {
     dispatch('close');
-    show = false;
+    showModal = false;
   }
 
   // Format bytes to readable size
@@ -115,7 +114,7 @@
   }
 </script>
 
-<Modal bind:show onClose={handleClose}>
+<Modal bind:showModal on:close={handleClose}>
   <div class="p-6 space-y-4">
     <!-- Header -->
     <div class="flex items-center justify-between">
@@ -155,6 +154,7 @@
             ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
             : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'}"
           onclick={() => (paymentMode = 'incremental')}
+          onkeydown={(e) => e.key === 'Enter' && (paymentMode = 'incremental')}
           role="button"
           tabindex="0"
         >
@@ -182,6 +182,7 @@
             ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
             : 'border-gray-300 dark:border-gray-600 hover:border-gray-400'}"
           onclick={() => (paymentMode = 'remaining')}
+          onkeydown={(e) => e.key === 'Enter' && (paymentMode = 'remaining')}
           role="button"
           tabindex="0"
         >
