@@ -102,7 +102,8 @@ pub(crate) async fn cleanup_expired_proxy_auth_tokens(
 /// Generate a cryptographically secure random token
 fn generate_secure_token() -> String {
     let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    // Explicitly generate u8 values to avoid type inference errors on some Rust toolchains.
+    let bytes: Vec<u8> = (0..32).map(|_| rng.gen::<u8>()).collect();
     hex::encode(bytes)
 }
 

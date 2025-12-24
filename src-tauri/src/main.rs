@@ -56,6 +56,7 @@ use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
     proxy_echo, proxy_remove, ProxyNode,
 };
+use chiral_network::download_paths;
 use chiral_network::payment_checkpoint::PaymentCheckpointService;
 use bandwidth::BandwidthController;
 use chiral_network::transfer_events::{
@@ -120,7 +121,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::{
     io::AsyncReadExt,
     sync::Mutex,
@@ -162,67 +162,6 @@ impl Default for BackendSettings {
             max_log_size_mb: 10,
         }
     }
-}
-
-/// Load settings from the Tauri app data directory
-fn load_settings_from_file(app_handle: &tauri::AppHandle) -> BackendSettings {
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .expect("Failed to get app data directory");
-
-    let settings_file = app_data_dir.join("settings.json");
-
-    if settings_file.exists() {
-        match std::fs::read_to_string(&settings_file) {
-            Ok(contents) => {
-                match serde_json::from_str::<serde_json::Value>(&contents) {
-                    Ok(json) => {
-                        // Extract only the fields we need
-                        let storage_path = json
-                            .get("storagePath")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let enable_file_logging = json
-                            .get("enableFileLogging")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-                        let max_log_size_mb = json
-                            .get("maxLogSizeMB")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(10);
-
-                        return BackendSettings {
-                            storage_path,
-                            enable_file_logging,
-                            max_log_size_mb,
-                        };
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to parse settings file: {}. Using defaults.", e);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to read settings file: {}. Using defaults.", e);
-            }
-        }
-    }
-
-    BackendSettings::default()
-}
-
-/// Expand tilde (~) in path to home directory
-fn expand_tilde(path: &str) -> PathBuf {
-    if path.starts_with("~/") || path == "~" {
-        if let Some(base_dirs) = directories::BaseDirs::new() {
-            return base_dirs
-                .home_dir()
-                .join(path.strip_prefix("~/").unwrap_or(""));
-        }
-    }
-    PathBuf::from(path)
 }
 
 /// Get a unique file path by adding (1), (2), etc. if the file already exists
@@ -3563,26 +3502,7 @@ fn detect_locale() -> String {
 /// Get the resolved download directory.
 #[tauri::command]
 fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
-    // Load backend settings from file
-    let backend_settings = load_settings_from_file(&app);
-
-    // If backend has a configured path, use it
-    if !backend_settings.storage_path.is_empty() {
-        let expanded_path = expand_tilde(&backend_settings.storage_path);
-        return expanded_path
-            .to_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| "Failed to convert path to string".to_string());
-    }
-
-    // Cross-platform default
-    let default_path = "~/Downloads/Chiral-Network-Storage";
-
-    let expanded_path = expand_tilde(default_path);
-    expanded_path
-        .to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| "Failed to convert path to string".to_string())
+    download_paths::get_download_directory(&app)
 }
 
 /// Validates a storage path to ensure it's a valid absolute path
@@ -3644,22 +3564,7 @@ fn validate_storage_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn ensure_directory_exists(path: String) -> Result<(), String> {
-    let path_obj = Path::new(&path);
-
-    // Get parent directory (in case path is a file path)
-    let dir_to_create = if path_obj.extension().is_some() {
-        // This looks like a file path, get the parent directory
-        path_obj
-            .parent()
-            .ok_or_else(|| "Invalid path".to_string())?
-    } else {
-        // This is a directory path
-        path_obj
-    };
-
-    tokio::fs::create_dir_all(dir_to_create)
-        .await
-        .map_err(|e| format!("Failed to create directory: {}", e))
+    download_paths::ensure_directory_exists(&path).await
 }
 
 #[tauri::command]
@@ -7246,22 +7151,32 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
 }
 
 fn prompt_close_confirmation(app_handle: &tauri::AppHandle) {
-    let handle = app_handle.clone();
-
-    app_handle
-        .dialog()
-        .message("Close Chiral Network? Active downloads and uploads will stop.")
-        .title("Confirm Exit")
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Stay".into()))
-        .show(move |should_quit| {
-            if should_quit {
-                let app_handle = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    shutdown_application(app_handle).await;
-                });
-            }
+    if let Some(window) = app_handle.get_webview_window("main") {
+        // Bring window to front to ensure the in-app prompt is visible
+        let _ = window.show();
+        let _ = window.set_focus();
+        if let Err(err) = window.emit("show_exit_prompt", ()) {
+            tracing::warn!(
+                "Failed to emit exit prompt event to frontend, shutting down immediately: {}",
+                err
+            );
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                shutdown_application(handle).await;
+            });
+        }
+    } else {
+        let handle = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            shutdown_application(handle).await;
         });
+    }
+}
+
+#[tauri::command]
+async fn confirm_exit(app_handle: tauri::AppHandle) -> Result<(), String> {
+    shutdown_application(app_handle).await;
+    Ok(())
 }
 
 // ============================================================================
@@ -7946,6 +7861,8 @@ async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std
         file_transfer_service,
         geth_process,
         peer_id,
+        miner_address: args.miner_address.clone(),
+        geth_data_dir: args.geth_data_dir.clone(),
     };
 
     // Run the REPL
@@ -8037,6 +7954,8 @@ async fn run_tui_mode(args: headless::CliArgs) -> Result<(), Box<dyn std::error:
         file_transfer_service,
         geth_process,
         peer_id,
+        miner_address: args.miner_address.clone(),
+        geth_data_dir: args.geth_data_dir.clone(),
     };
 
     // Run the TUI
@@ -8189,6 +8108,44 @@ fn main() {
     // Parse command line arguments
     use clap::Parser;
     let args = headless::CliArgs::parse();
+
+    // Handle --download-geth flag
+    if args.download_geth {
+        use crate::geth_downloader::GethDownloader;
+        println!("🔽 Downloading Geth binary...");
+
+        let downloader = GethDownloader::new();
+
+        if downloader.is_geth_installed() {
+            println!("✓ Geth is already installed at: {}", downloader.geth_path().display());
+            std::process::exit(0);
+        }
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            downloader.download_geth(|progress| {
+                println!("  Progress: {:.1}% ({} / {} bytes) - {}",
+                    progress.percentage,
+                    progress.downloaded,
+                    progress.total,
+                    progress.status
+                );
+            }).await
+        });
+
+        match result {
+            Ok(_) => {
+                println!("✓ Geth downloaded successfully to: {}", downloader.geth_path().display());
+                println!("\nYou can now run mining commands:");
+                println!("  ./target/release/chiral-network --interactive --enable-geth");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to download Geth: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     // For headless mode, initialize basic console logging
     if args.headless {
@@ -8771,6 +8728,7 @@ fn main() {
             get_multiaddresses,
             clear_seed_list,
             get_full_network_stats,
+            confirm_exit,
             // Download restart commands
             start_download_restart,
             pause_download_restart,
@@ -8810,7 +8768,51 @@ fn main() {
             );
 
             // Load settings from disk
-            let settings = load_settings_from_file(&app.handle());
+            // We only need log-related settings during setup; parse them from settings.json
+            // without depending on a local `load_settings_from_file` helper.
+            let settings = {
+                #[derive(serde::Deserialize)]
+                struct LogSettings {
+                    #[serde(rename = "enableFileLogging")]
+                    enable_file_logging: Option<bool>,
+                    #[serde(rename = "maxLogSizeMB")]
+                    max_log_size_mb: Option<u64>,
+                }
+
+                let app_data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .expect("Failed to get app data directory");
+                let settings_file = app_data_dir.join("settings.json");
+
+                let mut settings = BackendSettings::default();
+                if settings_file.exists() {
+                    if let Ok(contents) = std::fs::read_to_string(&settings_file) {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents) {
+                            settings.enable_file_logging = json
+                                .get("enableFileLogging")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(settings.enable_file_logging);
+                            settings.max_log_size_mb = json
+                                .get("maxLogSizeMB")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(settings.max_log_size_mb);
+                            settings.storage_path = json
+                                .get("storagePath")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                        } else if let Ok(log_json) = serde_json::from_str::<LogSettings>(&contents) {
+                            // Fallback in case settings.json isn't a plain object
+                            settings.enable_file_logging =
+                                log_json.enable_file_logging.unwrap_or(settings.enable_file_logging);
+                            settings.max_log_size_mb =
+                                log_json.max_log_size_mb.unwrap_or(settings.max_log_size_mb);
+                        }
+                    }
+                }
+                settings
+            };
 
             // Initialize tracing subscriber with console output and optionally file output
             use tracing_subscriber::{fmt, prelude::*, EnvFilter};

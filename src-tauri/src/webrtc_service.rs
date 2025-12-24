@@ -20,6 +20,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
@@ -29,8 +30,204 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
+use indicatif::{ProgressBar, ProgressStyle};
 
-const CHUNK_SIZE: usize = 4096; // 4KB chunks - safe size for WebRTC data channel max message size (~16KB after JSON serialization)
+lazy_static::lazy_static! {
+    /// Global map of progress bars for active downloads, keyed by file hash
+    static ref DOWNLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
+
+    /// Global map of progress bars for active uploads, keyed by (peer_id, file_hash)
+    static ref UPLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
+}
+
+const CHUNK_SIZE: usize = 32768; // 32KB chunks - configured data channel for larger messages (8x improvement over original 4KB)
+
+// --- WebRTC binary framing for file chunks ---
+// We send file chunks as *binary* messages instead of JSON text to avoid massive JSON overhead
+// (Vec<u8> becomes a large numeric array in JSON, easily exceeding DataChannel max message size).
+//
+// Frame format (big-endian):
+//   0..4   : magic "CHNK"
+//   4      : version (1)
+//   5      : flags (bit0: encrypted_key_bundle present)
+//   6..10  : chunk_index (u32)
+//   10..14 : total_chunks (u32)
+//   14..16 : file_name_len (u16)
+//   16..48 : file_hash (32 bytes, raw)
+//   48..80 : checksum (32 bytes, raw sha256)
+//   [opt]  : key_bundle_len (u32) + key_bundle_json bytes (if flags bit0 set)
+//   ...    : file_name bytes (utf8, file_name_len)
+//   ...    : data bytes (rest)
+const CHUNK_FRAME_MAGIC: &[u8; 4] = b"CHNK";
+const CHUNK_FRAME_VERSION: u8 = 1;
+const CHUNK_FRAME_FLAG_KEY_BUNDLE: u8 = 1 << 0;
+
+fn encode_chunk_frame(chunk: &FileChunk) -> Result<Vec<u8>, String> {
+    let file_hash_bytes_vec = hex::decode(&chunk.file_hash)
+        .map_err(|e| format!("Invalid file_hash hex for chunk framing: {}", e))?;
+    if file_hash_bytes_vec.len() != 32 {
+        return Err(format!(
+            "Invalid file_hash length for chunk framing (expected 32 bytes, got {})",
+            file_hash_bytes_vec.len()
+        ));
+    }
+    let mut file_hash_bytes = [0u8; 32];
+    file_hash_bytes.copy_from_slice(&file_hash_bytes_vec);
+
+    let checksum_hex = if chunk.checksum.len() == 64 {
+        chunk.checksum.clone()
+    } else {
+        // Fallback: recompute checksum from data if the stored value isn't a 32-byte hex digest.
+        let mut hasher = Sha256::default();
+        hasher.update(&chunk.data);
+        format!("{:x}", hasher.finalize())
+    };
+    let checksum_vec =
+        hex::decode(&checksum_hex).map_err(|e| format!("Invalid checksum hex for framing: {}", e))?;
+    if checksum_vec.len() != 32 {
+        return Err(format!(
+            "Invalid checksum length for chunk framing (expected 32 bytes, got {})",
+            checksum_vec.len()
+        ));
+    }
+    let mut checksum_bytes = [0u8; 32];
+    checksum_bytes.copy_from_slice(&checksum_vec);
+
+    let file_name_bytes = chunk.file_name.as_bytes();
+    if file_name_bytes.len() > u16::MAX as usize {
+        return Err("file_name too long for chunk framing".to_string());
+    }
+    let file_name_len = file_name_bytes.len() as u16;
+
+    let mut flags: u8 = 0;
+    let mut key_bundle_json: Vec<u8> = Vec::new();
+    if let Some(bundle) = &chunk.encrypted_key_bundle {
+        flags |= CHUNK_FRAME_FLAG_KEY_BUNDLE;
+        key_bundle_json = serde_json::to_vec(bundle)
+            .map_err(|e| format!("Failed to serialize encrypted_key_bundle: {}", e))?;
+    }
+
+    let mut out = Vec::with_capacity(
+        4 + 1 + 1 + 4 + 4 + 2 + 32 + 32
+            + if flags & CHUNK_FRAME_FLAG_KEY_BUNDLE != 0 {
+                4 + key_bundle_json.len()
+            } else {
+                0
+            }
+            + file_name_bytes.len()
+            + chunk.data.len(),
+    );
+
+    out.extend_from_slice(CHUNK_FRAME_MAGIC);
+    out.push(CHUNK_FRAME_VERSION);
+    out.push(flags);
+    out.extend_from_slice(&chunk.chunk_index.to_be_bytes());
+    out.extend_from_slice(&chunk.total_chunks.to_be_bytes());
+    out.extend_from_slice(&file_name_len.to_be_bytes());
+    out.extend_from_slice(&file_hash_bytes);
+    out.extend_from_slice(&checksum_bytes);
+
+    if flags & CHUNK_FRAME_FLAG_KEY_BUNDLE != 0 {
+        let len_u32: u32 = key_bundle_json
+            .len()
+            .try_into()
+            .map_err(|_| "encrypted_key_bundle too large".to_string())?;
+        out.extend_from_slice(&len_u32.to_be_bytes());
+        out.extend_from_slice(&key_bundle_json);
+    }
+
+    out.extend_from_slice(file_name_bytes);
+    out.extend_from_slice(&chunk.data);
+    Ok(out)
+}
+
+fn decode_chunk_frame(data: &[u8]) -> Result<Option<FileChunk>, String> {
+    // Fast reject: must start with magic and have the minimal fixed header.
+    const MIN_HEADER: usize = 4 + 1 + 1 + 4 + 4 + 2 + 32 + 32;
+    if data.len() < MIN_HEADER {
+        return Ok(None);
+    }
+    if &data[0..4] != CHUNK_FRAME_MAGIC {
+        return Ok(None);
+    }
+
+    let version = data[4];
+    if version != CHUNK_FRAME_VERSION {
+        return Err(format!("Unsupported chunk frame version: {}", version));
+    }
+
+    let flags = data[5];
+    let mut pos = 6;
+
+    let chunk_index = u32::from_be_bytes(
+        data[pos..pos + 4]
+            .try_into()
+            .map_err(|_| "Invalid chunk_index bytes".to_string())?,
+    );
+    pos += 4;
+    let total_chunks = u32::from_be_bytes(
+        data[pos..pos + 4]
+            .try_into()
+            .map_err(|_| "Invalid total_chunks bytes".to_string())?,
+    );
+    pos += 4;
+    let file_name_len = u16::from_be_bytes(
+        data[pos..pos + 2]
+            .try_into()
+            .map_err(|_| "Invalid file_name_len bytes".to_string())?,
+    ) as usize;
+    pos += 2;
+
+    let file_hash_bytes: [u8; 32] = data[pos..pos + 32]
+        .try_into()
+        .map_err(|_| "Invalid file_hash bytes".to_string())?;
+    pos += 32;
+    let checksum_bytes: [u8; 32] = data[pos..pos + 32]
+        .try_into()
+        .map_err(|_| "Invalid checksum bytes".to_string())?;
+    pos += 32;
+
+    let encrypted_key_bundle: Option<EncryptedAesKeyBundle> =
+        if flags & CHUNK_FRAME_FLAG_KEY_BUNDLE != 0 {
+            if data.len() < pos + 4 {
+                return Err("Chunk frame truncated before key_bundle_len".to_string());
+            }
+            let key_len = u32::from_be_bytes(
+                data[pos..pos + 4]
+                    .try_into()
+                    .map_err(|_| "Invalid key_bundle_len bytes".to_string())?,
+            ) as usize;
+            pos += 4;
+            if data.len() < pos + key_len {
+                return Err("Chunk frame truncated in key_bundle".to_string());
+            }
+            let bundle = serde_json::from_slice::<EncryptedAesKeyBundle>(&data[pos..pos + key_len])
+                .map_err(|e| format!("Failed to parse encrypted_key_bundle: {}", e))?;
+            pos += key_len;
+            Some(bundle)
+        } else {
+            None
+        };
+
+    if data.len() < pos + file_name_len {
+        return Err("Chunk frame truncated in file_name".to_string());
+    }
+    let file_name = String::from_utf8(data[pos..pos + file_name_len].to_vec())
+        .map_err(|_| "Invalid utf8 in file_name".to_string())?;
+    pos += file_name_len;
+
+    let chunk_data = data[pos..].to_vec();
+
+    Ok(Some(FileChunk {
+        file_hash: hex::encode(file_hash_bytes),
+        file_name,
+        chunk_index,
+        total_chunks,
+        data: chunk_data,
+        checksum: hex::encode(checksum_bytes),
+        encrypted_key_bundle,
+    }))
+}
 
 /// Maximum connection retry attempts before giving up
 const MAX_CONNECTION_RETRIES: u32 = 3;
@@ -743,9 +940,12 @@ impl WebRTCService {
             }
         };
 
-        // Create data channel
+        // Create data channel with configuration for larger messages
+        let mut dc_config = RTCDataChannelInit::default();
+        dc_config.ordered = Some(true);  // Ensure ordered delivery for file chunks
+
         let data_channel = match peer_connection
-            .create_data_channel("file-transfer", None)
+            .create_data_channel("file-transfer", Some(dc_config))
             .await
         {
             Ok(dc) => dc,
@@ -1255,18 +1455,17 @@ impl WebRTCService {
             sleep(Duration::from_millis(50)).await;
         };
 
-        // Serialize chunk and send over data channel
-        match serde_json::to_string(chunk) {
-            Ok(chunk_json) => {
-                let chunk_len = chunk_json.len();
-                // Log for first 100 chunks
-                if chunk.chunk_index < 100 {
-                    info!("📤 SEND_TEXT_START: chunk {} ({} bytes) for peer {}", chunk.chunk_index, chunk_len, peer_id);
-                }
-                
+        // Encode chunk as a binary frame and send over data channel.
+        // This avoids huge JSON overhead and prevents "outbound packet larger than maximum message size".
+        let payload = match encode_chunk_frame(chunk) {
+            Ok(frame) => frame,
+            Err(e) => {
+                // Fallback to JSON only if framing fails for unexpected inputs.
+                warn!("Chunk framing failed; falling back to JSON send_text: {}", e);
+                let chunk_json =
+                    serde_json::to_string(chunk).map_err(|e| format!("Failed to serialize chunk: {}", e))?;
                 // Check buffer before sending - wait if buffer is too full
-                // This prevents overwhelming the data channel's internal buffer
-                let max_buffered: usize = 256 * 1024; // 256KB max buffer
+                let max_buffered: usize = 2 * 1024 * 1024; // 2MB max buffer
                 let start_wait = Instant::now();
                 loop {
                     let buffered = dc.buffered_amount().await;
@@ -1274,32 +1473,45 @@ impl WebRTCService {
                         break;
                     }
                     if start_wait.elapsed() > Duration::from_secs(10) {
-                        error!("❌ Timeout waiting for data channel buffer to drain (buffered: {} bytes)", buffered);
+                        error!(
+                            "❌ Timeout waiting for data channel buffer to drain (buffered: {} bytes)",
+                            buffered
+                        );
                         return Err("Data channel buffer timeout".to_string());
                     }
-                    if chunk.chunk_index < 100 {
-                        info!("⏳ Waiting for buffer to drain: {} bytes buffered for chunk {}", buffered, chunk.chunk_index);
-                    }
-                    sleep(Duration::from_millis(10)).await;
+                    sleep(Duration::from_millis(1)).await;
                 }
-                
-                if let Err(e) = dc.send_text(chunk_json).await {
-                    error!("Failed to send chunk over data channel: {}", e);
-                    return Err(format!("Failed to send chunk: {}", e));
-                }
-                
-                // Log buffer state after send
-                if chunk.chunk_index < 100 {
-                    let buffered_after = dc.buffered_amount().await;
-                    info!("📤 SEND_TEXT_DONE: chunk {} for peer {}, buffer now: {} bytes", chunk.chunk_index, peer_id, buffered_after);
-                }
-                Ok(())
+                dc.send_text(chunk_json)
+                    .await
+                    .map_err(|e| format!("Failed to send chunk (json): {}", e))?;
+                return Ok(());
             }
-            Err(e) => {
-                error!("Failed to serialize chunk: {}", e);
-                Err(format!("Failed to serialize chunk: {}", e))
+        };
+
+        // Check buffer before sending - wait if buffer is too full
+        let max_buffered: usize = 2 * 1024 * 1024; // 2MB max buffer
+        let start_wait = Instant::now();
+        loop {
+            let buffered = dc.buffered_amount().await;
+            if buffered < max_buffered {
+                break;
             }
+            if start_wait.elapsed() > Duration::from_secs(10) {
+                error!(
+                    "❌ Timeout waiting for data channel buffer to drain (buffered: {} bytes)",
+                    buffered
+                );
+                return Err("Data channel buffer timeout".to_string());
+            }
+            sleep(Duration::from_millis(1)).await;
         }
+
+        let bytes_data = Bytes::from(payload);
+        dc.send(&bytes_data)
+            .await
+            .map_err(|e| format!("Failed to send chunk (binary): {}", e))?;
+
+        Ok(())
     }
 
     async fn handle_request_chunk(
@@ -1348,6 +1560,58 @@ impl WebRTCService {
         payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
         debug!("📩 Data channel message received from peer {}: {} bytes", peer_id, msg.data.len());
+
+        // First, try to decode as a binary-framed FileChunk (preferred, avoids JSON overhead).
+        match decode_chunk_frame(&msg.data) {
+            Ok(Some(chunk)) => {
+                // Create or update progress bar
+                {
+                    let mut bars = DOWNLOAD_PROGRESS_BARS.lock().await;
+                    let pb = bars.entry(chunk.file_hash.clone()).or_insert_with(|| {
+                        let pb = ProgressBar::new(chunk.total_chunks as u64);
+                        pb.set_style(
+                            ProgressStyle::default_bar()
+                                .template("📦 {msg} [{bar:40.cyan/blue}] {pos}/{len} ({percent}%)")
+                                .unwrap()
+                                .progress_chars("=>-"),
+                        );
+                        pb.set_message(format!("Downloading {}", &chunk.file_hash[..8]));
+                        pb
+                    });
+                    pb.set_position((chunk.chunk_index + 1) as u64);
+                }
+
+                // Handle received chunk
+                Self::process_incoming_chunk(
+                    &chunk,
+                    file_transfer_service,
+                    connections,
+                    event_tx,
+                    peer_id,
+                    keystore,
+                    &active_private_key,
+                    app_handle.as_ref(),
+                    &bandwidth,
+                    multi_source_service,
+                )
+                .await;
+                let _ = event_tx
+                    .send(WebRTCEvent::FileChunkReceived {
+                        peer_id: peer_id.to_string(),
+                        chunk,
+                    })
+                    .await;
+                return;
+            }
+            Ok(None) => {
+                // Not a chunk frame; fall through to text-based parsing.
+            }
+            Err(e) => {
+                // If a peer sends a malformed chunk frame, treat it as a transfer failure but don't crash.
+                warn!("Failed to decode chunk frame from {}: {}", peer_id, e);
+            }
+        }
+
         if let Ok(text) = std::str::from_utf8(&msg.data) {
             // Log first 500 chars of message for debugging
             let preview = if text.len() > 500 { &text[..500] } else { text };
@@ -1355,8 +1619,21 @@ impl WebRTCService {
             
             // Try to parse as FileChunk first (most common)
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
-                info!("📦 Received chunk {}/{} for file {} from peer {}", 
-                    chunk.chunk_index + 1, chunk.total_chunks, chunk.file_hash, peer_id);
+                // Create or update progress bar
+                {
+                    let mut bars = DOWNLOAD_PROGRESS_BARS.lock().await;
+                    let pb = bars.entry(chunk.file_hash.clone()).or_insert_with(|| {
+                        let pb = ProgressBar::new(chunk.total_chunks as u64);
+                        pb.set_style(ProgressStyle::default_bar()
+                            .template("📦 {msg} [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {bytes_per_sec} ETA: {eta}")
+                            .unwrap()
+                            .progress_chars("=>-"));
+                        pb.set_message(format!("Downloading {}", &chunk.file_hash[..8]));
+                        pb
+                    });
+                    pb.inc(1); // Increment by 1 so indicatif can calculate speed
+                }
+
                 // Handle received chunk
                 Self::process_incoming_chunk(
                     &chunk,
@@ -1710,8 +1987,8 @@ impl WebRTCService {
         }
 
         // Flow control constants
-        const BATCH_SIZE: u32 = 10; // Send 10 chunks before waiting for ACKs
-        const MAX_PENDING_ACKS: u32 = 20; // Maximum unacked chunks before pausing
+        const BATCH_SIZE: u32 = 100; // Send 100 chunks before checking ACKs (increased from 10)
+        const MAX_PENDING_ACKS: u32 = 200; // Maximum unacked chunks before pausing (increased from 20)
         const ACK_WAIT_TIMEOUT_MS: u64 = 5000; // Timeout waiting for ACKs
 
         // Initialize pending ACK counter
@@ -1903,10 +2180,23 @@ impl WebRTCService {
                 encrypted_key_bundle,
             };
 
-            // Send chunk via WebRTC data channel - abort transfer if send fails
-            if chunk_index < 100 {
-                info!("🔄 Chunk {}: About to call handle_send_chunk", chunk_index);
+            // Create or update upload progress bar
+            {
+                let pb_key = format!("{}:{}", peer_id, &request.file_hash);
+                let mut bars = UPLOAD_PROGRESS_BARS.lock().await;
+                let pb = bars.entry(pb_key).or_insert_with(|| {
+                    let pb = ProgressBar::new(total_chunks as u64);
+                    pb.set_style(ProgressStyle::default_bar()
+                        .template("📤 {msg} [{bar:40.green/blue}] {pos}/{len} ({percent}%) {bytes_per_sec} ETA: {eta}")
+                        .unwrap()
+                        .progress_chars("=>-"));
+                    pb.set_message(format!("Uploading {}", &request.file_hash[..8]));
+                    pb
+                });
+                pb.inc(1); // Increment by 1 so indicatif can calculate speed
             }
+
+            // Send chunk via WebRTC data channel - abort transfer if send fails
             if let Err(e) = Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await {
                 error!("Failed to send chunk {}/{} to peer {}: {}", chunk_index, total_chunks, peer_id, e);
                 let _ = event_tx
@@ -1917,9 +2207,6 @@ impl WebRTCService {
                     })
                     .await;
                 return Err(format!("Transfer aborted: {}", e));
-            }
-            if chunk_index < 100 {
-                info!("🔄 Chunk {}: handle_send_chunk completed successfully", chunk_index);
             }
 
             // Update payment checkpoint progress after sending chunk
@@ -1969,18 +2256,11 @@ impl WebRTCService {
             // Send progress event OUTSIDE the lock to avoid deadlock
             // Use try_send to avoid blocking if channel is full - progress events are not critical
             if let Some(progress) = progress_to_send {
-                if chunk_index < 100 {
-                    info!("📊 Sending progress event for chunk {}", chunk_index);
-                }
                 match event_tx.try_send(WebRTCEvent::TransferProgress {
                     peer_id: peer_id.to_string(),
                     progress,
                 }) {
-                    Ok(_) => {
-                        if chunk_index < 100 {
-                            info!("📊 Progress event sent for chunk {}", chunk_index);
-                        }
-                    }
+                    Ok(_) => {},
                     Err(e) => {
                         // Channel full - skip this progress event, not critical
                         if chunk_index < 100 || chunk_index % 100 == 0 {
@@ -1995,17 +2275,17 @@ impl WebRTCService {
                 info!("✅ Chunk {} sent and tracked successfully for peer {}", chunk_index, peer_id);
             }
 
-            // Small delay between chunks in a batch
-            if (chunk_index + 1) % BATCH_SIZE == 0 {
-                // After a batch, give more time for ACKs
-                sleep(Duration::from_millis(50)).await;
-            } else {
-                sleep(Duration::from_millis(5)).await;
+            // Only yield to other tasks every 10 chunks (no artificial delays)
+            if (chunk_index + 1) % 10 == 0 {
+                tokio::task::yield_now().await;
             }
-            
-            // Log end of loop iteration for first 100 chunks
-            if chunk_index < 100 {
-                info!("🔁 LOOP_END: Finished chunk {} for peer {}, going to next", chunk_index, peer_id);
+        }
+
+        // Finish and remove upload progress bar
+        {
+            let pb_key = format!("{}:{}", peer_id, &request.file_hash);
+            if let Some(pb) = UPLOAD_PROGRESS_BARS.lock().await.remove(&pb_key) {
+                pb.finish_with_message(format!("✓ Uploaded {}", &request.file_hash[..8]));
             }
         }
 
@@ -2153,6 +2433,11 @@ impl WebRTCService {
                 }
 
                 if chunks.len() == total_chunks as usize {
+                    // Finish and remove progress bar
+                    if let Some(pb) = DOWNLOAD_PROGRESS_BARS.lock().await.remove(&chunk.file_hash) {
+                        pb.finish_with_message(format!("✓ Downloaded {}", &chunk.file_hash[..8]));
+                    }
+
                     // Assemble file
                     Self::assemble_file_from_chunks(
                         &chunk.file_hash,
@@ -2176,7 +2461,6 @@ impl WebRTCService {
             };
             let ack_message = WebRTCMessage::ChunkAck(ack);
             if let Ok(ack_json) = serde_json::to_string(&ack_message) {
-                info!("📤 Sending ACK for chunk {} of file {} to peer", chunk.chunk_index, chunk.file_hash);
                 if let Err(e) = dc.send_text(ack_json).await {
                     error!("❌ Failed to send ACK for chunk {}: {}", chunk.chunk_index, e);
                 }
@@ -2199,31 +2483,71 @@ impl WebRTCService {
     sorted_chunks.sort_by_key(|c| c.chunk_index);
 
     // Get file name from the first chunk
-    let file_name = sorted_chunks
+    let raw_file_name = sorted_chunks
         .first()
         .map(|c| c.file_name.clone()) // Use file_name instead of file_hash
         .unwrap_or_else(|| format!("downloaded_{}", file_hash));
 
-    // Concatenate chunk data
-    let mut file_data = Vec::new();
-    for chunk in sorted_chunks {
-        file_data.extend_from_slice(&chunk.data);
+    // Ensure we only use a safe basename (avoid path traversal / separators).
+    let file_name = std::path::Path::new(&raw_file_name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("downloaded_{}", file_hash));
+
+    // Compute final size without concatenating into a giant Vec<u8>.
+    let file_size: usize = sorted_chunks.iter().map(|c| c.data.len()).sum();
+
+    // Resolve download directory (same single source of truth as the frontend command).
+    let storage_path = match crate::download_paths::get_download_directory_opt(app_handle) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to resolve download directory: {}", e);
+            return;
+        }
+    };
+
+    // Ensure directory exists
+    if let Err(e) = crate::download_paths::ensure_directory_exists(&storage_path).await {
+        error!("Failed to ensure download directory exists ({}): {}", storage_path, e);
+        return;
     }
 
-    let file_size = file_data.len();
+    let output_path = std::path::Path::new(&storage_path).join(&file_name);
+
+    // Stream chunks to disk in order (avoid IPC + JSON serialization of raw bytes).
+    use tokio::io::AsyncWriteExt;
+    let file = match tokio::fs::File::create(&output_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            error!("Failed to create output file {:?}: {}", output_path, e);
+            return;
+        }
+    };
+    let mut writer = tokio::io::BufWriter::with_capacity(1024 * 1024, file); // 1MB buffer
+    for chunk in &sorted_chunks {
+        if let Err(e) = writer.write_all(&chunk.data).await {
+            error!("Failed to write chunk {} to {:?}: {}", chunk.chunk_index, output_path, e);
+            return;
+        }
+    }
+    if let Err(e) = writer.flush().await {
+        error!("Failed to flush output file {:?}: {}", output_path, e);
+        return;
+    }
 
     // NOTE: We do NOT call store_file_data here because:
     // 1. That function is for uploading/seeding files, not downloads
     // 2. It creates hash-named files + .meta files in storage
     // 3. The frontend handles saving the file with proper name via webrtc_download_complete event
 
-    // Emit event to frontend with complete file data - frontend will save the file
+    // Emit event to frontend with final output path (no huge byte array over IPC).
     if let Some(app_handle) = app_handle {
         if let Err(e) = app_handle.emit("webrtc_download_complete", serde_json::json!({
             "fileHash": file_hash,
             "fileName": file_name,
             "fileSize": file_size,
-            "data": file_data, // Send the actual file data
+            "outputPath": output_path.to_string_lossy().to_string(),
         })) {
             error!("Failed to emit webrtc_download_complete event: {}", e);
         }
@@ -2275,9 +2599,12 @@ impl WebRTCService {
             }
         };
 
-        // Create data channel
+        // Create data channel with configuration for larger messages
+        let mut dc_config = RTCDataChannelInit::default();
+        dc_config.ordered = Some(true);  // Ensure ordered delivery for file chunks
+
         let data_channel = match peer_connection
-            .create_data_channel("file-transfer", None)
+            .create_data_channel("file-transfer", Some(dc_config))
             .await
         {
             Ok(dc) => dc,
