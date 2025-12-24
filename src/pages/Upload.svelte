@@ -747,6 +747,16 @@
                 continue;
               }
 
+              // Check if node is in pure-client mode (cannot seed files)
+              if ($settings.pureClientMode) {
+                showToast(
+                  tr("toasts.upload.pureClientMode"),
+                  "error",
+                );
+                blockedCount++;
+                continue;
+              }
+
               try {
                 let metadata;
                 const filePrice = await calculateFilePrice(file.size);
@@ -1071,6 +1081,17 @@
       showToast(
         // "DHT network is not connected. Please start the DHT network before uploading files.",
         tr("toasts.upload.dhtDisconnected"),
+        "error",
+      );
+      clearTimeout(forceResetTimeout);
+      isUploading = false;
+      return;
+    }
+
+    // STEP 3: Check if node is in pure-client mode (cannot seed files)
+    if ($settings.pureClientMode) {
+      showToast(
+        tr("toasts.upload.pureClientMode"),
         "error",
       );
       clearTimeout(forceResetTimeout);
