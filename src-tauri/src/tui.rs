@@ -29,6 +29,8 @@ pub struct TuiContext {
     pub file_transfer_service: Option<Arc<FileTransferService>>,
     pub geth_process: Option<GethProcess>,
     pub peer_id: String,
+    pub miner_address: Option<String>,
+    pub geth_data_dir: String,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,16 @@ struct LiveMetrics {
     connected_peers: Vec<String>,
     dht_metrics: DhtMetricsSnapshot,
     download_metrics: Option<DownloadMetricsSnapshot>,
+    mining_status: Option<MiningMetrics>,
+}
+
+#[derive(Debug, Clone)]
+struct MiningMetrics {
+    is_mining: bool,
+    hash_rate: f64,
+    blocks_found: u64,
+    miner_address: Option<String>,
+    total_rewards: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -134,9 +146,12 @@ async fn run_app<B: ratatui::backend::Backend>(
     // Create a channel for live metrics updates
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // Clone Arc references for the background task
+    // Clone Arc references and data for the background task
     let dht_clone = context.dht_service.clone();
     let ft_clone = context.file_transfer_service.clone();
+    let has_geth = context.geth_process.is_some();
+    let miner_addr = context.miner_address.clone();
+    let geth_dir = context.geth_data_dir.clone();
 
     tokio::spawn(async move {
         loop {
@@ -149,10 +164,18 @@ async fn run_app<B: ratatui::backend::Backend>(
                 None
             };
 
+            // Fetch mining metrics if geth is enabled
+            let mining_status = if has_geth {
+                fetch_mining_metrics(miner_addr.as_deref(), &geth_dir).await
+            } else {
+                None
+            };
+
             let metrics = LiveMetrics {
                 connected_peers,
                 dht_metrics,
                 download_metrics,
+                mining_status,
             };
 
             let _ = tx.send(metrics);
@@ -346,7 +369,7 @@ fn render_content(f: &mut Frame, area: Rect, state: &TuiState, context: &TuiCont
         ActivePanel::Network => render_network_panel(f, chunks[1], context, metrics),
         ActivePanel::Downloads => render_downloads_panel(f, chunks[1], context, metrics),
         ActivePanel::Peers => render_peers_panel(f, chunks[1], context, metrics),
-        ActivePanel::Mining => render_mining_panel(f, chunks[1], context),
+        ActivePanel::Mining => render_mining_panel(f, chunks[1], context, metrics),
     }
 }
 
@@ -610,7 +633,7 @@ fn render_peers_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: 
     }
 }
 
-fn render_mining_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
+fn render_mining_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title("⛏️  Mining Status");
@@ -628,55 +651,91 @@ fn render_mining_panel(f: &mut Frame, area: Rect, context: &TuiContext) {
         return;
     }
 
+    // Get mining metrics from live data
+    let mining_metrics = metrics.as_ref().and_then(|m| m.mining_status.as_ref());
+
+    if mining_metrics.is_none() {
+        let loading = Paragraph::new("Loading mining data...")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Yellow));
+        f.render_widget(loading, inner);
+        return;
+    }
+
+    let mining = mining_metrics.unwrap();
+
     // Split into sections
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),   // Mining info
+            Constraint::Length(10),  // Mining info (added 2 lines for more data)
             Constraint::Min(0),      // Recent blocks
         ])
         .split(inner);
 
-    // Mining info
-    let mining_info = vec![
+    // Mining info with real data
+    let status_text = if mining.is_mining { "Active" } else { "Inactive" };
+    let status_color = if mining.is_mining { Color::Green } else { Color::Red };
+
+    let mut mining_info = vec![
         Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::Gray)),
-            Span::styled("Active", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(status_text, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
             Span::styled("Hash Rate: ", Style::default().fg(Color::Gray)),
-            Span::styled("234 MH/s", Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from(vec![
-            Span::styled("Threads: ", Style::default().fg(Color::Gray)),
-            Span::styled("4", Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{:.2} MH/s", mining.hash_rate), Style::default().fg(Color::Cyan)),
         ]),
         Line::from(vec![
             Span::styled("Blocks Found: ", Style::default().fg(Color::Gray)),
-            Span::styled("12", Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::styled("Total Rewards: ", Style::default().fg(Color::Gray)),
-            Span::styled("24.5 ETC", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(vec![
-            Span::styled("Power: ", Style::default().fg(Color::Gray)),
-            Span::styled("~350W", Style::default().fg(Color::Magenta)),
+            Span::styled(mining.blocks_found.to_string(), Style::default().fg(Color::Green)),
         ]),
     ];
+
+    // Add miner address if available
+    if let Some(ref addr) = mining.miner_address {
+        let addr_short = if addr.len() > 30 {
+            format!("{}...{}", &addr[..12], &addr[addr.len()-6..])
+        } else {
+            addr.clone()
+        };
+        mining_info.push(Line::from(vec![
+            Span::styled("Miner: ", Style::default().fg(Color::Gray)),
+            Span::styled(addr_short, Style::default().fg(Color::Yellow)),
+        ]));
+    }
+
+    // Add total rewards if available
+    if let Some(rewards) = mining.total_rewards {
+        mining_info.push(Line::from(vec![
+            Span::styled("Total Rewards: ", Style::default().fg(Color::Gray)),
+            Span::styled(format!("{:.4} ETC", rewards), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+
+    // Add efficiency metric
+    if mining.blocks_found > 0 && mining.hash_rate > 0.0 {
+        let efficiency = mining.hash_rate / mining.blocks_found as f64;
+        mining_info.push(Line::from(vec![
+            Span::styled("Efficiency: ", Style::default().fg(Color::Gray)),
+            Span::styled(format!("{:.0} MH/block", efficiency), Style::default().fg(Color::Magenta)),
+        ]));
+    }
 
     let mining_widget = Paragraph::new(mining_info)
         .block(Block::default().borders(Borders::ALL).title("Mining Info"));
     f.render_widget(mining_widget, sections[0]);
 
-    // Recent blocks
-    let blocks = vec![
-        "Block #1234567 - 2.0 ETC - 2 min ago",
-        "Block #1234512 - 2.0 ETC - 15 min ago",
-        "Block #1234489 - 2.0 ETC - 28 min ago",
+    // Recent blocks - show message to use REPL for detailed block history
+    let blocks_message = vec![
+        "For detailed block history and rewards,",
+        "use REPL mode commands:",
+        "",
+        "  mining rewards",
+        "  mining dashboard",
     ];
 
-    let block_items: Vec<ListItem> = blocks
+    let block_items: Vec<ListItem> = blocks_message
         .iter()
         .map(|b| ListItem::new(Line::from(*b)))
         .collect();
@@ -745,6 +804,41 @@ fn render_footer(f: &mut Frame, area: Rect, state: &TuiState) {
 
         f.render_widget(footer, area);
     }
+}
+
+// Fetch mining metrics from Geth
+async fn fetch_mining_metrics(miner_address: Option<&str>, geth_data_dir: &str) -> Option<MiningMetrics> {
+    // Get mining status
+    let is_mining = match crate::ethereum::get_mining_status().await {
+        Ok(status) => status,
+        Err(_) => return None,
+    };
+
+    // Get miner address (from params or coinbase)
+    let addr = match miner_address {
+        Some(a) => Some(a.to_string()),
+        None => crate::ethereum::get_coinbase().await.ok(),
+    };
+
+    // Get performance metrics
+    let (blocks_found, hash_rate) = crate::ethereum::get_mining_performance(geth_data_dir)
+        .await
+        .unwrap_or((0, 0.0));
+
+    // Get total rewards if we have an address
+    let total_rewards = if let Some(ref a) = addr {
+        crate::ethereum::get_total_mining_rewards(a).await.ok()
+    } else {
+        None
+    };
+
+    Some(MiningMetrics {
+        is_mining,
+        hash_rate,
+        blocks_found,
+        miner_address: addr,
+        total_rewards,
+    })
 }
 
 // Command execution

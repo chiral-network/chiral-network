@@ -19,6 +19,8 @@ pub struct ReplContext {
     pub file_transfer_service: Option<Arc<FileTransferService>>,
     pub geth_process: Option<GethProcess>,
     pub peer_id: String,
+    pub miner_address: Option<String>,
+    pub geth_data_dir: String,
 }
 
 // REPL helper for completion, highlighting, and validation
@@ -33,7 +35,7 @@ impl ReplHelper {
         subcommands.insert("peers", vec!["count", "list"]);
         subcommands.insert("dht", vec!["status", "get"]);
         subcommands.insert("list", vec!["files", "downloads"]);
-        subcommands.insert("mining", vec!["status", "start", "stop"]);
+        subcommands.insert("mining", vec!["status", "start", "stop", "dashboard", "logs", "rewards", "performance"]);
         subcommands.insert("config", vec!["get", "set", "list", "reset"]);
         subcommands.insert("reputation", vec!["list", "info"]);
         subcommands.insert("versions", vec!["list", "info"]);
@@ -136,11 +138,11 @@ impl Validator for ReplHelper {}
 impl Helper for ReplHelper {}
 
 pub async fn run_repl(context: ReplContext) -> Result<(), Box<dyn std::error::Error>> {
-    // Box width = 56 chars content
-    println!("\n┌────────────────────────────────────────────────────────┐");
-    println!("│ {:<54} │", "Chiral Network v0.1.0 - Interactive Shell");
-    println!("│ {:<54} │", "Type 'help' for commands, 'quit' to exit");
-    println!("└────────────────────────────────────────────────────────┘");
+    // Box width = 62 chars total (60 content + 2 spaces)
+    println!("\n┌──────────────────────────────────────────────────────────────┐");
+    println!("│ {:<60} │", "Chiral Network v0.1.0 - Interactive Shell");
+    println!("│ {:<60} │", "Type 'help' for commands, 'quit' to exit");
+    println!("└──────────────────────────────────────────────────────────────┘");
     println!("\nPeer ID: {}", context.peer_id);
     println!();
 
@@ -340,83 +342,87 @@ async fn handle_command(
 
 fn print_help() {
     println!("\n📚 Available Commands:");
-    println!("  ┌────────────────────────────────────────────────────────┐");
-    println!("  │ {:<54} │", "General");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "  help, h, ?              Show this help message");
-    println!("  │ {:<54} │", "  status, s               Show network status");
-    println!("  │ {:<54} │", "  clear, cls              Clear screen");
-    println!("  │ {:<54} │", "  quit, exit, q           Exit REPL");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "Network");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "  peers count             Count connected peers");
-    println!("  │ {:<54} │", "  peers list [--flags]    List peers");
-    println!("  │ {:<54} │", "    --trust <level>       Filter by trust level");
-    println!("  │ {:<54} │", "    --sort <field>        Sort by score/latency");
-    println!("  │ {:<54} │", "    --limit <num>         Limit results");
-    println!("  │ {:<54} │", "  dht [status|get <hash>] DHT operations");
-    println!("  │ {:<54} │", "  reputation list         Show peer reputation");
-    println!("  │ {:<54} │", "  reputation info <peer>  Get peer details");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "Files");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "  list [files|downloads]  List files or downloads");
-    println!("  │ {:<54} │", "  add <path>              Add file to share");
-    println!("  │ {:<54} │", "  download <hash>         Download file by hash");
-    println!("  │ {:<54} │", "  downloads               Show active downloads");
-    println!("  │ {:<54} │", "  versions list <hash>    Show file versions");
-    println!("  │ {:<54} │", "  versions info <hash>    Version details");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "Mining");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "  mining status           Show mining status");
-    println!("  │ {:<54} │", "  mining start [threads]  Start mining (geth)");
-    println!("  │ {:<54} │", "  mining stop             Stop mining");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "Configuration");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "  config list             List all settings");
-    println!("  │ {:<54} │", "  config get <key>        Get setting value");
-    println!("  │ {:<54} │", "  config set <key> <val>  Set setting value");
-    println!("  │ {:<54} │", "  config reset <key>      Reset to default");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "Advanced Features");
-    println!("  ├────────────────────────────────────────────────────────┤");
-    println!("  │ {:<54} │", "  export <target> [opts]  Export data to file");
-    println!("  │ {:<54} │", "    metrics/peers/downloads/all");
-    println!("  │ {:<54} │", "    --format json|csv   Output format");
-    println!("  │ {:<54} │", "    --output <path>     Custom file path");
-    println!("  │ {:<54} │", "  script run <path>       Run REPL script");
-    println!("  │ {:<54} │", "  script list             List available scripts");
-    println!("  │ {:<54} │", "  plugin load <path>      Load plugin");
-    println!("  │ {:<54} │", "  plugin list             List loaded plugins");
-    println!("  │ {:<54} │", "  webhook add <evt> <url> Add webhook");
-    println!("  │ {:<54} │", "  webhook list            List webhooks");
-    println!("  │ {:<54} │", "  report [summary|full]   Generate report");
-    println!("  │ {:<54} │", "  remote start [addr]     Start remote REPL server");
-    println!("  │ {:<54} │", "  remote stop             Stop remote REPL server");
-    println!("  │ {:<54} │", "  remote status           Show remote server status");
-    println!("  └────────────────────────────────────────────────────────┘");
+    println!("  ┌──────────────────────────────────────────────────────────────┐");
+    println!("  │ {:<60} │", "General");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "  help, h, ?              Show this help message");
+    println!("  │ {:<60} │", "  status, s               Show network status");
+    println!("  │ {:<60} │", "  clear, cls              Clear screen");
+    println!("  │ {:<60} │", "  quit, exit, q           Exit REPL");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "Network");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "  peers count             Count connected peers");
+    println!("  │ {:<60} │", "  peers list [--flags]    List peers");
+    println!("  │ {:<60} │", "    --trust <level>       Filter by trust level");
+    println!("  │ {:<60} │", "    --sort <field>        Sort by score/latency");
+    println!("  │ {:<60} │", "    --limit <num>         Limit results");
+    println!("  │ {:<60} │", "  dht [status|get <hash>] DHT operations");
+    println!("  │ {:<60} │", "  reputation list         Show peer reputation");
+    println!("  │ {:<60} │", "  reputation info <peer>  Get peer details");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "Files");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "  list [files|downloads]  List files or downloads");
+    println!("  │ {:<60} │", "  add <path>              Add file to share");
+    println!("  │ {:<60} │", "  download <hash>         Download file by hash");
+    println!("  │ {:<60} │", "  downloads               Show active downloads");
+    println!("  │ {:<60} │", "  versions list <hash>    Show file versions");
+    println!("  │ {:<60} │", "  versions info <hash>    Version details");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "Mining");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "  mining status           Show mining status");
+    println!("  │ {:<60} │", "  mining start [threads]  Start mining (geth)");
+    println!("  │ {:<60} │", "  mining stop             Stop mining");
+    println!("  │ {:<60} │", "  mining dashboard        Live mining dashboard");
+    println!("  │ {:<60} │", "  mining logs [lines]     View mining logs");
+    println!("  │ {:<60} │", "  mining rewards          Total rewards & history");
+    println!("  │ {:<60} │", "  mining performance      Performance metrics");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "Configuration");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "  config list             List all settings");
+    println!("  │ {:<60} │", "  config get <key>        Get setting value");
+    println!("  │ {:<60} │", "  config set <key> <val>  Set setting value");
+    println!("  │ {:<60} │", "  config reset <key>      Reset to default");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "Advanced Features");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "  export <target> [opts]  Export data to file");
+    println!("  │ {:<60} │", "    metrics/peers/downloads/all");
+    println!("  │ {:<60} │", "    --format json|csv   Output format");
+    println!("  │ {:<60} │", "    --output <path>     Custom file path");
+    println!("  │ {:<60} │", "  script run <path>       Run REPL script");
+    println!("  │ {:<60} │", "  script list             List available scripts");
+    println!("  │ {:<60} │", "  plugin load <path>      Load plugin");
+    println!("  │ {:<60} │", "  plugin list             List loaded plugins");
+    println!("  │ {:<60} │", "  webhook add <evt> <url> Add webhook");
+    println!("  │ {:<60} │", "  webhook list            List webhooks");
+    println!("  │ {:<60} │", "  report [summary|full]   Generate report");
+    println!("  │ {:<60} │", "  remote start [addr]     Start remote REPL server");
+    println!("  │ {:<60} │", "  remote stop             Stop remote REPL server");
+    println!("  │ {:<60} │", "  remote status           Show remote server status");
+    println!("  └──────────────────────────────────────────────────────────────┘");
     println!();
 }
 
 async fn cmd_status(context: &ReplContext) -> Result<(), String> {
     println!("\n📊 Network Status:");
-    println!("  ┌────────────────────────────────────────────────────────┐");
+    println!("  ┌──────────────────────────────────────────────────────────────┐");
 
     // Get connected peers
     let connected_peers = context.dht_service.get_connected_peers().await;
-    println!("  │ {:<54} │", format!("Connected Peers: {}", connected_peers.len()));
+    println!("  │ {:<60} │", format!("Connected Peers: {}", connected_peers.len()));
 
     // Get DHT metrics
     let metrics = context.dht_service.metrics_snapshot().await;
-    println!("  │ {:<54} │", format!("Reachability: {:?}", metrics.reachability));
-    println!("  │ {:<54} │", format!("NAT Status: {}",
+    println!("  │ {:<60} │", format!("Reachability: {:?}", metrics.reachability));
+    println!("  │ {:<60} │", format!("NAT Status: {}",
         if metrics.observed_addrs.is_empty() { "Unknown" } else { "Active" }));
 
     // AutoNAT status
-    println!("  │ {:<54} │", format!("AutoNAT: {}",
+    println!("  │ {:<60} │", format!("AutoNAT: {}",
         if metrics.autonat_enabled { "Enabled" } else { "Disabled" }));
 
     // Relay status
@@ -425,7 +431,7 @@ async fn cmd_status(context: &ReplContext) -> Result<(), String> {
     } else {
         "None".to_string()
     };
-    println!("  │ {:<54} │", format!("Circuit Relay: {}", relay_status));
+    println!("  │ {:<60} │", format!("Circuit Relay: {}", relay_status));
 
     // DCUtR stats
     if metrics.dcutr_enabled {
@@ -437,20 +443,20 @@ async fn cmd_status(context: &ReplContext) -> Result<(), String> {
         let rate_str = format!("{:.1}% ({}/{})", success_rate,
             metrics.dcutr_hole_punch_successes,
             metrics.dcutr_hole_punch_attempts);
-        println!("  │ {:<54} │", format!("DCUtR Success Rate: {}", rate_str));
+        println!("  │ {:<60} │", format!("DCUtR Success Rate: {}", rate_str));
     }
 
     // File transfer stats
     if let Some(ft) = &context.file_transfer_service {
         let snapshot = ft.download_metrics_snapshot().await;
-        println!("  ├────────────────────────────────────────────────────────┤");
-        println!("  │ {:<54} │", "Download Stats:");
-        println!("  │ {:<54} │", format!("  Success: {}", snapshot.total_success));
-        println!("  │ {:<54} │", format!("  Failures: {}", snapshot.total_failures));
-        println!("  │ {:<54} │", format!("  Retries: {}", snapshot.total_retries));
+        println!("  ├──────────────────────────────────────────────────────────────┤");
+        println!("  │ {:<60} │", "Download Stats:");
+        println!("  │ {:<60} │", format!("  Success: {}", snapshot.total_success));
+        println!("  │ {:<60} │", format!("  Failures: {}", snapshot.total_failures));
+        println!("  │ {:<60} │", format!("  Retries: {}", snapshot.total_retries));
     }
 
-    println!("  └────────────────────────────────────────────────────────┘");
+    println!("  └──────────────────────────────────────────────────────────────┘");
     println!();
 
     Ok(())
@@ -520,9 +526,9 @@ async fn cmd_peers(args: &[&str], context: &ReplContext) -> Result<(), String> {
                 println!("  (Filtered by trust: {})", trust);
             }
 
-            println!("  ┌────────────────────────────────────────────────────────┐");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<20} {:<10} {:<10} {:<11} │", "Peer ID", "Score", "Latency", "Trust");
-            println!("  ├────────────────────────────────────────────────────────┤");
+            println!("  ├──────────────────────────────────────────────────────────────┤");
 
             // Mock peer data with scores for filtering/sorting
             let mut peer_data: Vec<_> = connected_peers
@@ -584,14 +590,14 @@ async fn cmd_peers(args: &[&str], context: &ReplContext) -> Result<(), String> {
 
             if peer_data.len() > limit {
                 let msg = format!("... and {} more peers", peer_data.len() - limit);
-                println!("  │ {:<54} │", msg);
+                println!("  │ {:<60} │", msg);
             }
 
             if peer_data.is_empty() {
-                println!("  │ {:<54} │", "No peers match the filter criteria");
+                println!("  │ {:<60} │", "No peers match the filter criteria");
             }
 
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  Tip: Use {} to filter/sort", "peers list --trust high --sort score".cyan());
             println!();
@@ -627,7 +633,7 @@ async fn cmd_list(args: &[&str], context: &ReplContext) -> Result<(), String> {
                 }
 
                 println!("\n📥 Recent Downloads:");
-                println!("  ┌────────────────────────────────────────────────────────┐");
+                println!("  ┌──────────────────────────────────────────────────────────────┐");
 
                 for attempt in snapshot.recent_attempts.iter().take(10) {
                     let hash_short = if attempt.file_hash.len() > 16 {
@@ -646,7 +652,7 @@ async fn cmd_list(args: &[&str], context: &ReplContext) -> Result<(), String> {
                         status_icon, hash_short, attempt.attempt, attempt.max_attempts);
                 }
 
-                println!("  └────────────────────────────────────────────────────────┘");
+                println!("  └──────────────────────────────────────────────────────────────┘");
                 println!();
             } else {
                 println!("\n📥 File transfer service not available");
@@ -764,13 +770,13 @@ async fn cmd_dht(args: &[&str], context: &ReplContext) -> Result<(), String> {
             let metrics = context.dht_service.metrics_snapshot().await;
 
             println!("\n🔍 DHT Status:");
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", format!("Reachability: {:?}", metrics.reachability));
-            println!("  │ {:<54} │", format!("Confidence: {:?}", metrics.reachability_confidence));
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", format!("Reachability: {:?}", metrics.reachability));
+            println!("  │ {:<60} │", format!("Confidence: {:?}", metrics.reachability_confidence));
 
             if !metrics.observed_addrs.is_empty() {
-                println!("  ├────────────────────────────────────────────────────────┤");
-                println!("  │ {:<54} │", "Observed Addresses:");
+                println!("  ├──────────────────────────────────────────────────────────────┤");
+                println!("  │ {:<60} │", "Observed Addresses:");
                 for addr in metrics.observed_addrs.iter().take(3) {
                     // Truncate to fit in the box (max 52 chars for content with 2-space indent)
                     let display_addr = if addr.len() > 52 {
@@ -778,11 +784,11 @@ async fn cmd_dht(args: &[&str], context: &ReplContext) -> Result<(), String> {
                     } else {
                         format!("  {}", addr)
                     };
-                    println!("  │ {:<54} │", display_addr);
+                    println!("  │ {:<60} │", display_addr);
                 }
             }
 
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
         }
         "get" => {
@@ -814,7 +820,7 @@ async fn cmd_dht(args: &[&str], context: &ReplContext) -> Result<(), String> {
 
 async fn cmd_mining(args: &[&str], context: &ReplContext) -> Result<(), String> {
     if args.is_empty() {
-        return Err("Usage: mining <status|start|stop>".to_string());
+        return Err("Usage: mining <status|start|stop|dashboard|logs|rewards|performance>".to_string());
     }
 
     if context.geth_process.is_none() {
@@ -824,37 +830,411 @@ async fn cmd_mining(args: &[&str], context: &ReplContext) -> Result<(), String> 
     match args[0] {
         "status" => {
             println!("\n⛏️  Mining Status:");
-            println!("  (Mining status requires geth integration)");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+
+            // Get actual mining status from Geth
+            match crate::ethereum::get_mining_status().await {
+                Ok(is_mining) => {
+                    let status_text = if is_mining { "🟢 Active" } else { "🔴 Inactive" };
+                    let line = format!("Status: {}", status_text);
+                    // Emoji takes 2 display columns but counts as 1 char, so use 59 instead of 60
+                    println!("  │ {:<59} │", line);
+
+                    // Get coinbase/etherbase address
+                    match crate::ethereum::get_coinbase().await {
+                        Ok(coinbase) => {
+                            let line = format!("Miner Address: {}", coinbase);
+                            println!("  │ {:<60} │", line);
+                        }
+                        Err(_) => {
+                            if let Some(addr) = &context.miner_address {
+                                let line = format!("Miner Address: {}", addr);
+                                println!("  │ {:<60} │", line);
+                            }
+                        }
+                    }
+
+                    // Get hash rate and blocks if mining is active
+                    if is_mining {
+                        match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
+                            Ok((blocks_found, hash_rate)) => {
+                                let line = format!("Hash Rate: {:.2} MH/s", hash_rate);
+                                println!("  │ {:<60} │", line);
+                                let line = format!("Blocks Found: {}", blocks_found);
+                                println!("  │ {:<60} │", line);
+                            }
+                            Err(e) => {
+                                let line = format!("Performance: {}", e);
+                                println!("  │ {:<60} │", line);
+                            }
+                        }
+
+                        // Get total rewards if miner address is available
+                        let miner_addr = context.miner_address.as_ref()
+                            .or_else(|| {
+                                // Try to get from coinbase
+                                None
+                            });
+
+                        if let Some(addr) = miner_addr {
+                            match crate::ethereum::get_total_mining_rewards(addr).await {
+                                Ok(total) => {
+                                    let line = format!("Total Rewards: {:.4} ETC", total);
+                                    println!("  │ {:<60} │", line);
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let line = format!("Error: {}", e);
+                    println!("  │ {:<60} │", line);
+                }
+            }
+
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
         }
         "start" => {
             let threads = args.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
+
+            // Get miner address
+            let miner_addr = context.miner_address.as_ref()
+                .ok_or("No miner address configured. Set via --miner-address flag")?;
+
             println!("\n⛏️  Starting mining with {} thread(s)...", threads);
-            println!("  (Mining start requires geth integration)");
-            println!();
+
+            match crate::ethereum::start_mining(miner_addr, threads).await {
+                Ok(_) => {
+                    println!("✓ Mining started successfully!");
+                    println!("  Miner Address: {}", miner_addr);
+                    println!("  Threads: {}", threads);
+                    println!();
+                    println!("  Use {} to check status", "mining status".cyan());
+                    println!();
+                }
+                Err(e) => {
+                    return Err(format!("Failed to start mining: {}", e));
+                }
+            }
         }
         "stop" => {
             println!("\n⛏️  Stopping mining...");
-            println!("  (Mining stop requires geth integration)");
-            println!();
+
+            match crate::ethereum::stop_mining().await {
+                Ok(_) => {
+                    println!("✓ Mining stopped successfully!");
+                    println!();
+                }
+                Err(e) => {
+                    return Err(format!("Failed to stop mining: {}", e));
+                }
+            }
+        }
+        "dashboard" => {
+            cmd_mining_dashboard(context).await?;
+        }
+        "logs" => {
+            let lines = args.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(50);
+            cmd_mining_logs(context, lines).await?;
+        }
+        "rewards" => {
+            cmd_mining_rewards(context).await?;
+        }
+        "performance" | "perf" => {
+            cmd_mining_performance(context).await?;
         }
         _ => {
-            return Err(format!("Unknown mining subcommand: '{}'", args[0]));
+            return Err(format!("Unknown mining subcommand: '{}'\nUse: status, start [threads], stop, dashboard, logs [lines], rewards, performance", args[0]));
         }
     }
 
     Ok(())
 }
 
+// Mining dashboard with live stats
+async fn cmd_mining_dashboard(context: &ReplContext) -> Result<(), String> {
+    println!("\n⛏️  Mining Dashboard:");
+    println!("  ┌──────────────────────────────────────────────────────────────┐");
+
+    // Get mining status
+    let is_mining = crate::ethereum::get_mining_status().await
+        .unwrap_or(false);
+
+    let status_text = if is_mining { "🟢 Active" } else { "🔴 Inactive" };
+    let line = format!("Mining: {}", status_text);
+    // Emoji takes 2 display columns but counts as 1 char, so use 59 instead of 60
+    println!("  │ {:<59} │", line);
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+
+    if is_mining {
+        // Get performance metrics
+        match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
+            Ok((blocks_found, hash_rate)) => {
+                let line = format!("Hash Rate: {:.2} MH/s", hash_rate);
+                println!("  │ {:<60} │", line);
+                let line = format!("Blocks Found: {}", blocks_found);
+                println!("  │ {:<60} │", line);
+            }
+            Err(e) => {
+                let line = format!("Performance Error: {}", e);
+                println!("  │ {:<60} │", line);
+            }
+        }
+
+        // Get miner address and rewards
+        if let Some(addr) = &context.miner_address {
+            let line = format!("Miner: {}...", &addr[..16]);
+            println!("  │ {:<60} │", line);
+
+            match crate::ethereum::get_total_mining_rewards(addr).await {
+                Ok(total) => {
+                    let line = format!("Total Rewards: {:.4} ETC", total);
+                    println!("  │ {:<60} │", line);
+                }
+                Err(_) => {}
+            }
+        }
+
+        println!("  ├──────────────────────────────────────────────────────────────┤");
+        println!("  │ {:<60} │", "Recent Activity:");
+
+        // Get recent blocks if available
+        if let Some(addr) = &context.miner_address {
+            match crate::ethereum::get_recent_mined_blocks(addr, 100, 3).await {
+                Ok(blocks) => {
+                    if blocks.is_empty() {
+                        println!("  │ {:<60} │", "  No recent blocks found");
+                    } else {
+                        for block in blocks {
+                            let time_ago = format_time_ago(block.timestamp);
+                            let reward_str = block.reward.map(|r| format!("{:.2} ETC", r))
+                                .unwrap_or_else(|| "0.00 ETC".to_string());
+                            let line = format!("  Block #{} - {} - {}", block.number, reward_str, time_ago);
+                            println!("  │ {:<60} │", line);
+                        }
+                    }
+                }
+                Err(_) => {
+                    println!("  │ {:<60} │", "  Unable to fetch recent blocks");
+                }
+            }
+        }
+    } else {
+        println!("  │ {:<60} │", "Mining is not currently active");
+        println!("  │ {:<60} │", "");
+        let line = format!("Use {} to start", "mining start [threads]");
+        println!("  │ {:<60} │", line);
+    }
+
+    println!("  └──────────────────────────────────────────────────────────────┘");
+    println!();
+    let msg = format!("  Refresh: Run {} again for updated stats", "mining dashboard");
+    println!("{}", msg);
+    println!();
+
+    Ok(())
+}
+
+// Mining logs viewer
+async fn cmd_mining_logs(context: &ReplContext, lines: usize) -> Result<(), String> {
+    println!("\n📋 Mining Logs (last {} lines):", lines);
+    println!("  ┌──────────────────────────────────────────────────────────────┐");
+
+    match crate::ethereum::get_mining_logs(&context.geth_data_dir, lines) {
+        Ok(log_lines) => {
+            if log_lines.is_empty() {
+                println!("  │ {:<60} │", "No logs available");
+            } else {
+                for line in log_lines {
+                    // Truncate long lines to fit in box
+                    let display_line = if line.len() > 60 {
+                        format!("{}...", &line[..57])
+                    } else {
+                        line
+                    };
+                    println!("  │ {:<60} │", display_line);
+                }
+            }
+        }
+        Err(e) => {
+            let line = format!("Error reading logs: {}", e);
+            println!("  │ {:<60} │", line);
+        }
+    }
+
+    println!("  └──────────────────────────────────────────────────────────────┘");
+    println!();
+    let msg = format!("  Tip: Use {} for more lines", "mining logs 100");
+    println!("{}", msg);
+    println!();
+
+    Ok(())
+}
+
+// Mining rewards summary
+async fn cmd_mining_rewards(context: &ReplContext) -> Result<(), String> {
+    println!("\n💰 Mining Rewards:");
+    println!("  ┌──────────────────────────────────────────────────────────────┐");
+
+    let miner_addr = context.miner_address.as_ref()
+        .ok_or("No miner address configured")?;
+
+    println!("  │ {:<60} │", format!("Address: {}", miner_addr));
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+
+    // Get total rewards
+    println!("  │ {:<60} │", "Calculating total rewards...");
+    match crate::ethereum::get_total_mining_rewards(miner_addr).await {
+        Ok(total) => {
+            println!("  │ {:<60} │", format!("Total Rewards: {:.6} ETC", total));
+        }
+        Err(e) => {
+            println!("  │ {:<60} │", format!("Error: {}", e));
+        }
+    }
+
+    // Get performance metrics
+    match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
+        Ok((blocks_found, _hash_rate)) => {
+            println!("  │ {:<60} │", format!("Blocks Found: {}", blocks_found));
+
+            // Calculate average reward per block (if blocks > 0)
+            if blocks_found > 0 {
+                match crate::ethereum::get_total_mining_rewards(miner_addr).await {
+                    Ok(total) => {
+                        let avg_reward = total / blocks_found as f64;
+                        println!("  │ {:<60} │", format!("Avg Reward/Block: {:.6} ETC", avg_reward));
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        Err(_) => {}
+    }
+
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "Recent Blocks:");
+
+    // Get recent blocks with rewards
+    match crate::ethereum::get_recent_mined_blocks(miner_addr, 100, 10).await {
+        Ok(blocks) => {
+            if blocks.is_empty() {
+                println!("  │ {:<60} │", "  No blocks found yet");
+            } else {
+                for block in blocks {
+                    let time_ago = format_time_ago(block.timestamp);
+                    let reward_str = block.reward.map(|r| format!("{:.4} ETC", r))
+                        .unwrap_or_else(|| "0.0000 ETC".to_string());
+                    println!("  │ {:<60} │",
+                        format!("  #{:<8} {}  {}",
+                        block.number, reward_str, time_ago));
+                }
+            }
+        }
+        Err(e) => {
+            println!("  │ {:<60} │", format!("Error: {}", e));
+        }
+    }
+
+    println!("  └──────────────────────────────────────────────────────────────┘");
+    println!();
+
+    Ok(())
+}
+
+// Mining performance metrics
+async fn cmd_mining_performance(context: &ReplContext) -> Result<(), String> {
+    println!("\n📊 Mining Performance:");
+    println!("  ┌──────────────────────────────────────────────────────────────┐");
+
+    match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
+        Ok((blocks_found, hash_rate)) => {
+            println!("  │ {:<60} │", format!("Hash Rate: {:.2} MH/s", hash_rate));
+            println!("  │ {:<60} │", format!("Blocks Found: {}", blocks_found));
+
+            // Calculate hashes per block if we have blocks
+            if blocks_found > 0 {
+                // This is a rough estimate based on difficulty
+                println!("  │ {:<60} │", format!("Efficiency: {:.0} MH/block", hash_rate / blocks_found as f64));
+            }
+
+            // Get mining status
+            match crate::ethereum::get_mining_status().await {
+                Ok(is_mining) => {
+                    let status = if is_mining { "🟢 Active" } else { "🔴 Inactive" };
+                    // Emoji takes 2 display columns but counts as 1 char, so use 59 instead of 60
+                    println!("  │ {:<59} │", format!("Status: {}", status));
+                }
+                Err(_) => {}
+            }
+
+            // Get current difficulty (if available)
+            match crate::ethereum::get_network_difficulty_as_u64().await {
+                Ok(difficulty) => {
+                    println!("  │ {:<60} │", format!("Network Difficulty: {}", format_number(difficulty)));
+                }
+                Err(_) => {}
+            }
+        }
+        Err(e) => {
+            println!("  │ {:<60} │", format!("Error: {}", e));
+        }
+    }
+
+    println!("  └──────────────────────────────────────────────────────────────┘");
+    println!();
+
+    Ok(())
+}
+
+// Helper function to format timestamps as "X time ago"
+fn format_time_ago(timestamp: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let diff = now.saturating_sub(timestamp);
+
+    if diff < 60 {
+        format!("{}s ago", diff)
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else {
+        format!("{}d ago", diff / 86400)
+    }
+}
+
+// Helper function to format large numbers with separators
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let mut count = 0;
+
+    for c in s.chars().rev() {
+        if count > 0 && count % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+        count += 1;
+    }
+
+    result.chars().rev().collect()
+}
+
 async fn cmd_downloads(_context: &ReplContext) -> Result<(), String> {
     // This would integrate with MultiSourceDownloadService for real-time progress
     // For now, showing a placeholder implementation
     println!("\n📥 Active Downloads:");
-    println!("  ┌────────────────────────────────────────────────────────┐");
-    println!("  │ {:<54} │", "No active downloads");
-    println!("  │ {:<54} │", "");
-    println!("  │ {:<54} │", "Use 'download <hash>' to start a download");
-    println!("  └────────────────────────────────────────────────────────┘");
+    println!("  ┌──────────────────────────────────────────────────────────────┐");
+    println!("  │ {:<60} │", "No active downloads");
+    println!("  │ {:<60} │", "");
+    println!("  │ {:<60} │", "Use 'download <hash>' to start a download");
+    println!("  └──────────────────────────────────────────────────────────────┘");
     println!();
 
     // Future implementation would show:
@@ -874,23 +1254,23 @@ async fn cmd_config(args: &[&str], _context: &ReplContext) -> Result<(), String>
     match args[0] {
         "list" => {
             println!("\n⚙️  Configuration Settings:");
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", "Network Settings:");
-            println!("  │ {:<54} │", "  max_peers: 50");
-            println!("  │ {:<54} │", "  listen_port: 4001");
-            println!("  │ {:<54} │", "  enable_upnp: true");
-            println!("  │ {:<54} │", "  enable_autonat: true");
-            println!("  │ {:<54} │", "  enable_relay: true");
-            println!("  ├────────────────────────────────────────────────────────┤");
-            println!("  │ {:<54} │", "Download Settings:");
-            println!("  │ {:<54} │", "  max_concurrent_downloads: 3");
-            println!("  │ {:<54} │", "  chunk_size: 262144 (256KB)");
-            println!("  │ {:<54} │", "  download_timeout: 60s");
-            println!("  ├────────────────────────────────────────────────────────┤");
-            println!("  │ {:<54} │", "Bandwidth Settings:");
-            println!("  │ {:<54} │", "  max_upload_speed: unlimited");
-            println!("  │ {:<54} │", "  max_download_speed: unlimited");
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", "Network Settings:");
+            println!("  │ {:<60} │", "  max_peers: 50");
+            println!("  │ {:<60} │", "  listen_port: 4001");
+            println!("  │ {:<60} │", "  enable_upnp: true");
+            println!("  │ {:<60} │", "  enable_autonat: true");
+            println!("  │ {:<60} │", "  enable_relay: true");
+            println!("  ├──────────────────────────────────────────────────────────────┤");
+            println!("  │ {:<60} │", "Download Settings:");
+            println!("  │ {:<60} │", "  max_concurrent_downloads: 3");
+            println!("  │ {:<60} │", "  chunk_size: 262144 (256KB)");
+            println!("  │ {:<60} │", "  download_timeout: 60s");
+            println!("  ├──────────────────────────────────────────────────────────────┤");
+            println!("  │ {:<60} │", "Bandwidth Settings:");
+            println!("  │ {:<60} │", "  max_upload_speed: unlimited");
+            println!("  │ {:<60} │", "  max_download_speed: unlimited");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  Use {} to get a specific value", "config get <key>".cyan());
             println!();
@@ -947,9 +1327,9 @@ async fn cmd_reputation(args: &[&str], context: &ReplContext) -> Result<(), Stri
             }
 
             println!("\n👥 Peer Reputation:");
-            println!("  ┌────────────────────────────────────────────────────────┐");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<20} {:<10} {:<22} │", "Peer ID", "Score", "Trust Level");
-            println!("  ├────────────────────────────────────────────────────────┤");
+            println!("  ├──────────────────────────────────────────────────────────────┤");
 
             // Show first few peers with mock reputation data
             for (i, peer) in peers.iter().take(10).enumerate() {
@@ -968,10 +1348,10 @@ async fn cmd_reputation(args: &[&str], context: &ReplContext) -> Result<(), Stri
 
             if peers.len() > 10 {
                 let msg = format!("... and {} more peers", peers.len() - 10);
-                println!("  │ {:<54} │", msg);
+                println!("  │ {:<60} │", msg);
             }
 
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  Use {} to see details", "reputation info <peer_id>".cyan());
             println!();
@@ -983,16 +1363,16 @@ async fn cmd_reputation(args: &[&str], context: &ReplContext) -> Result<(), Stri
 
             let peer_id = args[1];
             println!("\n👥 Reputation Details for: {}", peer_id);
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", format!("Score: 82/100"));
-            println!("  │ {:<54} │", format!("Trust Level: High"));
-            println!("  │ {:<54} │", format!("Successful Transfers: 47"));
-            println!("  │ {:<54} │", format!("Failed Transfers: 3"));
-            println!("  │ {:<54} │", format!("Avg Latency: 45ms"));
-            println!("  │ {:<54} │", format!("Avg Bandwidth: 2.5 MB/s"));
-            println!("  │ {:<54} │", format!("Uptime: 98.5%"));
-            println!("  │ {:<54} │", format!("Last Seen: 2 minutes ago"));
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", format!("Score: 82/100"));
+            println!("  │ {:<60} │", format!("Trust Level: High"));
+            println!("  │ {:<60} │", format!("Successful Transfers: 47"));
+            println!("  │ {:<60} │", format!("Failed Transfers: 3"));
+            println!("  │ {:<60} │", format!("Avg Latency: 45ms"));
+            println!("  │ {:<60} │", format!("Avg Bandwidth: 2.5 MB/s"));
+            println!("  │ {:<60} │", format!("Uptime: 98.5%"));
+            println!("  │ {:<60} │", format!("Last Seen: 2 minutes ago"));
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  (Full reputation data requires peer stats integration)");
             println!();
@@ -1018,13 +1398,13 @@ async fn cmd_versions(args: &[&str], _context: &ReplContext) -> Result<(), Strin
 
             let hash = args[1];
             println!("\n📂 File Versions for: {}", hash);
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", "Version History:");
-            println!("  ├────────────────────────────────────────────────────────┤");
-            println!("  │ {:<54} │", "  v3 (current) - 2024-10-15 - 2.5 MB");
-            println!("  │ {:<54} │", "  v2          - 2024-10-10 - 2.4 MB");
-            println!("  │ {:<54} │", "  v1 (initial) - 2024-10-05 - 2.3 MB");
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", "Version History:");
+            println!("  ├──────────────────────────────────────────────────────────────┤");
+            println!("  │ {:<60} │", "  v3 (current) - 2024-10-15 - 2.5 MB");
+            println!("  │ {:<60} │", "  v2          - 2024-10-10 - 2.4 MB");
+            println!("  │ {:<60} │", "  v1 (initial) - 2024-10-05 - 2.3 MB");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  Use {} to see changes", "versions info <hash>".cyan());
             println!();
@@ -1036,14 +1416,14 @@ async fn cmd_versions(args: &[&str], _context: &ReplContext) -> Result<(), Strin
 
             let hash = args[1];
             println!("\n📂 Version Details for: {}", hash);
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", "Version: 3 (current)");
-            println!("  │ {:<54} │", "Date: 2024-10-15 14:23:45 UTC");
-            println!("  │ {:<54} │", "Size: 2.5 MB");
-            println!("  │ {:<54} │", "Parent: v2 (Qmabc...def)");
-            println!("  │ {:<54} │", "Changes: +50 KB");
-            println!("  │ {:<54} │", "Seeders: 5");
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", "Version: 3 (current)");
+            println!("  │ {:<60} │", "Date: 2024-10-15 14:23:45 UTC");
+            println!("  │ {:<60} │", "Size: 2.5 MB");
+            println!("  │ {:<60} │", "Parent: v2 (Qmabc...def)");
+            println!("  │ {:<60} │", "Changes: +50 KB");
+            println!("  │ {:<60} │", "Seeders: 5");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  (Full version tracking requires file metadata integration)");
             println!();
@@ -1296,10 +1676,10 @@ async fn cmd_script(args: &[&str], _context: &ReplContext) -> Result<(), String>
             let script_content = std::fs::read_to_string(script_path)
                 .map_err(|e| format!("Failed to read script: {}", e))?;
 
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", format!("Script: {}", script_path));
-            println!("  │ {:<54} │", format!("Lines: {}", script_content.lines().count()));
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", format!("Script: {}", script_path));
+            println!("  │ {:<60} │", format!("Lines: {}", script_content.lines().count()));
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  (Script execution will process each line as a REPL command)");
             println!("  Tip: Create .chiral scripts with one command per line");
@@ -1307,7 +1687,7 @@ async fn cmd_script(args: &[&str], _context: &ReplContext) -> Result<(), String>
         }
         "list" => {
             println!("\n📜 Available Scripts:");
-            println!("  ┌────────────────────────────────────────────────────────┐");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
 
             // Check for scripts in common locations
             let script_dirs = vec![
@@ -1324,7 +1704,7 @@ async fn cmd_script(args: &[&str], _context: &ReplContext) -> Result<(), String>
                         for entry in entries.flatten() {
                             if let Some(name) = entry.file_name().to_str() {
                                 if name.ends_with(".chiral") {
-                                    println!("  │ {:<54} │", format!("  {}", name));
+                                    println!("  │ {:<60} │", format!("  {}", name));
                                     found_scripts = true;
                                 }
                             }
@@ -1334,12 +1714,12 @@ async fn cmd_script(args: &[&str], _context: &ReplContext) -> Result<(), String>
             }
 
             if !found_scripts {
-                println!("  │ {:<54} │", "No scripts found");
-                println!("  │ {:<54} │", "");
-                println!("  │ {:<54} │", "Create scripts in .chiral/scripts/");
+                println!("  │ {:<60} │", "No scripts found");
+                println!("  │ {:<60} │", "");
+                println!("  │ {:<60} │", "Create scripts in .chiral/scripts/");
             }
 
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  Example script format:");
             println!("  {}", "  status".cyan());
@@ -1384,11 +1764,11 @@ async fn cmd_plugin(args: &[&str], _context: &ReplContext) -> Result<(), String>
         }
         "list" => {
             println!("\n🔌 Loaded Plugins:");
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", "No plugins loaded");
-            println!("  │ {:<54} │", "");
-            println!("  │ {:<54} │", "Plugins extend REPL with custom commands");
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", "No plugins loaded");
+            println!("  │ {:<60} │", "");
+            println!("  │ {:<60} │", "Plugins extend REPL with custom commands");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  Plugin API documentation: docs/plugin-api.md");
             println!();
@@ -1437,11 +1817,11 @@ async fn cmd_webhook(args: &[&str], context: &ReplContext) -> Result<(), String>
             let webhook_id = webhook_manager.add_webhook(event.to_string(), url.to_string()).await?;
 
             println!("\n✓ Webhook added successfully!");
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", format!("ID: {}", webhook_id));
-            println!("  │ {:<54} │", format!("Event: {}", event));
-            println!("  │ {:<54} │", format!("URL: {}", url));
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", format!("ID: {}", webhook_id));
+            println!("  │ {:<60} │", format!("Event: {}", event));
+            println!("  │ {:<60} │", format!("URL: {}", url));
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             println!("  Use {} to test the webhook", format!("webhook test {}", webhook_id).cyan());
             println!();
@@ -1461,15 +1841,15 @@ async fn cmd_webhook(args: &[&str], context: &ReplContext) -> Result<(), String>
             let webhooks = webhook_manager.list_webhooks().await;
 
             println!("\n🪝 Configured Webhooks:");
-            println!("  ┌────────────────────────────────────────────────────────┐");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
 
             if webhooks.is_empty() {
-                println!("  │ {:<54} │", "No webhooks configured");
-                println!("  │ {:<54} │", "");
-                println!("  │ {:<54} │", "Add webhooks to receive event notifications");
+                println!("  │ {:<60} │", "No webhooks configured");
+                println!("  │ {:<60} │", "");
+                println!("  │ {:<60} │", "Add webhooks to receive event notifications");
             } else {
                 println!("  │ {:<20} {:<15} {:<16} │", "Event", "Triggers", "Status");
-                println!("  ├────────────────────────────────────────────────────────┤");
+                println!("  ├──────────────────────────────────────────────────────────────┤");
 
                 for webhook in webhooks.iter().take(10) {
                     let status = if webhook.enabled { "Enabled" } else { "Disabled" };
@@ -1478,24 +1858,24 @@ async fn cmd_webhook(args: &[&str], context: &ReplContext) -> Result<(), String>
                         webhook.trigger_count,
                         status
                     );
-                    println!("  │ {:<54} │", format!("  ID: {}", webhook.id));
-                    println!("  │ {:<54} │", format!("  URL: {}", &webhook.url[..webhook.url.len().min(50)]));
+                    println!("  │ {:<60} │", format!("  ID: {}", webhook.id));
+                    println!("  │ {:<60} │", format!("  URL: {}", &webhook.url[..webhook.url.len().min(50)]));
 
                     if let Some(last_triggered) = webhook.last_triggered {
                         let dt = chrono::DateTime::from_timestamp(last_triggered as i64, 0)
                             .unwrap_or_default();
-                        println!("  │ {:<54} │", format!("  Last: {}", dt.format("%Y-%m-%d %H:%M:%S")));
+                        println!("  │ {:<60} │", format!("  Last: {}", dt.format("%Y-%m-%d %H:%M:%S")));
                     }
 
-                    println!("  ├────────────────────────────────────────────────────────┤");
+                    println!("  ├──────────────────────────────────────────────────────────────┤");
                 }
 
                 if webhooks.len() > 10 {
-                    println!("  │ {:<54} │", format!("... and {} more", webhooks.len() - 10));
+                    println!("  │ {:<60} │", format!("... and {} more", webhooks.len() - 10));
                 }
             }
 
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
             print_webhook_events();
             println!();
@@ -1535,19 +1915,19 @@ async fn cmd_report(args: &[&str], context: &ReplContext) -> Result<(), String> 
     match *report_type {
         "summary" | "full" => {
             println!("\n📊 Network Report");
-            println!("  ┌────────────────────────────────────────────────────────┐");
-            println!("  │ {:<54} │", format!("Generated: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
-            println!("  │ {:<54} │", format!("Peer ID: {}...", &context.peer_id[..20]));
-            println!("  ├────────────────────────────────────────────────────────┤");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", format!("Generated: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
+            println!("  │ {:<60} │", format!("Peer ID: {}...", &context.peer_id[..20]));
+            println!("  ├──────────────────────────────────────────────────────────────┤");
 
             // Network stats
             let peers = context.dht_service.get_connected_peers().await;
             let metrics = context.dht_service.metrics_snapshot().await;
 
-            println!("  │ {:<54} │", "Network Status:");
-            println!("  │ {:<54} │", format!("  Connected Peers: {}", peers.len()));
-            println!("  │ {:<54} │", format!("  Reachability: {:?}", metrics.reachability));
-            println!("  │ {:<54} │", format!("  AutoNAT: {}", if metrics.autonat_enabled { "Enabled" } else { "Disabled" }));
+            println!("  │ {:<60} │", "Network Status:");
+            println!("  │ {:<60} │", format!("  Connected Peers: {}", peers.len()));
+            println!("  │ {:<60} │", format!("  Reachability: {:?}", metrics.reachability));
+            println!("  │ {:<60} │", format!("  AutoNAT: {}", if metrics.autonat_enabled { "Enabled" } else { "Disabled" }));
 
             if metrics.dcutr_enabled {
                 let success_rate = if metrics.dcutr_hole_punch_attempts > 0 {
@@ -1555,20 +1935,20 @@ async fn cmd_report(args: &[&str], context: &ReplContext) -> Result<(), String> 
                 } else {
                     0.0
                 };
-                println!("  │ {:<54} │", format!("  DCUtR Success: {:.1}%", success_rate));
+                println!("  │ {:<60} │", format!("  DCUtR Success: {:.1}%", success_rate));
             }
 
             // File transfer stats
             if let Some(ft) = &context.file_transfer_service {
                 let snapshot = ft.download_metrics_snapshot().await;
-                println!("  ├────────────────────────────────────────────────────────┤");
-                println!("  │ {:<54} │", "Download Statistics:");
-                println!("  │ {:<54} │", format!("  Successful: {}", snapshot.total_success));
-                println!("  │ {:<54} │", format!("  Failed: {}", snapshot.total_failures));
-                println!("  │ {:<54} │", format!("  Retries: {}", snapshot.total_retries));
+                println!("  ├──────────────────────────────────────────────────────────────┤");
+                println!("  │ {:<60} │", "Download Statistics:");
+                println!("  │ {:<60} │", format!("  Successful: {}", snapshot.total_success));
+                println!("  │ {:<60} │", format!("  Failed: {}", snapshot.total_failures));
+                println!("  │ {:<60} │", format!("  Retries: {}", snapshot.total_retries));
             }
 
-            println!("  └────────────────────────────────────────────────────────┘");
+            println!("  └──────────────────────────────────────────────────────────────┘");
             println!();
 
             if *report_type == "full" {

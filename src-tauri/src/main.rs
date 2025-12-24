@@ -7928,6 +7928,8 @@ async fn run_interactive_mode(args: headless::CliArgs) -> Result<(), Box<dyn std
         file_transfer_service,
         geth_process,
         peer_id,
+        miner_address: args.miner_address.clone(),
+        geth_data_dir: args.geth_data_dir.clone(),
     };
 
     // Run the REPL
@@ -8019,6 +8021,8 @@ async fn run_tui_mode(args: headless::CliArgs) -> Result<(), Box<dyn std::error:
         file_transfer_service,
         geth_process,
         peer_id,
+        miner_address: args.miner_address.clone(),
+        geth_data_dir: args.geth_data_dir.clone(),
     };
 
     // Run the TUI
@@ -8171,6 +8175,44 @@ fn main() {
     // Parse command line arguments
     use clap::Parser;
     let args = headless::CliArgs::parse();
+
+    // Handle --download-geth flag
+    if args.download_geth {
+        use crate::geth_downloader::GethDownloader;
+        println!("🔽 Downloading Geth binary...");
+
+        let downloader = GethDownloader::new();
+
+        if downloader.is_geth_installed() {
+            println!("✓ Geth is already installed at: {}", downloader.geth_path().display());
+            std::process::exit(0);
+        }
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            downloader.download_geth(|progress| {
+                println!("  Progress: {:.1}% ({} / {} bytes) - {}",
+                    progress.percentage,
+                    progress.downloaded,
+                    progress.total,
+                    progress.status
+                );
+            }).await
+        });
+
+        match result {
+            Ok(_) => {
+                println!("✓ Geth downloaded successfully to: {}", downloader.geth_path().display());
+                println!("\nYou can now run mining commands:");
+                println!("  ./target/release/chiral-network --interactive --enable-geth");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to download Geth: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     // For headless mode, initialize basic console logging
     if args.headless {

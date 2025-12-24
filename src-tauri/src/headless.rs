@@ -34,6 +34,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub bootstrap: Vec<String>,
 
+    /// Download Geth binary and exit
+    #[arg(long)]
+    pub download_geth: bool,
+
     /// Enable geth node
     #[arg(long)]
     pub enable_geth: bool,
