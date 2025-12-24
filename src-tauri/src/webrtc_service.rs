@@ -38,6 +38,27 @@ lazy_static::lazy_static! {
 
     /// Global map of progress bars for active uploads, keyed by (peer_id, file_hash)
     static ref UPLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
+
+    /// Requested output paths for WebRTC downloads (file_hash -> output_path).
+    /// This lets the download initiator (GUI/E2E API) control the final save location,
+    /// while the assembler lives in this library crate (no access to binary AppState).
+    static ref REQUESTED_WEBRTC_DOWNLOAD_OUTPUT_PATHS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+}
+
+/// Record the desired output path for a given WebRTC file hash.
+pub async fn set_requested_download_output_path(file_hash: String, output_path: String) {
+    let mut map = REQUESTED_WEBRTC_DOWNLOAD_OUTPUT_PATHS.lock().await;
+    map.insert(file_hash, output_path);
+    // This log is intentionally INFO (not DEBUG) because it is a high-signal clue when
+    // diagnosing "WebRTC saved to the wrong folder" issues in real-network runs.
+    if let Some((k, v)) = map.iter().last() {
+        info!("📌 WebRTC requested output path set: {} -> {}", k, v);
+    }
+}
+
+async fn take_requested_download_output_path(file_hash: &str) -> Option<String> {
+    let mut map = REQUESTED_WEBRTC_DOWNLOAD_OUTPUT_PATHS.lock().await;
+    map.remove(file_hash)
 }
 
 const CHUNK_SIZE: usize = 32768; // 32KB chunks - configured data channel for larger messages (8x improvement over original 4KB)
@@ -2498,22 +2519,55 @@ impl WebRTCService {
     // Compute final size without concatenating into a giant Vec<u8>.
     let file_size: usize = sorted_chunks.iter().map(|c| c.data.len()).sum();
 
-    // Resolve download directory (same single source of truth as the frontend command).
-    let storage_path = match crate::download_paths::get_download_directory_opt(app_handle) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Failed to resolve download directory: {}", e);
+    // Choose output path:
+    // - If the caller (GUI / E2E API) requested a specific output_path, honor it.
+    // - Otherwise, fall back to the configured download directory from settings.
+    let requested_output_path: Option<std::path::PathBuf> =
+        take_requested_download_output_path(file_hash)
+            .await
+            .map(std::path::PathBuf::from);
+
+    let output_path: std::path::PathBuf = if let Some(p) = requested_output_path {
+        // If the requested path is an existing directory, write the file inside it.
+        if p.exists() && p.is_dir() {
+            p.join(&file_name)
+        } else {
+            p
+        }
+    } else {
+        // Resolve download directory (same single source of truth as the frontend command).
+        let storage_path = match crate::download_paths::get_download_directory_opt(app_handle) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Failed to resolve download directory: {}", e);
+                return;
+            }
+        };
+
+        // Ensure directory exists
+        if let Err(e) = crate::download_paths::ensure_directory_exists(&storage_path).await {
+            error!("Failed to ensure download directory exists ({}): {}", storage_path, e);
             return;
         }
+
+        std::path::Path::new(&storage_path).join(&file_name)
     };
 
-    // Ensure directory exists
-    if let Err(e) = crate::download_paths::ensure_directory_exists(&storage_path).await {
-        error!("Failed to ensure download directory exists ({}): {}", storage_path, e);
-        return;
+    // High-signal diagnostic: shows whether we honored a requested output path or fell back.
+    if output_path.to_string_lossy().contains("chiral-e2e-downloads") {
+        info!("📦 WebRTC assembling into E2E output path: {:?}", output_path);
+    } else {
+        info!("📦 WebRTC assembling into default output path: {:?}", output_path);
     }
 
-    let output_path = std::path::Path::new(&storage_path).join(&file_name);
+    // Ensure output parent directory exists (covers requested output paths too).
+    if let Some(parent) = output_path.parent() {
+        let parent_str = parent.to_string_lossy().to_string();
+        if let Err(e) = crate::download_paths::ensure_directory_exists(&parent_str).await {
+            error!("Failed to ensure output directory exists ({}): {}", parent_str, e);
+            return;
+        }
+    }
 
     // Stream chunks to disk in order (avoid IPC + JSON serialization of raw bytes).
     use tokio::io::AsyncWriteExt;
@@ -2552,6 +2606,8 @@ impl WebRTCService {
             error!("Failed to emit webrtc_download_complete event: {}", e);
         }
     }
+
+    // Mapping cleanup happens via take_requested_download_output_path().
 
     let _ = event_tx
         .send(WebRTCEvent::TransferCompleted {
