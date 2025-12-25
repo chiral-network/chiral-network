@@ -4,6 +4,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { dhtService } from "$lib/dht";
 import { get } from "svelte/store";
 import { settings } from "$lib/stores";
@@ -32,10 +33,11 @@ export interface DiagReport {
 }
 
 class DiagnosticsService {
-  private isTauri: boolean;
-
-  constructor() {
-    this.isTauri = typeof window !== "undefined" && "__TAURI__" in window;
+  /**
+   * Check if running in Tauri environment (dynamically at runtime)
+   */
+  private get isTauri(): boolean {
+    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   }
 
   /**
@@ -99,19 +101,27 @@ class DiagnosticsService {
   private async checkEnvironment(): Promise<DiagResult> {
     try {
       if (this.isTauri) {
-        const version = await invoke<string>("tauri", {
-          __tauriModule: "App",
-          message: { cmd: "tauri", __tauriModule: "App", message: { cmd: "getVersion" } },
-        }).catch(() => "unknown");
-
-        return {
-          id: "env_check",
-          category: "environment",
-          label: "Environment",
-          status: "pass",
-          details: `Tauri Desktop App ${version}`,
-          timestamp: Date.now(),
-        };
+        try {
+          const version = await getVersion();
+          return {
+            id: "env_check",
+            category: "environment",
+            label: "Environment",
+            status: "pass",
+            details: `Tauri Desktop App v${version}`,
+            timestamp: Date.now(),
+          };
+        } catch (versionError) {
+          // Tauri detected but version unavailable
+          return {
+            id: "env_check",
+            category: "environment",
+            label: "Environment",
+            status: "pass",
+            details: "Tauri Desktop App (version unknown)",
+            timestamp: Date.now(),
+          };
+        }
       } else {
         return {
           id: "env_check",
@@ -160,17 +170,32 @@ class DiagnosticsService {
           category: "storage",
           label: "Storage Path",
           status: "pass",
-          details: storagePath,
+          details: `${storagePath} (accessible)`,
           timestamp: Date.now(),
         };
       } catch (validateError) {
+        const errorMsg = validateError instanceof Error ? validateError.message : String(validateError);
+
+        // Directory doesn't exist is a warning, not a failure (app can create it)
+        if (errorMsg.includes("does not exist") || errorMsg.includes("No such file")) {
+          return {
+            id: "storage_check",
+            category: "storage",
+            label: "Storage Path",
+            status: "warn",
+            details: `${storagePath} (will be created on first use)`,
+            timestamp: Date.now(),
+          };
+        }
+
+        // Other errors (permissions, invalid path) are failures
         return {
           id: "storage_check",
           category: "storage",
           label: "Storage Path",
           status: "fail",
           details: storagePath,
-          error: validateError instanceof Error ? validateError.message : String(validateError),
+          error: errorMsg,
           timestamp: Date.now(),
         };
       }
@@ -484,7 +509,9 @@ class DiagnosticsService {
         };
       }
 
-      if (activeRelayCount === 0) {
+      const relayCount = activeRelayCount ?? 0;
+
+      if (relayCount === 0) {
         return {
           id: "relay_check",
           category: "network",
@@ -500,7 +527,7 @@ class DiagnosticsService {
         category: "network",
         label: "Circuit Relay",
         status: "pass",
-        details: `${activeRelayCount} relay(s), status: ${relayReservationStatus || "unknown"}`,
+        details: `${relayCount} relay(s), status: ${relayReservationStatus || "unknown"}`,
         timestamp: Date.now(),
       };
     } catch (error) {
@@ -730,28 +757,83 @@ class DiagnosticsService {
       }
 
       const storagePath = await invoke<string>("get_download_directory");
-      const availableBytes = await invoke<number>("get_disk_space", { path: storagePath });
-      const availableGB = (availableBytes / (1024 ** 3)).toFixed(2);
 
-      if (availableBytes < 1024 ** 3) { // Less than 1 GB
+      try {
+        const availableBytes = await invoke<number>("get_disk_space", { path: storagePath });
+        const availableGB = (availableBytes / (1024 ** 3)).toFixed(2);
+
+        if (availableBytes < 1024 ** 3) { // Less than 1 GB
+          return {
+            id: "disk_check",
+            category: "storage",
+            label: "Disk Space",
+            status: "warn",
+            details: `${availableGB} GB available (low)`,
+            timestamp: Date.now(),
+          };
+        }
+
         return {
           id: "disk_check",
           category: "storage",
           label: "Disk Space",
-          status: "warn",
-          details: `${availableGB} GB available (low)`,
+          status: "pass",
+          details: `${availableGB} GB available`,
+          timestamp: Date.now(),
+        };
+      } catch (diskError) {
+        const errorMsg = diskError instanceof Error ? diskError.message : String(diskError);
+
+        // If directory doesn't exist, check parent directory
+        if (errorMsg.includes("No such file") || errorMsg.includes("does not exist")) {
+          try {
+            // Get parent directory (e.g., /Users/spark/Downloads from /Users/spark/Downloads/Chiral-Network-Storage)
+            const parentPath = storagePath.split('/').slice(0, -1).join('/') || '/';
+            const availableBytes = await invoke<number>("get_disk_space", { path: parentPath });
+            const availableGB = (availableBytes / (1024 ** 3)).toFixed(2);
+
+            if (availableBytes < 1024 ** 3) { // Less than 1 GB
+              return {
+                id: "disk_check",
+                category: "storage",
+                label: "Disk Space",
+                status: "warn",
+                details: `${availableGB} GB available on parent volume (low)`,
+                timestamp: Date.now(),
+              };
+            }
+
+            return {
+              id: "disk_check",
+              category: "storage",
+              label: "Disk Space",
+              status: "pass",
+              details: `${availableGB} GB available on parent volume`,
+              timestamp: Date.now(),
+            };
+          } catch (parentError) {
+            // Parent check also failed
+            return {
+              id: "disk_check",
+              category: "storage",
+              label: "Disk Space",
+              status: "fail",
+              error: `Cannot check disk space: ${parentError instanceof Error ? parentError.message : String(parentError)}`,
+              timestamp: Date.now(),
+            };
+          }
+        }
+
+        // Other error
+        return {
+          id: "disk_check",
+          category: "storage",
+          label: "Disk Space",
+          status: "fail",
+          error: errorMsg,
           timestamp: Date.now(),
         };
       }
-
-      return {
-        id: "disk_check",
-        category: "storage",
-        label: "Disk Space",
-        status: "pass",
-        details: `${availableGB} GB available`,
-        timestamp: Date.now(),
-      };
     } catch (error) {
       return {
         id: "disk_check",
