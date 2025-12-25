@@ -2,6 +2,32 @@
 //!
 //! This module implements a custom BitTorrent extension to identify and
 //! prioritize Chiral clients within standard BitTorrent swarms.
+//!
+//! # Current Implementation Status
+//!
+//! **IMPORTANT:** This module is currently a stub implementation due to librqbit v8.1.1
+//! API limitations. The library does not expose public APIs for custom BitTorrent
+//! extension protocols (BEP 10). While librqbit internally supports extended messages,
+//! the Session and ManagedTorrent APIs don't provide methods to register handlers,
+//! send messages, or receive callbacks for custom extensions.
+//!
+//! **Current Functionality:**
+//! - State tracking and event notifications work correctly
+//! - Peer identification and metadata storage functions as designed
+//! - Integration with BitTorrentHandler for event propagation
+//!
+//! **Not Functional (due to librqbit API limitations):**
+//! - Actual message exchange over BitTorrent extension protocol
+//! - Custom extension registration with torrents
+//! - Peer-to-peer extension message sending/receiving
+//!
+//! **Workaround:** Chiral protocol features (payments, reputation, direct connections)
+//! are implemented through the existing libp2p infrastructure instead. This provides
+//! the same functionality without requiring BitTorrent extension support.
+//!
+//! **Future:** This code is maintained for potential future integration if/when librqbit
+//! exposes the necessary extension APIs, or if the project switches to a different
+//! BitTorrent library that supports custom extensions.
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -167,12 +193,24 @@ impl ChiralBitTorrentExtension {
         info!("Registering Chiral extension with torrent: {}", info_hash);
 
         // TODO: Use librqbit's extension API to register our extension
-        // This is where we'd integrate with librqbit's BEP 10 support
-        // 
-        // Example (pseudo-code based on librqbit's extension API):
+        //
+        // LIMITATION: librqbit v8.1.1 does NOT expose public APIs for custom BitTorrent
+        // extension protocols (BEP 10). While the library internally supports extended
+        // messages via ExtendedMessage::Dyn(u8, BencodeValue), the Session and
+        // ManagedTorrent APIs don't provide methods to:
+        //   1. Register custom extension handlers
+        //   2. Send custom extension messages to specific peers
+        //   3. Receive custom extension message callbacks
+        //
+        // WORKAROUND: Chiral protocol features (payments, reputation, direct connections)
+        // are implemented through the existing libp2p infrastructure instead of through
+        // BitTorrent's extension protocol. This code maintains state for potential future
+        // integration if librqbit adds extension API support.
+        //
+        // Example of what the API would look like if it existed:
         // torrent.register_extension(CHIRAL_EXTENSION_NAME, self.create_extension_handler()).await?;
 
-        // For now, we'll simulate the registration
+        // For now, we simulate the registration for state tracking purposes
         let mut peers = self.chiral_peers.write().await;
         peers.insert(info_hash.to_string(), HashMap::new());
 
@@ -316,9 +354,13 @@ impl ChiralBitTorrentExtension {
         
         let response = if accepted {
             // TODO: Set up our endpoint for the direct connection
+            //
+            // LIMITATION: This requires librqbit extension API (see register_with_torrent).
+            // Direct connections are instead established through libp2p infrastructure.
+            // This would retrieve our libp2p multiaddr endpoint if the feature was active.
             ChiralMessage::DirectConnectionResponse {
                 accepted: true,
-                endpoint: Some("our_endpoint_here".to_string()), // TODO: Get actual endpoint
+                endpoint: Some("our_endpoint_here".to_string()), // Placeholder - would use libp2p endpoint
                 reason: None,
             }
         } else {
@@ -424,11 +466,21 @@ impl ChiralBitTorrentExtension {
         debug!("Sending Chiral extension message to peer: {}", peer_id);
 
         // TODO: Use librqbit's extension API to send the message
-        // This would be something like:
+        //
+        // LIMITATION: This requires librqbit extension API (see register_with_torrent).
+        // librqbit v8.1.1 doesn't expose methods to send custom extension messages.
+        // The library internally supports ExtendedMessage::Dyn() but Session/ManagedTorrent
+        // APIs don't provide peer-level message sending capabilities.
+        //
+        // WORKAROUND: Messages are sent through libp2p's DHT and direct peer connections
+        // instead of through BitTorrent's extension protocol.
+        //
+        // Example of what the API would look like if it existed:
+        // let torrent = self.session.get_torrent(info_hash)?;
         // torrent.send_extension_message(peer_id, CHIRAL_EXTENSION_NAME, message_data).await?;
 
-        // For now, we'll just log the intent
-        debug!("Would send {} bytes to peer {} for torrent {}", 
+        // For now, we log the intent for debugging purposes
+        debug!("Would send {} bytes to peer {} for torrent {}",
                message_data.len(), peer_id, info_hash);
 
         Ok(())
