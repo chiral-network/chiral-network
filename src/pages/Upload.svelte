@@ -45,6 +45,7 @@
   import { dhtService } from "$lib/dht";
   import Label from "$lib/components/ui/label.svelte";
   import Input from "$lib/components/ui/input.svelte";
+  import FTPUploadConfig from "$lib/components/upload/FTPUploadConfig.svelte";
   import { settings } from "$lib/stores";
   import { paymentService } from '$lib/services/paymentService';
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -178,6 +179,13 @@
   let recipientPublicKeyInput = "";
   let editingRecipientIndex = -1;
   let showEncryptionOptions = false;
+
+  // FTP upload configuration state
+  let ftpUrl = '';
+  let ftpUsername = '';
+  let ftpPassword = '';
+  let ftpUseFTPS = false;
+  let ftpPassiveMode = true;
 
   // Calculate price using dynamic network metrics with safe fallbacks
   async function uploadFileStreamingToDisk(file: File) {
@@ -1431,6 +1439,35 @@
           />
         </div>
       </div>
+    </Card>
+  {/if}
+
+  <!-- FTP Server Configuration (only shown when FTP is selected) -->
+  {#if isTauri && selectedProtocol === "FTP"}
+    <Card class="p-4">
+      <div class="flex items-center gap-3 mb-4">
+        <div
+          class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-gray-500/10 to-gray-500/5 rounded-lg border border-gray-500/20"
+        >
+          <Server class="h-5 w-5 text-gray-600" />
+        </div>
+        <div class="text-left">
+          <h3 class="text-sm font-semibold text-foreground">
+            FTP Server Configuration
+          </h3>
+          <p class="text-xs text-muted-foreground">
+            Configure your FTP server to upload files
+          </p>
+        </div>
+      </div>
+
+      <FTPUploadConfig
+        bind:ftpUrl
+        bind:ftpUsername
+        bind:ftpPassword
+        bind:ftpUseFTPS
+        bind:ftpPassiveMode
+      />
     </Card>
   {/if}
 
