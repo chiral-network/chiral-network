@@ -68,10 +68,11 @@
         speed: speed > 0 ? `${toHumanReadableSize(speed)}/s` : '0 B/s',
         eta: eta_seconds > 0 ? `${Math.floor(eta_seconds / 60)}m ${eta_seconds % 60}s` : 'N/A',
         seederAddresses: [],
-        downloadedChunks: 0,
+        downloadedChunks: [],
         totalChunks: 0,
         protocol: 'BitTorrent' as const,
-        downloadStartTime: existingIndex >= 0 ? f[existingIndex].downloadStartTime : Date.now()
+        downloadStartTime: existingIndex >= 0 ? f[existingIndex].downloadStartTime : Date.now(),
+        price: 0
       };
 
       if (existingIndex >= 0) {
@@ -97,10 +98,11 @@
       speed: '0 B/s',
       eta: 'Complete',
       seederAddresses: [],
-      downloadedChunks: 0,
+      downloadedChunks: [],
       totalChunks: 0,
       protocol: 'BitTorrent' as const,
-      downloadStartTime: Date.now()
+      downloadStartTime: Date.now(),
+      price: 0
     };
 
     downloadHistoryService.addToHistory(torrentFile);
@@ -577,7 +579,7 @@
                 progress: data.progress,
                 speed: speedFormatted,
                 eta: data.progress >= 100 ? 'Complete' : etaFormatted,
-                downloadedChunks: data.chunksReceived,
+                downloadedChunks: [],
                 totalChunks: data.totalChunks,
                 downloadStartTime: downloadStartTime
               };
@@ -3423,7 +3425,7 @@ async function loadAndResumeDownloads() {
   <PaymentCheckpointModal
     checkpointEvent={currentCheckpoint}
     fileName={currentCheckpointFileName}
-    show={showPaymentModal}
+    showModal={showPaymentModal}
     on:pay={handlePaymentCheckpoint}
     on:cancel={handlePaymentCancel}
     on:close={handlePaymentClose}

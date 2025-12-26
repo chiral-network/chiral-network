@@ -548,7 +548,6 @@
   // Files can only be downloaded via the protocol they were uploaded with
   function getAvailableProtocols(metadata: FileMetadata): Array<{id: string, name: string, description: string, available: boolean}> {
     // Determine which protocol was used for upload based on metadata
-    const hasCids = !!(metadata.cids && metadata.cids.length > 0);
     const hasInfoHash = !!metadata.infoHash;
     const hasHttpSources = !!(metadata.httpSources && metadata.httpSources.length > 0);
     const hasFtpSources = !!(metadata.ftpSources && metadata.ftpSources.length > 0);
