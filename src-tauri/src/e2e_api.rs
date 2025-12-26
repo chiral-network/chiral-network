@@ -203,7 +203,7 @@ async fn ensure_multi_source_services_started(app: &tauri::AppHandle) -> Result<
     }
     .ok_or_else(|| "Chunk manager not initialized".to_string())?;
 
-    let transfer_event_bus = Arc::new(crate::transfer_events::TransferEventBus::new(app.clone()));
+    let transfer_event_bus = Arc::new(crate::TransferEventBus::new(app.clone()));
     let ms = crate::multi_source_download::MultiSourceDownloadService::new(
         dht,
         webrtc,
