@@ -132,39 +132,70 @@ async fn ensure_p2p_services_started(app: &tauri::AppHandle) -> Result<(), Strin
     // "File transfer service is not running". For E2E API usage, we auto-start them.
     let state = app.state::<crate::AppState>();
 
-    // Fast path: already running.
+    // If the frontend never bootstrapped services, we may be missing:
+    // - FileTransferService (required for WebRTC + MultiSource)
+    // - WebRTCService (required for MultiSource)
+    // - ChunkManager (required for FTP/MultiSource manifest-based verification)
+    //
+    // For E2E API usage we ensure all are present.
+
+    // Ensure ChunkManager exists (used by FTP/MultiSource and some WebRTC paths).
     {
-        let ft_guard = state.file_transfer.lock().await;
-        if ft_guard.is_some() {
-            return Ok(());
+        let mut chunk_guard = state.chunk_manager.lock().await;
+        if chunk_guard.is_none() {
+            let chunk_storage_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("Failed to get app data dir for chunk storage: {}", e))?
+                .join("chunk_storage");
+            let _ = std::fs::create_dir_all(&chunk_storage_path);
+            *chunk_guard = Some(Arc::new(ChunkManager::new(chunk_storage_path)));
         }
     }
 
-    // Start FileTransferService (storage under app data dir).
-    let ft = FileTransferService::new_with_app_handle(app.clone())
-        .await
-        .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
-    let ft_arc = Arc::new(ft);
-    {
-        let mut ft_guard = state.file_transfer.lock().await;
-        *ft_guard = Some(ft_arc.clone());
-    }
+    // Ensure FileTransferService exists (storage under app data dir).
+    let ft_arc = {
+        let existing = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = existing {
+            ft
+        } else {
+            let ft = FileTransferService::new_with_app_handle(app.clone())
+                .await
+                .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
+            let ft_arc = Arc::new(ft);
+            let mut ft_guard = state.file_transfer.lock().await;
+            *ft_guard = Some(ft_arc.clone());
+            ft_arc
+        }
+    };
 
-    // Start WebRTCService and set the global singleton (used by chunk processing).
-    let webrtc = WebRTCService::new(
-        app.clone(),
-        ft_arc.clone(),
-        state.keystore.clone(),
-        state.bandwidth.clone(),
-    )
-    .await
-    .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
+    // Ensure WebRTCService exists and set the global singleton (used by chunk processing).
+    let webrtc_arc = {
+        let existing = {
+            let guard = state.webrtc.lock().await;
+            guard.as_ref().cloned()
+        };
+        if let Some(w) = existing {
+            w
+        } else {
+            let webrtc = WebRTCService::new(
+                app.clone(),
+                ft_arc.clone(),
+                state.keystore.clone(),
+                state.bandwidth.clone(),
+            )
+            .await
+            .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
 
-    let webrtc_arc = Arc::new(webrtc);
-    {
-        let mut guard = state.webrtc.lock().await;
-        *guard = Some(webrtc_arc.clone());
-    }
+            let webrtc_arc = Arc::new(webrtc);
+            let mut guard = state.webrtc.lock().await;
+            *guard = Some(webrtc_arc.clone());
+            webrtc_arc
+        }
+    };
     set_webrtc_service(webrtc_arc).await;
 
     Ok(())
