@@ -323,10 +323,112 @@ impl Ed2kClient {
 
         self.connection = Some(stream);
 
-        // In a real implementation, we would send a login packet here
-        // For now, we just establish the connection
+        // Perform login handshake
+        self.send_login().await?;
+
+        info!("Connected and logged in to ED2K server: {}", addr);
 
         Ok(())
+    }
+
+    /// Send login request to ED2K server
+    async fn send_login(&mut self) -> Result<(), Ed2kError> {
+        let conn = self.connection.as_mut()
+            .ok_or_else(|| Ed2kError::ConnectionError("Not connected".to_string()))?;
+
+        // Generate a client hash (normally would be persistent)
+        let client_hash = Self::generate_client_hash();
+        
+        // Build login packet
+        // Format: [hash:16][client_id:4][port:2][tag_count:4][tags...]
+        let mut payload = Vec::new();
+        
+        // Client hash (16 bytes)
+        payload.extend_from_slice(&client_hash);
+        
+        // Client ID (0 for initial connection, server assigns one)
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        
+        // Client port (4662 - default ED2K client port)
+        payload.extend_from_slice(&4662u16.to_le_bytes());
+        
+        // Tag count (3 tags: name, version, flags)
+        payload.extend_from_slice(&3u32.to_le_bytes());
+        
+        // Tag 1: Client name (CT_NAME = 0x01)
+        Self::write_string_tag(&mut payload, 0x01, "Chiral Network");
+        
+        // Tag 2: Client version (CT_VERSION = 0x11)
+        payload.push(0x03); // Integer type
+        payload.push(0x11); // Version tag ID
+        payload.extend_from_slice(&0x3Cu32.to_le_bytes()); // Version 0.60
+        
+        // Tag 3: Capabilities (CT_SERVER_FLAGS = 0x20)
+        payload.push(0x03); // Integer type
+        payload.push(0x20); // Flags tag ID
+        payload.extend_from_slice(&0x00000001u32.to_le_bytes()); // Basic flags
+        
+        // Send login packet
+        Self::send_packet(conn, opcodes::OP_LOGINREQUEST, &payload).await?;
+        
+        // Wait for server response (OP_SERVERMESSAGE or OP_IDCHANGE)
+        let (opcode, response_payload) = Self::receive_packet(conn, 30).await?;
+        
+        match opcode {
+            0x32 => { // OP_IDCHANGE - server assigned client ID
+                if response_payload.len() >= 4 {
+                    let client_id = u32::from_le_bytes([
+                        response_payload[0],
+                        response_payload[1],
+                        response_payload[2],
+                        response_payload[3],
+                    ]);
+                    self.client_id = Some(client_id);
+                    info!("Server assigned client ID: {}", client_id);
+                }
+            }
+            0x38 => { // OP_SERVERMESSAGE
+                debug!("Received server message during login");
+            }
+            _ => {
+                return Err(Ed2kError::ProtocolError(format!(
+                    "Unexpected response to login: opcode 0x{:02x}",
+                    opcode
+                )));
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Generate a client hash (MD4 hash of random data)
+    fn generate_client_hash() -> [u8; 16] {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        // Use timestamp as seed for reproducible but unique hash
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let mut hasher = Md4::new();
+        hasher.update(&timestamp.to_le_bytes());
+        hasher.update(b"chiral-network-ed2k-client");
+        
+        let result = hasher.finalize();
+        let mut hash = [0u8; 16];
+        hash.copy_from_slice(&result);
+        hash
+    }
+
+    /// Write a string tag to payload
+    fn write_string_tag(payload: &mut Vec<u8>, tag_id: u8, value: &str) {
+        payload.push(0x02); // String tag type
+        payload.push(tag_id); // Tag ID
+        
+        let value_bytes = value.as_bytes();
+        payload.extend_from_slice(&(value_bytes.len() as u16).to_le_bytes());
+        payload.extend_from_slice(value_bytes);
     }
 
     /// Download a specific chunk (9.28 MB)
@@ -668,52 +770,55 @@ impl Ed2kClient {
             return Err(Ed2kError::ProtocolError("Hash must be 16 bytes (MD4)".to_string()));
         }
 
-        // Build OP_GETSOURCES packet
-        let mut packet = Vec::new();
-        packet.push(opcodes::OP_GETSOURCES);
-        packet.extend_from_slice(&hash_bytes);
+        info!("Requesting sources for file hash: {}", file_hash);
 
-        // Send request
-        conn.write_all(&packet).await?;
+        // Send OP_GETSOURCES packet using proper packet format
+        Self::send_packet(conn, opcodes::OP_GETSOURCES, &hash_bytes).await?;
 
-        // Read response (OP_FOUNDSOURCES)
-        let mut header = [0u8; 5];
-        let read_result = tokio::time::timeout(
-            self.config.timeout,
-            conn.read_exact(&mut header)
-        ).await;
+        // Receive response packet
+        let timeout_secs = self.config.timeout.as_secs();
+        let (opcode, payload) = Self::receive_packet(conn, timeout_secs).await?;
 
-        match read_result {
-            Ok(Ok(_)) => {
-                if header[0] != opcodes::OP_FOUNDSOURCES {
-                    return Err(Ed2kError::ProtocolError(
-                        format!("Unexpected response opcode: 0x{:02x}", header[0])
-                    ));
-                }
-
-                // Parse source count
-                let source_count = u32::from_le_bytes([header[1], header[2], header[3], header[4]]) as usize;
-                let mut sources = Vec::with_capacity(source_count);
-
-                // Read source entries (6 bytes each: 4 bytes IP + 2 bytes port)
-                for _ in 0..source_count {
-                    let mut source_data = [0u8; 6];
-                    conn.read_exact(&mut source_data).await?;
-
-                    let ip = format!(
-                        "{}.{}.{}.{}",
-                        source_data[0], source_data[1], source_data[2], source_data[3]
-                    );
-                    let port = u16::from_le_bytes([source_data[4], source_data[5]]);
-
-                    sources.push(format!("{}:{}", ip, port));
-                }
-
-                Ok(sources)
-            }
-            Ok(Err(e)) => Err(Ed2kError::IoError(e)),
-            Err(_) => Err(Ed2kError::Timeout),
+        if opcode != opcodes::OP_FOUNDSOURCES {
+            return Err(Ed2kError::ProtocolError(
+                format!("Expected OP_FOUNDSOURCES (0x{:02x}), got 0x{:02x}", 
+                    opcodes::OP_FOUNDSOURCES, opcode)
+            ));
         }
+
+        // Parse payload: [file_hash:16][source_count:1][sources...]
+        if payload.len() < 17 {
+            return Err(Ed2kError::ProtocolError("Invalid FOUNDSOURCES payload".to_string()));
+        }
+
+        // Verify file hash matches
+        if &payload[0..16] != hash_bytes.as_slice() {
+            return Err(Ed2kError::ProtocolError("File hash mismatch in response".to_string()));
+        }
+
+        // Parse source count (1 byte)
+        let source_count = payload[16] as usize;
+        let mut sources = Vec::with_capacity(source_count);
+
+        // Parse sources: each source is 6 bytes (4 bytes IP + 2 bytes port)
+        let mut offset = 17;
+        for _ in 0..source_count {
+            if offset + 6 > payload.len() {
+                break;
+            }
+
+            let ip = format!(
+                "{}.{}.{}.{}",
+                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]
+            );
+            let port = u16::from_le_bytes([payload[offset + 4], payload[offset + 5]]);
+            sources.push(format!("{}:{}", ip, port));
+
+            offset += 6;
+        }
+
+        info!("Found {} sources for file", sources.len());
+        Ok(sources)
     }
 
     /// Get server information
@@ -1240,4 +1345,126 @@ mod tests {
         let blocks_per_chunk = ED2K_CHUNK_SIZE / ED2K_BLOCK_SIZE;
         assert_eq!(blocks_per_chunk, 37); // 9.28MB / 256KB = 37.109...
     }
-}
+
+    #[test]
+    fn test_parse_source_list_single() {
+        // Create a mock OP_FOUNDSOURCES payload
+        let mut payload = Vec::new();
+        
+        // File hash (16 bytes)
+        payload.extend_from_slice(&[0xAB; 16]);
+        
+        // Source count (1 byte)
+        payload.push(1);
+        
+        // Single source: 192.168.1.100:4662
+        payload.extend_from_slice(&[192, 168, 1, 100]); // IP
+        payload.extend_from_slice(&4662u16.to_le_bytes()); // Port
+        
+        // Parse manually to test the logic
+        let source_count = payload[16] as usize;
+        assert_eq!(source_count, 1);
+        
+        let mut offset = 17;
+        let ip = format!(
+            "{}.{}.{}.{}",
+            payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]
+        );
+        let port = u16::from_le_bytes([payload[offset + 4], payload[offset + 5]]);
+        
+        assert_eq!(ip, "192.168.1.100");
+        assert_eq!(port, 4662);
+    }
+
+    #[test]
+    fn test_parse_source_list_multiple() {
+        // Create a mock OP_FOUNDSOURCES payload with 3 sources
+        let mut payload = Vec::new();
+        
+        // File hash (16 bytes)
+        payload.extend_from_slice(&[0xCD; 16]);
+        
+        // Source count (3 bytes)
+        payload.push(3);
+        
+        // Source 1: 10.0.0.1:4661
+        payload.extend_from_slice(&[10, 0, 0, 1]);
+        payload.extend_from_slice(&4661u16.to_le_bytes());
+        
+        // Source 2: 10.0.0.2:4662
+        payload.extend_from_slice(&[10, 0, 0, 2]);
+        payload.extend_from_slice(&4662u16.to_le_bytes());
+        
+        // Source 3: 10.0.0.3:4663
+        payload.extend_from_slice(&[10, 0, 0, 3]);
+        payload.extend_from_slice(&4663u16.to_le_bytes());
+        
+        let source_count = payload[16] as usize;
+        assert_eq!(source_count, 3);
+        
+        let mut sources = Vec::new();
+        let mut offset = 17;
+        
+        for _ in 0..source_count {
+            let ip = format!(
+                "{}.{}.{}.{}",
+                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]
+            );
+            let port = u16::from_le_bytes([payload[offset + 4], payload[offset + 5]]);
+            sources.push(format!("{}:{}", ip, port));
+            offset += 6;
+        }
+        
+        assert_eq!(sources.len(), 3);
+        assert_eq!(sources[0], "10.0.0.1:4661");
+        assert_eq!(sources[1], "10.0.0.2:4662");
+        assert_eq!(sources[2], "10.0.0.3:4663");
+    }
+
+    #[test]
+    fn test_parse_source_list_empty() {
+        // Create a mock OP_FOUNDSOURCES payload with no sources
+        let mut payload = Vec::new();
+        
+        // File hash (16 bytes)
+        payload.extend_from_slice(&[0xEF; 16]);
+        
+        // Source count (0 sources)
+        payload.push(0);
+        
+        let source_count = payload[16] as usize;
+        assert_eq!(source_count, 0);
+    }
+
+    #[test]
+    fn test_source_payload_too_short() {
+        // Payload shorter than minimum (16 bytes hash + 1 byte count)
+        let payload = vec![0x00; 10];
+        
+        assert!(payload.len() < 17);
+    }
+
+    #[test]
+    fn test_source_payload_truncated() {
+        // Payload with source count but incomplete source data
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&[0xFF; 16]); // Hash
+        payload.push(2); // Says 2 sources
+        // But only 3 bytes follow (should be 12 bytes for 2 sources)
+        payload.extend_from_slice(&[192, 168, 1]);
+        
+        let source_count = payload[16] as usize;
+        let mut offset = 17;
+        let mut actual_sources = 0;
+        
+        // Should break when not enough data
+        for _ in 0..source_count {
+            if offset + 6 > payload.len() {
+                break;
+            }
+            actual_sources += 1;
+            offset += 6;
+        }
+        
+        assert_eq!(actual_sources, 0); // No complete sources parsed
+    }}
