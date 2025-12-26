@@ -293,10 +293,14 @@ impl Ed2kProtocolHandler {
             hasher.update(&[]);
             hex::encode(hasher.finalize())
         } else {
-            // Stream hashes into hasher instead of concatenating strings
+            // Stream hashes into hasher instead of concatenating strings.
+            // Decode each hex-encoded chunk hash to raw bytes before hashing,
+            // to ensure we hash the actual hash values, not their ASCII representation.
             let mut hasher = Sha256::new();
             for chunk_info in &chunk_infos {
-                hasher.update(chunk_info.hash.as_bytes());
+                let hash_bytes = hex::decode(&chunk_info.hash)
+                    .map_err(|e| ProtocolError::Internal(format!("Invalid chunk hash hex: {e}")))?;
+                hasher.update(&hash_bytes);
             }
             hex::encode(hasher.finalize())
         };
