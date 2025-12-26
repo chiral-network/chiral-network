@@ -4798,6 +4798,26 @@ async fn download_file_from_network(
                         metadata.file_name, metadata.file_size
                     );
 
+                    // Record requested output path so the WebRTC assembler can respect it.
+                    // Bitswap already uses the passed output_path directly, but WebRTC assembles in webrtc_service.rs.
+                    {
+                        // If the caller passed a directory path, write into it using the metadata file name.
+                        let resolved = {
+                            let p = std::path::PathBuf::from(&output_path);
+                            if p.exists() && p.is_dir() {
+                                p.join(&metadata.file_name).to_string_lossy().to_string()
+                            } else {
+                                output_path.clone()
+                            }
+                        };
+
+                        webrtc_service::set_requested_download_output_path(
+                            metadata.merkle_root.clone(),
+                            resolved,
+                        )
+                        .await;
+                    }
+
                     // Implement peer discovery for file chunks
                     info!(
                         "Discovering peers for file: {} with {} known seeders",

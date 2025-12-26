@@ -578,7 +578,23 @@ async fn api_download(
     // Use a stable downloads dir under temp for E2E.
     let downloads_dir = std::env::temp_dir().join("chiral-e2e-downloads");
     let _ = tokio::fs::create_dir_all(&downloads_dir).await;
-    let output_path = downloads_dir.join(&out_name);
+    // IMPORTANT:
+    // - The HttpDownloadClient may write to a *unique* path if the target exists (to avoid overwrites).
+    // - Our E2E endpoint then verifies the file by reading `output_path`.
+    // If `output_path` already exists from a previous run, this can lead to verifying the *wrong* file.
+    // So we always generate a unique output filename per request.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let hash_prefix: String = meta.merkle_root.chars().take(8).collect();
+    let output_path = downloads_dir.join(format!(
+        "{}-{}-{}-{}",
+        protocol_upper.to_lowercase(),
+        hash_prefix,
+        now_ms,
+        out_name
+    ));
 
     if protocol_upper == "HTTP" {
         // Include downloader peer id for provider metrics if available.
