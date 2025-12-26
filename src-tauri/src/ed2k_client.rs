@@ -6,8 +6,11 @@
 //! - MD4 hash algorithm for file and chunk verification
 //! - TCP connection to ed2k servers (default port 4661)
 
+use md4::{Md4, Digest};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::Duration;
+use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -282,14 +285,157 @@ impl Ed2kClient {
 
     /// Verify MD4 hash of data
     pub fn verify_md4_hash(data: &[u8], expected_hash: &str) -> bool {
-        use md4::Digest;
+        let computed_hash = Self::compute_md4_hash(data);
+        computed_hash.eq_ignore_ascii_case(expected_hash)
+    }
 
-        let mut hasher = md4::Md4::new();
+    /// Compute MD4 hash of data and return as hex string
+    pub fn compute_md4_hash(data: &[u8]) -> String {
+        let mut hasher = Md4::new();
         hasher.update(data);
         let result = hasher.finalize();
-        let computed_hash = format!("{:x}", result);
+        format!("{:x}", result)
+    }
 
-        computed_hash.eq_ignore_ascii_case(expected_hash)
+    /// Compute ED2K file hash
+    /// For files <= 9.28MB: returns MD4 hash of the entire file
+    /// For files > 9.28MB: returns MD4 hash of the concatenated chunk hashes (root hash)
+    pub async fn compute_file_hash<P: AsRef<Path>>(path: P) -> Result<String, Ed2kError> {
+        let mut file = File::open(path).await?;
+        let metadata = file.metadata().await?;
+        let file_size = metadata.len() as usize;
+
+        // Single chunk file
+        if file_size <= ED2K_CHUNK_SIZE {
+            let mut buffer = Vec::with_capacity(file_size);
+            file.read_to_end(&mut buffer).await?;
+            Ok(Self::compute_md4_hash(&buffer))
+        } else {
+            // Multi-chunk file: compute hash of chunk hashes
+            let chunk_hashes = Self::compute_chunk_hashes_from_file(&mut file, file_size).await?;
+            
+            // Concatenate all chunk hash bytes
+            let mut combined_hashes = Vec::new();
+            for hash_str in chunk_hashes {
+                let hash_bytes = hex::decode(&hash_str)?;
+                combined_hashes.extend_from_slice(&hash_bytes);
+            }
+            
+            Ok(Self::compute_md4_hash(&combined_hashes))
+        }
+    }
+
+    /// Compute chunk hashes for a file
+    /// Returns a vector of MD4 hash strings, one for each 9.28MB chunk
+    pub async fn compute_chunk_hashes<P: AsRef<Path>>(path: P) -> Result<Vec<String>, Ed2kError> {
+        let mut file = File::open(path).await?;
+        let metadata = file.metadata().await?;
+        let file_size = metadata.len() as usize;
+        
+        Self::compute_chunk_hashes_from_file(&mut file, file_size).await
+    }
+
+    /// Internal helper to compute chunk hashes from an open file
+    async fn compute_chunk_hashes_from_file(file: &mut File, file_size: usize) -> Result<Vec<String>, Ed2kError> {
+        let num_chunks = (file_size + ED2K_CHUNK_SIZE - 1) / ED2K_CHUNK_SIZE;
+        let mut chunk_hashes = Vec::with_capacity(num_chunks);
+        let mut buffer = vec![0u8; ED2K_CHUNK_SIZE];
+
+        for _ in 0..num_chunks {
+            let bytes_read = file.read(&mut buffer).await?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            let chunk_hash = Self::compute_md4_hash(&buffer[..bytes_read]);
+            chunk_hashes.push(chunk_hash);
+        }
+
+        Ok(chunk_hashes)
+    }
+
+    /// Split data into ED2K chunks (9.28MB each)
+    /// Returns a vector of byte slices representing each chunk
+    pub fn split_into_chunks(data: &[u8]) -> Vec<&[u8]> {
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+
+        while offset < data.len() {
+            let end = std::cmp::min(offset + ED2K_CHUNK_SIZE, data.len());
+            chunks.push(&data[offset..end]);
+            offset = end;
+        }
+
+        chunks
+    }
+
+    /// Validate a complete file against ED2K hash
+    /// Returns true if the computed hash matches the expected hash
+    pub async fn validate_file<P: AsRef<Path>>(
+        path: P,
+        expected_hash: &str,
+    ) -> Result<bool, Ed2kError> {
+        let computed_hash = Self::compute_file_hash(path).await?;
+        Ok(computed_hash.eq_ignore_ascii_case(expected_hash))
+    }
+
+    /// Validate a single chunk against its expected hash
+    pub fn validate_chunk(chunk_data: &[u8], expected_hash: &str) -> bool {
+        Self::verify_md4_hash(chunk_data, expected_hash)
+    }
+
+    /// Get the number of chunks needed for a file of given size
+    pub fn get_chunk_count(file_size: u64) -> usize {
+        ((file_size as usize) + ED2K_CHUNK_SIZE - 1) / ED2K_CHUNK_SIZE
+    }
+
+    /// Get the size of a specific chunk (last chunk may be smaller)
+    pub fn get_chunk_size(chunk_index: usize, file_size: u64) -> usize {
+        let total_chunks = Self::get_chunk_count(file_size);
+        
+        if chunk_index >= total_chunks {
+            return 0;
+        }
+        
+        if chunk_index == total_chunks - 1 {
+            // Last chunk
+            let remainder = (file_size as usize) % ED2K_CHUNK_SIZE;
+            if remainder == 0 {
+                ED2K_CHUNK_SIZE
+            } else {
+                remainder
+            }
+        } else {
+            ED2K_CHUNK_SIZE
+        }
+    }
+
+    /// Create ED2K file info from a local file
+    /// Computes all necessary hashes and metadata
+    pub async fn create_file_info<P: AsRef<Path>>(path: P) -> Result<Ed2kFileInfo, Ed2kError> {
+        let path_ref = path.as_ref();
+        let metadata = tokio::fs::metadata(path_ref).await?;
+        let file_size = metadata.len();
+        
+        let file_name = path_ref
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
+        
+        let file_hash = Self::compute_file_hash(path_ref).await?;
+        let chunk_hashes = if file_size > ED2K_CHUNK_SIZE as u64 {
+            Self::compute_chunk_hashes(path_ref).await?
+        } else {
+            Vec::new()
+        };
+        
+        Ok(Ed2kFileInfo {
+            file_hash,
+            file_size,
+            file_name,
+            sources: Vec::new(),
+            chunk_hashes,
+        })
     }
 
     /// Offer files to the ED2K server for sharing
@@ -494,6 +640,177 @@ mod tests {
         let expected_hash = "aa010fbc1d14c795d86ef98c95479d17";
 
         assert!(Ed2kClient::verify_md4_hash(data, expected_hash));
+    }
+
+    #[test]
+    fn test_compute_md4_hash() {
+        let data = b"hello world";
+        let hash = Ed2kClient::compute_md4_hash(data);
+        assert_eq!(hash, "aa010fbc1d14c795d86ef98c95479d17");
+    }
+
+    #[test]
+    fn test_compute_md4_hash_empty() {
+        let data = b"";
+        let hash = Ed2kClient::compute_md4_hash(data);
+        // MD4 hash of empty string
+        assert_eq!(hash, "31d6cfe0d16ae931b73c59d7e0c089c0");
+    }
+
+    #[test]
+    fn test_split_into_chunks_small_file() {
+        let data = vec![0u8; 1000];
+        let chunks = Ed2kClient::split_into_chunks(&data);
+        
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), 1000);
+    }
+
+    #[test]
+    fn test_split_into_chunks_exact_chunk_size() {
+        let data = vec![0u8; ED2K_CHUNK_SIZE];
+        let chunks = Ed2kClient::split_into_chunks(&data);
+        
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), ED2K_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_split_into_chunks_multiple() {
+        let data = vec![0u8; ED2K_CHUNK_SIZE * 2 + 1000];
+        let chunks = Ed2kClient::split_into_chunks(&data);
+        
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), ED2K_CHUNK_SIZE);
+        assert_eq!(chunks[1].len(), ED2K_CHUNK_SIZE);
+        assert_eq!(chunks[2].len(), 1000);
+    }
+
+    #[test]
+    fn test_get_chunk_count_small() {
+        assert_eq!(Ed2kClient::get_chunk_count(1000), 1);
+    }
+
+    #[test]
+    fn test_get_chunk_count_exact() {
+        assert_eq!(Ed2kClient::get_chunk_count(ED2K_CHUNK_SIZE as u64), 1);
+    }
+
+    #[test]
+    fn test_get_chunk_count_multiple() {
+        assert_eq!(Ed2kClient::get_chunk_count((ED2K_CHUNK_SIZE * 2 + 1000) as u64), 3);
+    }
+
+    #[test]
+    fn test_get_chunk_size_first() {
+        let file_size = (ED2K_CHUNK_SIZE * 2 + 1000) as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(0, file_size), ED2K_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_get_chunk_size_middle() {
+        let file_size = (ED2K_CHUNK_SIZE * 3) as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(1, file_size), ED2K_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_get_chunk_size_last_partial() {
+        let file_size = (ED2K_CHUNK_SIZE * 2 + 1000) as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(2, file_size), 1000);
+    }
+
+    #[test]
+    fn test_get_chunk_size_last_full() {
+        let file_size = (ED2K_CHUNK_SIZE * 2) as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(1, file_size), ED2K_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_get_chunk_size_out_of_bounds() {
+        let file_size = ED2K_CHUNK_SIZE as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(10, file_size), 0);
+    }
+
+    #[test]
+    fn test_validate_chunk_valid() {
+        let data = b"test data";
+        let hash = Ed2kClient::compute_md4_hash(data);
+        assert!(Ed2kClient::validate_chunk(data, &hash));
+    }
+
+    #[test]
+    fn test_validate_chunk_invalid() {
+        let data = b"test data";
+        let wrong_hash = "0000000000000000000000000000000";
+        assert!(!Ed2kClient::validate_chunk(data, wrong_hash));
+    }
+
+    #[tokio::test]
+    async fn test_compute_file_hash_small() {
+        use tokio::io::AsyncWriteExt;
+        
+        // Create a temporary file
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ed2k_test_small.dat");
+        
+        let mut file = tokio::fs::File::create(&file_path).await.unwrap();
+        file.write_all(b"hello world").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        
+        let hash = Ed2kClient::compute_file_hash(&file_path).await.unwrap();
+        assert_eq!(hash, "aa010fbc1d14c795d86ef98c95479d17");
+        
+        // Cleanup
+        tokio::fs::remove_file(file_path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_validate_file() {
+        use tokio::io::AsyncWriteExt;
+        
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ed2k_test_validate.dat");
+        
+        let mut file = tokio::fs::File::create(&file_path).await.unwrap();
+        file.write_all(b"test").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        
+        let correct_hash = "db346d691d7acc4dc2625db19f9e3f52";
+        let is_valid = Ed2kClient::validate_file(&file_path, correct_hash).await.unwrap();
+        assert!(is_valid);
+        
+        let wrong_hash = "0000000000000000000000000000000";
+        let is_invalid = Ed2kClient::validate_file(&file_path, wrong_hash).await.unwrap();
+        assert!(!is_invalid);
+        
+        // Cleanup
+        tokio::fs::remove_file(file_path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_create_file_info() {
+        use tokio::io::AsyncWriteExt;
+        
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ed2k_test_info.dat");
+        
+        let mut file = tokio::fs::File::create(&file_path).await.unwrap();
+        let test_data = b"test file content";
+        file.write_all(test_data).await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        
+        let file_info = Ed2kClient::create_file_info(&file_path).await.unwrap();
+        
+        assert_eq!(file_info.file_size, test_data.len() as u64);
+        assert_eq!(file_info.file_name, Some("ed2k_test_info.dat".to_string()));
+        assert!(!file_info.file_hash.is_empty());
+        assert_eq!(file_info.chunk_hashes.len(), 0); // Small file, no chunks
+        
+        // Cleanup
+        tokio::fs::remove_file(file_path).await.ok();
     }
 
     #[test]
