@@ -1,72 +1,50 @@
-# Add ED2K Core Hash Computation and File Validation
+# PR Summary: feat/ed2k-server-communication
 
-## Summary
-This PR implements the foundational hash computation and file validation system for the ED2K (eDonkey2000) protocol, providing the building blocks needed for proper ED2K file integrity verification and multi-chunk file handling.
+## Overview
+Refactored ED2K server communication to use standardized packet structures and added comprehensive testing for source discovery.
 
-## Changes
+## Changes Made
 
-### Hash Computation
-- **`compute_md4_hash()`**: Calculate MD4 hash for arbitrary data
-- **`compute_file_hash()`**: Generate ED2K file hash with proper handling:
-  - Files ≤ 9.28MB: Returns direct MD4 hash of entire file
-  - Files > 9.28MB: Returns MD4 hash of concatenated chunk hashes (root hash)
-- **`compute_chunk_hashes()`**: Compute MD4 hashes for all 9.28MB ED2K chunks in a file
+### Improved get_sources() implementation:
+- Replaced raw socket `write_all` with `send_packet()` helper using Ed2kPacketHeader
+- Uses `receive_packet()` for consistent packet parsing
+- Adds file hash verification in OP_FOUNDSOURCES responses
+- Proper error handling for malformed server responses
+- Standardizes communication between peer and server protocols
 
-### Validation
-- **`validate_file()`**: Verify entire file against expected ED2K hash
-- **`validate_chunk()`**: Verify single chunk integrity with expected hash
-- **`verify_md4_hash()`**: Core validation function with case-insensitive comparison
-
-### File Operations
-- **`create_file_info()`**: Generate complete ED2K metadata from local file:
-  - File hash (MD4)
-  - File size
-  - File name
-  - Chunk hashes (for multi-chunk files)
-- **`split_into_chunks()`**: Split data into 9.28MB ED2K chunks
-- **`get_chunk_count()`**: Calculate number of chunks needed for a file size
-- **`get_chunk_size()`**: Get size of specific chunk (handles last chunk correctly)
-
-### Testing
-Added 27 comprehensive tests covering:
-- MD4 hash computation (empty data, known values, case sensitivity)
-- File hash computation (small files, multi-chunk files)
-- Chunk operations (splitting, counting, size calculations)
-- File validation (correct hash, incorrect hash, edge cases)
-- File info creation from actual files
+### New Tests (6 added, 43 total passing):
+- `test_parse_source_list_single` - Parse single peer source
+- `test_parse_source_list_multiple` - Parse multiple peer sources
+- `test_parse_source_list_empty` - Handle empty source lists
+- `test_source_payload_too_short` - Validate minimum payload size
+- `test_source_payload_truncated` - Handle incomplete source data gracefully
 
 ## Technical Details
 
-### ED2K Hash System
-The ED2K protocol uses MD4 hashing with a specific structure:
-- **Chunk size**: 9,728,000 bytes (9.28 MB)
-- **Small files** (≤ 9.28MB): Direct MD4 hash of file content
-- **Large files** (> 9.28MB): MD4 hash of concatenated chunk hashes (Merkle-like structure)
+### OP_GETSOURCES Request:
+- Sends 16-byte MD4 file hash to server
+- Uses Ed2kPacketHeader (protocol byte 0xE3 + opcode 0x19)
 
-### Integration
-These functions integrate with the existing ED2K implementation in `multi_source_download.rs`, which handles:
-- Downloading full 9.28MB ED2K chunks
-- Splitting them into 256KB application chunks
-- Storing individual chunks
+### OP_FOUNDSOURCES Response:
+- Parses: `[file_hash:16][source_count:1][sources...]`
+- Each source: 6 bytes (4-byte IP + 2-byte port LE)
+- Verifies returned hash matches request
+- Handles truncated payloads without crashing
 
-This PR provides the hash computation and verification layer that ensures integrity at both the ED2K chunk level and full file level.
+## Dependencies
+- Builds on feat/ed2k-peer-protocol (Ed2kPacketHeader, send_packet, receive_packet)
+- Uses feat/ed2k-hash-validation (MD4 hash functions)
+- Existing send_login() already functional
 
 ## Testing
-All 27 tests pass successfully:
-```
-test result: ok. 27 passed; 0 failed; 0 ignored
-```
+✅ All 43 tests passing:
+- 27 hash/validation tests
+- 11 peer protocol tests  
+- 5 server communication tests
 
-Tests cover:
-- Known MD4 hash values
-- File operations with temporary files
-- Chunk boundary conditions
-- Empty and edge case inputs
-- Case-insensitive hash comparison
+## Next Steps
+- Integration with multi_source_download.rs
+- Connect discovered peers to download_block_from_peer()
+- File search (OP_SEARCHREQUEST/OP_SEARCHRESULT)
+- Upload support (OP_REQUESTPARTS/OP_SENDINGPART)
 
-## Why This Matters
-ED2K's 9.28MB chunk structure is fundamentally different from HTTP's byte-range requests or BitTorrent's piece structure. This PR provides the correct cryptographic foundation for:
-- Verifying downloaded ED2K chunks before storing
-- Computing file hashes for sharing files via ED2K
-- Validating complete file integrity after download
-- Supporting the existing multi-source download infrastructure
