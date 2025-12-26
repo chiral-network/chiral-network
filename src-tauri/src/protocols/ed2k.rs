@@ -221,22 +221,44 @@ impl Ed2kProtocolHandler {
         file_path: &PathBuf,
     ) -> Result<crate::manager::FileManifest, ProtocolError> {
         const APP_CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks for app-level verification
+        const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB safety limit
+        const MAX_CHUNKS: usize = 400_000; // ~100GB / 256KB, prevents memory exhaustion
         
         let metadata = tokio::fs::metadata(file_path)
             .await
             .map_err(|e| ProtocolError::FileNotFound(e.to_string()))?;
 
         let file_size = metadata.len();
+        
+        // Validate file size to prevent resource exhaustion
+        if file_size > MAX_FILE_SIZE {
+            return Err(ProtocolError::Internal(format!(
+                "File too large: {} bytes (max {} bytes)",
+                file_size, MAX_FILE_SIZE
+            )));
+        }
+        
         let mut file = tokio::fs::File::open(file_path)
             .await
             .map_err(|e| ProtocolError::Internal(e.to_string()))?;
 
         let mut chunk_infos = Vec::new();
-        let mut all_chunk_hashes = Vec::new(); // For merkle root calculation
         let mut buffer = vec![0u8; APP_CHUNK_SIZE];
         let mut chunk_index = 0u32;
+        
+        // Pre-allocate with capacity to avoid repeated allocations
+        let estimated_chunks = ((file_size + APP_CHUNK_SIZE as u64 - 1) / APP_CHUNK_SIZE as u64) as usize;
+        chunk_infos.reserve(estimated_chunks.min(MAX_CHUNKS));
 
         loop {
+            // Check chunk limit to prevent memory exhaustion
+            if chunk_infos.len() >= MAX_CHUNKS {
+                return Err(ProtocolError::Internal(format!(
+                    "File has too many chunks: {} (max {})",
+                    chunk_infos.len(), MAX_CHUNKS
+                )));
+            }
+            
             let bytes_read = file
                 .read(&mut buffer)
                 .await
@@ -252,8 +274,6 @@ impl Ed2kProtocolHandler {
             let mut sha256_hasher = Sha256::new();
             sha256_hasher.update(chunk_data);
             let chunk_hash = hex::encode(sha256_hasher.finalize());
-            
-            all_chunk_hashes.push(chunk_hash.clone());
 
             chunk_infos.push(crate::manager::ChunkInfo {
                 index: chunk_index,
@@ -266,20 +286,18 @@ impl Ed2kProtocolHandler {
             chunk_index += 1;
         }
 
-        // Calculate Merkle root from all chunk hashes
-        let merkle_root = if all_chunk_hashes.is_empty() {
+        // Calculate Merkle root efficiently using a hasher for streaming
+        let merkle_root = if chunk_infos.is_empty() {
             // Empty file edge case
             let mut hasher = Sha256::new();
             hasher.update(&[]);
             hex::encode(hasher.finalize())
         } else {
-            // Concatenate all chunk hashes and hash the result
-            let mut combined = String::new();
-            for hash in &all_chunk_hashes {
-                combined.push_str(hash);
-            }
+            // Stream hashes into hasher instead of concatenating strings
             let mut hasher = Sha256::new();
-            hasher.update(combined.as_bytes());
+            for chunk_info in &chunk_infos {
+                hasher.update(chunk_info.hash.as_bytes());
+            }
             hex::encode(hasher.finalize())
         };
 
