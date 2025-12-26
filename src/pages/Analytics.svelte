@@ -2,6 +2,7 @@
 import Card from '$lib/components/ui/card.svelte'
 import Badge from '$lib/components/ui/badge.svelte'
 import Progress from '$lib/components/ui/progress.svelte'
+import StorageAnalytics from '$lib/components/StorageAnalytics.svelte'
 import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
 import { files, wallet, settings } from '$lib/stores';
 import { proxyNodes } from '$lib/proxy';
@@ -955,6 +956,10 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
       {/if}
     </Card>
   </div>
+
+  <!-- Storage Analytics -->
+  <StorageAnalytics />
+
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
     <Card class="p-6">
       <h2 class="text-lg font-semibold mb-4">{$t('analytics.topEarningFiles')}</h2>

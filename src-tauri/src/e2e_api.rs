@@ -664,23 +664,24 @@ async fn api_download(
     // Use a stable downloads dir under temp for E2E.
     let downloads_dir = std::env::temp_dir().join("chiral-e2e-downloads");
     let _ = tokio::fs::create_dir_all(&downloads_dir).await;
-
-    // Important:
-    // - HTTP downloads happen synchronously and we verify by sha256(file)==merkle_root.
-    // - Reusing the same output filename across runs can interact badly with partial/resume logic
-    //   (or stale files), causing "verified=false" even when the network side is correct.
-    // So for HTTP we write to a per-request unique output filename under the same directory.
-    let output_path = if protocol_upper == "HTTP" {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let hash_prefix: String = meta.merkle_root.chars().take(8).collect();
-        let safe_name = out_name.replace(['\\', '/', ':'], "_");
-        downloads_dir.join(format!("http-{}-{}-{}", hash_prefix, ts, safe_name))
-    } else {
-        downloads_dir.join(&out_name)
-    };
+    // IMPORTANT:
+    // - Our E2E endpoint verifies by reading `output_path` after the download finishes.
+    // - If `output_path` already exists from a previous run, we can accidentally verify the wrong file
+    //   (or trigger resume/partial behaviors depending on protocol/client).
+    // So we always generate a unique output filename per request (all protocols).
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let hash_prefix: String = meta.merkle_root.chars().take(8).collect();
+    let safe_name = out_name.replace(['\\', '/', ':'], "_");
+    let output_path = downloads_dir.join(format!(
+        "{}-{}-{}-{}",
+        protocol_upper.to_lowercase(),
+        hash_prefix,
+        now_ms,
+        safe_name
+    ));
 
     if protocol_upper == "HTTP" {
         // Ensure we're not resuming into an unrelated stale file.

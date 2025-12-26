@@ -749,7 +749,26 @@
     "multipleLoginsDesc": "El usuario inició sesión desde distintos países en 5 minutos",
     "failedDownloads": "Descargas fallidas",
     "failedDownloadsDesc": "Se detectaron varios intentos de descarga fallidos",
-    "latencyNoNodes": "No hay nodos proxy conectados. Los datos de latencia aparecerán aquí una vez que te conectes."
+    "latencyNoNodes": "No hay nodos proxy conectados. Los datos de latencia aparecerán aquí una vez que te conectes.",
+    "storage": {
+      "title": "Análisis de Almacenamiento",
+      "totalUsage": "Uso Total",
+      "cleanupNeeded": "Limpieza Recomendada",
+      "cleanupHint": "El uso de almacenamiento supera el umbral del {threshold}%",
+      "cleaning": "Limpiando...",
+      "cleanupNow": "Limpiar Almacenamiento",
+      "lastCleanup": "Último Informe de Limpieza",
+      "filesDeleted": "Archivos eliminados",
+      "spaceFreed": "Espacio liberado",
+      "errors": "Errores",
+      "noData": "No hay datos de almacenamiento disponibles",
+      "breakdown": "Desglose de Almacenamiento",
+      "noFilesStored": "Aún no hay archivos almacenados",
+      "autoCleanup": "Limpieza Automática",
+      "enabled": "Habilitado",
+      "disabled": "Deshabilitado",
+      "threshold": "Umbral"
+    }
   },
   "proxy": {
     "title": "Red proxy",

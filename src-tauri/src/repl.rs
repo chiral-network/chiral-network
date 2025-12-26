@@ -291,6 +291,10 @@ async fn handle_command(
             crate::remote_repl::cmd_remote(args, context).await?;
             Ok(false)
         }
+        "storage" | "cache" => {
+            cmd_storage(args, context).await?;
+            Ok(false)
+        }
         "clear" | "cls" => {
             print!("\x1B[2J\x1B[1;1H");
             Ok(false)
@@ -302,7 +306,7 @@ async fn handle_command(
                 "add", "download", "dl", "mining", "mine", "downloads",
                 "config", "reputation", "rep", "versions", "ver",
                 "export", "script", "plugin", "webhook", "report", "remote",
-                "clear", "cls", "quit", "exit", "q",
+                "storage", "cache", "clear", "cls", "quit", "exit", "q",
             ];
 
             let mut suggestions: Vec<(&str, usize)> = all_commands
@@ -330,6 +334,7 @@ async fn handle_command(
                     "config" => println!("   Usage: config [get|set|list|reset]"),
                     "reputation" | "rep" => println!("   Usage: reputation [list|info <peer_id>]"),
                     "versions" | "ver" => println!("   Usage: versions [list|info] <hash>"),
+                    "storage" | "cache" => println!("   Usage: storage [stats|clear|cleanup <days>]"),
                     _ => {}
                 }
             } else {
@@ -386,6 +391,14 @@ fn print_help() {
     println!("  │ {:<60} │", "  config get <key>        Get setting value");
     println!("  │ {:<60} │", "  config set <key> <val>  Set setting value");
     println!("  │ {:<60} │", "  config reset <key>      Reset to default");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "Storage & Cache");
+    println!("  ├──────────────────────────────────────────────────────────────┤");
+    println!("  │ {:<60} │", "  storage stats           Show storage usage");
+    println!("  │ {:<60} │", "  storage blockstore      Blockstore statistics");
+    println!("  │ {:<60} │", "  storage cleanup <days>  Clean old blockstore files");
+    println!("  │ {:<60} │", "  storage clear           Clear entire blockstore");
+    println!("  │ {:<60} │", "  cache stats             Alias for storage stats");
     println!("  ├──────────────────────────────────────────────────────────────┤");
     println!("  │ {:<60} │", "Advanced Features");
     println!("  ├──────────────────────────────────────────────────────────────┤");
@@ -1309,6 +1322,191 @@ async fn cmd_config(args: &[&str], _context: &ReplContext) -> Result<(), String>
     }
 
     Ok(())
+}
+
+async fn cmd_storage(args: &[&str], _context: &ReplContext) -> Result<(), String> {
+    if args.is_empty() {
+        return Err("Usage: storage <stats|blockstore|cleanup <days>|clear>".to_string());
+    }
+
+    match args[0] {
+        "stats" => {
+            use crate::storage_manager::StorageUsage;
+            use colored::Colorize;
+
+            println!("\n📊 Storage Usage:");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+
+            // Get project directories
+            let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .ok_or_else(|| "Failed to determine project directories".to_string())?;
+
+            let download_path = chiral_network::download_paths::get_default_download_directory()
+                .map_err(|e| format!("Failed to get download directory: {}", e))?;
+            let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+            let temp_path = std::env::temp_dir().join("chiral_transfers");
+            let chunk_storage_path = proj_dirs.data_dir().join("chunk_storage");
+
+            // Calculate sizes
+            let download_pathbuf = std::path::PathBuf::from(&download_path);
+            let downloads_size = calculate_dir_size(&download_pathbuf)?;
+            let blockstore_size = calculate_dir_size(&blockstore_path)?;
+            let temp_size = calculate_dir_size(&temp_path)?;
+            let chunk_size = calculate_dir_size(&chunk_storage_path)?;
+            let total_size = downloads_size + blockstore_size + temp_size + chunk_size;
+
+            println!("  │ {:<60} │", format!("Downloads:      {}", StorageUsage::format_bytes(downloads_size)));
+            println!("  │ {:<60} │", format!("Blockstore:     {}", StorageUsage::format_bytes(blockstore_size)));
+            println!("  │ {:<60} │", format!("Temp Files:     {}", StorageUsage::format_bytes(temp_size)));
+            println!("  │ {:<60} │", format!("Chunk Storage:  {}", StorageUsage::format_bytes(chunk_size)));
+            println!("  │ {:<60} │", "──────────────────────────────────────────────");
+            println!("  │ {:<60} │", format!("Total:          {}", StorageUsage::format_bytes(total_size).green().bold()));
+
+            // Get available space
+            if let Ok(avail) = fs2::available_space(std::path::Path::new(&download_path)) {
+                println!("  │ {:<60} │", format!("Available:      {}", StorageUsage::format_bytes(avail)));
+            }
+
+            println!("  └──────────────────────────────────────────────────────────────┘");
+            println!();
+        }
+        "blockstore" => {
+            use crate::blockstore_manager::BlockstoreManager;
+            use colored::Colorize;
+
+            let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .ok_or_else(|| "Failed to determine project directories".to_string())?;
+            let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+
+            let manager = BlockstoreManager::new(blockstore_path, 1024); // 1GB default
+            let stats = manager.get_stats()
+                .map_err(|e| format!("Failed to get blockstore stats: {}", e))?;
+
+            println!("\n📦 Blockstore Statistics:");
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", format!("Size:           {}", stats.format_size()));
+            println!("  │ {:<60} │", format!("Files:          {}", stats.file_count));
+            println!("  │ {:<60} │", format!("Cache Limit:    {} MB", stats.cache_limit_mb));
+            println!("  │ {:<60} │", format!("Usage:          {:.1}%", stats.usage_percentage()));
+
+            let status = if stats.exceeds_limit {
+                "⚠️  Over Limit".yellow().bold()
+            } else {
+                "✓ Within Limit".green()
+            };
+            println!("  │ {:<60} │", format!("Status:         {}", status));
+            println!("  └──────────────────────────────────────────────────────────────┘");
+            println!();
+        }
+        "cleanup" => {
+            use crate::blockstore_manager::BlockstoreManager;
+            use colored::Colorize;
+
+            if args.len() < 2 {
+                return Err("Usage: storage cleanup <days>".to_string());
+            }
+
+            let days: u64 = args[1].parse()
+                .map_err(|_| format!("Invalid number of days: {}", args[1]))?;
+
+            let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .ok_or_else(|| "Failed to determine project directories".to_string())?;
+            let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+
+            let manager = BlockstoreManager::new(blockstore_path, 1024);
+
+            println!("\n🧹 Cleaning blockstore files older than {} days...", days);
+
+            let report = manager.cleanup_old_blocks(days)
+                .map_err(|e| format!("Cleanup failed: {}", e))?;
+
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", format!("Files Deleted:  {}", report.files_deleted));
+            println!("  │ {:<60} │", format!("Space Freed:    {}", crate::storage_manager::StorageUsage::format_bytes(report.bytes_freed).green()));
+
+            if !report.errors.is_empty() {
+                println!("  │ {:<60} │", format!("Errors:         {}", report.errors.len()).red());
+            }
+
+            println!("  └──────────────────────────────────────────────────────────────┘");
+            println!();
+        }
+        "clear" => {
+            use crate::blockstore_manager::BlockstoreManager;
+            use colored::Colorize;
+
+            println!("{}", "⚠️  WARNING: This will delete the ENTIRE blockstore!".yellow().bold());
+            println!("   All cached blocks will be removed and files will need to be re-downloaded.");
+            println!("\n   Are you sure? Type 'yes' to confirm: ");
+
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)
+                .map_err(|e| format!("Failed to read input: {}", e))?;
+
+            if input.trim().to_lowercase() != "yes" {
+                println!("{}", "   Cancelled.".cyan());
+                return Ok(());
+            }
+
+            let proj_dirs = directories::ProjectDirs::from("com", "chiral-network", "chiral-network")
+                .ok_or_else(|| "Failed to determine project directories".to_string())?;
+            let blockstore_path = proj_dirs.data_dir().join("blockstore_db");
+
+            let manager = BlockstoreManager::new(blockstore_path, 1024);
+
+            println!("\n🧹 Clearing blockstore...");
+
+            let report = manager.clear_blockstore()
+                .map_err(|e| format!("Clear failed: {}", e))?;
+
+            println!("  ┌──────────────────────────────────────────────────────────────┐");
+            println!("  │ {:<60} │", format!("Space Freed:    {}", crate::storage_manager::StorageUsage::format_bytes(report.bytes_freed).green().bold()));
+
+            if !report.errors.is_empty() {
+                println!("  │ {:<60} │", format!("Errors:         {}", report.errors.len()).red());
+            }
+
+            println!("  └──────────────────────────────────────────────────────────────┘");
+            println!("\n   {}", "✓ Blockstore cleared successfully!".green().bold());
+            println!();
+        }
+        _ => {
+            return Err(format!("Unknown storage subcommand: '{}'. Use 'stats', 'blockstore', 'cleanup', or 'clear'", args[0]));
+        }
+    }
+
+    Ok(())
+}
+
+/// Helper function to calculate directory size
+fn calculate_dir_size(path: &std::path::Path) -> Result<u64, String> {
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let mut total = 0u64;
+
+    if path.is_file() {
+        return Ok(std::fs::metadata(path)
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .len());
+    }
+
+    for entry in std::fs::read_dir(path)
+        .map_err(|e| format!("Failed to read directory: {}", e))? {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let entry_path = entry.path();
+
+        if entry_path.is_file() {
+            total += std::fs::metadata(&entry_path)
+                .map_err(|e| format!("Failed to get metadata: {}", e))?
+                .len();
+        } else if entry_path.is_dir() {
+            total += calculate_dir_size(&entry_path)?;
+        }
+    }
+
+    Ok(total)
 }
 
 async fn cmd_reputation(args: &[&str], context: &ReplContext) -> Result<(), String> {

@@ -888,7 +888,26 @@
     "to": "To",
     "suspiciousActivity": "Suspicious Activity",
     "noSuspiciousActivity": "No suspicious activity detected.",
-    "latencyNoNodes": "No connected proxy nodes. Latency data will appear here once you connect."
+    "latencyNoNodes": "No connected proxy nodes. Latency data will appear here once you connect.",
+    "storage": {
+      "title": "Storage Analytics",
+      "totalUsage": "Total Usage",
+      "cleanupNeeded": "Cleanup Recommended",
+      "cleanupHint": "Storage usage exceeds {threshold}% threshold",
+      "cleaning": "Cleaning up...",
+      "cleanupNow": "Clean Up Storage",
+      "lastCleanup": "Last Cleanup Report",
+      "filesDeleted": "Files deleted",
+      "spaceFreed": "Space freed",
+      "errors": "Errors",
+      "noData": "No storage data available",
+      "breakdown": "Storage Breakdown",
+      "noFilesStored": "No files stored yet",
+      "autoCleanup": "Auto-Cleanup",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "threshold": "Threshold"
+    }
   },
   "proxy": {
     "title": "Proxy Network",
