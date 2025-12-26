@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tracing::{debug, info};
 
 /// ed2k chunk size: 9.28 MB (9,728,000 bytes)
 pub const ED2K_CHUNK_SIZE: usize = 9_728_000;
@@ -94,8 +95,13 @@ pub struct Ed2kSearchResult {
     pub source_count: u32,
 }
 
+/// ED2K block size: 256 KB (used within 9.28MB chunks)
+/// ED2K transfers files in 256KB blocks, which are grouped into 9.28MB chunks for hashing
+pub const ED2K_BLOCK_SIZE: usize = 256 * 1024;
+
 /// ed2k protocol opcodes
 mod opcodes {
+    // Server opcodes
     pub const OP_LOGINREQUEST: u8 = 0x01;
     pub const OP_SERVERMESSAGE: u8 = 0x38;
     pub const OP_SERVERLIST: u8 = 0x32;
@@ -103,8 +109,121 @@ mod opcodes {
     pub const OP_OFFERFILES: u8 = 0x15;
     pub const OP_GETSOURCES: u8 = 0x19;
     pub const OP_FOUNDSOURCES: u8 = 0x42;
-    pub const OP_REQUESTPARTS: u8 = 0x58;
-    pub const OP_SENDINGPART: u8 = 0x46;
+    
+    // Peer-to-peer opcodes
+    pub const OP_REQUESTPARTS: u8 = 0x47;      // Request file parts from peer
+    pub const OP_SENDINGPART: u8 = 0x46;       // Sending file part data
+    pub const OP_FILEREQUEST: u8 = 0x58;       // Request file from peer
+    pub const OP_FILEREQANSWER: u8 = 0x59;     // Answer to file request
+    pub const OP_SETREQFILEID: u8 = 0x4F;      // Set requested file ID
+    pub const OP_STARTUPLOADREQ: u8 = 0x54;    // Request to start upload
+}
+
+/// ED2K packet header structure
+/// Format: [Protocol:1][Size:4][Opcode:1][Payload:Size-1]
+#[derive(Debug, Clone)]
+pub struct Ed2kPacketHeader {
+    pub protocol: u8,      // Always 0xE3 for ED2K protocol
+    pub size: u32,         // Size of payload + opcode (excludes protocol byte and size field)
+    pub opcode: u8,        // Operation code
+}
+
+impl Ed2kPacketHeader {
+    pub const HEADER_SIZE: usize = 6; // 1 byte protocol + 4 bytes size + 1 byte opcode
+    pub const ED2K_PROTOCOL: u8 = 0xE3;
+    
+    /// Create a new packet header
+    pub fn new(opcode: u8, payload_size: u32) -> Self {
+        Self {
+            protocol: Self::ED2K_PROTOCOL,
+            size: payload_size + 1, // +1 for opcode
+            opcode,
+        }
+    }
+    
+    /// Serialize header to bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(Self::HEADER_SIZE);
+        bytes.push(self.protocol);
+        bytes.extend_from_slice(&self.size.to_le_bytes());
+        bytes.push(self.opcode);
+        bytes
+    }
+    
+    /// Parse header from bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Ed2kError> {
+        if bytes.len() < Self::HEADER_SIZE {
+            return Err(Ed2kError::ProtocolError("Incomplete packet header".to_string()));
+        }
+        
+        let protocol = bytes[0];
+        if protocol != Self::ED2K_PROTOCOL {
+            return Err(Ed2kError::ProtocolError(format!(
+                "Invalid protocol byte: 0x{:02x}, expected 0xE3",
+                protocol
+            )));
+        }
+        
+        let size = u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+        let opcode = bytes[5];
+        
+        Ok(Self { protocol, size, opcode })
+    }
+}
+
+/// ED2K block request structure
+/// Used to request a 256KB block from a peer
+#[derive(Debug, Clone)]
+pub struct Ed2kBlockRequest {
+    pub file_hash: [u8; 16],   // MD4 hash of file
+    pub start_offset: u64,     // Start byte offset
+    pub end_offset: u64,       // End byte offset (exclusive)
+}
+
+impl Ed2kBlockRequest {
+    /// Create a new block request
+    pub fn new(file_hash: [u8; 16], start_offset: u64, end_offset: u64) -> Self {
+        Self {
+            file_hash,
+            start_offset,
+            end_offset,
+        }
+    }
+    
+    /// Serialize to bytes for OP_REQUESTPARTS packet
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(16 + 8 + 8);
+        bytes.extend_from_slice(&self.file_hash);
+        bytes.extend_from_slice(&self.start_offset.to_le_bytes());
+        bytes.extend_from_slice(&self.end_offset.to_le_bytes());
+        bytes
+    }
+    
+    /// Parse from bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Ed2kError> {
+        if bytes.len() < 32 {
+            return Err(Ed2kError::ProtocolError("Incomplete block request".to_string()));
+        }
+        
+        let mut file_hash = [0u8; 16];
+        file_hash.copy_from_slice(&bytes[0..16]);
+        
+        let start_offset = u64::from_le_bytes([
+            bytes[16], bytes[17], bytes[18], bytes[19],
+            bytes[20], bytes[21], bytes[22], bytes[23],
+        ]);
+        
+        let end_offset = u64::from_le_bytes([
+            bytes[24], bytes[25], bytes[26], bytes[27],
+            bytes[28], bytes[29], bytes[30], bytes[31],
+        ]);
+        
+        Ok(Self {
+            file_hash,
+            start_offset,
+            end_offset,
+        })
+    }
 }
 
 /// ed2k client for downloading files
@@ -627,6 +746,146 @@ impl Ed2kClient {
     pub fn is_connected(&self) -> bool {
         self.connection.is_some()
     }
+
+    // Peer-to-peer communication methods
+
+    /// Connect to an ED2K peer for file transfer
+    pub async fn connect_to_peer(addr: &str, timeout_secs: u64) -> Result<TcpStream, Ed2kError> {
+        let stream = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            TcpStream::connect(addr)
+        )
+        .await
+        .map_err(|_| Ed2kError::Timeout)?
+        .map_err(|e| Ed2kError::ConnectionError(e.to_string()))?;
+
+        info!("Connected to ED2K peer: {}", addr);
+        Ok(stream)
+    }
+
+    /// Send an ED2K packet to a peer
+    pub async fn send_packet(
+        stream: &mut TcpStream,
+        opcode: u8,
+        payload: &[u8],
+    ) -> Result<(), Ed2kError> {
+        let header = Ed2kPacketHeader::new(opcode, payload.len() as u32);
+        let header_bytes = header.to_bytes();
+        
+        // Write header
+        stream.write_all(&header_bytes).await?;
+        
+        // Write payload
+        if !payload.is_empty() {
+            stream.write_all(payload).await?;
+        }
+        
+        stream.flush().await?;
+        
+        debug!("Sent ED2K packet: opcode=0x{:02x}, size={}", opcode, payload.len());
+        Ok(())
+    }
+
+    /// Receive an ED2K packet from a peer
+    pub async fn receive_packet(
+        stream: &mut TcpStream,
+        timeout_secs: u64,
+    ) -> Result<(u8, Vec<u8>), Ed2kError> {
+        // Read header
+        let mut header_bytes = [0u8; Ed2kPacketHeader::HEADER_SIZE];
+        
+        tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            stream.read_exact(&mut header_bytes)
+        )
+        .await
+        .map_err(|_| Ed2kError::Timeout)??;
+        
+        let header = Ed2kPacketHeader::from_bytes(&header_bytes)?;
+        
+        // Read payload (size includes opcode, so subtract 1)
+        let payload_size = header.size.saturating_sub(1) as usize;
+        let mut payload = vec![0u8; payload_size];
+        
+        if payload_size > 0 {
+            tokio::time::timeout(
+                Duration::from_secs(timeout_secs),
+                stream.read_exact(&mut payload)
+            )
+            .await
+            .map_err(|_| Ed2kError::Timeout)??;
+        }
+        
+        debug!("Received ED2K packet: opcode=0x{:02x}, size={}", header.opcode, payload_size);
+        
+        Ok((header.opcode, payload))
+    }
+
+    /// Request a block from a peer
+    pub async fn request_block_from_peer(
+        stream: &mut TcpStream,
+        file_hash: &str,
+        start_offset: u64,
+        end_offset: u64,
+    ) -> Result<(), Ed2kError> {
+        let hash_bytes = hex::decode(file_hash)?;
+        if hash_bytes.len() != 16 {
+            return Err(Ed2kError::ProtocolError("File hash must be 16 bytes".to_string()));
+        }
+        
+        let mut hash_array = [0u8; 16];
+        hash_array.copy_from_slice(&hash_bytes);
+        
+        let request = Ed2kBlockRequest::new(hash_array, start_offset, end_offset);
+        let payload = request.to_bytes();
+        
+        Self::send_packet(stream, opcodes::OP_REQUESTPARTS, &payload).await?;
+        
+        info!(
+            "Requested block: offset={}-{}, size={}",
+            start_offset,
+            end_offset,
+            end_offset - start_offset
+        );
+        
+        Ok(())
+    }
+
+    /// Download a block from a peer
+    /// Returns the block data
+    pub async fn download_block_from_peer(
+        stream: &mut TcpStream,
+        file_hash: &str,
+        start_offset: u64,
+        block_size: usize,
+    ) -> Result<Vec<u8>, Ed2kError> {
+        let end_offset = start_offset + block_size as u64;
+        
+        // Send request
+        Self::request_block_from_peer(stream, file_hash, start_offset, end_offset).await?;
+        
+        // Receive response
+        let (opcode, payload) = Self::receive_packet(stream, 60).await?;
+        
+        if opcode != opcodes::OP_SENDINGPART {
+            return Err(Ed2kError::ProtocolError(format!(
+                "Expected OP_SENDINGPART (0x{:02x}), got 0x{:02x}",
+                opcodes::OP_SENDINGPART,
+                opcode
+            )));
+        }
+        
+        // Parse payload: [file_hash:16][start:8][end:8][data:...]
+        if payload.len() < 32 {
+            return Err(Ed2kError::ProtocolError("Invalid SENDINGPART payload".to_string()));
+        }
+        
+        let data = payload[32..].to_vec();
+        
+        info!("Downloaded block: size={} bytes", data.len());
+        
+        Ok(data)
+    }
 }
 
 #[cfg(test)]
@@ -875,5 +1134,110 @@ mod tests {
     #[test]
     fn test_ed2k_chunk_size_constant() {
         assert_eq!(ED2K_CHUNK_SIZE, 9_728_000);
+    }
+
+    #[test]
+    fn test_ed2k_block_size_constant() {
+        assert_eq!(ED2K_BLOCK_SIZE, 256 * 1024);
+    }
+
+    #[test]
+    fn test_packet_header_new() {
+        let header = Ed2kPacketHeader::new(0x46, 1000);
+        
+        assert_eq!(header.protocol, Ed2kPacketHeader::ED2K_PROTOCOL);
+        assert_eq!(header.size, 1001); // payload + opcode
+        assert_eq!(header.opcode, 0x46);
+    }
+
+    #[test]
+    fn test_packet_header_serialization() {
+        let header = Ed2kPacketHeader::new(0x47, 256);
+        let bytes = header.to_bytes();
+        
+        assert_eq!(bytes.len(), Ed2kPacketHeader::HEADER_SIZE);
+        assert_eq!(bytes[0], 0xE3); // Protocol byte
+        assert_eq!(bytes[5], 0x47); // Opcode
+        
+        // Size should be 257 (256 + 1 for opcode)
+        let size = u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+        assert_eq!(size, 257);
+    }
+
+    #[test]
+    fn test_packet_header_deserialization() {
+        let original = Ed2kPacketHeader::new(0x58, 512);
+        let bytes = original.to_bytes();
+        let parsed = Ed2kPacketHeader::from_bytes(&bytes).unwrap();
+        
+        assert_eq!(parsed.protocol, original.protocol);
+        assert_eq!(parsed.size, original.size);
+        assert_eq!(parsed.opcode, original.opcode);
+    }
+
+    #[test]
+    fn test_packet_header_invalid_protocol() {
+        let mut bytes = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x47]; // Wrong protocol byte
+        let result = Ed2kPacketHeader::from_bytes(&bytes);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_packet_header_incomplete() {
+        let bytes = vec![0xE3, 0x00, 0x00]; // Incomplete header
+        let result = Ed2kPacketHeader::from_bytes(&bytes);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_block_request_new() {
+        let hash = [0x01; 16];
+        let request = Ed2kBlockRequest::new(hash, 0, 262144);
+        
+        assert_eq!(request.file_hash, hash);
+        assert_eq!(request.start_offset, 0);
+        assert_eq!(request.end_offset, 262144);
+    }
+
+    #[test]
+    fn test_block_request_serialization() {
+        let hash = [0xAB; 16];
+        let request = Ed2kBlockRequest::new(hash, 1000, 2000);
+        let bytes = request.to_bytes();
+        
+        assert_eq!(bytes.len(), 32); // 16 + 8 + 8
+        assert_eq!(&bytes[0..16], &hash);
+    }
+
+    #[test]
+    fn test_block_request_deserialization() {
+        let hash = [0xCD; 16];
+        let original = Ed2kBlockRequest::new(hash, 512, 1024);
+        let bytes = original.to_bytes();
+        let parsed = Ed2kBlockRequest::from_bytes(&bytes).unwrap();
+        
+        assert_eq!(parsed.file_hash, original.file_hash);
+        assert_eq!(parsed.start_offset, original.start_offset);
+        assert_eq!(parsed.end_offset, original.end_offset);
+    }
+
+    #[test]
+    fn test_block_request_incomplete() {
+        let bytes = vec![0x00; 20]; // Too short
+        let result = Ed2kBlockRequest::from_bytes(&bytes);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_block_size_alignment() {
+        // Verify ED2K_BLOCK_SIZE is 256KB
+        assert_eq!(ED2K_BLOCK_SIZE, 262144);
+        
+        // Verify relationship: multiple blocks make up a chunk
+        let blocks_per_chunk = ED2K_CHUNK_SIZE / ED2K_BLOCK_SIZE;
+        assert_eq!(blocks_per_chunk, 37); // 9.28MB / 256KB = 37.109...
     }
 }
