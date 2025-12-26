@@ -8521,11 +8521,22 @@ fn main() {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     // --- Single Instance Check ---
-    // Prevent multiple instances from running by checking if the DHT port is already in use
-    let single_instance_port = 4001;
-    if std::net::TcpListener::bind(format!("127.0.0.1:{}", single_instance_port)).is_err() {
+    // Prevent multiple instances from running *on the same DHT port*.
+    //
+    // NOTE: Real E2E (spawn/attach) and local multi-node setups can run multiple instances
+    // on one machine as long as each uses a distinct DHT port.
+    let dht_port: u16 = std::env::var("CHIRAL_DHT_PORT")
+        .or_else(|_| std::env::var("CHIRAL_P2P_PORT"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .unwrap_or(4001);
+
+    if std::net::TcpListener::bind(format!("127.0.0.1:{}", dht_port)).is_err() {
         eprintln!("Error: Another instance of Chiral Network is already running.");
         eprintln!("Please close the existing instance before starting a new one.");
+        eprintln!(
+            "Hint: set CHIRAL_DHT_PORT (or CHIRAL_P2P_PORT) to run multiple nodes on one machine."
+        );
         std::process::exit(1);
     }
 
@@ -8535,7 +8546,7 @@ fn main() {
     let dht_service_arc = runtime.block_on(async move {
         // These settings can be moved to a config file later
         let bootstrap_nodes = get_bootstrap_nodes();
-        let port = 4001; // Default DHT port
+        let port = dht_port; // DHT port (configurable via env)
         let is_bootstrap = false;
         let enable_autonat = true;
         let enable_autorelay = true;
