@@ -1144,6 +1144,58 @@
           // continue; // Skip the normal Chiral upload flow
         }
 
+        // Handle FTP upload to external server
+        if (selectedProtocol === "FTP" && ftpUrl) {
+          try {
+            // Show upload in progress toast
+            showToast(
+              `Uploading ${fileName} to FTP server...`,
+              "info"
+            );
+
+            // Upload file to external FTP server
+            const uploadedUrl = await invoke<string>('upload_to_external_ftp', {
+              filePath,
+              ftpUrl,
+              username: ftpUsername || null,
+              password: ftpPassword || null,
+              useFtps: ftpUseFTPS,
+              passiveMode: ftpPassiveMode,
+            });
+
+            // Create file entry with FTP URL
+            const ftpFile = {
+              id: `ftp-${Date.now()}-${Math.random()}`,
+              name: fileName,
+              hash: uploadedUrl, // Use FTP URL as hash
+              protocolHash: uploadedUrl,
+              size: fileSize,
+              path: filePath,
+              seederAddresses: [],
+              uploadDate: new Date(),
+              seeders: 1,
+              status: "seeding" as const,
+              price: 0, // FTP is free
+              protocol: "FTP" as const,
+            };
+
+            files.update(f => [...f, ftpFile]);
+            showToast(
+              `${fileName} uploaded to FTP server successfully`,
+              "success"
+            );
+            addedCount++;
+            continue; // Skip the normal Chiral upload flow
+          } catch (error) {
+            console.error("FTP upload failed:", error);
+            showToast(
+              `FTP upload failed: ${error}`,
+              "error"
+            );
+            continue;
+          }
+        }
+
         // Copy file to temp location to prevent original file from being moved
         const tempFilePath = await invoke<string>("copy_file_to_temp", {
           filePath,
