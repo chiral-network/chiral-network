@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Server, Lock, Eye, EyeOff, TestTube, CheckCircle, XCircle, Loader2 } from 'lucide-svelte';
+  import { Server, Lock, Eye, EyeOff, TestTube, CheckCircle, XCircle, Loader2, AlertCircle } from 'lucide-svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Input from '$lib/components/ui/input.svelte';
   import Label from '$lib/components/ui/label.svelte';
@@ -67,7 +67,31 @@
 </script>
 
 <div class="space-y-4">
-  <div class="flex items-center gap-2 text-sm text-muted-foreground mb-3">
+  <!-- Important Notice -->
+  <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+    <div class="flex items-start gap-2">
+      <AlertCircle class="h-5 w-5 text-yellow-900 flex-shrink-0 mt-0.5" />
+      <div class="space-y-1">
+        <p class="text-sm font-semibold text-yellow-900">
+          FTP Server Required
+        </p>
+        <p class="text-xs text-yellow-700 mt-1">
+          FTP upload requires access to an <strong>external FTP server</strong> (web hosting, university server, or self-hosted).
+          <strong>Most users should use P2P protocols</strong> (WebRTC, Bitswap, BitTorrent) which don't need a server.
+        </p>
+        <details class="text-xs text-yellow-700 mt-2">
+          <summary class="cursor-pointer hover:underline">How to get FTP access?</summary>
+          <ul class="list-disc list-inside mt-1 space-y-0.5 ml-2">
+            <li>Web hosting providers (shared hosting, VPS)</li>
+            <li>University/company FTP servers</li>
+            <li>Local FTP server for testing: <code class="bg-yellow-100 px-1 rounded text-yellow-900">python -m pyftpdlib</code></li>
+          </ul>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-2 text-sm text-muted-foreground">
     <Server class="h-4 w-4" />
     <span>Configure your FTP server to upload files</span>
   </div>
