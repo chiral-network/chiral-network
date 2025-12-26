@@ -4014,6 +4014,44 @@ async fn upload_file_to_network(
                     .map_err(|e| format!("Failed to read file: {}", e))?;
                 let file_size = file_data.len() as u64;
 
+                // Generate a manifest with per-chunk SHA-256 hashes so FTP downloads can be validated
+                // by MultiSourceDownloadService (manifest-based chunk hash verification).
+                //
+                // NOTE:
+                // - For FTP we keep `metadata.merkle_root` as the overall file hash (sha256(file)),
+                //   and set the manifest merkle_root to the same value for consistency with E2E verification.
+                let chunk_size: usize = 256 * 1024; // match ChunkManager default
+                let mut manifest_chunks: Vec<crate::manager::ChunkInfo> = Vec::new();
+                {
+                    use sha2::{Digest as _, Sha256};
+                    let mut offset: usize = 0;
+                    let mut index: u32 = 0;
+                    while offset < file_data.len() {
+                        let end = std::cmp::min(offset + chunk_size, file_data.len());
+                        let slice = &file_data[offset..end];
+                        let mut hasher = Sha256::new();
+                        hasher.update(slice);
+                        let hash = format!("{:x}", hasher.finalize());
+                        let size = slice.len();
+                        manifest_chunks.push(crate::manager::ChunkInfo {
+                            index,
+                            hash: hash.clone(),
+                            size,
+                            encrypted_hash: hash,
+                            encrypted_size: size,
+                        });
+                        offset = end;
+                        index += 1;
+                    }
+                }
+                let file_manifest = crate::manager::FileManifest {
+                    merkle_root: file_hash.clone(),
+                    chunks: manifest_chunks,
+                    encrypted_key_bundle: None,
+                };
+                let manifest_json = serde_json::to_string(&file_manifest)
+                    .map_err(|e| format!("Failed to serialize FileManifest: {}", e))?;
+
                 // Use file hash as the filename to ensure uniqueness
                 let ftp_file_name = format!("{}_{}", file_hash, original_file_name);
 
@@ -4061,7 +4099,7 @@ async fn upload_file_to_network(
                     info_hash: None,
                     trackers: None,
                     ed2k_sources: None,
-                    manifest: None,
+                    manifest: Some(manifest_json),
                     download_path: None,
                 };
 
