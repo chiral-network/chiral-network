@@ -9006,9 +9006,25 @@ fn main() {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
                     if let Some(state) = app_handle.try_state::<AppState>() {
-                        // Try ports 8080-8090 to support multiple instances
+                        // Try a port range to support multiple instances.
+                        // Default is 8080-8090, but E2E spawn mode (two nodes on one machine)
+                        // may need to override this to avoid collisions with other local services.
+                        let port_start: u16 = std::env::var("CHIRAL_HTTP_PORT_START")
+                            .ok()
+                            .and_then(|s| s.trim().parse().ok())
+                            .unwrap_or(8080);
+                        let port_end: u16 = std::env::var("CHIRAL_HTTP_PORT_END")
+                            .ok()
+                            .and_then(|s| s.trim().parse().ok())
+                            .unwrap_or(8090);
+                        let (port_start, port_end) = if port_start <= port_end {
+                            (port_start, port_end)
+                        } else {
+                            (port_end, port_start)
+                        };
+
                         let mut server_started = false;
-                        for port in 8080..=8090 {
+                        for port in port_start..=port_end {
                             let bind_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
 
                             // Create shutdown channel
@@ -9058,9 +9074,15 @@ fn main() {
                         }
 
                         if !server_started {
-                            tracing::warn!("Could not start HTTP server on any port (8080-8090)");
+                            tracing::warn!(
+                                "Could not start HTTP server on any port ({}-{})",
+                                port_start,
+                                port_end
+                            );
                             eprintln!(
-                                "⚠️  HTTP server could not start - all ports 8080-8090 are in use"
+                                "⚠️  HTTP server could not start - all ports {}-{} are in use",
+                                port_start,
+                                port_end
                             );
                         }
                     }

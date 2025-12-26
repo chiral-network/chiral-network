@@ -20,6 +20,8 @@ use crate::http_download::HttpDownloadClient;
 use crate::http_server;
 use crate::manager::ChunkManager;
 use crate::transaction_services;
+use crate::file_transfer::FileTransferService;
+use crate::webrtc_service::{set_webrtc_service, WebRTCService};
 
 #[derive(Clone)]
 pub struct E2eApiState {
@@ -124,6 +126,50 @@ struct ReceiptRequest {
     tx_hash: String,
 }
 
+async fn ensure_p2p_services_started(app: &tauri::AppHandle) -> Result<(), String> {
+    // E2E spawn mode starts `tauri dev` without any frontend interaction, so
+    // FileTransfer/WebRTC may never be started. WebRTC downloads will then fail with
+    // "File transfer service is not running". For E2E API usage, we auto-start them.
+    let state = app.state::<crate::AppState>();
+
+    // Fast path: already running.
+    {
+        let ft_guard = state.file_transfer.lock().await;
+        if ft_guard.is_some() {
+            return Ok(());
+        }
+    }
+
+    // Start FileTransferService (storage under app data dir).
+    let ft = FileTransferService::new_with_app_handle(app.clone())
+        .await
+        .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
+    let ft_arc = Arc::new(ft);
+    {
+        let mut ft_guard = state.file_transfer.lock().await;
+        *ft_guard = Some(ft_arc.clone());
+    }
+
+    // Start WebRTCService and set the global singleton (used by chunk processing).
+    let webrtc = WebRTCService::new(
+        app.clone(),
+        ft_arc.clone(),
+        state.keystore.clone(),
+        state.bandwidth.clone(),
+    )
+    .await
+    .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
+
+    let webrtc_arc = Arc::new(webrtc);
+    {
+        let mut guard = state.webrtc.lock().await;
+        *guard = Some(webrtc_arc.clone());
+    }
+    set_webrtc_service(webrtc_arc).await;
+
+    Ok(())
+}
+
 pub async fn start_e2e_api_server(app: tauri::AppHandle, port: u16) -> Result<SocketAddr, String> {
     let state = E2eApiState {
         app,
@@ -176,7 +222,21 @@ async fn api_download_status(
 }
 
 async fn api_health(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse {
-    // Best-effort info, avoid leaking secrets.
+    // IMPORTANT:
+    // Real E2E spawn mode uses /api/health to decide "node is ready".
+    // If we return 200 too early (before HTTP server / P2P services are initialized),
+    // the subsequent /api/upload can fail with:
+    // - "HTTP file server is not running (no bound address)"
+    // - "File transfer service is not running" (WebRTC paths)
+    //
+    // So we treat /api/health as a readiness gate:
+    // - ensure (best-effort) P2P services are started
+    // - require DHT + HTTP file server bound before returning 200
+
+    // Best-effort: auto-start P2P services needed for WebRTC uploads/downloads in E2E.
+    // Don't fail health solely due to P2P init errors, but log readiness via HTTP status below.
+    let _ = ensure_p2p_services_started(&state.app).await;
+
     let node_id = std::env::var("CHIRAL_NODE_ID").ok();
     let peer_id = {
         let app_state = state.app.state::<crate::AppState>();
@@ -206,7 +266,33 @@ async fn api_health(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse 
     };
     let rpc_endpoint = std::env::var("CHIRAL_RPC_ENDPOINT").ok();
 
-    (StatusCode::OK, Json(HealthResponse { ok: true, node_id, peer_id, file_server_url, rpc_endpoint }))
+    // Readiness: require DHT peer_id and bound HTTP file server URL.
+    // If not ready, return 503 so the test harness keeps polling.
+    if peer_id.is_none() || file_server_url.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse {
+                ok: false,
+                node_id,
+                peer_id,
+                file_server_url,
+                rpc_endpoint,
+            }),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(HealthResponse {
+            ok: true,
+            node_id,
+            peer_id,
+            file_server_url,
+            rpc_endpoint,
+        }),
+    )
+        .into_response()
 }
 
 async fn api_dht_peers(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse {
@@ -578,9 +664,28 @@ async fn api_download(
     // Use a stable downloads dir under temp for E2E.
     let downloads_dir = std::env::temp_dir().join("chiral-e2e-downloads");
     let _ = tokio::fs::create_dir_all(&downloads_dir).await;
-    let output_path = downloads_dir.join(&out_name);
+
+    // Important:
+    // - HTTP downloads happen synchronously and we verify by sha256(file)==merkle_root.
+    // - Reusing the same output filename across runs can interact badly with partial/resume logic
+    //   (or stale files), causing "verified=false" even when the network side is correct.
+    // So for HTTP we write to a per-request unique output filename under the same directory.
+    let output_path = if protocol_upper == "HTTP" {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let hash_prefix: String = meta.merkle_root.chars().take(8).collect();
+        let safe_name = out_name.replace(['\\', '/', ':'], "_");
+        downloads_dir.join(format!("http-{}-{}-{}", hash_prefix, ts, safe_name))
+    } else {
+        downloads_dir.join(&out_name)
+    };
 
     if protocol_upper == "HTTP" {
+        // Ensure we're not resuming into an unrelated stale file.
+        let _ = tokio::fs::remove_file(&output_path).await;
+
         // Include downloader peer id for provider metrics if available.
         let peer_id = Some(dht.get_peer_id().await);
         let client = HttpDownloadClient::new_with_peer_id(peer_id);
@@ -591,6 +696,15 @@ async fn api_download(
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
         }
     } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" {
+        // Auto-start P2P services for E2E spawn mode (no frontend bootstrapping).
+        if let Err(e) = ensure_p2p_services_started(&state.app).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse { error: e }),
+            )
+                .into_response();
+        }
+
         // IMPORTANT: WebRTC/Bitswap downloads can take a long time and the node test runner (undici fetch)
         // can time out waiting for response headers. So we run the download asynchronously and return
         // a downloadId immediately; the client polls /api/download/status/:id.
@@ -634,6 +748,8 @@ async fn api_download(
             let result: Result<u64, String> = async {
                 let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
                 if protocol_upper_for_task == "WEBRTC" {
+                        // In case the service was stopped after request but before task runs.
+                        ensure_p2p_services_started(&app_handle_for_task).await?;
                     if let Err(e) = crate::download_file_from_network(
                         app_state_for_task,
                         meta_for_task.merkle_root.clone(),
