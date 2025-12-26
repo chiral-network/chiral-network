@@ -593,6 +593,12 @@ mod tests {
             }
         }
 
+        // Clear L1 cache to ensure read_chunk() will actually fail for deleted chunks
+        {
+            let mut cache = L1_CACHE.lock().unwrap();
+            *cache = LruCache::new(L1_CACHE_CAPACITY);
+        }
+
         // 4. Attempt to reassemble the file. This should fail since we can't reconstruct missing chunks
         let result = manager.reassemble_and_decrypt_file(
             &manifest.chunks,

@@ -6244,7 +6244,7 @@ fn get_disk_space_robust(path: &std::path::Path) -> Result<f64, String> {
 /// Get current storage usage across all locations
 #[tauri::command]
 async fn get_storage_usage(app_handle: tauri::AppHandle) -> Result<storage_manager::StorageUsage, String> {
-    use storage_manager::{StorageManager, StorageConfig};
+    use storage_manager::StorageManager;
 
     let config = create_storage_config(&app_handle).await
         .map_err(|e| format!("Failed to create storage config: {}", e))?;
@@ -6257,7 +6257,7 @@ async fn get_storage_usage(app_handle: tauri::AppHandle) -> Result<storage_manag
 /// Trigger manual cleanup (ignores autoCleanup setting)
 #[tauri::command]
 async fn force_storage_cleanup(app_handle: tauri::AppHandle) -> Result<storage_manager::CleanupReport, String> {
-    use storage_manager::{StorageManager, StorageConfig};
+    use storage_manager::StorageManager;
 
     tracing::info!("Manual storage cleanup requested");
 
@@ -6272,7 +6272,7 @@ async fn force_storage_cleanup(app_handle: tauri::AppHandle) -> Result<storage_m
 /// Check if cleanup is needed and perform it if auto-cleanup is enabled
 #[tauri::command]
 async fn check_and_cleanup_storage(app_handle: tauri::AppHandle) -> Result<Option<storage_manager::CleanupReport>, String> {
-    use storage_manager::{StorageManager, StorageConfig};
+    use storage_manager::StorageManager;
 
     let config = create_storage_config(&app_handle).await
         .map_err(|e| format!("Failed to create storage config: {}", e))?;

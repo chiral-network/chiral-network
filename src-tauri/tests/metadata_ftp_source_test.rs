@@ -56,12 +56,13 @@ fn test_ftp_source_info_serialization() {
     let json = serde_json::to_string(&ftp_source).expect("Failed to serialize");
 
     // Check that all fields are present in JSON (password is skipped for security)
+    // Note: FtpSourceInfo uses camelCase for JSON field names
     assert!(json.contains("ftp://ftp.example.com/file.bin"));
     assert!(json.contains("user1"));
     assert!(!json.contains("encrypted_pass_123")); // password is skipped
-    assert!(json.contains("supports_resume"));
-    assert!(json.contains("file_size"));
-    assert!(json.contains("is_available"));
+    assert!(json.contains("supportsResume")); // camelCase in JSON
+    assert!(json.contains("fileSize")); // camelCase in JSON
+    assert!(json.contains("isAvailable")); // camelCase in JSON
 }
 
 /// Test FtpSourceInfo deserialization from JSON (from DHT retrieval)
@@ -70,10 +71,10 @@ fn test_ftp_source_info_deserialization() {
     let json = r#"{
         "url": "ftp://ftp.example.com/file.bin",
         "username": "user1",
-        "supports_resume": true,
-        "file_size": 1048576,
-        "last_checked": 1640995200,
-        "is_available": true
+        "supportsResume": true,
+        "fileSize": 1048576,
+        "lastChecked": 1640995200,
+        "isAvailable": true
     }"#;
 
     let ftp_source: FtpSourceInfo = serde_json::from_str(json).expect("Failed to deserialize");
@@ -89,10 +90,10 @@ fn test_ftp_source_info_deserialization_anonymous() {
     let json = r#"{
         "url": "ftp://ftp.gnu.org/gnu/file.tar.gz",
         "username": null,
-        "supports_resume": true,
-        "file_size": 1048576,
-        "last_checked": 1640995200,
-        "is_available": true
+        "supportsResume": true,
+        "fileSize": 1048576,
+        "lastChecked": 1640995200,
+        "isAvailable": true
     }"#;
 
     let ftp_source: FtpSourceInfo = serde_json::from_str(json).expect("Failed to deserialize");
