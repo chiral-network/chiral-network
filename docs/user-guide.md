@@ -75,6 +75,22 @@ The sidebar contains navigation to all pages:
 - Set upload bandwidth priority
 - Manage seeding resources
 
+**FTP Upload** (when FTP protocol is selected):
+
+- **FTP Server Required**: FTP upload requires access to an external FTP server
+- Most users should use P2P protocols (WebRTC, Bitswap, BitTorrent) which don't need a server
+- Configure FTP server settings:
+  - FTP Server URL (e.g., `ftp://ftp.example.com/uploads/`)
+  - Username (optional, defaults to anonymous)
+  - Password (optional)
+  - Use FTPS (FTP over TLS) for secure connection
+  - Passive Mode (recommended for firewall compatibility)
+- Test connection before uploading to verify settings
+- How to get FTP access:
+  - Web hosting providers (shared hosting, VPS)
+  - University/company FTP servers
+  - Local FTP server for testing: `python -m pyftpdlib`
+
 ### Managing Uploads
 
 **View uploaded files**:

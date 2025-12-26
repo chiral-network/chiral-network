@@ -4427,6 +4427,225 @@ async fn upload_file_to_network(
     // This code path should no longer be reached for WebRTC uploads
     Err("Unexpected code path in upload_file_to_network".to_string())
 }
+/// Test FTP connection to external server
+#[tauri::command]
+async fn test_ftp_connection(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String> {
+    use suppaftp::types::FileType;
+    use suppaftp::Mode;
+
+    // Parse URL to get host and port
+    let parsed = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let host = parsed.host_str().ok_or("Invalid FTP URL: no host")?;
+    let port = parsed.port().unwrap_or(21);
+
+    // Connect based on FTPS setting
+    if use_ftps {
+        use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
+
+        // Create TLS connector
+        let tls_connector = NativeTlsConnector::from(
+            native_tls::TlsConnector::new()
+                .map_err(|e| format!("Failed to create TLS connector: {}", e))?,
+        );
+
+        // Connect to FTPS server
+        let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
+            format!("{}:{}", host, port),
+            tls_connector,
+            host,
+        )
+        .map_err(|e| format!("Failed to connect to FTPS server: {}", e))?;
+
+        // Set passive mode
+        if passive_mode {
+            ftp_stream.set_mode(Mode::Passive);
+        }
+
+        // Login
+        let user = username.as_deref().unwrap_or("anonymous");
+        let pass = password.as_deref().unwrap_or("");
+        ftp_stream
+            .login(user, pass)
+            .map_err(|e| format!("FTPS login failed: {}", e))?;
+
+        // Test by setting transfer type
+        ftp_stream
+            .transfer_type(FileType::Binary)
+            .map_err(|e| format!("Failed to set binary mode: {}", e))?;
+
+        // Quit connection
+        ftp_stream
+            .quit()
+            .map_err(|e| format!("Failed to quit FTPS session: {}", e))?;
+    } else {
+        use suppaftp::Mode;
+
+        // Connect to regular FTP server
+        let mut ftp_stream = FtpStream::connect(format!("{}:{}", host, port))
+            .map_err(|e| format!("Failed to connect to FTP server: {}", e))?;
+
+        // Set passive mode
+        if passive_mode {
+            ftp_stream.set_mode(Mode::Passive);
+        }
+
+        // Login
+        let user = username.as_deref().unwrap_or("anonymous");
+        let pass = password.as_deref().unwrap_or("");
+        ftp_stream
+            .login(user, pass)
+            .map_err(|e| format!("FTP login failed: {}", e))?;
+
+        // Test by setting transfer type
+        ftp_stream
+            .transfer_type(FileType::Binary)
+            .map_err(|e| format!("Failed to set binary mode: {}", e))?;
+
+        // Quit connection
+        ftp_stream
+            .quit()
+            .map_err(|e| format!("Failed to quit FTP session: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Upload file to external FTP server
+#[tauri::command]
+async fn upload_to_external_ftp(
+    app: tauri::AppHandle,
+    file_path: String,
+    ftp_url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<String, String> {
+    use suppaftp::types::FileType;
+    use suppaftp::Mode;
+    use std::io::Read;
+
+    // Read the file
+    let mut file = std::fs::File::open(&file_path)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+
+    let mut file_data = Vec::new();
+    file.read_to_end(&mut file_data)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    // Parse URL to get host, port, and remote path
+    let parsed = url::Url::parse(&ftp_url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let host = parsed.host_str().ok_or("Invalid FTP URL: no host")?;
+    let port = parsed.port().unwrap_or(21);
+    let remote_path = parsed.path();
+
+    // Get filename from local path
+    let file_name = std::path::Path::new(&file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid file path")?;
+
+    // Construct the full remote path
+    let full_remote_path = if remote_path.ends_with('/') {
+        format!("{}{}", remote_path, file_name)
+    } else {
+        format!("{}/{}", remote_path, file_name)
+    };
+
+    // Upload based on FTPS setting
+    if use_ftps {
+        use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
+
+        // Create TLS connector
+        let tls_connector = NativeTlsConnector::from(
+            native_tls::TlsConnector::new()
+                .map_err(|e| format!("Failed to create TLS connector: {}", e))?,
+        );
+
+        // Connect to FTPS server
+        let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
+            format!("{}:{}", host, port),
+            tls_connector,
+            host,
+        )
+        .map_err(|e| format!("Failed to connect to FTPS server: {}", e))?;
+
+        // Set passive mode
+        if passive_mode {
+            ftp_stream.set_mode(Mode::Passive);
+        }
+
+        // Login
+        let user = username.as_deref().unwrap_or("anonymous");
+        let pass = password.as_deref().unwrap_or("");
+        ftp_stream
+            .login(user, pass)
+            .map_err(|e| format!("FTPS login failed: {}", e))?;
+
+        // Set binary mode
+        ftp_stream
+            .transfer_type(FileType::Binary)
+            .map_err(|e| format!("Failed to set binary mode: {}", e))?;
+
+        // Upload file
+        let mut reader = std::io::Cursor::new(file_data);
+        ftp_stream
+            .put_file(&full_remote_path, &mut reader)
+            .map_err(|e| format!("Failed to upload file: {}", e))?;
+
+        // Quit connection
+        ftp_stream
+            .quit()
+            .map_err(|e| format!("Failed to quit FTPS session: {}", e))?;
+    } else {
+        // Connect to regular FTP server
+        let mut ftp_stream = FtpStream::connect(format!("{}:{}", host, port))
+            .map_err(|e| format!("Failed to connect to FTP server: {}", e))?;
+
+        // Set passive mode
+        if passive_mode {
+            ftp_stream.set_mode(Mode::Passive);
+        }
+
+        // Login
+        let user = username.as_deref().unwrap_or("anonymous");
+        let pass = password.as_deref().unwrap_or("");
+        ftp_stream
+            .login(user, pass)
+            .map_err(|e| format!("FTP login failed: {}", e))?;
+
+        // Set binary mode
+        ftp_stream
+            .transfer_type(FileType::Binary)
+            .map_err(|e| format!("Failed to set binary mode: {}", e))?;
+
+        // Upload file
+        let mut reader = std::io::Cursor::new(file_data);
+        ftp_stream
+            .put_file(&full_remote_path, &mut reader)
+            .map_err(|e| format!("Failed to upload file: {}", e))?;
+
+        // Quit connection
+        ftp_stream
+            .quit()
+            .map_err(|e| format!("Failed to quit FTP session: {}", e))?;
+    }
+
+    // Construct the full FTP URL to return
+    let uploaded_url = format!("{}://{}{}",
+        if use_ftps { "ftps" } else { "ftp" },
+        parsed.authority(),
+        full_remote_path
+    );
+
+    Ok(uploaded_url)
+}
 
 #[tauri::command]
 async fn start_ftp_download(
@@ -8865,6 +9084,8 @@ fn main() {
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
+            test_ftp_connection,
+            upload_to_external_ftp,
             start_ftp_download,
             download_blocks_from_network,
             start_multi_source_download,

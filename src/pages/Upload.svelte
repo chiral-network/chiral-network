@@ -45,6 +45,7 @@
   import { dhtService } from "$lib/dht";
   import Label from "$lib/components/ui/label.svelte";
   import Input from "$lib/components/ui/input.svelte";
+  import FTPUploadConfig from "$lib/components/upload/FTPUploadConfig.svelte";
   import { settings } from "$lib/stores";
   import { paymentService } from '$lib/services/paymentService';
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -178,6 +179,13 @@
   let recipientPublicKeyInput = "";
   let editingRecipientIndex = -1;
   let showEncryptionOptions = false;
+
+  // FTP upload configuration state
+  let ftpUrl = '';
+  let ftpUsername = '';
+  let ftpPassword = '';
+  let ftpUseFTPS = false;
+  let ftpPassiveMode = true;
 
   // Calculate price using dynamic network metrics with safe fallbacks
   async function uploadFileStreamingToDisk(file: File) {
@@ -1136,6 +1144,58 @@
           // continue; // Skip the normal Chiral upload flow
         }
 
+        // Handle FTP upload to external server
+        if (selectedProtocol === "FTP" && ftpUrl) {
+          try {
+            // Show upload in progress toast
+            showToast(
+              `Uploading ${fileName} to FTP server...`,
+              "info"
+            );
+
+            // Upload file to external FTP server
+            const uploadedUrl = await invoke<string>('upload_to_external_ftp', {
+              filePath,
+              ftpUrl,
+              username: ftpUsername || null,
+              password: ftpPassword || null,
+              useFtps: ftpUseFTPS,
+              passiveMode: ftpPassiveMode,
+            });
+
+            // Create file entry with FTP URL
+            const ftpFile = {
+              id: `ftp-${Date.now()}-${Math.random()}`,
+              name: fileName,
+              hash: uploadedUrl, // Use FTP URL as hash
+              protocolHash: uploadedUrl,
+              size: fileSize,
+              path: filePath,
+              seederAddresses: [],
+              uploadDate: new Date(),
+              seeders: 1,
+              status: "seeding" as const,
+              price: 0, // FTP is free
+              protocol: "FTP" as const,
+            };
+
+            files.update(f => [...f, ftpFile]);
+            showToast(
+              `${fileName} uploaded to FTP server successfully`,
+              "success"
+            );
+            addedCount++;
+            continue; // Skip the normal Chiral upload flow
+          } catch (error) {
+            console.error("FTP upload failed:", error);
+            showToast(
+              `FTP upload failed: ${error}`,
+              "error"
+            );
+            continue;
+          }
+        }
+
         // Copy file to temp location to prevent original file from being moved
         const tempFilePath = await invoke<string>("copy_file_to_temp", {
           filePath,
@@ -1431,6 +1491,35 @@
           />
         </div>
       </div>
+    </Card>
+  {/if}
+
+  <!-- FTP Server Configuration (only shown when FTP is selected) -->
+  {#if isTauri && selectedProtocol === "FTP"}
+    <Card class="p-4">
+      <div class="flex items-center gap-3 mb-4">
+        <div
+          class="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-gray-500/10 to-gray-500/5 rounded-lg border border-gray-500/20"
+        >
+          <Server class="h-5 w-5 text-gray-600" />
+        </div>
+        <div class="text-left">
+          <h3 class="text-sm font-semibold text-foreground">
+            FTP Server Configuration
+          </h3>
+          <p class="text-xs text-muted-foreground">
+            Configure your FTP server to upload files
+          </p>
+        </div>
+      </div>
+
+      <FTPUploadConfig
+        bind:ftpUrl
+        bind:ftpUsername
+        bind:ftpPassword
+        bind:ftpUseFTPS
+        bind:ftpPassiveMode
+      />
     </Card>
   {/if}
 
