@@ -849,12 +849,11 @@ async fn api_download(
                 .unwrap_or(600_000); // default 10 minutes for real P2P
 
             let result: Result<u64, String> = async {
-                let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
                 if protocol_upper_for_task == "WEBRTC" {
                         // In case the service was stopped after request but before task runs.
                         ensure_p2p_services_started(&app_handle_for_task).await?;
                     if let Err(e) = crate::download_file_from_network(
-                        app_state_for_task,
+                        app_handle_for_task.state::<crate::AppState>(),
                         meta_for_task.merkle_root.clone(),
                         out_path_for_task.clone(),
                     )
@@ -864,7 +863,7 @@ async fn api_download(
                     }
                 } else if protocol_upper_for_task == "BITSWAP" {
                     if let Err(e) = crate::download_blocks_from_network(
-                        app_state_for_task,
+                        app_handle_for_task.state::<crate::AppState>(),
                         meta_for_task.clone(),
                         out_path_for_task.clone(),
                     )
@@ -876,6 +875,7 @@ async fn api_download(
                     // FTP: use MultiSourceDownloadService so we consume ftp_sources and verify chunk hashes if manifest exists.
                     ensure_multi_source_services_started(&app_handle_for_task).await?;
                     let ms = {
+                        let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
                         let guard = app_state_for_task.multi_source_download.lock().await;
                         guard.as_ref().cloned()
                     }
@@ -892,12 +892,98 @@ async fn api_download(
                 }
 
                 let start = std::time::Instant::now();
+                // FTP-specific: fail fast when the download is "stuck running" (no progress),
+                // and avoid treating pre-allocated file length as completion.
+                let ftp_stall_timeout_ms: u64 = std::env::var("E2E_FTP_STALL_TIMEOUT_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(60_000);
+                let ftp_finalize_grace_ms: u64 = std::env::var("E2E_FTP_FINALIZE_GRACE_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(30_000);
+                let mut last_progress_bytes: u64 = 0;
+                let mut last_progress_at = std::time::Instant::now();
+                let mut first_seen_incomplete_full_len_at: Option<std::time::Instant> = None;
                 loop {
+                    if protocol_upper_for_task == "FTP" {
+                        // Observe MultiSource progress to detect stalls earlier than the outer 10min timeout.
+                        let ms_opt = {
+                            let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
+                            let guard = app_state_for_task.multi_source_download.lock().await;
+                            guard.as_ref().cloned()
+                        };
+                        if let Some(ms) = ms_opt {
+                            if let Some(p) = ms.get_download_progress(&meta_for_task.merkle_root).await {
+                                if p.downloaded_size > last_progress_bytes {
+                                    last_progress_bytes = p.downloaded_size;
+                                    last_progress_at = std::time::Instant::now();
+                                } else if last_progress_at.elapsed().as_millis() as u64 >= ftp_stall_timeout_ms {
+                                    let mut sources_summary = String::new();
+                                    for s in p.source_assignments.iter().take(6) {
+                                        sources_summary.push_str(&format!(
+                                            "[{} {:?}] ",
+                                            s.source_id(),
+                                            s.status
+                                        ));
+                                    }
+                                    return Err(format!(
+                                        "FTP download stalled for {}ms (no progress). downloaded={}/{} bytes, completed_chunks={}/{}, active_sources={}, sources={}",
+                                        ftp_stall_timeout_ms,
+                                        p.downloaded_size,
+                                        p.total_size,
+                                        p.completed_chunks,
+                                        p.total_chunks,
+                                        p.active_sources,
+                                        sources_summary.trim()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
                     match tokio::fs::metadata(&out_path_for_task).await {
                         Ok(m) => {
                             let len = m.len();
                             if len == meta_for_task.file_size {
-                                return Ok(len);
+                                if protocol_upper_for_task == "FTP" {
+                                    // For FTP, don't treat file length as completion because MultiSource finalization
+                                    // pre-allocates the file length before chunk writes finish.
+                                    match tokio::fs::read(&out_path_for_task).await {
+                                        Ok(b) => {
+                                            let mut h = sha2::Sha256::new();
+                                            h.update(&b);
+                                            let computed = format!("{:x}", h.finalize());
+                                            if computed == meta_for_task.merkle_root {
+                                                return Ok(len);
+                                            }
+                                            // The file may be mid-finalization; allow a short grace window.
+                                            let now = std::time::Instant::now();
+                                            if first_seen_incomplete_full_len_at.is_none() {
+                                                first_seen_incomplete_full_len_at = Some(now);
+                                            }
+                                            if first_seen_incomplete_full_len_at
+                                                .as_ref()
+                                                .is_some_and(|t| t.elapsed().as_millis() as u64 >= ftp_finalize_grace_ms)
+                                            {
+                                                return Err(format!(
+                                                    "FTP output file reached expected length but sha256 mismatch persisted for {}ms (expected merkle_root={}): {}",
+                                                    ftp_finalize_grace_ms,
+                                                    meta_for_task.merkle_root,
+                                                    out_path_for_task
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            return Err(format!(
+                                                "FTP output file exists but failed to read for verification: {}",
+                                                e
+                                            ));
+                                        }
+                                    }
+                                } else {
+                                    return Ok(len);
+                                }
                             }
                         }
                         Err(_) => {}
