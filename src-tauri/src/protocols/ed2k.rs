@@ -79,6 +79,16 @@ impl Ed2kProtocolHandler {
         }
     }
 
+    /// Generate FileManifest for a file (public helper for upload workflows)
+    /// 
+    /// This method is called from main.rs during ED2K file upload
+    /// to generate the manifest that will be stored in FileMetadata.manifest
+    pub async fn generate_manifest_for_upload(
+        file_path: &PathBuf,
+    ) -> Result<crate::manager::FileManifest, ProtocolError> {
+        Self::generate_file_manifest(file_path).await
+    }
+
     /// Get current timestamp
     fn now() -> u64 {
         SystemTime::now()
@@ -200,6 +210,106 @@ impl Ed2kProtocolHandler {
             ),
             sha256_chunk_hashes,
         ))
+    }
+
+    /// Generate FileManifest with SHA256 hashes for 256KB chunks
+    /// 
+    /// This creates the manifest needed for FileMetadata.manifest field.
+    /// Unlike generate_ed2k_link which hashes 9.28MB ED2K chunks,
+    /// this function hashes 256KB application chunks for download verification.
+    async fn generate_file_manifest(
+        file_path: &PathBuf,
+    ) -> Result<crate::manager::FileManifest, ProtocolError> {
+        const APP_CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks for app-level verification
+        const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB safety limit
+        const MAX_CHUNKS: usize = 400_000; // ~100GB / 256KB, prevents memory exhaustion
+        
+        let metadata = tokio::fs::metadata(file_path)
+            .await
+            .map_err(|e| ProtocolError::FileNotFound(e.to_string()))?;
+
+        let file_size = metadata.len();
+        
+        // Validate file size to prevent resource exhaustion
+        if file_size > MAX_FILE_SIZE {
+            return Err(ProtocolError::Internal(format!(
+                "File too large: {} bytes (max {} bytes)",
+                file_size, MAX_FILE_SIZE
+            )));
+        }
+        
+        let mut file = tokio::fs::File::open(file_path)
+            .await
+            .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+
+        let mut chunk_infos = Vec::new();
+        let mut buffer = vec![0u8; APP_CHUNK_SIZE];
+        let mut chunk_index = 0u32;
+        
+        // Pre-allocate with capacity to avoid repeated allocations
+        let estimated_chunks = ((file_size + APP_CHUNK_SIZE as u64 - 1) / APP_CHUNK_SIZE as u64) as usize;
+        chunk_infos.reserve(estimated_chunks.min(MAX_CHUNKS));
+
+        loop {
+            // Check chunk limit to prevent memory exhaustion
+            if chunk_infos.len() >= MAX_CHUNKS {
+                return Err(ProtocolError::Internal(format!(
+                    "File has too many chunks: {} (max {})",
+                    chunk_infos.len(), MAX_CHUNKS
+                )));
+            }
+            
+            let bytes_read = file
+                .read(&mut buffer)
+                .await
+                .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+            
+            if bytes_read == 0 {
+                break;
+            }
+
+            let chunk_data = &buffer[..bytes_read];
+
+            // Calculate SHA256 hash for this 256KB chunk
+            let mut sha256_hasher = Sha256::new();
+            sha256_hasher.update(chunk_data);
+            let chunk_hash = hex::encode(sha256_hasher.finalize());
+
+            chunk_infos.push(crate::manager::ChunkInfo {
+                index: chunk_index,
+                hash: chunk_hash,
+                size: bytes_read,
+                encrypted_hash: String::new(), // No encryption for ED2K
+                encrypted_size: bytes_read,
+            });
+
+            chunk_index += 1;
+        }
+
+        // Calculate Merkle root efficiently using a hasher for streaming
+        let merkle_root = if chunk_infos.is_empty() {
+            // Empty file edge case
+            let mut hasher = Sha256::new();
+            hasher.update(&[]);
+            hex::encode(hasher.finalize())
+        } else {
+            // Stream hashes into hasher instead of concatenating strings.
+            // Decode each hex-encoded chunk hash to raw bytes before hashing,
+            // to ensure we hash the actual hash values, not their ASCII representation.
+            let mut hasher = Sha256::new();
+            for chunk_info in &chunk_infos {
+                let hash_bytes = hex::decode(&chunk_info.hash)
+                    .map_err(|e| ProtocolError::Internal(format!("Invalid chunk hash hex: {e}")))?;
+                hasher.update(&hash_bytes);
+            }
+            hex::encode(hasher.finalize())
+        };
+
+        Ok(crate::manager::FileManifest {
+            merkle_root,
+            chunks: chunk_infos,
+            encrypted_key_bundle: None, // ED2K doesn't use encryption
+        })
     }
 
     /// Calculate number of chunks for a file
@@ -462,8 +572,12 @@ impl ProtocolHandler for Ed2kProtocolHandler {
             ));
         }
 
-        // Generate ed2k link and SHA256 chunk hashes
-        let (ed2k_link, sha256_chunk_hashes) = Self::generate_ed2k_link(&file_path).await?;
+        // Generate ed2k link and SHA256 chunk hashes for 9.28MB ED2K chunks
+        let (ed2k_link, sha256_ed2k_chunk_hashes) = Self::generate_ed2k_link(&file_path).await?;
+
+        // Generate FileManifest with SHA256 hashes for 256KB app chunks
+        // This is what gets stored in FileMetadata.manifest for download verification
+        let file_manifest = Self::generate_file_manifest(&file_path).await?;
 
         let seeding_info = SeedingInfo {
             identifier: ed2k_link.clone(),
@@ -481,7 +595,8 @@ impl ProtocolHandler for Ed2kProtocolHandler {
 
         // Parse ed2k link to get file info for registration
         let mut file_info = Self::parse_ed2k_link(&ed2k_link)?;
-        file_info.chunk_hashes = sha256_chunk_hashes; // Store the SHA256 chunk hashes
+        // Store the 9.28MB ED2K chunk hashes for server communication
+        file_info.chunk_hashes = sha256_ed2k_chunk_hashes;
 
         // ED2K now works in a decentralized P2P mode
         // Files are made available locally and can be discovered via DHT
@@ -518,7 +633,8 @@ impl ProtocolHandler for Ed2kProtocolHandler {
             }
         }
 
-        info!("ED2K: File seeded successfully in P2P mode - available via DHT and direct connections");
+        info!("ED2K: File seeded successfully with {} 256KB chunks in manifest", 
+              file_manifest.chunks.len());
 
         Ok(seeding_info)
     }
