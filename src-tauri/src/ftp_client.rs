@@ -328,49 +328,88 @@ pub async fn download_from_ftp_with_progress(
 ) -> Result<u64> {
     let source_clone = source_info.clone();
     let output_clone = output_path.to_path_buf();
-    
+
     spawn_blocking(move || {
         // Connect to FTP server
         let (host, port, remote_path) = FtpClient::parse_ftp_url(&source_clone.url)?;
-        
+
         let mut ftp_stream = FtpStream::connect(format!("{}:{}", host, port))
             .context("Failed to connect to FTP server")?;
-        
+
         // Login
         let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
         ftp_stream
             .login(&username, &password)
             .context("Failed to login to FTP server")?;
-        
+
         // Set binary mode and passive mode
         ftp_stream
             .transfer_type(FileType::Binary)
             .context("Failed to set binary transfer mode")?;
-        
+
         if source_clone.passive_mode {
             ftp_stream.set_mode(suppaftp::Mode::Passive);
         }
-        
+
         // Get file size for progress calculation
         let file_size = ftp_stream
             .size(&remote_path)
             .unwrap_or(0) as u64;
-        
-        // Open retrieve stream
-        let mut reader = ftp_stream
-            .retr_as_stream(&remote_path)
-            .context("Failed to start file retrieval")?;
-        
-        // Create output file
+
+        // Check if partial file exists for resume
+        let resume_position = if output_clone.exists() {
+            let metadata = std::fs::metadata(&output_clone)
+                .context("Failed to get partial file metadata")?;
+            let partial_size = metadata.len();
+
+            // Only resume if partial file is smaller than remote file
+            if partial_size < file_size && partial_size > 0 {
+                info!(
+                    partial_bytes = partial_size,
+                    total_bytes = file_size,
+                    "Resuming FTP download from previous position"
+                );
+                partial_size
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        // Open retrieve stream (with resume if applicable)
+        let mut reader = if resume_position > 0 {
+            // Resume from position using REST command
+            ftp_stream
+                .resume_transfer(resume_position as usize)
+                .context("Failed to set resume position")?;
+            ftp_stream
+                .retr_as_stream(&remote_path)
+                .context("Failed to start file retrieval (resume)")?
+        } else {
+            ftp_stream
+                .retr_as_stream(&remote_path)
+                .context("Failed to start file retrieval")?
+        };
+
+        // Create or append to output file
         use std::io::Write;
-        let mut output_file = std::fs::File::create(&output_clone)
-            .context("Failed to create output file")?;
-        
+        use std::fs::OpenOptions;
+        let mut output_file = if resume_position > 0 {
+            OpenOptions::new()
+                .append(true)
+                .open(&output_clone)
+                .context("Failed to open file for resume")?
+        } else {
+            std::fs::File::create(&output_clone)
+                .context("Failed to create output file")?
+        };
+
         // Download in chunks with progress reporting
         const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
         let mut buffer = vec![0u8; CHUNK_SIZE];
-        let mut total_downloaded = 0u64;
-        
+        let mut total_downloaded = resume_position;
+
         loop {
             use std::io::Read;
             match reader.read(&mut buffer) {
@@ -384,14 +423,14 @@ pub async fn download_from_ftp_with_progress(
                 Err(e) => return Err(anyhow::anyhow!("Failed to read from FTP stream: {}", e)),
             }
         }
-        
+
         // Finalize the transfer
         ftp_stream.finalize_retr_stream(reader)
             .context("Failed to finalize retrieval")?;
-        
+
         // Quit connection
         ftp_stream.quit().context("Failed to quit FTP session")?;
-        
+
         Ok(total_downloaded)
     })
     .await
