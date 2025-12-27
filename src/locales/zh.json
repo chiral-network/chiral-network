@@ -1809,66 +1809,66 @@
   "settings.diagnostics.webrtcSupport": "WebRTC Support",
   "pureClientMode": {
     "warnings": {
-      "forcedMode": "You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).",
-      "forcedModeMining": "You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.",
-      "natDetected": "AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.",
-      "natDetectedMining": "AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.",
-      "settingsForced": "⚠️ Client mode forced: You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.",
-      "serverModeDisabled": "ℹ️ Server mode is disabled when client mode is forced."
+      "forcedMode": "您已在设置中手动启用纯客户端模式。您无法共享文件或充当DHT服务器。区块链使用轻量同步模式（最小下载）。",
+      "forcedModeMining": "您已在设置中手动启用纯客户端模式。区块链仅同步最后约100个区块，而非完整同步（约10,000个区块）。挖矿可用但使用最小存储空间。",
+      "natDetected": "AutoNAT检测到您位于NAT或限制性防火墙后。您可以下载文件但无法将其共享给其他对等节点。",
+      "natDetectedMining": "AutoNAT检测到您位于NAT或限制性防火墙后。区块链仅同步最后约100个区块以减少带宽/存储需求。挖矿可用但存储空间减少。",
+      "settingsForced": "⚠️ 客户端模式已强制：您将无法共享文件或充当DHT服务器。区块链使用部分同步（仅最后约100个区块）而非完整同步（约10,000个区块）。挖矿可用但存储空间减少。需要重启DHT。",
+      "serverModeDisabled": "ℹ️ 强制客户端模式时服务器模式被禁用。"
     },
     "banner": {
       "title": {
-        "forced": "Client-Only Mode Enabled (Forced)",
-        "nat": "Client-Only Mode (Behind NAT)",
-        "default": "Client-Only Mode",
-        "forcedMining": "Client-Only Mode Enabled (Forced) - Limited Blockchain Sync",
-        "natMining": "Client-Only Mode (Behind NAT) - Limited Blockchain Sync",
-        "defaultMining": "Client-Only Mode - Limited Blockchain Sync"
+        "forced": "仅客户端模式已启用（强制）",
+        "nat": "仅客户端模式（NAT后）",
+        "default": "仅客户端模式",
+        "forcedMining": "仅客户端模式已启用（强制） - 区块链同步受限",
+        "natMining": "仅客户端模式（NAT后） - 区块链同步受限",
+        "defaultMining": "仅客户端模式 - 区块链同步受限"
       },
       "description": {
-        "default": "You are in client-only mode and cannot seed files.",
-        "defaultMining": "You are in client-only mode. Blockchain syncs only last ~100 blocks (minimal storage). Mining is available."
+        "default": "您处于仅客户端模式，无法共享文件。",
+        "defaultMining": "您处于仅客户端模式。区块链仅同步最后约100个区块（最小存储）。挖矿可用。"
       },
       "help": {
-        "forced": "To enable seeding, disable \"Force Client-Only Mode\" in Settings → Developers → DHT Client Mode.",
-        "nat": "Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.",
-        "default": "Check your network settings or AutoNAT configuration.",
-        "forcedMining": "To enable full blockchain sync (10,000 blocks), disable \"Force Client-Only Mode\" in Settings → Developers.",
-        "natMining": "Full nodes sync ~10,000 blocks. To upgrade, configure port forwarding or use a VPN with a public IP to become publicly reachable.",
-        "defaultMining": "Check your network settings or AutoNAT configuration for full functionality."
+        "forced": "要启用共享，请在 设置 → 开发者 → DHT客户端模式 中禁用"强制仅客户端模式"。",
+        "nat": "您的文件仍将本地保存，但不会与网络共享。要启用共享，请配置端口转发或使用具有公共IP的VPN。",
+        "default": "检查您的网络设置或AutoNAT配置。",
+        "forcedMining": "要启用完整区块链同步（10,000个区块），请在 设置 → 开发者 中禁用"强制仅客户端模式"。",
+        "natMining": "完整节点同步约10,000个区块。要升级，请配置端口转发或使用具有公共IP的VPN以变得可公开访问。",
+        "defaultMining": "检查您的网络设置或AutoNAT配置以获得完整功能。"
       }
     },
     "settings": {
       "dht": {
         "clientMode": {
-          "title": "DHT Client Mode (Override)",
-          "label": "Force Client-Only Mode",
-          "descriptionOverride": "Developer override:",
-          "descriptionText": "Forces node to stay in client mode even if publicly reachable.",
-          "noteLabel": "Note:",
-          "noteText": "AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.",
-          "autoBehaviorLabel": "Automatic behavior:",
-          "autoBehaviorText": "If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle."
+          "title": "DHT客户端模式（覆盖）",
+          "label": "强制仅客户端模式",
+          "descriptionOverride": "开发者覆盖：",
+          "descriptionText": "即使可公开访问也强制节点保持客户端模式。",
+          "noteLabel": "注意：",
+          "noteText": "如果您位于NAT后，AutoNAT会自动将您保持在客户端模式 - 除非您想强制它，否则无需手动启用此选项。",
+          "autoBehaviorLabel": "自动行为：",
+          "autoBehaviorText": "如果AutoNAT检测到您位于NAT后，您将自动保持在客户端模式，无需此开关。"
         },
         "serverMode": {
-          "title": "DHT Server Mode (Override)",
-          "label": "Force Server Mode",
-          "descriptionOverride": "Developer override:",
-          "descriptionText": "Forces node to act as DHT server even if behind NAT (for testing only).",
-          "noteLabel": "Note:",
-          "noteText": "This may not work if you're behind a strict NAT/firewall. AutoNAT automatically upgrades you to server mode when publicly reachable.",
-          "warningLabel": "Server mode forced:",
-          "warningText": "Node will attempt to act as DHT server even behind NAT. This may result in connectivity issues. Requires DHT restart.",
-          "autoBehaviorLabel": "Automatic behavior:",
-          "autoBehaviorText": "If AutoNAT detects you're publicly reachable, you'll automatically be upgraded to server mode without needing this toggle."
+          "title": "DHT服务器模式（覆盖）",
+          "label": "强制服务器模式",
+          "descriptionOverride": "开发者覆盖：",
+          "descriptionText": "即使位于NAT后也强制节点充当DHT服务器（仅用于测试）。",
+          "noteLabel": "注意：",
+          "noteText": "如果您位于严格的NAT/防火墙后，这可能无法工作。当可公开访问时，AutoNAT会自动将您升级到服务器模式。",
+          "warningLabel": "服务器模式已强制：",
+          "warningText": "即使位于NAT后，节点也将尝试充当DHT服务器。这可能导致连接问题。需要重启DHT。",
+          "autoBehaviorLabel": "自动行为：",
+          "autoBehaviorText": "如果AutoNAT检测到您可公开访问，您将自动升级到服务器模式，无需此开关。"
         }
       }
     }
   },
   "wallet": {
     "testWallet": {
-      "header": "For Testing Only",
-      "button": "Create Test Wallet"
+      "header": "仅用于测试",
+      "button": "创建测试钱包"
     }
   }
 }
