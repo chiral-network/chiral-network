@@ -1821,5 +1821,15 @@
   "settings.diagnostics.peerConnections": "Peer Connections",
   "settings.diagnostics.proxyConfig": "Proxy Configuration",
   "settings.diagnostics.storagePath": "Storage Path",
-  "settings.diagnostics.webrtcSupport": "WebRTC Support"
+  "settings.diagnostics.webrtcSupport": "WebRTC Support",
+  "pureClientMode": {
+    "warnings": {
+      "forcedMode": "You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).",
+      "forcedModeMining": "You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.",
+      "natDetected": "AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.",
+      "natDetectedMining": "AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.",
+      "settingsForced": "⚠️ Client mode forced: You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.",
+      "serverModeDisabled": "ℹ️ Server mode is disabled when client mode is forced."
+    }
+  }
 }
