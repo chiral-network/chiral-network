@@ -16,6 +16,7 @@ pub mod download_source;
 pub mod download_scheduler;
 pub mod download_persistence;
 pub mod ftp_client;
+pub mod ftp_bookmarks;
 pub mod ed2k_client;
 pub mod http_download;
 pub mod bittorrent_handler;

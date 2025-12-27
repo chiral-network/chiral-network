@@ -37,7 +37,7 @@ pub mod blockstore_manager;
 // Re-export modules from the lib crate
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source,
-    ed2k_client, encryption, file_transfer, ftp_client, sftp_client, http_download, keystore,
+    ed2k_client, encryption, file_transfer, ftp_client, ftp_bookmarks, http_download, keystore,
     logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
@@ -4528,32 +4528,85 @@ async fn create_ftp_directory(
         .map_err(|e| format!("Failed to create FTP directory: {}", e))
 }
 
-/// Download file from SFTP server
+/// Load all FTP bookmarks
 #[tauri::command]
-async fn start_sftp_download(
-    url: String,
-    username: String,
-    password: Option<String>,
-    private_key_path: Option<String>,
-    key_passphrase: Option<String>,
-    output_path: String,
-) -> Result<u64, String> {
-    use crate::download_source::SftpSourceInfo;
-    use std::path::Path;
+async fn load_ftp_bookmarks(app: tauri::AppHandle) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
 
-    let source_info = SftpSourceInfo {
-        url,
-        username,
-        encrypted_password: password,
-        private_key_path,
-        key_passphrase,
-        port: 22,
-        timeout_secs: Some(30),
-    };
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.load_bookmarks()
+        .map_err(|e| format!("Failed to load bookmarks: {}", e))
+}
 
-    sftp_client::download_from_sftp(&source_info, Path::new(&output_path))
-        .await
-        .map_err(|e| format!("Failed to download from SFTP: {}", e))
+/// Add a new FTP bookmark
+#[tauri::command]
+async fn add_ftp_bookmark(
+    app: tauri::AppHandle,
+    bookmark: ftp_bookmarks::FtpBookmark,
+) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.add_bookmark(bookmark)
+        .map_err(|e| format!("Failed to add bookmark: {}", e))
+}
+
+/// Update an existing FTP bookmark
+#[tauri::command]
+async fn update_ftp_bookmark(
+    app: tauri::AppHandle,
+    bookmark: ftp_bookmarks::FtpBookmark,
+) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.update_bookmark(bookmark)
+        .map_err(|e| format!("Failed to update bookmark: {}", e))
+}
+
+/// Delete an FTP bookmark
+#[tauri::command]
+async fn delete_ftp_bookmark(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.delete_bookmark(&id)
+        .map_err(|e| format!("Failed to delete bookmark: {}", e))
+}
+
+/// Search FTP bookmarks
+#[tauri::command]
+async fn search_ftp_bookmarks(
+    app: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.search_bookmarks(&query)
+        .map_err(|e| format!("Failed to search bookmarks: {}", e))
+}
+
+/// Record bookmark usage
+#[tauri::command]
+async fn record_ftp_bookmark_usage(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.record_usage(&id)
+        .map_err(|e| format!("Failed to record usage: {}", e))
 }
 
 /// Test FTP connection to external server
@@ -9217,7 +9270,12 @@ fn main() {
             delete_ftp_file,
             rename_ftp_file,
             create_ftp_directory,
-            start_sftp_download,
+            load_ftp_bookmarks,
+            add_ftp_bookmark,
+            update_ftp_bookmark,
+            delete_ftp_bookmark,
+            search_ftp_bookmarks,
+            record_ftp_bookmark_usage,
             test_ftp_connection,
             upload_to_external_ftp,
             start_ftp_download,
