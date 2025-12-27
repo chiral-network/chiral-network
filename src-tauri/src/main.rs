@@ -9581,6 +9581,21 @@ fn main() {
             }
 
             if let Ok(port_str) = std::env::var("CHIRAL_E2E_API_PORT") {
+                // When running Real E2E attach/spawn flows, we generally don't want GUI windows
+                // popping up on the developer machine. Hide the main window by default.
+                //
+                // Override by setting CHIRAL_E2E_SHOW_WINDOW=1.
+                let show_window = std::env::var("CHIRAL_E2E_SHOW_WINDOW")
+                    .ok()
+                    .as_deref()
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                if !show_window {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                }
+
                 if let Ok(port) = port_str.trim().parse::<u16>() {
                     let app_handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
