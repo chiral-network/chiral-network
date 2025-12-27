@@ -1789,66 +1789,66 @@
   },
   "pureClientMode": {
     "warnings": {
-      "forcedMode": "You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).",
-      "forcedModeMining": "You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.",
-      "natDetected": "AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.",
-      "natDetectedMining": "AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.",
-      "settingsForced": "⚠️ Client mode forced: You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.",
-      "serverModeDisabled": "ℹ️ Server mode is disabled when client mode is forced."
+      "forcedMode": "Вы вручную включили режим чистого клиента в Настройках. Вы не можете раздавать файлы или действовать как DHT-сервер. Блокчейн использует режим легкой синхронизации (минимальная загрузка).",
+      "forcedModeMining": "Вы вручную включили режим чистого клиента в Настройках. Блокчейн синхронизирует только последние ~100 блоков вместо полной синхронизации (~10 000 блоков). Майнинг доступен, но использует минимальное хранилище.",
+      "natDetected": "AutoNAT обнаружил, что вы за NAT или ограничительным брандмауэром. Вы можете скачивать файлы, но не можете раздавать их другим участникам.",
+      "natDetectedMining": "AutoNAT обнаружил, что вы за NAT или ограничительным брандмауэром. Блокчейн синхронизирует только последние ~100 блоков для снижения требований к пропускной способности/хранилищу. Майнинг доступен с уменьшенным хранилищем.",
+      "settingsForced": "⚠️ Режим клиента принудительно включен: Вы не сможете раздавать файлы или действовать как DHT-сервер. Блокчейн использует частичную синхронизацию (только последние ~100 блоков) вместо полной синхронизации (~10 000 блоков). Майнинг доступен с уменьшенным хранилищем. Требуется перезапуск DHT.",
+      "serverModeDisabled": "ℹ️ Режим сервера отключен при принудительном режиме клиента."
     },
     "banner": {
       "title": {
-        "forced": "Client-Only Mode Enabled (Forced)",
-        "nat": "Client-Only Mode (Behind NAT)",
-        "default": "Client-Only Mode",
-        "forcedMining": "Client-Only Mode Enabled (Forced) - Limited Blockchain Sync",
-        "natMining": "Client-Only Mode (Behind NAT) - Limited Blockchain Sync",
-        "defaultMining": "Client-Only Mode - Limited Blockchain Sync"
+        "forced": "Режим Только Клиент Включен (Принудительно)",
+        "nat": "Режим Только Клиент (За NAT)",
+        "default": "Режим Только Клиент",
+        "forcedMining": "Режим Только Клиент Включен (Принудительно) - Ограниченная Синхронизация Блокчейна",
+        "natMining": "Режим Только Клиент (За NAT) - Ограниченная Синхронизация Блокчейна",
+        "defaultMining": "Режим Только Клиент - Ограниченная Синхронизация Блокчейна"
       },
       "description": {
-        "default": "You are in client-only mode and cannot seed files.",
-        "defaultMining": "You are in client-only mode. Blockchain syncs only last ~100 blocks (minimal storage). Mining is available."
+        "default": "Вы в режиме только клиента и не можете раздавать файлы.",
+        "defaultMining": "Вы в режиме только клиента. Блокчейн синхронизирует только последние ~100 блоков (минимальное хранилище). Майнинг доступен."
       },
       "help": {
-        "forced": "To enable seeding, disable \"Force Client-Only Mode\" in Settings → Developers → DHT Client Mode.",
-        "nat": "Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.",
-        "default": "Check your network settings or AutoNAT configuration.",
-        "forcedMining": "To enable full blockchain sync (10,000 blocks), disable \"Force Client-Only Mode\" in Settings → Developers.",
-        "natMining": "Full nodes sync ~10,000 blocks. To upgrade, configure port forwarding or use a VPN with a public IP to become publicly reachable.",
-        "defaultMining": "Check your network settings or AutoNAT configuration for full functionality."
+        "forced": "Чтобы включить раздачу, отключите \"Принудительный Режим Только Клиент\" в Настройки → Разработчики → Режим DHT Клиента.",
+        "nat": "Ваши файлы по-прежнему будут сохранены локально, но не будут переданы в сеть. Чтобы включить раздачу, настройте переадресацию портов или используйте VPN с публичным IP.",
+        "default": "Проверьте настройки сети или конфигурацию AutoNAT.",
+        "forcedMining": "Чтобы включить полную синхронизацию блокчейна (10 000 блоков), отключите \"Принудительный Режим Только Клиент\" в Настройки → Разработчики.",
+        "natMining": "Полные узлы синхронизируют ~10 000 блоков. Чтобы обновиться, настройте переадресацию портов или используйте VPN с публичным IP, чтобы стать публично доступным.",
+        "defaultMining": "Проверьте настройки сети или конфигурацию AutoNAT для полной функциональности."
       }
     },
     "settings": {
       "dht": {
         "clientMode": {
-          "title": "DHT Client Mode (Override)",
-          "label": "Force Client-Only Mode",
-          "descriptionOverride": "Developer override:",
-          "descriptionText": "Forces node to stay in client mode even if publicly reachable.",
-          "noteLabel": "Note:",
-          "noteText": "AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.",
-          "autoBehaviorLabel": "Automatic behavior:",
-          "autoBehaviorText": "If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle."
+          "title": "Режим DHT Клиента (Переопределение)",
+          "label": "Принудительный Режим Только Клиент",
+          "descriptionOverride": "Переопределение разработчика:",
+          "descriptionText": "Принудительно оставляет узел в режиме клиента, даже если он публично доступен.",
+          "noteLabel": "Примечание:",
+          "noteText": "AutoNAT автоматически оставляет вас в режиме клиента, если вы за NAT - вам не нужно включать это вручную, если только вы не хотите принудительно установить его.",
+          "autoBehaviorLabel": "Автоматическое поведение:",
+          "autoBehaviorText": "Если AutoNAT обнаружит, что вы за NAT, вы автоматически останетесь в режиме клиента без необходимости этого переключателя."
         },
         "serverMode": {
-          "title": "DHT Server Mode (Override)",
-          "label": "Force Server Mode",
-          "descriptionOverride": "Developer override:",
-          "descriptionText": "Forces node to act as DHT server even if behind NAT (for testing only).",
-          "noteLabel": "Note:",
-          "noteText": "This may not work if you're behind a strict NAT/firewall. AutoNAT automatically upgrades you to server mode when publicly reachable.",
-          "warningLabel": "Server mode forced:",
-          "warningText": "Node will attempt to act as DHT server even behind NAT. This may result in connectivity issues. Requires DHT restart.",
-          "autoBehaviorLabel": "Automatic behavior:",
-          "autoBehaviorText": "If AutoNAT detects you're publicly reachable, you'll automatically be upgraded to server mode without needing this toggle."
+          "title": "Режим DHT Сервера (Переопределение)",
+          "label": "Принудительный Режим Сервера",
+          "descriptionOverride": "Переопределение разработчика:",
+          "descriptionText": "Принудительно заставляет узел действовать как DHT-сервер, даже если он за NAT (только для тестирования).",
+          "noteLabel": "Примечание:",
+          "noteText": "Это может не работать, если вы за строгим NAT/брандмауэром. AutoNAT автоматически повышает вас до режима сервера, когда вы публично доступны.",
+          "warningLabel": "Режим сервера принудительно включен:",
+          "warningText": "Узел попытается действовать как DHT-сервер, даже за NAT. Это может привести к проблемам с подключением. Требуется перезапуск DHT.",
+          "autoBehaviorLabel": "Автоматическое поведение:",
+          "autoBehaviorText": "Если AutoNAT обнаружит, что вы публично доступны, вы автоматически будете повышены до режима сервера без необходимости этого переключателя."
         }
       }
     }
   },
   "wallet": {
     "testWallet": {
-      "header": "For Testing Only",
-      "button": "Create Test Wallet"
+      "header": "Только для Тестирования",
+      "button": "Создать Тестовый Кошелек"
     }
   }
 }
