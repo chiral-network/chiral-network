@@ -1824,66 +1824,66 @@
   "settings.diagnostics.webrtcSupport": "WebRTC Support",
   "pureClientMode": {
     "warnings": {
-      "forcedMode": "You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).",
-      "forcedModeMining": "You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.",
-      "natDetected": "AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.",
-      "natDetectedMining": "AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.",
-      "settingsForced": "⚠️ Client mode forced: You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.",
-      "serverModeDisabled": "ℹ️ Server mode is disabled when client mode is forced."
+      "forcedMode": "আপনি সেটিংসে ম্যানুয়ালি পিউর ক্লায়েন্ট মোড সক্ষম করেছেন। আপনি ফাইল সিড করতে বা DHT সার্ভার হিসাবে কাজ করতে পারবেন না। ব্লকচেইন লাইট সিঙ্ক মোড (ন্যূনতম ডাউনলোড) ব্যবহার করে।",
+      "forcedModeMining": "আপনি সেটিংসে ম্যানুয়ালি পিউর ক্লায়েন্ট মোড সক্ষম করেছেন। ব্লকচেইন সম্পূর্ণ সিঙ্ক (~10,000 ব্লক) এর পরিবর্তে শুধুমাত্র শেষ ~100 ব্লক সিঙ্ক করে। মাইনিং উপলব্ধ কিন্তু ন্যূনতম স্টোরেজ ব্যবহার করে।",
+      "natDetected": "AutoNAT সনাক্ত করেছে যে আপনি NAT বা সীমাবদ্ধ ফায়ারওয়ালের পিছনে আছেন। আপনি ফাইল ডাউনলোড করতে পারেন কিন্তু অন্য পিয়ারদের কাছে সিড করতে পারবেন না।",
+      "natDetectedMining": "AutoNAT সনাক্ত করেছে যে আপনি NAT বা সীমাবদ্ধ ফায়ারওয়ালের পিছনে আছেন। ব্লকচেইন ব্যান্ডউইথ/স্টোরেজ প্রয়োজনীয়তা কমাতে শুধুমাত্র শেষ ~100 ব্লক সিঙ্ক করে। হ্রাস স্টোরেজ সহ মাইনিং উপলব্ধ।",
+      "settingsForced": "⚠️ ক্লায়েন্ট মোড বাধ্য: আপনি ফাইল সিড করতে বা DHT সার্ভার হিসাবে কাজ করতে পারবেন না। ব্লকচেইন সম্পূর্ণ সিঙ্ক (~10,000 ব্লক) এর পরিবর্তে আংশিক সিঙ্ক (শুধুমাত্র শেষ ~100 ব্লক) ব্যবহার করে। হ্রাস স্টোরেজ সহ মাইনিং উপলব্ধ। DHT পুনরায় চালু প্রয়োজন।",
+      "serverModeDisabled": "ℹ️ ক্লায়েন্ট মোড বাধ্য করা হলে সার্ভার মোড নিষ্ক্রিয় হয়।"
     },
     "banner": {
       "title": {
-        "forced": "Client-Only Mode Enabled (Forced)",
-        "nat": "Client-Only Mode (Behind NAT)",
-        "default": "Client-Only Mode",
-        "forcedMining": "Client-Only Mode Enabled (Forced) - Limited Blockchain Sync",
-        "natMining": "Client-Only Mode (Behind NAT) - Limited Blockchain Sync",
-        "defaultMining": "Client-Only Mode - Limited Blockchain Sync"
+        "forced": "ক্লায়েন্ট-অনলি মোড সক্ষম (বাধ্য)",
+        "nat": "ক্লায়েন্ট-অনলি মোড (NAT এর পিছনে)",
+        "default": "ক্লায়েন্ট-অনলি মোড",
+        "forcedMining": "ক্লায়েন্ট-অনলি মোড সক্ষম (বাধ্য) - সীমিত ব্লকচেইন সিঙ্ক",
+        "natMining": "ক্লায়েন্ট-অনলি মোড (NAT এর পিছনে) - সীমিত ব্লকচেইন সিঙ্ক",
+        "defaultMining": "ক্লায়েন্ট-অনলি মোড - সীমিত ব্লকচেইন সিঙ্ক"
       },
       "description": {
-        "default": "You are in client-only mode and cannot seed files.",
-        "defaultMining": "You are in client-only mode. Blockchain syncs only last ~100 blocks (minimal storage). Mining is available."
+        "default": "আপনি ক্লায়েন্ট-অনলি মোডে আছেন এবং ফাইল সিড করতে পারবেন না।",
+        "defaultMining": "আপনি ক্লায়েন্ট-অনলি মোডে আছেন। ব্লকচেইন শুধুমাত্র শেষ ~100 ব্লক সিঙ্ক করে (ন্যূনতম স্টোরেজ)। মাইনিং উপলব্ধ।"
       },
       "help": {
-        "forced": "To enable seeding, disable \"Force Client-Only Mode\" in Settings → Developers → DHT Client Mode.",
-        "nat": "Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.",
-        "default": "Check your network settings or AutoNAT configuration.",
-        "forcedMining": "To enable full blockchain sync (10,000 blocks), disable \"Force Client-Only Mode\" in Settings → Developers.",
-        "natMining": "Full nodes sync ~10,000 blocks. To upgrade, configure port forwarding or use a VPN with a public IP to become publicly reachable.",
-        "defaultMining": "Check your network settings or AutoNAT configuration for full functionality."
+        "forced": "সিডিং সক্ষম করতে, সেটিংস → ডেভেলপার → DHT ক্লায়েন্ট মোডে \"ফোর্স ক্লায়েন্ট-অনলি মোড\" নিষ্ক্রিয় করুন।",
+        "nat": "আপনার ফাইল এখনও স্থানীয়ভাবে সংরক্ষিত হবে, কিন্তু নেটওয়ার্কের সাথে শেয়ার করা হবে না। সিডিং সক্ষম করতে, পোর্ট ফরওয়ার্ডিং কনফিগার করুন বা পাবলিক IP সহ VPN ব্যবহার করুন।",
+        "default": "আপনার নেটওয়ার্ক সেটিংস বা AutoNAT কনফিগারেশন পরীক্ষা করুন।",
+        "forcedMining": "সম্পূর্ণ ব্লকচেইন সিঙ্ক (10,000 ব্লক) সক্ষম করতে, সেটিংস → ডেভেলপারে \"ফোর্স ক্লায়েন্ট-অনলি মোড\" নিষ্ক্রিয় করুন।",
+        "natMining": "সম্পূর্ণ নোডগুলি ~10,000 ব্লক সিঙ্ক করে। আপগ্রেড করতে, পোর্ট ফরওয়ার্ডিং কনফিগার করুন বা পাবলিকভাবে পৌঁছানোর জন্য পাবলিক IP সহ VPN ব্যবহার করুন।",
+        "defaultMining": "সম্পূর্ণ কার্যকারিতার জন্য আপনার নেটওয়ার্ক সেটিংস বা AutoNAT কনফিগারেশন পরীক্ষা করুন।"
       }
     },
     "settings": {
       "dht": {
         "clientMode": {
-          "title": "DHT Client Mode (Override)",
-          "label": "Force Client-Only Mode",
-          "descriptionOverride": "Developer override:",
-          "descriptionText": "Forces node to stay in client mode even if publicly reachable.",
-          "noteLabel": "Note:",
-          "noteText": "AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.",
-          "autoBehaviorLabel": "Automatic behavior:",
-          "autoBehaviorText": "If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle."
+          "title": "DHT ক্লায়েন্ট মোড (ওভাররাইড)",
+          "label": "ফোর্স ক্লায়েন্ট-অনলি মোড",
+          "descriptionOverride": "ডেভেলপার ওভাররাইড:",
+          "descriptionText": "পাবলিকভাবে পৌঁছানো সম্ভব হলেও নোডকে ক্লায়েন্ট মোডে থাকতে বাধ্য করে।",
+          "noteLabel": "নোট:",
+          "noteText": "আপনি NAT এর পিছনে থাকলে AutoNAT স্বয়ংক্রিয়ভাবে আপনাকে ক্লায়েন্ট মোডে রাখে - আপনি এটি বাধ্য করতে না চাইলে ম্যানুয়ালি সক্ষম করার প্রয়োজন নেই।",
+          "autoBehaviorLabel": "স্বয়ংক্রিয় আচরণ:",
+          "autoBehaviorText": "AutoNAT যদি সনাক্ত করে যে আপনি NAT এর পিছনে আছেন, তাহলে এই টগলের প্রয়োজন ছাড়াই আপনি স্বয়ংক্রিয়ভাবে ক্লায়েন্ট মোডে থাকবেন।"
         },
         "serverMode": {
-          "title": "DHT Server Mode (Override)",
-          "label": "Force Server Mode",
-          "descriptionOverride": "Developer override:",
-          "descriptionText": "Forces node to act as DHT server even if behind NAT (for testing only).",
-          "noteLabel": "Note:",
-          "noteText": "This may not work if you're behind a strict NAT/firewall. AutoNAT automatically upgrades you to server mode when publicly reachable.",
-          "warningLabel": "Server mode forced:",
-          "warningText": "Node will attempt to act as DHT server even behind NAT. This may result in connectivity issues. Requires DHT restart.",
-          "autoBehaviorLabel": "Automatic behavior:",
-          "autoBehaviorText": "If AutoNAT detects you're publicly reachable, you'll automatically be upgraded to server mode without needing this toggle."
+          "title": "DHT সার্ভার মোড (ওভাররাইড)",
+          "label": "ফোর্স সার্ভার মোড",
+          "descriptionOverride": "ডেভেলপার ওভাররাইড:",
+          "descriptionText": "NAT এর পিছনে থাকলেও নোডকে DHT সার্ভার হিসাবে কাজ করতে বাধ্য করে (শুধুমাত্র পরীক্ষার জন্য)।",
+          "noteLabel": "নোট:",
+          "noteText": "আপনি কঠোর NAT/ফায়ারওয়ালের পিছনে থাকলে এটি কাজ নাও করতে পারে। পাবলিকভাবে পৌঁছানো সম্ভব হলে AutoNAT স্বয়ংক্রিয়ভাবে আপনাকে সার্ভার মোডে আপগ্রেড করে।",
+          "warningLabel": "সার্ভার মোড বাধ্য:",
+          "warningText": "NAT এর পিছনে থাকলেও নোড DHT সার্ভার হিসাবে কাজ করার চেষ্টা করবে। এর ফলে সংযোগ সমস্যা হতে পারে। DHT পুনরায় চালু প্রয়োজন।",
+          "autoBehaviorLabel": "স্বয়ংক্রিয় আচরণ:",
+          "autoBehaviorText": "AutoNAT যদি সনাক্ত করে যে আপনি পাবলিকভাবে পৌঁছানো সম্ভব, তাহলে এই টগলের প্রয়োজন ছাড়াই আপনি স্বয়ংক্রিয়ভাবে সার্ভার মোডে আপগ্রেড হবেন।"
         }
       }
     }
   },
   "wallet": {
     "testWallet": {
-      "header": "For Testing Only",
-      "button": "Create Test Wallet"
+      "header": "শুধুমাত্র পরীক্ষার জন্য",
+      "button": "টেস্ট ওয়ালেট তৈরি করুন"
     }
   }
 }
