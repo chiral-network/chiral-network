@@ -39,6 +39,7 @@
   import { bandwidthScheduler } from "$lib/services/bandwidthScheduler";
   import { settingsBackupService } from "$lib/services/settingsBackupService";
   import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
+  import { diagnosticsService, type DiagReport } from "$lib/services/diagnosticsService";
   import { 
     validateStoragePath, 
     validatePort, 
@@ -160,11 +161,8 @@
   } | null = null;
 
   // Diagnostics state
-  type DiagStatus = "pass" | "fail" | "warn";
-  type DiagItem = { id: string; label: string; status: DiagStatus; details?: string };
   let diagnosticsRunning = false;
-  let diagnostics: DiagItem[] = [];
-  let diagnosticsReport = "";
+  let diagnosticsReport: DiagReport | null = null;
 
   // Backup/Restore state
   let backupRestoreSectionOpen = false;
@@ -864,76 +862,26 @@
 
   async function runDiagnostics() {
     diagnosticsRunning = true;
-    diagnostics = [];
-    diagnosticsReport = "";
+    diagnosticsReport = null;
 
-    const add = (item: DiagItem) => {
-      diagnostics = [...diagnostics, item];
-    };
-
-    // const tr = (k: string, params?: Record<string, any>) => (get(t) as any)(k, params);
-
-    // 1) Environment (Web vs Tauri)
-    const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
     try {
-      if (isTauri) {
-        const ver = await getVersion();
-        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "pass", details: `Tauri ${ver}` });
-      } else {
-        add({ id: "env", label: tr("settings.diagnostics.environment"), status: "warn", details: "Web build: some checks skipped" });
-      }
-    } catch (e:any) {
-      add({ id: "env", label: tr("settings.diagnostics.environment"), status: "fail", details: String(e) });
+      // Run all diagnostic checks
+      const report = await diagnosticsService.runAll();
+      diagnosticsReport = report;
+    } catch (e) {
+      console.error("Diagnostics failed:", e);
+      showToast(tr("settings.diagnostics.copyFailed"), "error");
+    } finally {
+      diagnosticsRunning = false;
     }
-
-    // 2) i18n storage read/write
-    try {
-      const before = await loadLocale();
-      await saveLocale(before || "en");
-      const after = await loadLocale();
-      const ok = (before || "en") === (after || "en");
-      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: ok ? "pass" : "warn", details: `value=${after ?? "null"}` });
-    } catch (e:any) {
-      add({ id: "i18n", label: tr("settings.diagnostics.i18nStorage"), status: "fail", details: String(e) });
-    }
-
-    // 3) Bootstrap nodes availability (DHT)
-    try {
-      // Only in Tauri builds
-      if (isTauri) {
-        const nodes = await invoke<string[]>("get_bootstrap_nodes_command");
-        const count = Array.isArray(nodes) ? nodes.length : 0;
-        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: count > 0 ? "pass" : "fail", details: `count=${count}` });
-      } else {
-        add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "warn", details: "Skipped in web build" });
-      }
-    } catch (e:any) {
-      add({ id: "dht", label: tr("settings.diagnostics.bootstrapNodes"), status: "fail", details: String(e) });
-    }
-
-    // 4) Privacy routing configuration sanity
-    try {
-      const ipMode = localSettings.ipPrivacyMode;
-      const trusted = localSettings.trustedProxyRelays?.length ?? 0;
-      if (ipMode !== "off" && trusted === 0) {
-        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "warn", details: tr("settings.diagnostics.privacyNeedsTrusted") });
-      } else {
-        add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "pass", details: `mode=${ipMode}, trusted=${trusted}` });
-      }
-    } catch (e:any) {
-      add({ id: "privacy", label: tr("settings.diagnostics.privacyConfig"), status: "fail", details: String(e) });
-    }
-
-    // Build report text
-    diagnosticsReport = diagnostics
-      .map((d) => `${d.status.toUpperCase()} - ${d.label}: ${d.details ?? ""}`)
-      .join("\n");
-    diagnosticsRunning = false;
   }
 
   async function copyDiagnostics() {
+    if (!diagnosticsReport) return;
+
     try {
-      await navigator.clipboard.writeText(diagnosticsReport);
+      const reportText = diagnosticsService.formatReport(diagnosticsReport);
+      await navigator.clipboard.writeText(reportText);
       showToast(tr("settings.diagnostics.copied"));
     } catch (e) {
       showToast(tr("settings.diagnostics.copyFailed"), "error");
@@ -2434,35 +2382,62 @@ function sectionMatches(section: string, query: string) {
             <RefreshCw class="h-4 w-4 mr-2 {diagnosticsRunning ? 'animate-spin' : ''}" />
             {diagnosticsRunning ? $t("settings.diagnostics.running") : $t("settings.diagnostics.run")}
           </Button>
-          {#if diagnostics.length > 0}
+          {#if diagnosticsReport}
             <Button variant="outline" size="xs" on:click={copyDiagnostics}>
               <Copy class="h-4 w-4 mr-2" />{$t("settings.diagnostics.copyReport")}
             </Button>
           {/if}
         </div>
 
-        {#if diagnostics.length > 0}
+        {#if diagnosticsReport}
           <div>
-            <h3 class="font-medium mb-2">{$t("settings.diagnostics.resultsTitle")}</h3>
-            <ul class="space-y-2">
-              {#each diagnostics as d}
-                <li class="flex items-start gap-2">
-                  {#if d.status === 'pass'}
-                    <CheckCircle class="h-4 w-4 text-green-600 mt-0.5" />
-                  {:else if d.status === 'warn'}
-                    <AlertTriangle class="h-4 w-4 text-amber-600 mt-0.5" />
-                  {:else}
-                    <AlertTriangle class="h-4 w-4 text-red-600 mt-0.5" />
-                  {/if}
-                  <div>
-                    <div class="text-sm font-medium">{d.label}</div>
-                    {#if d.details}
-                      <div class="text-xs text-muted-foreground">{d.details}</div>
-                    {/if}
-                  </div>
-                </li>
-              {/each}
-            </ul>
+            <!-- Summary -->
+            <div class="mb-4 p-3 bg-gray-50 rounded-lg">
+              <h3 class="font-medium mb-2">{$t("settings.diagnostics.resultsTitle")}</h3>
+              <div class="flex gap-4 text-sm">
+                <span class="text-green-600">✓ {diagnosticsReport.summary.passed} passed</span>
+                {#if diagnosticsReport.summary.warnings > 0}
+                  <span class="text-amber-600">⚠ {diagnosticsReport.summary.warnings} warnings</span>
+                {/if}
+                {#if diagnosticsReport.summary.failed > 0}
+                  <span class="text-red-600">✗ {diagnosticsReport.summary.failed} failed</span>
+                {/if}
+              </div>
+            </div>
+
+            <!-- Results by Category -->
+            {#each ['environment', 'network', 'storage', 'security', 'system'] as category}
+              {@const categoryResults = diagnosticsReport.results.filter(r => r.category === category)}
+              {#if categoryResults.length > 0}
+                <div class="mb-4">
+                  <h4 class="text-sm font-semibold text-gray-700 uppercase mb-2">{category}</h4>
+                  <ul class="space-y-2">
+                    {#each categoryResults as d}
+                      <li class="flex items-start gap-2">
+                        {#if d.status === 'pass'}
+                          <CheckCircle class="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                        {:else if d.status === 'warn'}
+                          <AlertTriangle class="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                        {:else if d.status === 'fail'}
+                          <AlertTriangle class="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
+                        {:else}
+                          <Activity class="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                        {/if}
+                        <div class="flex-1 min-w-0">
+                          <div class="text-sm font-medium">{d.label}</div>
+                          {#if d.details}
+                            <div class="text-xs text-muted-foreground break-words">{d.details}</div>
+                          {/if}
+                          {#if d.error}
+                            <div class="text-xs text-red-600 break-words">Error: {d.error}</div>
+                          {/if}
+                        </div>
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+            {/each}
           </div>
         {/if}
       </div>

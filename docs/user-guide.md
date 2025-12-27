@@ -419,6 +419,64 @@ The Analytics page shows:
 - Log level (debug/info/warn/error)
 - Log location
 
+### Diagnostics
+
+The Diagnostics tool runs comprehensive system health checks to help troubleshoot issues.
+
+**Running Diagnostics**:
+
+1. Navigate to Settings → Diagnostics
+2. Click "Run diagnostics" button
+3. View categorized results
+
+**What Gets Checked**:
+
+*Environment*:
+- Tauri desktop app detection
+- Application version
+
+*Network*:
+- DHT connectivity and peer count
+- Active peer connections
+- Bootstrap node availability
+- NAT traversal status (AutoNAT v2)
+- Circuit Relay connections and reservations
+
+*Storage*:
+- Storage path validation
+- Write permissions
+- Available disk space
+
+*Security*:
+- Proxy configuration
+- Encryption capability (AES-256-GCM)
+- Privacy mode validation
+
+*System*:
+- WebRTC support
+- Bandwidth limit configuration
+- LocalStorage functionality
+
+**Status Indicators**:
+
+- ✓ Green checkmark - Test passed
+- ⚠ Yellow warning - Needs attention but not critical
+- ✗ Red error - Test failed, requires action
+- ℹ Blue info - Informational status
+
+**Export Report**:
+
+- Click "Copy report" to export results
+- Paste into bug reports or support requests
+- Includes timestamp and summary statistics
+
+**Common Warnings**:
+
+- *Storage path not found* - Directory will be created on first use
+- *NAT: private* - Normal behind router, relay will be used
+- *No relay connections* - Enable AutoRelay in settings if needed
+- *Low disk space* - Free up space or change storage location
+
 ## Reputation System
 
 ### Viewing Peer Reputation
@@ -455,13 +513,23 @@ View top relay servers:
 
 ## Troubleshooting
 
+### Quick Diagnosis
+
+**Run Diagnostics First**:
+
+1. Go to Settings → Diagnostics
+2. Click "Run diagnostics"
+3. Review failed tests and warnings
+4. Follow specific troubleshooting steps below
+
 ### Can't Connect to Network
 
-1. Check internet connection
-2. Verify firewall allows application
-3. Try different port in Settings
-4. Check DHT status in Network page
-5. Restart application
+1. Run diagnostics to check DHT and peer connectivity
+2. Check internet connection
+3. Verify firewall allows application
+4. Try different port in Settings
+5. Check DHT status in Network page
+6. Restart application
 
 ### Files Not Downloading
 

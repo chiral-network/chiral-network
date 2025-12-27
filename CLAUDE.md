@@ -65,7 +65,7 @@ The application uses client-side routing with the following pages:
 7. **Analytics** - Usage statistics, bandwidth tracking, performance metrics
 8. **Reputation** - Peer reputation system with analytics and relay leaderboard
 9. **Account** - Wallet management, HD wallet support, transaction history
-10. **Settings** - Comprehensive configuration (storage, network, privacy, bandwidth scheduling, i18n)
+10. **Settings** - Comprehensive configuration (storage, network, privacy, bandwidth scheduling, diagnostics, i18n)
 
 ### Removed Pages (Anti-Piracy Measures)
 - ❌ Search page (could enable finding copyrighted content)
@@ -269,6 +269,15 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 - `proxyAuth.ts` - Proxy authentication
 - `encryption.ts` - File encryption utilities
 
+#### System Diagnostics
+- `diagnosticsService.ts` - Comprehensive system health checks
+  - 13 diagnostic tests across 5 categories
+  - Environment, network, storage, security, system checks
+  - Real-time DHT, AutoNAT, Circuit Relay status
+  - Storage validation and disk space monitoring
+  - Encryption capability and WebRTC support testing
+  - Exportable text reports for troubleshooting
+
 ### 13. Smart Contracts
 - **Location**: `src/lib/services/ProofOfStorage.sol`
 - **Purpose**: Proof of Storage consensus mechanism
@@ -296,6 +305,22 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 - `button.svelte`, `card.svelte`, `input.svelte`, `label.svelte`
 - `badge.svelte`, `progress.svelte`, `dropDown.svelte`
 - `Expandable.svelte`
+
+### 15. System Diagnostics
+- **Service**: `src/lib/services/diagnosticsService.ts`
+- **Location**: Settings → Diagnostics section
+- **Features**:
+  - 13 comprehensive health checks across 5 categories
+  - Environment detection (Tauri vs web build)
+  - Network health (DHT connectivity, peer count, bootstrap nodes)
+  - NAT traversal status (AutoNAT v2, Circuit Relay v2)
+  - Storage validation (path, permissions, disk space)
+  - Security checks (proxy config, encryption capability)
+  - System tests (WebRTC support, bandwidth limits, LocalStorage)
+  - Real-time status indicators (pass/warn/fail/info)
+  - Exportable text reports for troubleshooting
+  - Graceful handling of non-existent directories
+  - Parent directory fallback for disk space checks
 
 ## Key Implementation Details
 
@@ -582,15 +607,25 @@ npm run check            # TypeScript type check
 
 ## Troubleshooting
 
+### Using Built-in Diagnostics
+
+**Run system diagnostics first** (Settings → Diagnostics):
+- Checks environment, network, storage, security, and system health
+- 13 comprehensive tests with color-coded results
+- Export report for bug reports
+- See `docs/user-guide.md` for interpretation guide
+
 ### Common Issues
 
 1. **Extra `</script>` tags**: Check Svelte files end correctly
 2. **Import errors**: Ensure all pages are properly imported in `App.svelte`
 3. **Drag-drop failing**: Verify event handlers are attached to correct elements
 4. **i18n not loading**: Check `setupI18n()` is called in `App.svelte`
-5. **DHT not connecting**: Verify bootstrap nodes are reachable
+5. **DHT not connecting**: Run diagnostics, verify bootstrap nodes are reachable
 6. **Mining not starting**: Check Geth service is initialized
 7. **Tauri invoke errors**: Ensure backend commands are registered
+8. **Storage path errors**: Diagnostics will show if directory is missing/inaccessible
+9. **NAT/Relay issues**: Check diagnostics for AutoNAT and Circuit Relay status
 
 ### Debug Commands
 
@@ -624,6 +659,7 @@ src/
 │   ├── services/            # Backend services
 │   │   ├── analyticsService.ts
 │   │   ├── bandwidthScheduler.ts
+│   │   ├── diagnosticsService.ts
 │   │   ├── fileService.ts
 │   │   ├── gethService.ts
 │   │   ├── multiSourceDownloadService.ts
