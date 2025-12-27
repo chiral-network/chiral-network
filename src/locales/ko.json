@@ -1808,66 +1808,66 @@
   "settings.diagnostics.webrtcSupport": "WebRTC Support",
   "pureClientMode": {
     "warnings": {
-      "forcedMode": "You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).",
-      "forcedModeMining": "You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.",
-      "natDetected": "AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.",
-      "natDetectedMining": "AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.",
-      "settingsForced": "⚠️ Client mode forced: You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.",
-      "serverModeDisabled": "ℹ️ Server mode is disabled when client mode is forced."
+      "forcedMode": "설정에서 순수 클라이언트 모드를 수동으로 활성화했습니다. 파일을 시드하거나 DHT 서버 역할을 할 수 없습니다. 블록체인은 경량 동기화 모드(최소 다운로드)를 사용합니다.",
+      "forcedModeMining": "설정에서 순수 클라이언트 모드를 수동으로 활성화했습니다. 블록체인은 전체 동기화(약 10,000 블록) 대신 마지막 약 100개 블록만 동기화합니다. 채굴은 가능하지만 최소 저장 공간을 사용합니다.",
+      "natDetected": "AutoNAT가 NAT 또는 제한적인 방화벽 뒤에 있음을 감지했습니다. 파일을 다운로드할 수 있지만 다른 피어에게 시드할 수 없습니다.",
+      "natDetectedMining": "AutoNAT가 NAT 또는 제한적인 방화벽 뒤에 있음을 감지했습니다. 블록체인은 대역폭/저장 요구사항을 줄이기 위해 마지막 약 100개 블록만 동기화합니다. 감소된 저장 공간으로 채굴이 가능합니다.",
+      "settingsForced": "⚠️ 클라이언트 모드 강제: 파일을 시드하거나 DHT 서버 역할을 할 수 없습니다. 블록체인은 전체 동기화(약 10,000 블록) 대신 부분 동기화(마지막 약 100개 블록만)를 사용합니다. 감소된 저장 공간으로 채굴 가능. DHT 재시작 필요.",
+      "serverModeDisabled": "ℹ️ 클라이언트 모드가 강제될 때 서버 모드가 비활성화됩니다."
     },
     "banner": {
       "title": {
-        "forced": "Client-Only Mode Enabled (Forced)",
-        "nat": "Client-Only Mode (Behind NAT)",
-        "default": "Client-Only Mode",
-        "forcedMining": "Client-Only Mode Enabled (Forced) - Limited Blockchain Sync",
-        "natMining": "Client-Only Mode (Behind NAT) - Limited Blockchain Sync",
-        "defaultMining": "Client-Only Mode - Limited Blockchain Sync"
+        "forced": "클라이언트 전용 모드 활성화됨 (강제)",
+        "nat": "클라이언트 전용 모드 (NAT 뒤)",
+        "default": "클라이언트 전용 모드",
+        "forcedMining": "클라이언트 전용 모드 활성화됨 (강제) - 제한된 블록체인 동기화",
+        "natMining": "클라이언트 전용 모드 (NAT 뒤) - 제한된 블록체인 동기화",
+        "defaultMining": "클라이언트 전용 모드 - 제한된 블록체인 동기화"
       },
       "description": {
-        "default": "You are in client-only mode and cannot seed files.",
-        "defaultMining": "You are in client-only mode. Blockchain syncs only last ~100 blocks (minimal storage). Mining is available."
+        "default": "클라이언트 전용 모드이며 파일을 시드할 수 없습니다.",
+        "defaultMining": "클라이언트 전용 모드입니다. 블록체인은 마지막 약 100개 블록만 동기화합니다(최소 저장 공간). 채굴이 가능합니다."
       },
       "help": {
-        "forced": "To enable seeding, disable \"Force Client-Only Mode\" in Settings → Developers → DHT Client Mode.",
-        "nat": "Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.",
-        "default": "Check your network settings or AutoNAT configuration.",
-        "forcedMining": "To enable full blockchain sync (10,000 blocks), disable \"Force Client-Only Mode\" in Settings → Developers.",
-        "natMining": "Full nodes sync ~10,000 blocks. To upgrade, configure port forwarding or use a VPN with a public IP to become publicly reachable.",
-        "defaultMining": "Check your network settings or AutoNAT configuration for full functionality."
+        "forced": "시드를 활성화하려면 설정 → 개발자 → DHT 클라이언트 모드에서 \"클라이언트 전용 모드 강제\"를 비활성화하세요.",
+        "nat": "파일은 여전히 로컬에 저장되지만 네트워크와 공유되지 않습니다. 시드를 활성화하려면 포트 포워딩을 구성하거나 공용 IP가 있는 VPN을 사용하세요.",
+        "default": "네트워크 설정 또는 AutoNAT 구성을 확인하세요.",
+        "forcedMining": "전체 블록체인 동기화(10,000 블록)를 활성화하려면 설정 → 개발자에서 \"클라이언트 전용 모드 강제\"를 비활성화하세요.",
+        "natMining": "전체 노드는 약 10,000개 블록을 동기화합니다. 업그레이드하려면 포트 포워딩을 구성하거나 공용 IP가 있는 VPN을 사용하여 공개적으로 접근 가능하게 되세요.",
+        "defaultMining": "전체 기능을 위해 네트워크 설정 또는 AutoNAT 구성을 확인하세요."
       }
     },
     "settings": {
       "dht": {
         "clientMode": {
-          "title": "DHT Client Mode (Override)",
-          "label": "Force Client-Only Mode",
-          "descriptionOverride": "Developer override:",
-          "descriptionText": "Forces node to stay in client mode even if publicly reachable.",
-          "noteLabel": "Note:",
-          "noteText": "AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.",
-          "autoBehaviorLabel": "Automatic behavior:",
-          "autoBehaviorText": "If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle."
+          "title": "DHT 클라이언트 모드 (재정의)",
+          "label": "클라이언트 전용 모드 강제",
+          "descriptionOverride": "개발자 재정의:",
+          "descriptionText": "공개적으로 접근 가능하더라도 노드를 클라이언트 모드로 유지합니다.",
+          "noteLabel": "참고:",
+          "noteText": "NAT 뒤에 있는 경우 AutoNAT가 자동으로 클라이언트 모드를 유지합니다 - 강제하려는 경우가 아니면 수동으로 활성화할 필요가 없습니다.",
+          "autoBehaviorLabel": "자동 동작:",
+          "autoBehaviorText": "AutoNAT가 NAT 뒤에 있음을 감지하면 이 토글 없이 자동으로 클라이언트 모드를 유지합니다."
         },
         "serverMode": {
-          "title": "DHT Server Mode (Override)",
-          "label": "Force Server Mode",
-          "descriptionOverride": "Developer override:",
-          "descriptionText": "Forces node to act as DHT server even if behind NAT (for testing only).",
-          "noteLabel": "Note:",
-          "noteText": "This may not work if you're behind a strict NAT/firewall. AutoNAT automatically upgrades you to server mode when publicly reachable.",
-          "warningLabel": "Server mode forced:",
-          "warningText": "Node will attempt to act as DHT server even behind NAT. This may result in connectivity issues. Requires DHT restart.",
-          "autoBehaviorLabel": "Automatic behavior:",
-          "autoBehaviorText": "If AutoNAT detects you're publicly reachable, you'll automatically be upgraded to server mode without needing this toggle."
+          "title": "DHT 서버 모드 (재정의)",
+          "label": "서버 모드 강제",
+          "descriptionOverride": "개발자 재정의:",
+          "descriptionText": "NAT 뒤에 있더라도 노드가 DHT 서버로 작동하도록 강제합니다(테스트 전용).",
+          "noteLabel": "참고:",
+          "noteText": "엄격한 NAT/방화벽 뒤에 있는 경우 작동하지 않을 수 있습니다. 공개적으로 접근 가능할 때 AutoNAT가 자동으로 서버 모드로 업그레이드합니다.",
+          "warningLabel": "서버 모드 강제됨:",
+          "warningText": "NAT 뒤에 있어도 노드가 DHT 서버로 작동하려고 시도합니다. 연결 문제가 발생할 수 있습니다. DHT 재시작 필요.",
+          "autoBehaviorLabel": "자동 동작:",
+          "autoBehaviorText": "AutoNAT가 공개적으로 접근 가능함을 감지하면 이 토글 없이 자동으로 서버 모드로 업그레이드됩니다."
         }
       }
     }
   },
   "wallet": {
     "testWallet": {
-      "header": "For Testing Only",
-      "button": "Create Test Wallet"
+      "header": "테스트 전용",
+      "button": "테스트 지갑 생성"
     }
   }
 }
