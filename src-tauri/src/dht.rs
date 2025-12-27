@@ -1810,17 +1810,23 @@ async fn run_dht_node(
                                             expires: None,
                                         };
 
-                                // Determine appropriate quorum based on number of connected peers
-                                // Use majority quorum (N) instead of All to avoid publish failures
-                                // when some peers are slow/unreachable
+                                // Determine appropriate quorum based on number of connected peers.
+                                //
+                                // We want to replicate beyond Quorum::One when possible, but "N(3)" is too strict
+                                // on small / flaky real-network runs (common in E2E) and can produce:
+                                //   PutRecord failed: QuorumFailed { success: [..2 peers..], quorum: 3 }
+                                //
+                                // Use a softer target:
+                                // - If we have 0-1 connected peers: Quorum::One
+                                // - If we have >=2: require ~half of connected peers (ceil(n/2)), capped by replication_factor.
                                 let connected_peers_count = connected_peers.lock().await.len();
                                 let replication_factor = 3; // Must match kad_cfg.set_replication_factor
 
-                                // IMPORTANT: If we only use Quorum::One, the record may effectively stay local
-                                // and other nodes (GUI on another machine) may never discover it.
-                                // As soon as we have enough connected peers, replicate to N(replication_factor).
-                                let quorum = if connected_peers_count >= replication_factor {
-                                    if let Some(n) = std::num::NonZeroUsize::new(replication_factor) {
+                                let quorum = if connected_peers_count >= 2 {
+                                    // ceil(n/2) using integer arithmetic
+                                    let half_up = (connected_peers_count + 1) / 2;
+                                    let target = std::cmp::min(replication_factor, std::cmp::max(1, half_up));
+                                    if let Some(n) = std::num::NonZeroUsize::new(target) {
                                         kad::Quorum::N(n)
                                     } else {
                                         kad::Quorum::One

@@ -16,6 +16,8 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
+use chiral_network::ftp_server;
+
 use crate::download_source::HttpSourceInfo;
 use crate::http_download::HttpDownloadClient;
 use crate::http_server;
@@ -23,6 +25,7 @@ use crate::manager::Sha256Hasher;
 use crate::transaction_services;
 use crate::{dht, ethereum};
 use crate::{file_transfer::FileTransferService, manager::ChunkManager};
+use crate::protocols::ProtocolHandler;
 
 #[derive(Clone)]
 pub struct HeadlessE2eState {
@@ -34,6 +37,8 @@ pub struct HeadlessE2eState {
     pub private_key: Option<String>,
     pub file_transfer_service: Option<Arc<FileTransferService>>,
     pub chunk_manager: Option<Arc<ChunkManager>>,
+    /// Embedded FTP server (used for FTP upload E2E).
+    pub ftp_server: Option<Arc<ftp_server::FtpServer>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -194,7 +199,7 @@ async fn api_upload_generate(
 
     let file_size = req.size_mb * 1024 * 1024;
     let price = req.price.unwrap_or(0.001);
-    let seeder_url = state.http_base_url.clone();
+    let mut seeder_url = state.http_base_url.clone();
 
     // Create temp file, stream-write deterministic bytes and compute sha256.
     // IMPORTANT: include file_name + protocol in the deterministic byte pattern so
@@ -326,6 +331,160 @@ async fn api_upload_generate(
             )
                 .into_response();
         }
+        file_hash.clone()
+    } else if protocol_upper == "FTP" {
+        let Some(ftp_server) = state.ftp_server.clone() else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(http_server::ErrorResponse {
+                    error: "FTP upload requires an embedded FTP server in headless mode.".to_string(),
+                }),
+            )
+                .into_response();
+        };
+
+        if !ftp_server.is_running().await {
+            if let Err(e) = ftp_server.start().await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(http_server::ErrorResponse {
+                        error: format!("Failed to start embedded FTP server: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+
+        // Read file bytes (small in E2E) and seed via embedded FTP server.
+        let bytes = match tokio::fs::read(&tmp_path).await {
+            Ok(b) => b,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(http_server::ErrorResponse {
+                        error: format!("Failed to read temp file for FTP publish: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        let safe_name = file_name.replace(['\\', '/', ':'], "_");
+        let ftp_file_name = format!("{}_{}", file_hash, safe_name);
+        let mut ftp_url: String = match ftp_server.add_file_data(&bytes, &ftp_file_name).await {
+            Ok(u) => u,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(http_server::ErrorResponse {
+                        error: format!("Failed to add file to embedded FTP server: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        // If CHIRAL_PUBLIC_IP is set, rewrite the URL host to make it reachable cross-machine.
+        if let Ok(host) = std::env::var("CHIRAL_PUBLIC_IP") {
+            let host = host.trim();
+            if !host.is_empty() {
+                if let Ok(mut url) = url::Url::parse(&ftp_url) {
+                    let _ = url.set_host(Some(host));
+                    ftp_url = url.to_string();
+                }
+            }
+        }
+        // Surface the seeder URL in the upload response for debugging.
+        seeder_url = ftp_url.clone();
+
+        // Build manifest (SHA-256 per 256KB chunk) so multi-source validators can verify chunks if used.
+        let chunk_size: usize = 256 * 1024;
+        let mut manifest_chunks: Vec<crate::manager::ChunkInfo> = Vec::new();
+        {
+            use sha2::{Digest as _, Sha256};
+            let mut offset: usize = 0;
+            let mut index: u32 = 0;
+            while offset < bytes.len() {
+                let end = min(bytes.len(), offset + chunk_size);
+                let slice = &bytes[offset..end];
+                let mut h = Sha256::new();
+                h.update(slice);
+                let hash = format!("{:x}", h.finalize());
+                let size = slice.len();
+                manifest_chunks.push(crate::manager::ChunkInfo {
+                    index,
+                    hash: hash.clone(),
+                    size,
+                    encrypted_hash: hash,
+                    encrypted_size: size,
+                });
+                offset = end;
+                index += 1;
+            }
+        }
+        let file_manifest = crate::manager::FileManifest {
+            merkle_root: file_hash.clone(),
+            chunks: manifest_chunks,
+            encrypted_key_bundle: None,
+        };
+        let manifest_json = match serde_json::to_string(&file_manifest) {
+            Ok(s) => s,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(http_server::ErrorResponse {
+                        error: format!("Failed to serialize FileManifest: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        let meta = dht::models::FileMetadata {
+            merkle_root: file_hash.clone(),
+            file_name: file_name.clone(),
+            file_size,
+            file_data: vec![],
+            seeders: vec![],
+            created_at,
+            mime_type: None,
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
+            parent_hash: None,
+            cids: None,
+            encrypted_key_bundle: None,
+            ftp_sources: Some(vec![dht::models::FtpSourceInfo {
+                url: ftp_url.clone(),
+                username: None,
+                password: None,
+                supports_resume: true,
+                file_size,
+                last_checked: Some(created_at),
+                is_available: true,
+            }]),
+            ed2k_sources: None,
+            http_sources: None,
+            is_root: true,
+            download_path: None,
+            price,
+            uploader_address: state.uploader_address.clone(),
+            info_hash: None,
+            trackers: None,
+            manifest: Some(manifest_json),
+        };
+
+        if let Err(e) = state.dht.publish_file(meta, None).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(http_server::ErrorResponse {
+                    error: format!("Failed to publish FTP metadata to DHT: {}", e),
+                }),
+            )
+                .into_response();
+        }
+
+        // DHT key for FTP is the file hash.
         file_hash.clone()
     } else if protocol_upper == "WEBRTC" {
         let Some(ft) = state.file_transfer_service.clone() else {
@@ -517,7 +676,7 @@ async fn api_upload_generate(
         return (
             StatusCode::BAD_REQUEST,
             Json(http_server::ErrorResponse {
-                error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, or Bitswap.", protocol),
+                error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, or FTP.", protocol),
             }),
         )
             .into_response();
@@ -606,7 +765,20 @@ async fn api_download(
     let out_name = req.file_name.unwrap_or_else(|| meta.file_name.clone());
     let downloads_dir = state.storage_dir.join("downloads");
     let _ = tokio::fs::create_dir_all(&downloads_dir).await;
-    let output_path = downloads_dir.join(&out_name);
+    // Avoid collisions across runs by generating a unique output name.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let hash_prefix: String = meta.merkle_root.chars().take(8).collect();
+    let safe_name = out_name.replace(['\\', '/', ':'], "_");
+    let output_path = downloads_dir.join(format!(
+        "{}-{}-{}-{}",
+        protocol_upper.to_lowercase(),
+        hash_prefix,
+        now_ms,
+        safe_name
+    ));
 
     if protocol_upper == "HTTP" {
         let peer_id = Some(state.dht.get_peer_id().await);
@@ -620,6 +792,50 @@ async fn api_download(
                 Json(http_server::ErrorResponse { error: e }),
             )
                 .into_response();
+        }
+    } else if protocol_upper == "FTP" {
+        let ftp_url = meta
+            .ftp_sources
+            .as_ref()
+            .and_then(|v| v.first())
+            .map(|s| s.url.clone())
+            .ok_or_else(|| "No ftpSources in metadata".to_string());
+        let ftp_url = match ftp_url {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(http_server::ErrorResponse { error: e }),
+                )
+                    .into_response();
+            }
+        };
+
+        // Use the protocol handler to download to the target output path.
+        let handler = crate::protocols::ftp::FtpProtocolHandler::new();
+        let opts = crate::protocols::traits::DownloadOptions {
+            output_path: output_path.clone(),
+            max_peers: None,
+            chunk_size: None,
+            encryption: false,
+            bandwidth_limit: None,
+        };
+        if let Err(e) = handler.download(&ftp_url, opts).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(http_server::ErrorResponse { error: e.to_string() }),
+            )
+                .into_response();
+        }
+
+        // Best-effort wait for file to appear and reach expected size.
+        for _ in 0..240 {
+            if let Ok(m) = tokio::fs::metadata(&output_path).await {
+                if m.len() == meta.file_size {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
     } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" {
         // Note: current DHT DownloadFile command uses WebRTC if available (Bitswap path is not wired).
@@ -649,7 +865,7 @@ async fn api_download(
         return (
             StatusCode::BAD_REQUEST,
             Json(http_server::ErrorResponse {
-                error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, or Bitswap.", protocol_upper),
+                error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, or FTP.", protocol_upper),
             }),
         )
             .into_response();
@@ -667,7 +883,20 @@ async fn api_download(
                 .into_response();
         }
     };
-    let verified = bytes_len == meta.file_size;
+    // Stronger verify for FTP: sha256(file) must match merkle_root (file hash).
+    let verified = if protocol_upper == "FTP" {
+        match tokio::fs::read(&output_path).await {
+            Ok(b) => {
+                let mut h = sha2::Sha256::new();
+                h.update(&b);
+                let computed = format!("{:x}", h.finalize());
+                computed == meta.merkle_root && bytes_len == meta.file_size
+            }
+            Err(_) => false,
+        }
+    } else {
+        bytes_len == meta.file_size
+    };
 
     (
         StatusCode::OK,

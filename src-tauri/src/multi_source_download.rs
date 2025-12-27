@@ -1251,14 +1251,38 @@ impl MultiSourceDownloadService {
                             }
                         };
                         
-                        let result = downloader.download_range(&mut ftp_stream, &remote_path, start_byte, size).await;
-                        
-                        // Return connection to pool for reuse
-                        let mut connections_guard = connections.lock().await;
-                        let pool = connections_guard.entry(ftp_url.clone()).or_insert_with(Vec::new);
-                        pool.push(ftp_stream);
-                        
-                        result
+                        // Hard timeout + blocking isolation:
+                        // move the stream into the downloader so we can enforce a timeout even if the data socket hangs.
+                        match downloader
+                            .download_range_with_timeout(
+                                ftp_stream,
+                                remote_path.clone(),
+                                start_byte,
+                                size,
+                            )
+                            .await
+                        {
+                            Ok((returned_stream, data)) => {
+                                // Return connection to pool for reuse
+                                let mut connections_guard = connections.lock().await;
+                                let pool = connections_guard
+                                    .entry(ftp_url.clone())
+                                    .or_insert_with(Vec::new);
+                                pool.push(returned_stream);
+                                Ok(data)
+                            }
+                            Err((maybe_stream, e)) => {
+                                // Return the connection only if we still have it.
+                                if let Some(returned_stream) = maybe_stream {
+                                    let mut connections_guard = connections.lock().await;
+                                    let pool = connections_guard
+                                        .entry(ftp_url.clone())
+                                        .or_insert_with(Vec::new);
+                                    pool.push(returned_stream);
+                                }
+                                Err(e)
+                            }
+                        }
                     };
 
                     match download_result {
@@ -3296,8 +3320,14 @@ impl MultiSourceDownloadService {
             return Ok(());
         }
 
-        // Try to find available peers for retry
-        let available_peers = {
+        // Try to find available sources for retry.
+        //
+        // IMPORTANT:
+        // We must actively re-trigger downloads for the failed chunks.
+        // Merely pushing chunk IDs back into an assignment list is not sufficient for
+        // some protocols (FTP in particular), since chunk downloads are spawned as tasks
+        // and do not poll assignment queues continuously.
+        let available_sources = {
             let downloads = self.active_downloads.read().await;
             if let Some(download) = downloads.get(file_hash) {
                 download
@@ -3309,30 +3339,38 @@ impl MultiSourceDownloadService {
                             SourceStatus::Connected | SourceStatus::Downloading
                         )
                     })
-                    .map(|(peer_id, _)| peer_id.clone())
+                    .map(|(source_id, assignment)| (source_id.clone(), assignment.source.clone()))
                     .collect::<Vec<_>>()
             } else {
                 Vec::new()
             }
         };
 
-        if available_peers.is_empty() {
-            warn!("No available peers for retry");
-            return Err("No available peers for retry".to_string());
+        if available_sources.is_empty() {
+            warn!("No available sources for retry");
+            return Err("No available sources for retry".to_string());
         }
 
-        // Reassign failed chunks to available peers
-        for (index, chunk_id) in failed_chunks.iter().enumerate() {
-            let peer_index = index % available_peers.len();
-            let peer_id = &available_peers[peer_index];
+        // Prefer retrying via a connected FTP source if one exists (FTP-only transfers depend on this).
+        for (_source_id, source) in &available_sources {
+            if let DownloadSource::Ftp(ftp_info) = source {
+                // Kick off a new FTP chunk download wave for these failed chunks.
+                self.start_ftp_chunk_downloads(file_hash, ftp_info.clone(), failed_chunks.clone())
+                    .await;
+                return Ok(());
+            }
+        }
 
-            // Add chunk to peer's assignment
-            {
-                let mut downloads = self.active_downloads.write().await;
-                if let Some(download) = downloads.get_mut(file_hash) {
-                    if let Some(assignment) = download.source_assignments.get_mut(peer_id) {
-                        assignment.chunks.push(*chunk_id);
-                    }
+        // Fallback: if no FTP source exists, keep the previous behavior of reassigning chunks
+        // to connected sources (best-effort). This supports P2P/HTTP flows that may poll queues elsewhere.
+        let available_peer_ids: Vec<String> = available_sources.iter().map(|(id, _)| id.clone()).collect();
+        for (index, chunk_id) in failed_chunks.iter().enumerate() {
+            let peer_index = index % available_peer_ids.len();
+            let peer_id = &available_peer_ids[peer_index];
+            let mut downloads = self.active_downloads.write().await;
+            if let Some(download) = downloads.get_mut(file_hash) {
+                if let Some(assignment) = download.source_assignments.get_mut(peer_id) {
+                    assignment.chunks.push(*chunk_id);
                 }
             }
         }

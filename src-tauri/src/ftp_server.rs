@@ -122,9 +122,20 @@ impl FtpServer {
 
     /// Get the FTP URL for a file
     pub fn get_file_url(&self, file_name: &str) -> String {
-        // Get local IP address
-        let local_ip = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-        format!("ftp://{}:{}/{}", local_ip, self.port, file_name)
+        // Prefer an explicitly configured public host/IP.
+        // This is critical for real-network E2E where the seeder runs in a VM and the downloader
+        // is on another machine; auto-detected local IPs are often private and not reachable.
+        let host = std::env::var("CHIRAL_FTP_HOST")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| {
+                std::env::var("CHIRAL_PUBLIC_IP")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+            })
+            .or_else(|| get_local_ip())
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+        format!("ftp://{}:{}/{}", host, self.port, file_name)
     }
 
     /// Copy a file to the FTP server directory

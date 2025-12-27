@@ -465,6 +465,18 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
                     private_key: private_key.clone(),
                     file_transfer_service: file_transfer_service.clone(),
                     chunk_manager: chunk_manager.clone(),
+                    ftp_server: {
+                        // Enable embedded FTP server for E2E FTP protocol (upload + download).
+                        // Note: FTP uses passive ports 50000-50100 (see ftp_server.rs).
+                        let port: u16 = std::env::var("CHIRAL_FTP_PORT")
+                            .ok()
+                            .and_then(|s| s.trim().parse().ok())
+                            .unwrap_or(2121);
+                        Some(Arc::new(chiral_network::ftp_server::FtpServer::new(
+                            storage_dir.join("ftp"),
+                            port,
+                        )))
+                    },
                 };
                 match start_headless_e2e_api_server(state, port).await {
                     Ok((bound, shutdown_tx)) => {

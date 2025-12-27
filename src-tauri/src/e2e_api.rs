@@ -60,7 +60,7 @@ struct PeersResponse {
 struct UploadRequest {
     /// Size in MB for generated file
     size_mb: u64,
-    /// Protocol string - supported: HTTP (range), WebRTC (P2P), Bitswap (blocks)
+    /// Protocol string - supported: HTTP (range), WebRTC (P2P), Bitswap (blocks), FTP
     protocol: Option<String>,
     price: Option<f64>,
     file_name: Option<String>,
@@ -91,7 +91,7 @@ struct DownloadRequest {
     seeder_url: Option<String>,
     /// Optional output file name; defaults to metadata.fileName.
     file_name: Option<String>,
-    /// Optional protocol override. supported: HTTP, WebRTC, Bitswap
+    /// Optional protocol override. supported: HTTP, WebRTC, Bitswap, FTP
     protocol: Option<String>,
 }
 
@@ -132,40 +132,142 @@ async fn ensure_p2p_services_started(app: &tauri::AppHandle) -> Result<(), Strin
     // "File transfer service is not running". For E2E API usage, we auto-start them.
     let state = app.state::<crate::AppState>();
 
+    // If the frontend never bootstrapped services, we may be missing:
+    // - FileTransferService (required for WebRTC + MultiSource)
+    // - WebRTCService (required for MultiSource)
+    // - ChunkManager (required for FTP/MultiSource manifest-based verification)
+    //
+    // For E2E API usage we ensure all are present.
+
+    // Ensure ChunkManager exists (used by FTP/MultiSource and some WebRTC paths).
+    {
+        let mut chunk_guard = state.chunk_manager.lock().await;
+        if chunk_guard.is_none() {
+            let chunk_storage_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("Failed to get app data dir for chunk storage: {}", e))?
+                .join("chunk_storage");
+            let _ = std::fs::create_dir_all(&chunk_storage_path);
+            *chunk_guard = Some(Arc::new(ChunkManager::new(chunk_storage_path)));
+        }
+    }
+
+    // Ensure FileTransferService exists (storage under app data dir).
+    let ft_arc = {
+        let existing = {
+            let ft_guard = state.file_transfer.lock().await;
+            ft_guard.as_ref().cloned()
+        };
+        if let Some(ft) = existing {
+            ft
+        } else {
+            let ft = FileTransferService::new_with_app_handle(app.clone())
+                .await
+                .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
+            let ft_arc = Arc::new(ft);
+            let mut ft_guard = state.file_transfer.lock().await;
+            *ft_guard = Some(ft_arc.clone());
+            ft_arc
+        }
+    };
+
+    // Ensure WebRTCService exists and set the global singleton (used by chunk processing).
+    let webrtc_arc = {
+        let existing = {
+            let guard = state.webrtc.lock().await;
+            guard.as_ref().cloned()
+        };
+        if let Some(w) = existing {
+            w
+        } else {
+            let webrtc = WebRTCService::new(
+                app.clone(),
+                ft_arc.clone(),
+                state.keystore.clone(),
+                state.bandwidth.clone(),
+            )
+            .await
+            .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
+
+            let webrtc_arc = Arc::new(webrtc);
+            let mut guard = state.webrtc.lock().await;
+            *guard = Some(webrtc_arc.clone());
+            webrtc_arc
+        }
+    };
+    set_webrtc_service(webrtc_arc).await;
+
+    Ok(())
+}
+
+async fn ensure_multi_source_services_started(app: &tauri::AppHandle) -> Result<(), String> {
+    // MultiSourceDownloadService is needed for FTP downloads (ftp_sources + manifest-based verification).
+    let state = app.state::<crate::AppState>();
+
     // Fast path: already running.
     {
-        let ft_guard = state.file_transfer.lock().await;
-        if ft_guard.is_some() {
+        let guard = state.multi_source_download.lock().await;
+        if guard.is_some() {
             return Ok(());
         }
     }
 
-    // Start FileTransferService (storage under app data dir).
-    let ft = FileTransferService::new_with_app_handle(app.clone())
-        .await
-        .map_err(|e| format!("Failed to start file transfer service: {}", e))?;
-    let ft_arc = Arc::new(ft);
+    // Ensure WebRTC/FileTransfer exist (MultiSource depends on WebRTC service).
+    ensure_p2p_services_started(app).await?;
+
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    }
+    .ok_or_else(|| "DHT is not running".to_string())?;
+
+    let webrtc = {
+        let webrtc_guard = state.webrtc.lock().await;
+        webrtc_guard.as_ref().cloned()
+    }
+    .ok_or_else(|| "WebRTC service is not running".to_string())?;
+
+    let chunk_manager = {
+        let chunk_guard = state.chunk_manager.lock().await;
+        chunk_guard.as_ref().cloned()
+    }
+    .ok_or_else(|| "Chunk manager not initialized".to_string())?;
+
+    let transfer_event_bus = Arc::new(crate::TransferEventBus::new(app.clone()));
+    let ms = crate::multi_source_download::MultiSourceDownloadService::new(
+        dht,
+        webrtc,
+        state.bittorrent_handler.clone(),
+        transfer_event_bus,
+        state.analytics.clone(),
+        chunk_manager,
+    );
+    let ms_arc = Arc::new(ms);
+
     {
-        let mut ft_guard = state.file_transfer.lock().await;
-        *ft_guard = Some(ft_arc.clone());
+        let mut guard = state.multi_source_download.lock().await;
+        *guard = Some(ms_arc.clone());
     }
 
-    // Start WebRTCService and set the global singleton (used by chunk processing).
-    let webrtc = WebRTCService::new(
-        app.clone(),
-        ft_arc.clone(),
-        state.keystore.clone(),
-        state.bandwidth.clone(),
-    )
-    .await
-    .map_err(|e| format!("Failed to start WebRTC service: {}", e))?;
-
-    let webrtc_arc = Arc::new(webrtc);
+    // Start multi-source event pump once.
     {
-        let mut guard = state.webrtc.lock().await;
-        *guard = Some(webrtc_arc.clone());
+        let mut pump_guard = state.multi_source_pump.lock().await;
+        if pump_guard.is_none() {
+            let app_handle = app.clone();
+            let ms_clone = ms_arc.clone();
+            let handle = tokio::spawn(async move {
+                crate::pump_multi_source_events(app_handle, ms_clone).await;
+            });
+            *pump_guard = Some(handle);
+        }
     }
-    set_webrtc_service(webrtc_arc).await;
+
+    // Start the service background task.
+    let ms_clone = ms_arc.clone();
+    tokio::spawn(async move {
+        ms_clone.run().await;
+    });
 
     Ok(())
 }
@@ -414,7 +516,7 @@ async fn api_upload_generate(
 
     // Protocol-specific handling:
     // - HTTP: move into HTTP file server storage and publish metadata with http_sources
-    // - WebRTC/Bitswap: invoke the app's upload command so protocol services publish correct metadata
+    // - WebRTC/Bitswap/FTP: invoke the app's upload command so protocol services publish correct metadata
     let published_key: String = if protocol_upper == "HTTP" {
         // Move into provider storage dir and register with HTTP file server state.
         let permanent_path = app_state.http_server_state.storage_dir.join(&file_hash);
@@ -487,7 +589,7 @@ async fn api_upload_generate(
             .into_response();
         }
         file_hash.clone()
-    } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" {
+    } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" || protocol_upper == "FTP" {
         // Pre-compute the DHT key for the published metadata so we can wait until it's discoverable.
         // WebRTC uses a manifest Merkle root; Bitswap uses a sha256-like content root (matching the file hash).
         let expected_merkle_root = if protocol_upper == "WEBRTC" {
@@ -572,7 +674,7 @@ async fn api_upload_generate(
         expected_merkle_root
     } else {
         return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, or Bitswap.", protocol_norm),
+            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, or FTP.", protocol_norm),
         }))
         .into_response();
     };
@@ -696,7 +798,7 @@ async fn api_download(
         {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
         }
-    } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" {
+    } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" || protocol_upper == "FTP" {
         // Auto-start P2P services for E2E spawn mode (no frontend bootstrapping).
         if let Err(e) = ensure_p2p_services_started(&state.app).await {
             return (
@@ -747,12 +849,11 @@ async fn api_download(
                 .unwrap_or(600_000); // default 10 minutes for real P2P
 
             let result: Result<u64, String> = async {
-                let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
                 if protocol_upper_for_task == "WEBRTC" {
                         // In case the service was stopped after request but before task runs.
                         ensure_p2p_services_started(&app_handle_for_task).await?;
                     if let Err(e) = crate::download_file_from_network(
-                        app_state_for_task,
+                        app_handle_for_task.state::<crate::AppState>(),
                         meta_for_task.merkle_root.clone(),
                         out_path_for_task.clone(),
                     )
@@ -760,9 +861,9 @@ async fn api_download(
                     {
                         return Err(e);
                     }
-                } else {
+                } else if protocol_upper_for_task == "BITSWAP" {
                     if let Err(e) = crate::download_blocks_from_network(
-                        app_state_for_task,
+                        app_handle_for_task.state::<crate::AppState>(),
                         meta_for_task.clone(),
                         out_path_for_task.clone(),
                     )
@@ -770,15 +871,119 @@ async fn api_download(
                     {
                         return Err(e);
                     }
+                } else {
+                    // FTP: use MultiSourceDownloadService so we consume ftp_sources and verify chunk hashes if manifest exists.
+                    ensure_multi_source_services_started(&app_handle_for_task).await?;
+                    let ms = {
+                        let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
+                        let guard = app_state_for_task.multi_source_download.lock().await;
+                        guard.as_ref().cloned()
+                    }
+                    .ok_or_else(|| "MultiSourceDownloadService is not running".to_string())?;
+
+                    ms.start_download(
+                        meta_for_task.merkle_root.clone(),
+                        out_path_for_task.clone(),
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| format!("FTP multi-source download start failed: {}", e))?;
                 }
 
                 let start = std::time::Instant::now();
+                // FTP-specific: fail fast when the download is "stuck running" (no progress),
+                // and avoid treating pre-allocated file length as completion.
+                let ftp_stall_timeout_ms: u64 = std::env::var("E2E_FTP_STALL_TIMEOUT_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(60_000);
+                let ftp_finalize_grace_ms: u64 = std::env::var("E2E_FTP_FINALIZE_GRACE_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(30_000);
+                let mut last_progress_bytes: u64 = 0;
+                let mut last_progress_at = std::time::Instant::now();
+                let mut first_seen_incomplete_full_len_at: Option<std::time::Instant> = None;
                 loop {
+                    if protocol_upper_for_task == "FTP" {
+                        // Observe MultiSource progress to detect stalls earlier than the outer 10min timeout.
+                        let ms_opt = {
+                            let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
+                            let guard = app_state_for_task.multi_source_download.lock().await;
+                            guard.as_ref().cloned()
+                        };
+                        if let Some(ms) = ms_opt {
+                            if let Some(p) = ms.get_download_progress(&meta_for_task.merkle_root).await {
+                                if p.downloaded_size > last_progress_bytes {
+                                    last_progress_bytes = p.downloaded_size;
+                                    last_progress_at = std::time::Instant::now();
+                                } else if last_progress_at.elapsed().as_millis() as u64 >= ftp_stall_timeout_ms {
+                                    let mut sources_summary = String::new();
+                                    for s in p.source_assignments.iter().take(6) {
+                                        sources_summary.push_str(&format!(
+                                            "[{} {:?}] ",
+                                            s.source_id(),
+                                            s.status
+                                        ));
+                                    }
+                                    return Err(format!(
+                                        "FTP download stalled for {}ms (no progress). downloaded={}/{} bytes, completed_chunks={}/{}, active_sources={}, sources={}",
+                                        ftp_stall_timeout_ms,
+                                        p.downloaded_size,
+                                        p.total_size,
+                                        p.completed_chunks,
+                                        p.total_chunks,
+                                        p.active_sources,
+                                        sources_summary.trim()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
                     match tokio::fs::metadata(&out_path_for_task).await {
                         Ok(m) => {
                             let len = m.len();
                             if len == meta_for_task.file_size {
-                                return Ok(len);
+                                if protocol_upper_for_task == "FTP" {
+                                    // For FTP, don't treat file length as completion because MultiSource finalization
+                                    // pre-allocates the file length before chunk writes finish.
+                                    match tokio::fs::read(&out_path_for_task).await {
+                                        Ok(b) => {
+                                            let mut h = sha2::Sha256::new();
+                                            h.update(&b);
+                                            let computed = format!("{:x}", h.finalize());
+                                            if computed == meta_for_task.merkle_root {
+                                                return Ok(len);
+                                            }
+                                            // The file may be mid-finalization; allow a short grace window.
+                                            let now = std::time::Instant::now();
+                                            if first_seen_incomplete_full_len_at.is_none() {
+                                                first_seen_incomplete_full_len_at = Some(now);
+                                            }
+                                            if first_seen_incomplete_full_len_at
+                                                .as_ref()
+                                                .is_some_and(|t| t.elapsed().as_millis() as u64 >= ftp_finalize_grace_ms)
+                                            {
+                                                return Err(format!(
+                                                    "FTP output file reached expected length but sha256 mismatch persisted for {}ms (expected merkle_root={}): {}",
+                                                    ftp_finalize_grace_ms,
+                                                    meta_for_task.merkle_root,
+                                                    out_path_for_task
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            return Err(format!(
+                                                "FTP output file exists but failed to read for verification: {}",
+                                                e
+                                            ));
+                                        }
+                                    }
+                                } else {
+                                    return Ok(len);
+                                }
                             }
                         }
                         Err(_) => {}
@@ -800,7 +1005,23 @@ async fn api_download(
                     Ok(bytes) => {
                         job.status = "success".to_string();
                         job.bytes = bytes;
-                        job.verified = bytes == meta_for_task.file_size;
+                        if protocol_upper_for_task == "FTP" {
+                            // Stronger verification for FTP: sha256(file) must match merkle_root (file hash).
+                            match tokio::fs::read(&out_path_for_task).await {
+                                Ok(b) => {
+                                    let mut h = sha2::Sha256::new();
+                                    h.update(&b);
+                                    let computed = format!("{:x}", h.finalize());
+                                    job.verified =
+                                        computed == meta_for_task.merkle_root && bytes == meta_for_task.file_size;
+                                }
+                                Err(_) => {
+                                    job.verified = false;
+                                }
+                            }
+                        } else {
+                            job.verified = bytes == meta_for_task.file_size;
+                        }
                         job.error = None;
                     }
                     Err(e) => {
@@ -826,7 +1047,7 @@ async fn api_download(
             .into_response();
     } else {
         return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, or Bitswap.", protocol_upper),
+            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, or FTP.", protocol_upper),
         }))
         .into_response();
     }
