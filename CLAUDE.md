@@ -322,6 +322,48 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Graceful handling of non-existent directories
   - Parent directory fallback for disk space checks
 
+### 16. Advanced FTP Features
+- **Module**: `src-tauri/src/ftp_client.rs`
+- **Bookmarks**: `src-tauri/src/ftp_bookmarks.rs`
+- **Commands**: 11 new Tauri commands for FTP operations
+- **Features**:
+  - **Resume Capability**: Automatic resume of interrupted downloads
+    - Detects partial files and calculates resume position
+    - Uses FTP REST command to resume from last byte
+    - Appends to existing partial files
+    - Progress tracking from resume position
+  - **Directory Listing**: Browse remote FTP directories
+    - Parse Unix-style directory listings
+    - Extract file metadata (name, size, permissions, modified date)
+    - Distinguish between files and directories
+    - Filter out current/parent directory entries
+  - **File Operations**: Remote file management
+    - Delete files or directories (automatic detection)
+    - Rename files or directories
+    - Create new directories
+    - Works with both FTP and FTPS
+  - **Server Bookmarks**: Save and manage FTP server configurations
+    - Full CRUD operations (create, read, update, delete)
+    - Search by name, URL, tags, or notes
+    - Usage tracking (use count, last used timestamp)
+    - Sort by most used or recently used
+    - Import/Export with merge option
+    - JSON storage in config directory
+  - **FTPS Support**: Secure FTP over TLS
+  - **Passive Mode**: Better firewall/NAT compatibility
+- **Tauri Commands**:
+  - `list_ftp_directory` - Browse FTP directories
+  - `delete_ftp_file` - Delete remote files/folders
+  - `rename_ftp_file` - Rename remote files/folders
+  - `create_ftp_directory` - Create remote directories
+  - `load_ftp_bookmarks` - Load saved bookmarks
+  - `add_ftp_bookmark` - Add new bookmark
+  - `update_ftp_bookmark` - Update existing bookmark
+  - `delete_ftp_bookmark` - Delete bookmark
+  - `search_ftp_bookmarks` - Search bookmarks
+  - `record_ftp_bookmark_usage` - Track bookmark usage
+  - `test_ftp_connection` - Test server connectivity
+
 ## Key Implementation Details
 
 ### File Sharing Model

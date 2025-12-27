@@ -106,6 +106,123 @@ The sidebar contains navigation to all pages:
 - Remove from sharing (stop seeding)
 - View file details
 
+## FTP Server Integration
+
+Chiral Network supports uploading files to external FTP servers and managing FTP server bookmarks for quick access.
+
+### Uploading to FTP Server
+
+1. **Navigate to Upload page**
+2. **Click FTP Upload tab** (if available in your build)
+3. **Enter FTP server details:**
+   - Server URL (e.g., `ftp://ftp.example.com/uploads/`)
+   - Username (optional for anonymous FTP)
+   - Password (optional for anonymous FTP)
+   - Enable FTPS for secure connection (checkbox)
+   - Enable Passive Mode (recommended, checkbox)
+4. **Test connection** to verify server access
+5. **Select file** and click Upload
+
+**Features:**
+- **Automatic Resume**: Interrupted uploads automatically resume from where they stopped
+- **FTPS Support**: Secure FTP over TLS for encrypted connections
+- **Passive Mode**: Better compatibility with firewalls and NAT
+
+### Managing FTP Bookmarks
+
+Save frequently used FTP servers for quick access.
+
+#### Adding a Bookmark
+
+1. **Navigate to Upload → FTP Settings** (or FTP Bookmarks section)
+2. **Click "Add Bookmark"**
+3. **Enter bookmark details:**
+   - Name (e.g., "Production Server")
+   - FTP URL
+   - Username and password
+   - FTPS and passive mode preferences
+   - Optional notes and tags
+4. **Save bookmark**
+
+#### Using Bookmarks
+
+1. **Load bookmarks** from the FTP bookmarks list
+2. **Click on a bookmark** to auto-fill server details
+3. **Connect** to start transfer
+
+**Bookmark Features:**
+- **Search**: Find bookmarks by name, URL, or tags
+- **Usage Tracking**: See most used and recently used servers
+- **Import/Export**: Backup and restore bookmark configurations
+- **Tags**: Organize bookmarks by category (production, testing, etc.)
+
+### Browsing FTP Directories
+
+Before downloading, you can browse remote FTP directories:
+
+1. **Enter FTP directory URL** (e.g., `ftp://ftp.example.com/pub/`)
+2. **Click "Browse"** or use the directory listing command
+3. **View files and folders** with:
+   - File/folder names
+   - File sizes
+   - Modification dates
+   - Permissions
+
+### FTP File Operations
+
+Manage files directly on FTP servers:
+
+#### Delete Files or Folders
+
+1. **Browse to file location**
+2. **Select file/folder**
+3. **Click Delete** (automatically detects file vs. directory)
+4. **Confirm deletion**
+
+#### Rename Files or Folders
+
+1. **Select file/folder**
+2. **Click Rename**
+3. **Enter new name**
+4. **Confirm**
+
+#### Create New Folders
+
+1. **Navigate to parent directory**
+2. **Click "New Folder"**
+3. **Enter folder name**
+4. **Create**
+
+### FTP Download with Resume
+
+Download files from FTP servers with automatic resume capability:
+
+1. **Enter FTP file URL** (e.g., `ftp://ftp.example.com/file.zip`)
+2. **Provide credentials** if required
+3. **Start download**
+
+**If download is interrupted:**
+- The partial file is automatically saved
+- Resume download to continue from the last byte
+- No re-downloading of already received data
+
+### FTP Best Practices
+
+**Security:**
+- Use **FTPS** (FTP over TLS) whenever possible for encrypted connections
+- Avoid storing passwords in plain text - use bookmark encryption
+- Use strong passwords for FTP accounts
+
+**Performance:**
+- Use **Passive Mode** to avoid firewall issues
+- Test connection before large transfers
+- Use bookmarks to avoid re-entering credentials
+
+**Organization:**
+- Tag bookmarks for easy categorization (work, personal, backup, etc.)
+- Use descriptive bookmark names
+- Add notes to remember server purposes
+
 ## Downloading Files
 
 ### Download a File

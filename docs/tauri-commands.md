@@ -782,3 +782,159 @@ A utility function to parse an ed2k link string into its structured `Ed2kSourceI
 - **Parameters**: _(none)_
 - **Returns**: `number | null`
 - **Description**: Uses platform-specific probes (sysinfo, WMI, sensors, thermal zones) to return a smoothed CPU temperature in °C when available.
+
+## FTP Operations
+
+### `list_ftp_directory`
+
+- **Parameters**
+  - `url: string` - FTP directory URL (e.g., `ftp://ftp.example.com/pub/`)
+  - `username?: string` - FTP username (optional for anonymous FTP)
+  - `password?: string` - FTP password (optional for anonymous FTP)
+  - `use_ftps: boolean` - Enable FTPS (FTP over TLS)
+  - `passive_mode: boolean` - Use passive mode (recommended for NAT)
+- **Returns**: `FtpFileEntry[]`
+- **Description**: Lists files and directories in the specified FTP directory. Returns array of entries with name, size, type (file/directory), permissions, and modification date.
+
+### `delete_ftp_file`
+
+- **Parameters**
+  - `url: string` - FTP file/directory URL to delete
+  - `username?: string` - FTP username
+  - `password?: string` - FTP password
+  - `use_ftps: boolean` - Enable FTPS
+  - `passive_mode: boolean` - Use passive mode
+- **Returns**: `void`
+- **Description**: Deletes a file or directory on the FTP server. Automatically detects whether the target is a file or directory.
+
+### `rename_ftp_file`
+
+- **Parameters**
+  - `url: string` - FTP file/directory URL to rename
+  - `new_name: string` - New name for the file/directory
+  - `username?: string` - FTP username
+  - `password?: string` - FTP password
+  - `use_ftps: boolean` - Enable FTPS
+  - `passive_mode: boolean` - Use passive mode
+- **Returns**: `void`
+- **Description**: Renames a file or directory on the FTP server.
+
+### `create_ftp_directory`
+
+- **Parameters**
+  - `url: string` - FTP directory URL to create
+  - `username?: string` - FTP username
+  - `password?: string` - FTP password
+  - `use_ftps: boolean` - Enable FTPS
+  - `passive_mode: boolean` - Use passive mode
+- **Returns**: `void`
+- **Description**: Creates a new directory on the FTP server.
+
+### `test_ftp_connection`
+
+- **Parameters**
+  - `url: string` - FTP server URL to test
+  - `username?: string` - FTP username
+  - `password?: string` - FTP password
+  - `use_ftps: boolean` - Enable FTPS
+  - `passive_mode: boolean` - Use passive mode
+- **Returns**: `void`
+- **Description**: Tests the connection to an FTP server. Throws an error if connection fails with detailed error message.
+
+### `upload_to_external_ftp`
+
+- **Parameters**
+  - `file_path: string` - Local file path to upload
+  - `ftp_url: string` - FTP destination URL
+  - `username?: string` - FTP username
+  - `password?: string` - FTP password
+  - `use_ftps: boolean` - Enable FTPS
+  - `passive_mode: boolean` - Use passive mode
+- **Returns**: `string` - URL of uploaded file
+- **Description**: Uploads a file to an external FTP server. Returns the full FTP URL of the uploaded file.
+
+### `start_ftp_download`
+
+- **Parameters**
+  - `url: string` - FTP file URL to download
+  - `output_path: string` - Local output path
+  - `username?: string` - FTP username
+  - `password?: string` - FTP password
+- **Returns**: `string` - Transfer ID
+- **Description**: Starts an FTP download with progress tracking. Supports automatic resume of interrupted downloads.
+
+## FTP Bookmarks
+
+### `load_ftp_bookmarks`
+
+- **Parameters**: _(none)_
+- **Returns**: `FtpBookmark[]`
+- **Description**: Loads all saved FTP server bookmarks from the config directory.
+
+### `add_ftp_bookmark`
+
+- **Parameters**
+  - `bookmark: FtpBookmark` - Bookmark object with server configuration
+- **Returns**: `FtpBookmark[]` - Updated bookmarks list
+- **Description**: Adds a new FTP server bookmark. Returns the updated list of all bookmarks.
+
+### `update_ftp_bookmark`
+
+- **Parameters**
+  - `bookmark: FtpBookmark` - Updated bookmark object
+- **Returns**: `FtpBookmark[]` - Updated bookmarks list
+- **Description**: Updates an existing FTP server bookmark by ID. Returns the updated list of all bookmarks.
+
+### `delete_ftp_bookmark`
+
+- **Parameters**
+  - `id: string` - Bookmark ID to delete
+- **Returns**: `FtpBookmark[]` - Updated bookmarks list
+- **Description**: Deletes an FTP server bookmark by ID. Returns the updated list of all bookmarks.
+
+### `search_ftp_bookmarks`
+
+- **Parameters**
+  - `query: string` - Search query
+- **Returns**: `FtpBookmark[]` - Matching bookmarks
+- **Description**: Searches FTP bookmarks by name, URL, tags, or notes. Returns all matching bookmarks.
+
+### `record_ftp_bookmark_usage`
+
+- **Parameters**
+  - `id: string` - Bookmark ID
+- **Returns**: `void`
+- **Description**: Records that a bookmark was used. Increments use count and updates last used timestamp.
+
+## Type Definitions
+
+### `FtpFileEntry`
+
+```typescript
+interface FtpFileEntry {
+  name: string;           // File or directory name
+  size: number;           // Size in bytes
+  is_directory: boolean;  // True if directory, false if file
+  modified: string | null; // Modification date string
+  permissions: string | null; // Unix-style permissions (e.g., "-rw-r--r--")
+}
+```
+
+### `FtpBookmark`
+
+```typescript
+interface FtpBookmark {
+  id: string;                      // Unique identifier
+  name: string;                    // User-friendly name
+  url: string;                     // FTP server URL
+  username: string | null;         // FTP username
+  encrypted_password: string | null; // Encrypted password
+  use_ftps: boolean;               // Enable FTPS
+  passive_mode: boolean;           // Use passive mode
+  port: number | null;             // Custom port (null = default 21)
+  notes: string | null;            // User notes
+  tags: string[];                  // Tags for categorization
+  last_used: number | null;        // Unix timestamp
+  use_count: number;               // Number of times used
+}
+```

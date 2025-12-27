@@ -760,14 +760,498 @@ Event emission is **opt-in** through new constructors. Existing code using `FtpP
 
 ---
 
+---
+
+## Advanced FTP Features
+
+### 1. FTP Resume Capability
+
+**Status:** ✅ **COMPLETED**
+
+#### Overview
+
+The FTP client now supports automatic resume of interrupted downloads. If a download is interrupted mid-transfer, it can automatically continue from where it left off instead of starting over.
+
+#### Implementation
+
+**Key Features:**
+- **Partial File Detection**: Checks if a partial file already exists before starting download
+- **Resume Position Calculation**: Compares partial file size with remote file size
+- **REST Command Support**: Uses FTP's `resume_transfer()` command to set the starting position
+- **Append Mode**: Opens partial files in append mode to continue writing
+- **Progress Continuation**: Progress tracking starts from the resume position
+
+**Code Example:**
+
+```rust
+// Check if partial file exists for resume
+let resume_position = if output_clone.exists() {
+    let metadata = std::fs::metadata(&output_clone)?;
+    let partial_size = metadata.len();
+
+    // Only resume if partial file is smaller than remote file
+    if partial_size < file_size && partial_size > 0 {
+        info!(
+            partial_bytes = partial_size,
+            total_bytes = file_size,
+            "Resuming FTP download from previous position"
+        );
+        partial_size
+    } else {
+        0
+    }
+} else {
+    0
+};
+
+// Resume from position using REST command
+if resume_position > 0 {
+    ftp_stream.resume_transfer(resume_position as usize)?;
+    ftp_stream.retr_as_stream(&remote_path)?
+}
+
+// Open file in append mode
+let mut output_file = if resume_position > 0 {
+    OpenOptions::new()
+        .append(true)
+        .open(&output_clone)?
+} else {
+    std::fs::File::create(&output_clone)?
+};
+```
+
+**Benefits:**
+- Saves bandwidth by not re-downloading already received data
+- Improves user experience for large file downloads
+- Handles network interruptions gracefully
+- Automatic and transparent to the user
+
+---
+
+### 2. FTP Directory Listing
+
+**Status:** ✅ **COMPLETED**
+
+#### Overview
+
+The FTP client can now list files and directories on FTP servers, allowing users to browse remote directories before downloading files.
+
+#### Implementation
+
+**Key Features:**
+- **File Metadata Extraction**: Parses Unix-style directory listings
+- **File Type Detection**: Distinguishes between files and directories
+- **Metadata Parsing**: Extracts permissions, size, and modification date
+- **FTPS Support**: Works with both FTP and FTPS connections
+- **Current/Parent Filtering**: Automatically filters out `.` and `..` entries
+
+**Data Structure:**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FtpFileEntry {
+    pub name: String,
+    pub size: u64,
+    pub is_directory: bool,
+    pub modified: Option<String>,
+    pub permissions: Option<String>,
+}
+```
+
+**Example Output:**
+
+```json
+[
+  {
+    "name": "file.tar.gz",
+    "size": 1048576,
+    "is_directory": false,
+    "modified": "Jan 15 14:30",
+    "permissions": "-rw-r--r--"
+  },
+  {
+    "name": "documents",
+    "size": 4096,
+    "is_directory": true,
+    "modified": "Jan 10 09:15",
+    "permissions": "drwxr-xr-x"
+  }
+]
+```
+
+**Tauri Command:**
+
+```rust
+#[tauri::command]
+async fn list_ftp_directory(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<Vec<FtpFileEntry>, String>
+```
+
+**Frontend Usage:**
+
+```typescript
+// List directory contents
+const files = await invoke('list_ftp_directory', {
+  url: 'ftp://ftp.example.com/pub/',
+  username: 'user',
+  password: 'pass',
+  useFtps: false,
+  passiveMode: true
+});
+
+// Display files
+files.forEach(file => {
+  console.log(`${file.is_directory ? '📁' : '📄'} ${file.name} (${file.size} bytes)`);
+});
+```
+
+---
+
+### 3. FTP File Operations
+
+**Status:** ✅ **COMPLETED**
+
+#### Overview
+
+Comprehensive file management operations for FTP servers, allowing users to delete files, rename files, and create directories remotely.
+
+#### Implemented Operations
+
+##### Delete Files/Directories
+
+**Features:**
+- Automatic file/directory detection
+- Attempts file deletion first, falls back to directory deletion
+- Works with both FTP and FTPS
+
+**Tauri Command:**
+
+```rust
+#[tauri::command]
+async fn delete_ftp_file(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String>
+```
+
+**Usage:**
+
+```typescript
+await invoke('delete_ftp_file', {
+  url: 'ftp://ftp.example.com/oldfile.txt',
+  username: 'user',
+  password: 'pass',
+  useFtps: false,
+  passiveMode: true
+});
+```
+
+##### Rename Files/Directories
+
+**Features:**
+- Rename both files and directories
+- Simple new name parameter (not full path)
+- Supports both FTP and FTPS
+
+**Tauri Command:**
+
+```rust
+#[tauri::command]
+async fn rename_ftp_file(
+    url: String,
+    new_name: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String>
+```
+
+**Usage:**
+
+```typescript
+await invoke('rename_ftp_file', {
+  url: 'ftp://ftp.example.com/oldname.txt',
+  newName: 'newname.txt',
+  username: 'user',
+  password: 'pass',
+  useFtps: false,
+  passiveMode: true
+});
+```
+
+##### Create Directories
+
+**Features:**
+- Create directories on remote FTP server
+- Works with both FTP and FTPS
+- Proper error handling for permission issues
+
+**Tauri Command:**
+
+```rust
+#[tauri::command]
+async fn create_ftp_directory(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String>
+```
+
+**Usage:**
+
+```typescript
+await invoke('create_ftp_directory', {
+  url: 'ftp://ftp.example.com/new_folder',
+  username: 'user',
+  password: 'pass',
+  useFtps: false,
+  passiveMode: true
+});
+```
+
+---
+
+### 4. FTP Server Bookmarks System
+
+**Status:** ✅ **COMPLETED**
+
+#### Overview
+
+A complete bookmark management system for FTP servers, allowing users to save frequently used FTP server configurations for quick access.
+
+#### Data Structure
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FtpBookmark {
+    pub id: String,                          // Unique identifier
+    pub name: String,                        // User-friendly name
+    pub url: String,                         // FTP server URL
+    pub username: Option<String>,            // FTP username
+    pub encrypted_password: Option<String>,  // Encrypted password
+    pub use_ftps: bool,                      // Enable FTPS
+    pub passive_mode: bool,                  // Passive mode
+    pub port: Option<u16>,                   // Custom port
+    pub notes: Option<String>,               // User notes
+    pub tags: Vec<String>,                   // Categorization tags
+    pub last_used: Option<i64>,              // Unix timestamp
+    pub use_count: u32,                      // Usage counter
+}
+```
+
+#### Bookmark Manager Features
+
+**Core Operations:**
+- **Create** bookmarks with full server configuration
+- **Read** all bookmarks or get specific bookmark by ID
+- **Update** existing bookmark details
+- **Delete** bookmarks by ID
+
+**Advanced Features:**
+- **Search**: Find bookmarks by name, URL, tags, or notes
+- **Usage Tracking**: Automatically track usage count and last used time
+- **Sorting**: Get most used or recently used bookmarks
+- **Import/Export**: Backup and restore bookmarks as JSON
+- **Merge Import**: Import bookmarks while preserving existing ones
+
+#### Storage
+
+Bookmarks are stored in `{config_dir}/ftp_bookmarks.json`:
+
+```json
+[
+  {
+    "id": "bookmark-123",
+    "name": "Production FTP",
+    "url": "ftp://ftp.production.com",
+    "username": "produser",
+    "encrypted_password": "base64encodedpassword",
+    "use_ftps": true,
+    "passive_mode": true,
+    "port": null,
+    "notes": "Main production file server",
+    "tags": ["production", "important"],
+    "last_used": 1704096000,
+    "use_count": 42
+  }
+]
+```
+
+#### Tauri Commands
+
+```rust
+// Load all bookmarks
+#[tauri::command]
+async fn load_ftp_bookmarks(app: tauri::AppHandle)
+    -> Result<Vec<FtpBookmark>, String>
+
+// Add new bookmark
+#[tauri::command]
+async fn add_ftp_bookmark(app: tauri::AppHandle, bookmark: FtpBookmark)
+    -> Result<Vec<FtpBookmark>, String>
+
+// Update existing bookmark
+#[tauri::command]
+async fn update_ftp_bookmark(app: tauri::AppHandle, bookmark: FtpBookmark)
+    -> Result<Vec<FtpBookmark>, String>
+
+// Delete bookmark by ID
+#[tauri::command]
+async fn delete_ftp_bookmark(app: tauri::AppHandle, id: String)
+    -> Result<Vec<FtpBookmark>, String>
+
+// Search bookmarks
+#[tauri::command]
+async fn search_ftp_bookmarks(app: tauri::AppHandle, query: String)
+    -> Result<Vec<FtpBookmark>, String>
+
+// Record bookmark usage
+#[tauri::command]
+async fn record_ftp_bookmark_usage(app: tauri::AppHandle, id: String)
+    -> Result<(), String>
+```
+
+#### Frontend Usage Examples
+
+**Load Bookmarks:**
+
+```typescript
+const bookmarks = await invoke('load_ftp_bookmarks');
+```
+
+**Add Bookmark:**
+
+```typescript
+const newBookmark = {
+  id: crypto.randomUUID(),
+  name: 'My FTP Server',
+  url: 'ftp://ftp.example.com',
+  username: 'user',
+  encrypted_password: null,
+  use_ftps: false,
+  passive_mode: true,
+  port: null,
+  notes: 'Personal file server',
+  tags: ['personal'],
+  last_used: null,
+  use_count: 0
+};
+
+await invoke('add_ftp_bookmark', { bookmark: newBookmark });
+```
+
+**Search Bookmarks:**
+
+```typescript
+const results = await invoke('search_ftp_bookmarks', {
+  query: 'production'
+});
+```
+
+**Record Usage:**
+
+```typescript
+// When user connects using a bookmark
+await invoke('record_ftp_bookmark_usage', {
+  id: 'bookmark-123'
+});
+```
+
+#### Manager API
+
+```rust
+use ftp_bookmarks::FtpBookmarksManager;
+
+// Initialize manager
+let config_dir = app.path().app_config_dir()?;
+let manager = FtpBookmarksManager::new(config_dir);
+
+// Get most used bookmarks
+let top_bookmarks = manager.get_most_used(5)?;
+
+// Get recently used bookmarks
+let recent = manager.get_recently_used(10)?;
+
+// Export bookmarks
+let json = manager.export_bookmarks()?;
+
+// Import bookmarks (merge mode)
+let updated = manager.import_bookmarks(&json, true)?;
+```
+
+---
+
+## Summary of New Features
+
+### Implemented Features
+
+| Feature | Status | Tauri Commands | Key Benefits |
+|---------|--------|----------------|--------------|
+| **Resume Downloads** | ✅ | Built into `download_from_ftp_with_progress` | Saves bandwidth, handles interruptions |
+| **Directory Listing** | ✅ | `list_ftp_directory` | Browse before download |
+| **Delete Files** | ✅ | `delete_ftp_file` | Remote file management |
+| **Rename Files** | ✅ | `rename_ftp_file` | Remote file organization |
+| **Create Directories** | ✅ | `create_ftp_directory` | Remote folder creation |
+| **Bookmarks** | ✅ | 6 commands | Quick server access, usage tracking |
+
+### Total Tauri Commands Added
+
+**11 new FTP-related commands:**
+1. `list_ftp_directory`
+2. `delete_ftp_file`
+3. `rename_ftp_file`
+4. `create_ftp_directory`
+5. `load_ftp_bookmarks`
+6. `add_ftp_bookmark`
+7. `update_ftp_bookmark`
+8. `delete_ftp_bookmark`
+9. `search_ftp_bookmarks`
+10. `record_ftp_bookmark_usage`
+
+### Files Modified/Created
+
+**Created:**
+- `src-tauri/src/ftp_bookmarks.rs` - Bookmark management system
+
+**Modified:**
+- `src-tauri/src/ftp_client.rs` - Added resume, listing, and file operations
+- `src-tauri/src/main.rs` - Added all Tauri commands
+- `src-tauri/src/lib.rs` - Module declarations
+
+---
+
 ## Next Steps
 
-The FTP implementation is now complete with both source abstraction and data fetching capabilities. Future work could include:
+The FTP implementation now includes advanced features for production use:
+
+✅ **Core Functionality** - Download, upload, seeding
+✅ **Resume Capability** - Automatic resume of interrupted transfers
+✅ **Directory Browsing** - List and explore remote directories
+✅ **File Management** - Delete, rename, and create operations
+✅ **Bookmark System** - Save and manage favorite servers
+
+**Future Enhancements:**
+
+- Batch upload/download functionality
+- FTP transfer queue management with pause/resume
+- Bandwidth limiting per FTP transfer
+- Scheduled transfers with bandwidth scheduler integration
 
 ## References
 
 - RFC 959: File Transfer Protocol (FTP)
 - RFC 4217: Securing FTP with TLS (FTPS)
-- Rust `ftp` crate: https://crates.io/crates/ftp
+- Rust `suppaftp` crate: https://crates.io/crates/suppaftp
 - libp2p specifications
 - Chiral Network architecture docs
