@@ -195,8 +195,9 @@ impl DownloadSource {
             }
             DownloadSource::BitTorrent(info) => {
                 // Extract info hash from magnet link for display
-                if let Some(xt) = info.magnet_uri.split('&').find(|s| s.starts_with("xt=urn:btih:")) {
-                    let info_hash = &xt[11..];
+                // Handle both "magnet:?xt=..." and "xt=..." formats
+                if let Some(xt_part) = info.magnet_uri.split(&['?', '&'][..]).find(|s| s.starts_with("xt=urn:btih:")) {
+                    let info_hash = &xt_part[12..]; // Skip "xt=urn:btih:" (12 chars)
                     format!("BitTorrent: {}", &info_hash[..8.min(info_hash.len())])
                 } else {
                     "BitTorrent".to_string()
