@@ -37,7 +37,7 @@ pub mod blockstore_manager;
 // Re-export modules from the lib crate
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source,
-    ed2k_client, encryption, file_transfer, ftp_client, http_download, keystore,
+    ed2k_client, encryption, file_transfer, ftp_client, sftp_client, http_download, keystore,
     logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
@@ -4427,6 +4427,135 @@ async fn upload_file_to_network(
     // This code path should no longer be reached for WebRTC uploads
     Err("Unexpected code path in upload_file_to_network".to_string())
 }
+/// List files in an FTP directory
+#[tauri::command]
+async fn list_ftp_directory(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<Vec<ftp_client::FtpFileEntry>, String> {
+    use crate::download_source::FtpSourceInfo;
+
+    let source_info = FtpSourceInfo {
+        url,
+        username,
+        encrypted_password: None,
+        passive_mode,
+        use_ftps,
+        timeout_secs: Some(30),
+    };
+
+    ftp_client::list_ftp_directory(&source_info)
+        .await
+        .map_err(|e| format!("Failed to list FTP directory: {}", e))
+}
+
+/// Delete a file or directory on FTP server
+#[tauri::command]
+async fn delete_ftp_file(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String> {
+    use crate::download_source::FtpSourceInfo;
+
+    let source_info = FtpSourceInfo {
+        url,
+        username,
+        encrypted_password: None,
+        passive_mode,
+        use_ftps,
+        timeout_secs: Some(30),
+    };
+
+    ftp_client::delete_ftp_file(&source_info)
+        .await
+        .map_err(|e| format!("Failed to delete FTP file: {}", e))
+}
+
+/// Rename a file or directory on FTP server
+#[tauri::command]
+async fn rename_ftp_file(
+    url: String,
+    new_name: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String> {
+    use crate::download_source::FtpSourceInfo;
+
+    let source_info = FtpSourceInfo {
+        url,
+        username,
+        encrypted_password: None,
+        passive_mode,
+        use_ftps,
+        timeout_secs: Some(30),
+    };
+
+    ftp_client::rename_ftp_file(&source_info, &new_name)
+        .await
+        .map_err(|e| format!("Failed to rename FTP file: {}", e))
+}
+
+/// Create a directory on FTP server
+#[tauri::command]
+async fn create_ftp_directory(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String> {
+    use crate::download_source::FtpSourceInfo;
+
+    let source_info = FtpSourceInfo {
+        url,
+        username,
+        encrypted_password: None,
+        passive_mode,
+        use_ftps,
+        timeout_secs: Some(30),
+    };
+
+    ftp_client::create_ftp_directory(&source_info)
+        .await
+        .map_err(|e| format!("Failed to create FTP directory: {}", e))
+}
+
+/// Download file from SFTP server
+#[tauri::command]
+async fn start_sftp_download(
+    url: String,
+    username: String,
+    password: Option<String>,
+    private_key_path: Option<String>,
+    key_passphrase: Option<String>,
+    output_path: String,
+) -> Result<u64, String> {
+    use crate::download_source::SftpSourceInfo;
+    use std::path::Path;
+
+    let source_info = SftpSourceInfo {
+        url,
+        username,
+        encrypted_password: password,
+        private_key_path,
+        key_passphrase,
+        port: 22,
+        timeout_secs: Some(30),
+    };
+
+    sftp_client::download_from_sftp(&source_info, Path::new(&output_path))
+        .await
+        .map_err(|e| format!("Failed to download from SFTP: {}", e))
+}
+
 /// Test FTP connection to external server
 #[tauri::command]
 async fn test_ftp_connection(
@@ -9084,6 +9213,11 @@ fn main() {
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
+            list_ftp_directory,
+            delete_ftp_file,
+            rename_ftp_file,
+            create_ftp_directory,
+            start_sftp_download,
             test_ftp_connection,
             upload_to_external_ftp,
             start_ftp_download,

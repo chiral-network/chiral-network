@@ -14,6 +14,17 @@ use suppaftp::types::FileType;
 use suppaftp::{FtpStream, NativeTlsConnector, NativeTlsFtpStream};
 use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
+use serde::{Serialize, Deserialize};
+
+/// FTP file entry information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FtpFileEntry {
+    pub name: String,
+    pub size: u64,
+    pub is_directory: bool,
+    pub modified: Option<String>,
+    pub permissions: Option<String>,
+}
 
 /// Default FTP connection timeout in seconds
 ///
@@ -435,6 +446,346 @@ pub async fn download_from_ftp_with_progress(
     })
     .await
     .context("FTP download task panicked")?
+}
+
+/// List files and directories in an FTP directory
+///
+/// # Arguments
+/// * `source_info` - FTP source information (URL should point to a directory)
+///
+/// # Returns
+/// Vector of file entries in the directory
+pub async fn list_ftp_directory(source_info: &FtpSourceInfo) -> Result<Vec<FtpFileEntry>> {
+    let source_clone = source_info.clone();
+
+    spawn_blocking(move || {
+        let (host, port, remote_path) = FtpClient::parse_ftp_url(&source_clone.url)?;
+
+        // Connect to FTP server
+        let ftp_stream = if source_clone.use_ftps {
+            // FTPS connection
+            let tls_connector = NativeTlsConnector::from(
+                native_tls::TlsConnector::new().context("Failed to create TLS connector")?
+            );
+
+            let mut stream = NativeTlsFtpStream::connect_secure_implicit(
+                format!("{}:{}", host, port),
+                tls_connector,
+                &host,
+            )
+            .context("Failed to connect to FTPS server")?;
+
+            // Login
+            let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
+            stream
+                .login(&username, &password)
+                .context("FTPS login failed")?;
+
+            if source_clone.passive_mode {
+                stream.set_mode(suppaftp::Mode::Passive);
+            }
+
+            // List directory
+            let files = stream
+                .list(Some(&remote_path))
+                .context("Failed to list FTPS directory")?;
+
+            stream.quit().ok();
+
+            files
+        } else {
+            // Regular FTP connection
+            let mut stream = FtpStream::connect(format!("{}:{}", host, port))
+                .context("Failed to connect to FTP server")?;
+
+            // Login
+            let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
+            stream
+                .login(&username, &password)
+                .context("FTP login failed")?;
+
+            if source_clone.passive_mode {
+                stream.set_mode(suppaftp::Mode::Passive);
+            }
+
+            // List directory
+            let files = stream
+                .list(Some(&remote_path))
+                .context("Failed to list FTP directory")?;
+
+            stream.quit().ok();
+
+            files
+        };
+
+        // Parse file listings
+        let mut entries = Vec::new();
+
+        for file_line in ftp_stream {
+            // Parse Unix-style listing (most common format)
+            // Example: "drwxr-xr-x   2 user  group    4096 Jan 01 12:00 dirname"
+            // Example: "-rw-r--r--   1 user  group   12345 Jan 01 12:00 filename.txt"
+
+            let parts: Vec<&str> = file_line.split_whitespace().collect();
+
+            if parts.len() < 9 {
+                // Skip malformed lines
+                continue;
+            }
+
+            let permissions = parts[0].to_string();
+            let is_directory = permissions.starts_with('d');
+
+            // Size is typically at index 4
+            let size = parts[4].parse::<u64>().unwrap_or(0);
+
+            // Filename is everything after the time (index 8 onwards)
+            let name = parts[8..].join(" ");
+
+            // Skip current and parent directory entries
+            if name == "." || name == ".." {
+                continue;
+            }
+
+            // Date/time is at indices 5, 6, 7
+            let modified = if parts.len() >= 8 {
+                Some(format!("{} {} {}", parts[5], parts[6], parts[7]))
+            } else {
+                None
+            };
+
+            entries.push(FtpFileEntry {
+                name,
+                size,
+                is_directory,
+                modified,
+                permissions: Some(permissions),
+            });
+        }
+
+        info!(
+            entries_count = entries.len(),
+            path = %remote_path,
+            "Listed FTP directory"
+        );
+
+        Ok(entries)
+    })
+    .await
+    .context("FTP directory listing task panicked")?
+}
+
+/// Delete a file or directory on FTP server
+///
+/// # Arguments
+/// * `source_info` - FTP source information (URL should point to the file/directory to delete)
+///
+/// # Returns
+/// Success or error
+pub async fn delete_ftp_file(source_info: &FtpSourceInfo) -> Result<()> {
+    let source_clone = source_info.clone();
+
+    spawn_blocking(move || {
+        let (host, port, remote_path) = FtpClient::parse_ftp_url(&source_clone.url)?;
+
+        if source_clone.use_ftps {
+            // FTPS connection
+            let tls_connector = NativeTlsConnector::from(
+                native_tls::TlsConnector::new().context("Failed to create TLS connector")?
+            );
+
+            let mut stream = NativeTlsFtpStream::connect_secure_implicit(
+                format!("{}:{}", host, port),
+                tls_connector,
+                &host,
+            )
+            .context("Failed to connect to FTPS server")?;
+
+            let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
+            stream.login(&username, &password).context("FTPS login failed")?;
+
+            if source_clone.passive_mode {
+                stream.set_mode(suppaftp::Mode::Passive);
+            }
+
+            // Try to delete as file first, then as directory
+            match stream.rm(&remote_path) {
+                Ok(_) => {
+                    info!(path = %remote_path, "Deleted file via FTPS");
+                }
+                Err(_) => {
+                    // If file deletion fails, try removing as directory
+                    stream.rmdir(&remote_path)
+                        .context("Failed to delete file or directory via FTPS")?;
+                    info!(path = %remote_path, "Deleted directory via FTPS");
+                }
+            }
+
+            stream.quit().ok();
+        } else {
+            // Regular FTP
+            let mut stream = FtpStream::connect(format!("{}:{}", host, port))
+                .context("Failed to connect to FTP server")?;
+
+            let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
+            stream.login(&username, &password).context("FTP login failed")?;
+
+            if source_clone.passive_mode {
+                stream.set_mode(suppaftp::Mode::Passive);
+            }
+
+            // Try to delete as file first, then as directory
+            match stream.rm(&remote_path) {
+                Ok(_) => {
+                    info!(path = %remote_path, "Deleted file via FTP");
+                }
+                Err(_) => {
+                    // If file deletion fails, try removing as directory
+                    stream.rmdir(&remote_path)
+                        .context("Failed to delete file or directory via FTP")?;
+                    info!(path = %remote_path, "Deleted directory via FTP");
+                }
+            }
+
+            stream.quit().ok();
+        }
+
+        Ok(())
+    })
+    .await
+    .context("FTP delete task panicked")?
+}
+
+/// Rename a file or directory on FTP server
+///
+/// # Arguments
+/// * `source_info` - FTP source information (URL should point to the file/directory to rename)
+/// * `new_name` - New name for the file/directory
+///
+/// # Returns
+/// Success or error
+pub async fn rename_ftp_file(source_info: &FtpSourceInfo, new_name: &str) -> Result<()> {
+    let source_clone = source_info.clone();
+    let new_name_clone = new_name.to_string();
+
+    spawn_blocking(move || {
+        let (host, port, remote_path) = FtpClient::parse_ftp_url(&source_clone.url)?;
+
+        if source_clone.use_ftps {
+            // FTPS connection
+            let tls_connector = NativeTlsConnector::from(
+                native_tls::TlsConnector::new().context("Failed to create TLS connector")?
+            );
+
+            let mut stream = NativeTlsFtpStream::connect_secure_implicit(
+                format!("{}:{}", host, port),
+                tls_connector,
+                &host,
+            )
+            .context("Failed to connect to FTPS server")?;
+
+            let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
+            stream.login(&username, &password).context("FTPS login failed")?;
+
+            if source_clone.passive_mode {
+                stream.set_mode(suppaftp::Mode::Passive);
+            }
+
+            stream.rename(&remote_path, &new_name_clone)
+                .context("Failed to rename file via FTPS")?;
+
+            info!(old_path = %remote_path, new_name = %new_name_clone, "Renamed file via FTPS");
+
+            stream.quit().ok();
+        } else {
+            // Regular FTP
+            let mut stream = FtpStream::connect(format!("{}:{}", host, port))
+                .context("Failed to connect to FTP server")?;
+
+            let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
+            stream.login(&username, &password).context("FTP login failed")?;
+
+            if source_clone.passive_mode {
+                stream.set_mode(suppaftp::Mode::Passive);
+            }
+
+            stream.rename(&remote_path, &new_name_clone)
+                .context("Failed to rename file via FTP")?;
+
+            info!(old_path = %remote_path, new_name = %new_name_clone, "Renamed file via FTP");
+
+            stream.quit().ok();
+        }
+
+        Ok(())
+    })
+    .await
+    .context("FTP rename task panicked")?
+}
+
+/// Create a directory on FTP server
+///
+/// # Arguments
+/// * `source_info` - FTP source information (URL should point to the directory to create)
+///
+/// # Returns
+/// Success or error
+pub async fn create_ftp_directory(source_info: &FtpSourceInfo) -> Result<()> {
+    let source_clone = source_info.clone();
+
+    spawn_blocking(move || {
+        let (host, port, remote_path) = FtpClient::parse_ftp_url(&source_clone.url)?;
+
+        if source_clone.use_ftps {
+            // FTPS connection
+            let tls_connector = NativeTlsConnector::from(
+                native_tls::TlsConnector::new().context("Failed to create TLS connector")?
+            );
+
+            let mut stream = NativeTlsFtpStream::connect_secure_implicit(
+                format!("{}:{}", host, port),
+                tls_connector,
+                &host,
+            )
+            .context("Failed to connect to FTPS server")?;
+
+            let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
+            stream.login(&username, &password).context("FTPS login failed")?;
+
+            if source_clone.passive_mode {
+                stream.set_mode(suppaftp::Mode::Passive);
+            }
+
+            stream.mkdir(&remote_path)
+                .context("Failed to create directory via FTPS")?;
+
+            info!(path = %remote_path, "Created directory via FTPS");
+
+            stream.quit().ok();
+        } else {
+            // Regular FTP
+            let mut stream = FtpStream::connect(format!("{}:{}", host, port))
+                .context("Failed to connect to FTP server")?;
+
+            let (username, password) = FtpClient::get_credentials(&source_clone, None)?;
+            stream.login(&username, &password).context("FTP login failed")?;
+
+            if source_clone.passive_mode {
+                stream.set_mode(suppaftp::Mode::Passive);
+            }
+
+            stream.mkdir(&remote_path)
+                .context("Failed to create directory via FTP")?;
+
+            info!(path = %remote_path, "Created directory via FTP");
+
+            stream.quit().ok();
+        }
+
+        Ok(())
+    })
+    .await
+    .context("FTP mkdir task panicked")?
 }
 
 #[cfg(test)]
