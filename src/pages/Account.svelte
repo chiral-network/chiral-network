@@ -6,7 +6,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist } from '$lib/stores'
+  import { wallet, etcAccount, blacklist, showAuthWizard } from '$lib/stores'
   import { gethStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
   import { transactions, transactionPagination, miningPagination } from '$lib/stores';
@@ -1587,9 +1587,9 @@
       
       privateKeyVisible = false;
       
-      // Show success message
-      // showToast('Wallet locked and session cleared', 'success');
+      // Show success message and trigger re-login wizard
       showToast(tr('toasts.account.logout.locked'), 'success');
+      showAuthWizard.set(true);
       
     } catch (error) {
       console.error('Error during logout:', error);
