@@ -198,6 +198,18 @@ class RealE2ETestFramework {
       CHIRAL_HEADLESS: "true",
     };
 
+    // Avoid HTTP server port collisions in spawn mode (two local nodes).
+    // The Rust side auto-starts the HTTP file server in a fixed range by default (8080-8090).
+    // On busy developer machines those ports may already be taken; also two nodes can contend.
+    // Use a high, per-node range to make the spawn-mode harness reliable.
+    if (role === "uploader") {
+      env.CHIRAL_HTTP_PORT_START = env.CHIRAL_HTTP_PORT_START || "38080";
+      env.CHIRAL_HTTP_PORT_END = env.CHIRAL_HTTP_PORT_END || "38090";
+    } else {
+      env.CHIRAL_HTTP_PORT_START = env.CHIRAL_HTTP_PORT_START || "38091";
+      env.CHIRAL_HTTP_PORT_END = env.CHIRAL_HTTP_PORT_END || "38101";
+    }
+
     // Spawn mode runs both nodes on the same machine. We must isolate:
     // - Tauri app data dir (APPDATA/LOCALAPPDATA on Windows) to avoid DB/file locks
     // - download directory (~ expansion uses USERPROFILE/HOME), because BitTorrent session persistence writes there

@@ -6,10 +6,14 @@
 //! - MD4 hash algorithm for file and chunk verification
 //! - TCP connection to ed2k servers (default port 4661)
 
+use md4::{Md4, Digest};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::Duration;
+use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tracing::{debug, info};
 
 /// ed2k chunk size: 9.28 MB (9,728,000 bytes)
 pub const ED2K_CHUNK_SIZE: usize = 9_728_000;
@@ -91,8 +95,13 @@ pub struct Ed2kSearchResult {
     pub source_count: u32,
 }
 
+/// ED2K block size: 256 KB (used within 9.28MB chunks)
+/// ED2K transfers files in 256KB blocks, which are grouped into 9.28MB chunks for hashing
+pub const ED2K_BLOCK_SIZE: usize = 256 * 1024;
+
 /// ed2k protocol opcodes
 mod opcodes {
+    // Server opcodes
     pub const OP_LOGINREQUEST: u8 = 0x01;
     pub const OP_SERVERMESSAGE: u8 = 0x38;
     pub const OP_SERVERLIST: u8 = 0x32;
@@ -100,8 +109,121 @@ mod opcodes {
     pub const OP_OFFERFILES: u8 = 0x15;
     pub const OP_GETSOURCES: u8 = 0x19;
     pub const OP_FOUNDSOURCES: u8 = 0x42;
-    pub const OP_REQUESTPARTS: u8 = 0x58;
-    pub const OP_SENDINGPART: u8 = 0x46;
+    
+    // Peer-to-peer opcodes
+    pub const OP_REQUESTPARTS: u8 = 0x47;      // Request file parts from peer
+    pub const OP_SENDINGPART: u8 = 0x46;       // Sending file part data
+    pub const OP_FILEREQUEST: u8 = 0x58;       // Request file from peer
+    pub const OP_FILEREQANSWER: u8 = 0x59;     // Answer to file request
+    pub const OP_SETREQFILEID: u8 = 0x4F;      // Set requested file ID
+    pub const OP_STARTUPLOADREQ: u8 = 0x54;    // Request to start upload
+}
+
+/// ED2K packet header structure
+/// Format: [Protocol:1][Size:4][Opcode:1][Payload:Size-1]
+#[derive(Debug, Clone)]
+pub struct Ed2kPacketHeader {
+    pub protocol: u8,      // Always 0xE3 for ED2K protocol
+    pub size: u32,         // Size of payload + opcode (excludes protocol byte and size field)
+    pub opcode: u8,        // Operation code
+}
+
+impl Ed2kPacketHeader {
+    pub const HEADER_SIZE: usize = 6; // 1 byte protocol + 4 bytes size + 1 byte opcode
+    pub const ED2K_PROTOCOL: u8 = 0xE3;
+    
+    /// Create a new packet header
+    pub fn new(opcode: u8, payload_size: u32) -> Self {
+        Self {
+            protocol: Self::ED2K_PROTOCOL,
+            size: payload_size + 1, // +1 for opcode
+            opcode,
+        }
+    }
+    
+    /// Serialize header to bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(Self::HEADER_SIZE);
+        bytes.push(self.protocol);
+        bytes.extend_from_slice(&self.size.to_le_bytes());
+        bytes.push(self.opcode);
+        bytes
+    }
+    
+    /// Parse header from bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Ed2kError> {
+        if bytes.len() < Self::HEADER_SIZE {
+            return Err(Ed2kError::ProtocolError("Incomplete packet header".to_string()));
+        }
+        
+        let protocol = bytes[0];
+        if protocol != Self::ED2K_PROTOCOL {
+            return Err(Ed2kError::ProtocolError(format!(
+                "Invalid protocol byte: 0x{:02x}, expected 0xE3",
+                protocol
+            )));
+        }
+        
+        let size = u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+        let opcode = bytes[5];
+        
+        Ok(Self { protocol, size, opcode })
+    }
+}
+
+/// ED2K block request structure
+/// Used to request a 256KB block from a peer
+#[derive(Debug, Clone)]
+pub struct Ed2kBlockRequest {
+    pub file_hash: [u8; 16],   // MD4 hash of file
+    pub start_offset: u64,     // Start byte offset
+    pub end_offset: u64,       // End byte offset (exclusive)
+}
+
+impl Ed2kBlockRequest {
+    /// Create a new block request
+    pub fn new(file_hash: [u8; 16], start_offset: u64, end_offset: u64) -> Self {
+        Self {
+            file_hash,
+            start_offset,
+            end_offset,
+        }
+    }
+    
+    /// Serialize to bytes for OP_REQUESTPARTS packet
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(16 + 8 + 8);
+        bytes.extend_from_slice(&self.file_hash);
+        bytes.extend_from_slice(&self.start_offset.to_le_bytes());
+        bytes.extend_from_slice(&self.end_offset.to_le_bytes());
+        bytes
+    }
+    
+    /// Parse from bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Ed2kError> {
+        if bytes.len() < 32 {
+            return Err(Ed2kError::ProtocolError("Incomplete block request".to_string()));
+        }
+        
+        let mut file_hash = [0u8; 16];
+        file_hash.copy_from_slice(&bytes[0..16]);
+        
+        let start_offset = u64::from_le_bytes([
+            bytes[16], bytes[17], bytes[18], bytes[19],
+            bytes[20], bytes[21], bytes[22], bytes[23],
+        ]);
+        
+        let end_offset = u64::from_le_bytes([
+            bytes[24], bytes[25], bytes[26], bytes[27],
+            bytes[28], bytes[29], bytes[30], bytes[31],
+        ]);
+        
+        Ok(Self {
+            file_hash,
+            start_offset,
+            end_offset,
+        })
+    }
 }
 
 /// ed2k client for downloading files
@@ -201,10 +323,112 @@ impl Ed2kClient {
 
         self.connection = Some(stream);
 
-        // In a real implementation, we would send a login packet here
-        // For now, we just establish the connection
+        // Perform login handshake
+        self.send_login().await?;
+
+        info!("Connected and logged in to ED2K server: {}", addr);
 
         Ok(())
+    }
+
+    /// Send login request to ED2K server
+    async fn send_login(&mut self) -> Result<(), Ed2kError> {
+        let conn = self.connection.as_mut()
+            .ok_or_else(|| Ed2kError::ConnectionError("Not connected".to_string()))?;
+
+        // Generate a client hash (normally would be persistent)
+        let client_hash = Self::generate_client_hash();
+        
+        // Build login packet
+        // Format: [hash:16][client_id:4][port:2][tag_count:4][tags...]
+        let mut payload = Vec::new();
+        
+        // Client hash (16 bytes)
+        payload.extend_from_slice(&client_hash);
+        
+        // Client ID (0 for initial connection, server assigns one)
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        
+        // Client port (4662 - default ED2K client port)
+        payload.extend_from_slice(&4662u16.to_le_bytes());
+        
+        // Tag count (3 tags: name, version, flags)
+        payload.extend_from_slice(&3u32.to_le_bytes());
+        
+        // Tag 1: Client name (CT_NAME = 0x01)
+        Self::write_string_tag(&mut payload, 0x01, "Chiral Network");
+        
+        // Tag 2: Client version (CT_VERSION = 0x11)
+        payload.push(0x03); // Integer type
+        payload.push(0x11); // Version tag ID
+        payload.extend_from_slice(&0x3Cu32.to_le_bytes()); // Version 0.60
+        
+        // Tag 3: Capabilities (CT_SERVER_FLAGS = 0x20)
+        payload.push(0x03); // Integer type
+        payload.push(0x20); // Flags tag ID
+        payload.extend_from_slice(&0x00000001u32.to_le_bytes()); // Basic flags
+        
+        // Send login packet
+        Self::send_packet(conn, opcodes::OP_LOGINREQUEST, &payload).await?;
+        
+        // Wait for server response (OP_SERVERMESSAGE or OP_IDCHANGE)
+        let (opcode, response_payload) = Self::receive_packet(conn, 30).await?;
+        
+        match opcode {
+            0x32 => { // OP_IDCHANGE - server assigned client ID
+                if response_payload.len() >= 4 {
+                    let client_id = u32::from_le_bytes([
+                        response_payload[0],
+                        response_payload[1],
+                        response_payload[2],
+                        response_payload[3],
+                    ]);
+                    self.client_id = Some(client_id);
+                    info!("Server assigned client ID: {}", client_id);
+                }
+            }
+            0x38 => { // OP_SERVERMESSAGE
+                debug!("Received server message during login");
+            }
+            _ => {
+                return Err(Ed2kError::ProtocolError(format!(
+                    "Unexpected response to login: opcode 0x{:02x}",
+                    opcode
+                )));
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Generate a client hash (MD4 hash of random data)
+    fn generate_client_hash() -> [u8; 16] {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        // Use timestamp as seed for reproducible but unique hash
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let mut hasher = Md4::new();
+        hasher.update(&timestamp.to_le_bytes());
+        hasher.update(b"chiral-network-ed2k-client");
+        
+        let result = hasher.finalize();
+        let mut hash = [0u8; 16];
+        hash.copy_from_slice(&result);
+        hash
+    }
+
+    /// Write a string tag to payload
+    fn write_string_tag(payload: &mut Vec<u8>, tag_id: u8, value: &str) {
+        payload.push(0x02); // String tag type
+        payload.push(tag_id); // Tag ID
+        
+        let value_bytes = value.as_bytes();
+        payload.extend_from_slice(&(value_bytes.len() as u16).to_le_bytes());
+        payload.extend_from_slice(value_bytes);
     }
 
     /// Download a specific chunk (9.28 MB)
@@ -282,14 +506,157 @@ impl Ed2kClient {
 
     /// Verify MD4 hash of data
     pub fn verify_md4_hash(data: &[u8], expected_hash: &str) -> bool {
-        use md4::Digest;
+        let computed_hash = Self::compute_md4_hash(data);
+        computed_hash.eq_ignore_ascii_case(expected_hash)
+    }
 
-        let mut hasher = md4::Md4::new();
+    /// Compute MD4 hash of data and return as hex string
+    pub fn compute_md4_hash(data: &[u8]) -> String {
+        let mut hasher = Md4::new();
         hasher.update(data);
         let result = hasher.finalize();
-        let computed_hash = format!("{:x}", result);
+        format!("{:x}", result)
+    }
 
-        computed_hash.eq_ignore_ascii_case(expected_hash)
+    /// Compute ED2K file hash
+    /// For files <= 9.28MB: returns MD4 hash of the entire file
+    /// For files > 9.28MB: returns MD4 hash of the concatenated chunk hashes (root hash)
+    pub async fn compute_file_hash<P: AsRef<Path>>(path: P) -> Result<String, Ed2kError> {
+        let mut file = File::open(path).await?;
+        let metadata = file.metadata().await?;
+        let file_size = metadata.len() as usize;
+
+        // Single chunk file
+        if file_size <= ED2K_CHUNK_SIZE {
+            let mut buffer = Vec::with_capacity(file_size);
+            file.read_to_end(&mut buffer).await?;
+            Ok(Self::compute_md4_hash(&buffer))
+        } else {
+            // Multi-chunk file: compute hash of chunk hashes
+            let chunk_hashes = Self::compute_chunk_hashes_from_file(&mut file, file_size).await?;
+            
+            // Concatenate all chunk hash bytes
+            let mut combined_hashes = Vec::new();
+            for hash_str in chunk_hashes {
+                let hash_bytes = hex::decode(&hash_str)?;
+                combined_hashes.extend_from_slice(&hash_bytes);
+            }
+            
+            Ok(Self::compute_md4_hash(&combined_hashes))
+        }
+    }
+
+    /// Compute chunk hashes for a file
+    /// Returns a vector of MD4 hash strings, one for each 9.28MB chunk
+    pub async fn compute_chunk_hashes<P: AsRef<Path>>(path: P) -> Result<Vec<String>, Ed2kError> {
+        let mut file = File::open(path).await?;
+        let metadata = file.metadata().await?;
+        let file_size = metadata.len() as usize;
+        
+        Self::compute_chunk_hashes_from_file(&mut file, file_size).await
+    }
+
+    /// Internal helper to compute chunk hashes from an open file
+    async fn compute_chunk_hashes_from_file(file: &mut File, file_size: usize) -> Result<Vec<String>, Ed2kError> {
+        let num_chunks = (file_size + ED2K_CHUNK_SIZE - 1) / ED2K_CHUNK_SIZE;
+        let mut chunk_hashes = Vec::with_capacity(num_chunks);
+        let mut buffer = vec![0u8; ED2K_CHUNK_SIZE];
+
+        for _ in 0..num_chunks {
+            let bytes_read = file.read(&mut buffer).await?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            let chunk_hash = Self::compute_md4_hash(&buffer[..bytes_read]);
+            chunk_hashes.push(chunk_hash);
+        }
+
+        Ok(chunk_hashes)
+    }
+
+    /// Split data into ED2K chunks (9.28MB each)
+    /// Returns a vector of byte slices representing each chunk
+    pub fn split_into_chunks(data: &[u8]) -> Vec<&[u8]> {
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+
+        while offset < data.len() {
+            let end = std::cmp::min(offset + ED2K_CHUNK_SIZE, data.len());
+            chunks.push(&data[offset..end]);
+            offset = end;
+        }
+
+        chunks
+    }
+
+    /// Validate a complete file against ED2K hash
+    /// Returns true if the computed hash matches the expected hash
+    pub async fn validate_file<P: AsRef<Path>>(
+        path: P,
+        expected_hash: &str,
+    ) -> Result<bool, Ed2kError> {
+        let computed_hash = Self::compute_file_hash(path).await?;
+        Ok(computed_hash.eq_ignore_ascii_case(expected_hash))
+    }
+
+    /// Validate a single chunk against its expected hash
+    pub fn validate_chunk(chunk_data: &[u8], expected_hash: &str) -> bool {
+        Self::verify_md4_hash(chunk_data, expected_hash)
+    }
+
+    /// Get the number of chunks needed for a file of given size
+    pub fn get_chunk_count(file_size: u64) -> usize {
+        ((file_size as usize) + ED2K_CHUNK_SIZE - 1) / ED2K_CHUNK_SIZE
+    }
+
+    /// Get the size of a specific chunk (last chunk may be smaller)
+    pub fn get_chunk_size(chunk_index: usize, file_size: u64) -> usize {
+        let total_chunks = Self::get_chunk_count(file_size);
+        
+        if chunk_index >= total_chunks {
+            return 0;
+        }
+        
+        if chunk_index == total_chunks - 1 {
+            // Last chunk
+            let remainder = (file_size as usize) % ED2K_CHUNK_SIZE;
+            if remainder == 0 {
+                ED2K_CHUNK_SIZE
+            } else {
+                remainder
+            }
+        } else {
+            ED2K_CHUNK_SIZE
+        }
+    }
+
+    /// Create ED2K file info from a local file
+    /// Computes all necessary hashes and metadata
+    pub async fn create_file_info<P: AsRef<Path>>(path: P) -> Result<Ed2kFileInfo, Ed2kError> {
+        let path_ref = path.as_ref();
+        let metadata = tokio::fs::metadata(path_ref).await?;
+        let file_size = metadata.len();
+        
+        let file_name = path_ref
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
+        
+        let file_hash = Self::compute_file_hash(path_ref).await?;
+        let chunk_hashes = if file_size > ED2K_CHUNK_SIZE as u64 {
+            Self::compute_chunk_hashes(path_ref).await?
+        } else {
+            Vec::new()
+        };
+        
+        Ok(Ed2kFileInfo {
+            file_hash,
+            file_size,
+            file_name,
+            sources: Vec::new(),
+            chunk_hashes,
+        })
     }
 
     /// Offer files to the ED2K server for sharing
@@ -403,52 +770,55 @@ impl Ed2kClient {
             return Err(Ed2kError::ProtocolError("Hash must be 16 bytes (MD4)".to_string()));
         }
 
-        // Build OP_GETSOURCES packet
-        let mut packet = Vec::new();
-        packet.push(opcodes::OP_GETSOURCES);
-        packet.extend_from_slice(&hash_bytes);
+        info!("Requesting sources for file hash: {}", file_hash);
 
-        // Send request
-        conn.write_all(&packet).await?;
+        // Send OP_GETSOURCES packet using proper packet format
+        Self::send_packet(conn, opcodes::OP_GETSOURCES, &hash_bytes).await?;
 
-        // Read response (OP_FOUNDSOURCES)
-        let mut header = [0u8; 5];
-        let read_result = tokio::time::timeout(
-            self.config.timeout,
-            conn.read_exact(&mut header)
-        ).await;
+        // Receive response packet
+        let timeout_secs = self.config.timeout.as_secs();
+        let (opcode, payload) = Self::receive_packet(conn, timeout_secs).await?;
 
-        match read_result {
-            Ok(Ok(_)) => {
-                if header[0] != opcodes::OP_FOUNDSOURCES {
-                    return Err(Ed2kError::ProtocolError(
-                        format!("Unexpected response opcode: 0x{:02x}", header[0])
-                    ));
-                }
-
-                // Parse source count
-                let source_count = u32::from_le_bytes([header[1], header[2], header[3], header[4]]) as usize;
-                let mut sources = Vec::with_capacity(source_count);
-
-                // Read source entries (6 bytes each: 4 bytes IP + 2 bytes port)
-                for _ in 0..source_count {
-                    let mut source_data = [0u8; 6];
-                    conn.read_exact(&mut source_data).await?;
-
-                    let ip = format!(
-                        "{}.{}.{}.{}",
-                        source_data[0], source_data[1], source_data[2], source_data[3]
-                    );
-                    let port = u16::from_le_bytes([source_data[4], source_data[5]]);
-
-                    sources.push(format!("{}:{}", ip, port));
-                }
-
-                Ok(sources)
-            }
-            Ok(Err(e)) => Err(Ed2kError::IoError(e)),
-            Err(_) => Err(Ed2kError::Timeout),
+        if opcode != opcodes::OP_FOUNDSOURCES {
+            return Err(Ed2kError::ProtocolError(
+                format!("Expected OP_FOUNDSOURCES (0x{:02x}), got 0x{:02x}", 
+                    opcodes::OP_FOUNDSOURCES, opcode)
+            ));
         }
+
+        // Parse payload: [file_hash:16][source_count:1][sources...]
+        if payload.len() < 17 {
+            return Err(Ed2kError::ProtocolError("Invalid FOUNDSOURCES payload".to_string()));
+        }
+
+        // Verify file hash matches
+        if &payload[0..16] != hash_bytes.as_slice() {
+            return Err(Ed2kError::ProtocolError("File hash mismatch in response".to_string()));
+        }
+
+        // Parse source count (1 byte)
+        let source_count = payload[16] as usize;
+        let mut sources = Vec::with_capacity(source_count);
+
+        // Parse sources: each source is 6 bytes (4 bytes IP + 2 bytes port)
+        let mut offset = 17;
+        for _ in 0..source_count {
+            if offset + 6 > payload.len() {
+                break;
+            }
+
+            let ip = format!(
+                "{}.{}.{}.{}",
+                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]
+            );
+            let port = u16::from_le_bytes([payload[offset + 4], payload[offset + 5]]);
+            sources.push(format!("{}:{}", ip, port));
+
+            offset += 6;
+        }
+
+        info!("Found {} sources for file", sources.len());
+        Ok(sources)
     }
 
     /// Get server information
@@ -481,6 +851,146 @@ impl Ed2kClient {
     pub fn is_connected(&self) -> bool {
         self.connection.is_some()
     }
+
+    // Peer-to-peer communication methods
+
+    /// Connect to an ED2K peer for file transfer
+    pub async fn connect_to_peer(addr: &str, timeout_secs: u64) -> Result<TcpStream, Ed2kError> {
+        let stream = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            TcpStream::connect(addr)
+        )
+        .await
+        .map_err(|_| Ed2kError::Timeout)?
+        .map_err(|e| Ed2kError::ConnectionError(e.to_string()))?;
+
+        info!("Connected to ED2K peer: {}", addr);
+        Ok(stream)
+    }
+
+    /// Send an ED2K packet to a peer
+    pub async fn send_packet(
+        stream: &mut TcpStream,
+        opcode: u8,
+        payload: &[u8],
+    ) -> Result<(), Ed2kError> {
+        let header = Ed2kPacketHeader::new(opcode, payload.len() as u32);
+        let header_bytes = header.to_bytes();
+        
+        // Write header
+        stream.write_all(&header_bytes).await?;
+        
+        // Write payload
+        if !payload.is_empty() {
+            stream.write_all(payload).await?;
+        }
+        
+        stream.flush().await?;
+        
+        debug!("Sent ED2K packet: opcode=0x{:02x}, size={}", opcode, payload.len());
+        Ok(())
+    }
+
+    /// Receive an ED2K packet from a peer
+    pub async fn receive_packet(
+        stream: &mut TcpStream,
+        timeout_secs: u64,
+    ) -> Result<(u8, Vec<u8>), Ed2kError> {
+        // Read header
+        let mut header_bytes = [0u8; Ed2kPacketHeader::HEADER_SIZE];
+        
+        tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            stream.read_exact(&mut header_bytes)
+        )
+        .await
+        .map_err(|_| Ed2kError::Timeout)??;
+        
+        let header = Ed2kPacketHeader::from_bytes(&header_bytes)?;
+        
+        // Read payload (size includes opcode, so subtract 1)
+        let payload_size = header.size.saturating_sub(1) as usize;
+        let mut payload = vec![0u8; payload_size];
+        
+        if payload_size > 0 {
+            tokio::time::timeout(
+                Duration::from_secs(timeout_secs),
+                stream.read_exact(&mut payload)
+            )
+            .await
+            .map_err(|_| Ed2kError::Timeout)??;
+        }
+        
+        debug!("Received ED2K packet: opcode=0x{:02x}, size={}", header.opcode, payload_size);
+        
+        Ok((header.opcode, payload))
+    }
+
+    /// Request a block from a peer
+    pub async fn request_block_from_peer(
+        stream: &mut TcpStream,
+        file_hash: &str,
+        start_offset: u64,
+        end_offset: u64,
+    ) -> Result<(), Ed2kError> {
+        let hash_bytes = hex::decode(file_hash)?;
+        if hash_bytes.len() != 16 {
+            return Err(Ed2kError::ProtocolError("File hash must be 16 bytes".to_string()));
+        }
+        
+        let mut hash_array = [0u8; 16];
+        hash_array.copy_from_slice(&hash_bytes);
+        
+        let request = Ed2kBlockRequest::new(hash_array, start_offset, end_offset);
+        let payload = request.to_bytes();
+        
+        Self::send_packet(stream, opcodes::OP_REQUESTPARTS, &payload).await?;
+        
+        info!(
+            "Requested block: offset={}-{}, size={}",
+            start_offset,
+            end_offset,
+            end_offset - start_offset
+        );
+        
+        Ok(())
+    }
+
+    /// Download a block from a peer
+    /// Returns the block data
+    pub async fn download_block_from_peer(
+        stream: &mut TcpStream,
+        file_hash: &str,
+        start_offset: u64,
+        block_size: usize,
+    ) -> Result<Vec<u8>, Ed2kError> {
+        let end_offset = start_offset + block_size as u64;
+        
+        // Send request
+        Self::request_block_from_peer(stream, file_hash, start_offset, end_offset).await?;
+        
+        // Receive response
+        let (opcode, payload) = Self::receive_packet(stream, 60).await?;
+        
+        if opcode != opcodes::OP_SENDINGPART {
+            return Err(Ed2kError::ProtocolError(format!(
+                "Expected OP_SENDINGPART (0x{:02x}), got 0x{:02x}",
+                opcodes::OP_SENDINGPART,
+                opcode
+            )));
+        }
+        
+        // Parse payload: [file_hash:16][start:8][end:8][data:...]
+        if payload.len() < 32 {
+            return Err(Ed2kError::ProtocolError("Invalid SENDINGPART payload".to_string()));
+        }
+        
+        let data = payload[32..].to_vec();
+        
+        info!("Downloaded block: size={} bytes", data.len());
+        
+        Ok(data)
+    }
 }
 
 #[cfg(test)]
@@ -494,6 +1004,177 @@ mod tests {
         let expected_hash = "aa010fbc1d14c795d86ef98c95479d17";
 
         assert!(Ed2kClient::verify_md4_hash(data, expected_hash));
+    }
+
+    #[test]
+    fn test_compute_md4_hash() {
+        let data = b"hello world";
+        let hash = Ed2kClient::compute_md4_hash(data);
+        assert_eq!(hash, "aa010fbc1d14c795d86ef98c95479d17");
+    }
+
+    #[test]
+    fn test_compute_md4_hash_empty() {
+        let data = b"";
+        let hash = Ed2kClient::compute_md4_hash(data);
+        // MD4 hash of empty string
+        assert_eq!(hash, "31d6cfe0d16ae931b73c59d7e0c089c0");
+    }
+
+    #[test]
+    fn test_split_into_chunks_small_file() {
+        let data = vec![0u8; 1000];
+        let chunks = Ed2kClient::split_into_chunks(&data);
+        
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), 1000);
+    }
+
+    #[test]
+    fn test_split_into_chunks_exact_chunk_size() {
+        let data = vec![0u8; ED2K_CHUNK_SIZE];
+        let chunks = Ed2kClient::split_into_chunks(&data);
+        
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), ED2K_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_split_into_chunks_multiple() {
+        let data = vec![0u8; ED2K_CHUNK_SIZE * 2 + 1000];
+        let chunks = Ed2kClient::split_into_chunks(&data);
+        
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), ED2K_CHUNK_SIZE);
+        assert_eq!(chunks[1].len(), ED2K_CHUNK_SIZE);
+        assert_eq!(chunks[2].len(), 1000);
+    }
+
+    #[test]
+    fn test_get_chunk_count_small() {
+        assert_eq!(Ed2kClient::get_chunk_count(1000), 1);
+    }
+
+    #[test]
+    fn test_get_chunk_count_exact() {
+        assert_eq!(Ed2kClient::get_chunk_count(ED2K_CHUNK_SIZE as u64), 1);
+    }
+
+    #[test]
+    fn test_get_chunk_count_multiple() {
+        assert_eq!(Ed2kClient::get_chunk_count((ED2K_CHUNK_SIZE * 2 + 1000) as u64), 3);
+    }
+
+    #[test]
+    fn test_get_chunk_size_first() {
+        let file_size = (ED2K_CHUNK_SIZE * 2 + 1000) as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(0, file_size), ED2K_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_get_chunk_size_middle() {
+        let file_size = (ED2K_CHUNK_SIZE * 3) as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(1, file_size), ED2K_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_get_chunk_size_last_partial() {
+        let file_size = (ED2K_CHUNK_SIZE * 2 + 1000) as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(2, file_size), 1000);
+    }
+
+    #[test]
+    fn test_get_chunk_size_last_full() {
+        let file_size = (ED2K_CHUNK_SIZE * 2) as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(1, file_size), ED2K_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_get_chunk_size_out_of_bounds() {
+        let file_size = ED2K_CHUNK_SIZE as u64;
+        assert_eq!(Ed2kClient::get_chunk_size(10, file_size), 0);
+    }
+
+    #[test]
+    fn test_validate_chunk_valid() {
+        let data = b"test data";
+        let hash = Ed2kClient::compute_md4_hash(data);
+        assert!(Ed2kClient::validate_chunk(data, &hash));
+    }
+
+    #[test]
+    fn test_validate_chunk_invalid() {
+        let data = b"test data";
+        let wrong_hash = "0000000000000000000000000000000";
+        assert!(!Ed2kClient::validate_chunk(data, wrong_hash));
+    }
+
+    #[tokio::test]
+    async fn test_compute_file_hash_small() {
+        use tokio::io::AsyncWriteExt;
+        
+        // Create a temporary file
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ed2k_test_small.dat");
+        
+        let mut file = tokio::fs::File::create(&file_path).await.unwrap();
+        file.write_all(b"hello world").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        
+        let hash = Ed2kClient::compute_file_hash(&file_path).await.unwrap();
+        assert_eq!(hash, "aa010fbc1d14c795d86ef98c95479d17");
+        
+        // Cleanup
+        tokio::fs::remove_file(file_path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_validate_file() {
+        use tokio::io::AsyncWriteExt;
+        
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ed2k_test_validate.dat");
+        
+        let mut file = tokio::fs::File::create(&file_path).await.unwrap();
+        file.write_all(b"test").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        
+        let correct_hash = "db346d691d7acc4dc2625db19f9e3f52";
+        let is_valid = Ed2kClient::validate_file(&file_path, correct_hash).await.unwrap();
+        assert!(is_valid);
+        
+        let wrong_hash = "0000000000000000000000000000000";
+        let is_invalid = Ed2kClient::validate_file(&file_path, wrong_hash).await.unwrap();
+        assert!(!is_invalid);
+        
+        // Cleanup
+        tokio::fs::remove_file(file_path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_create_file_info() {
+        use tokio::io::AsyncWriteExt;
+        
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ed2k_test_info.dat");
+        
+        let mut file = tokio::fs::File::create(&file_path).await.unwrap();
+        let test_data = b"test file content";
+        file.write_all(test_data).await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        
+        let file_info = Ed2kClient::create_file_info(&file_path).await.unwrap();
+        
+        assert_eq!(file_info.file_size, test_data.len() as u64);
+        assert_eq!(file_info.file_name, Some("ed2k_test_info.dat".to_string()));
+        assert!(!file_info.file_hash.is_empty());
+        assert_eq!(file_info.chunk_hashes.len(), 0); // Small file, no chunks
+        
+        // Cleanup
+        tokio::fs::remove_file(file_path).await.ok();
     }
 
     #[test]
@@ -559,4 +1240,231 @@ mod tests {
     fn test_ed2k_chunk_size_constant() {
         assert_eq!(ED2K_CHUNK_SIZE, 9_728_000);
     }
-}
+
+    #[test]
+    fn test_ed2k_block_size_constant() {
+        assert_eq!(ED2K_BLOCK_SIZE, 256 * 1024);
+    }
+
+    #[test]
+    fn test_packet_header_new() {
+        let header = Ed2kPacketHeader::new(0x46, 1000);
+        
+        assert_eq!(header.protocol, Ed2kPacketHeader::ED2K_PROTOCOL);
+        assert_eq!(header.size, 1001); // payload + opcode
+        assert_eq!(header.opcode, 0x46);
+    }
+
+    #[test]
+    fn test_packet_header_serialization() {
+        let header = Ed2kPacketHeader::new(0x47, 256);
+        let bytes = header.to_bytes();
+        
+        assert_eq!(bytes.len(), Ed2kPacketHeader::HEADER_SIZE);
+        assert_eq!(bytes[0], 0xE3); // Protocol byte
+        assert_eq!(bytes[5], 0x47); // Opcode
+        
+        // Size should be 257 (256 + 1 for opcode)
+        let size = u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+        assert_eq!(size, 257);
+    }
+
+    #[test]
+    fn test_packet_header_deserialization() {
+        let original = Ed2kPacketHeader::new(0x58, 512);
+        let bytes = original.to_bytes();
+        let parsed = Ed2kPacketHeader::from_bytes(&bytes).unwrap();
+        
+        assert_eq!(parsed.protocol, original.protocol);
+        assert_eq!(parsed.size, original.size);
+        assert_eq!(parsed.opcode, original.opcode);
+    }
+
+    #[test]
+    fn test_packet_header_invalid_protocol() {
+        let mut bytes = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x47]; // Wrong protocol byte
+        let result = Ed2kPacketHeader::from_bytes(&bytes);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_packet_header_incomplete() {
+        let bytes = vec![0xE3, 0x00, 0x00]; // Incomplete header
+        let result = Ed2kPacketHeader::from_bytes(&bytes);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_block_request_new() {
+        let hash = [0x01; 16];
+        let request = Ed2kBlockRequest::new(hash, 0, 262144);
+        
+        assert_eq!(request.file_hash, hash);
+        assert_eq!(request.start_offset, 0);
+        assert_eq!(request.end_offset, 262144);
+    }
+
+    #[test]
+    fn test_block_request_serialization() {
+        let hash = [0xAB; 16];
+        let request = Ed2kBlockRequest::new(hash, 1000, 2000);
+        let bytes = request.to_bytes();
+        
+        assert_eq!(bytes.len(), 32); // 16 + 8 + 8
+        assert_eq!(&bytes[0..16], &hash);
+    }
+
+    #[test]
+    fn test_block_request_deserialization() {
+        let hash = [0xCD; 16];
+        let original = Ed2kBlockRequest::new(hash, 512, 1024);
+        let bytes = original.to_bytes();
+        let parsed = Ed2kBlockRequest::from_bytes(&bytes).unwrap();
+        
+        assert_eq!(parsed.file_hash, original.file_hash);
+        assert_eq!(parsed.start_offset, original.start_offset);
+        assert_eq!(parsed.end_offset, original.end_offset);
+    }
+
+    #[test]
+    fn test_block_request_incomplete() {
+        let bytes = vec![0x00; 20]; // Too short
+        let result = Ed2kBlockRequest::from_bytes(&bytes);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_block_size_alignment() {
+        // Verify ED2K_BLOCK_SIZE is 256KB
+        assert_eq!(ED2K_BLOCK_SIZE, 262144);
+        
+        // Verify relationship: multiple blocks make up a chunk
+        let blocks_per_chunk = ED2K_CHUNK_SIZE / ED2K_BLOCK_SIZE;
+        assert_eq!(blocks_per_chunk, 37); // 9.28MB / 256KB = 37.109...
+    }
+
+    #[test]
+    fn test_parse_source_list_single() {
+        // Create a mock OP_FOUNDSOURCES payload
+        let mut payload = Vec::new();
+        
+        // File hash (16 bytes)
+        payload.extend_from_slice(&[0xAB; 16]);
+        
+        // Source count (1 byte)
+        payload.push(1);
+        
+        // Single source: 192.168.1.100:4662
+        payload.extend_from_slice(&[192, 168, 1, 100]); // IP
+        payload.extend_from_slice(&4662u16.to_le_bytes()); // Port
+        
+        // Parse manually to test the logic
+        let source_count = payload[16] as usize;
+        assert_eq!(source_count, 1);
+        
+        let mut offset = 17;
+        let ip = format!(
+            "{}.{}.{}.{}",
+            payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]
+        );
+        let port = u16::from_le_bytes([payload[offset + 4], payload[offset + 5]]);
+        
+        assert_eq!(ip, "192.168.1.100");
+        assert_eq!(port, 4662);
+    }
+
+    #[test]
+    fn test_parse_source_list_multiple() {
+        // Create a mock OP_FOUNDSOURCES payload with 3 sources
+        let mut payload = Vec::new();
+        
+        // File hash (16 bytes)
+        payload.extend_from_slice(&[0xCD; 16]);
+        
+        // Source count (3 bytes)
+        payload.push(3);
+        
+        // Source 1: 10.0.0.1:4661
+        payload.extend_from_slice(&[10, 0, 0, 1]);
+        payload.extend_from_slice(&4661u16.to_le_bytes());
+        
+        // Source 2: 10.0.0.2:4662
+        payload.extend_from_slice(&[10, 0, 0, 2]);
+        payload.extend_from_slice(&4662u16.to_le_bytes());
+        
+        // Source 3: 10.0.0.3:4663
+        payload.extend_from_slice(&[10, 0, 0, 3]);
+        payload.extend_from_slice(&4663u16.to_le_bytes());
+        
+        let source_count = payload[16] as usize;
+        assert_eq!(source_count, 3);
+        
+        let mut sources = Vec::new();
+        let mut offset = 17;
+        
+        for _ in 0..source_count {
+            let ip = format!(
+                "{}.{}.{}.{}",
+                payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]
+            );
+            let port = u16::from_le_bytes([payload[offset + 4], payload[offset + 5]]);
+            sources.push(format!("{}:{}", ip, port));
+            offset += 6;
+        }
+        
+        assert_eq!(sources.len(), 3);
+        assert_eq!(sources[0], "10.0.0.1:4661");
+        assert_eq!(sources[1], "10.0.0.2:4662");
+        assert_eq!(sources[2], "10.0.0.3:4663");
+    }
+
+    #[test]
+    fn test_parse_source_list_empty() {
+        // Create a mock OP_FOUNDSOURCES payload with no sources
+        let mut payload = Vec::new();
+        
+        // File hash (16 bytes)
+        payload.extend_from_slice(&[0xEF; 16]);
+        
+        // Source count (0 sources)
+        payload.push(0);
+        
+        let source_count = payload[16] as usize;
+        assert_eq!(source_count, 0);
+    }
+
+    #[test]
+    fn test_source_payload_too_short() {
+        // Payload shorter than minimum (16 bytes hash + 1 byte count)
+        let payload = vec![0x00; 10];
+        
+        assert!(payload.len() < 17);
+    }
+
+    #[test]
+    fn test_source_payload_truncated() {
+        // Payload with source count but incomplete source data
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&[0xFF; 16]); // Hash
+        payload.push(2); // Says 2 sources
+        // But only 3 bytes follow (should be 12 bytes for 2 sources)
+        payload.extend_from_slice(&[192, 168, 1]);
+        
+        let source_count = payload[16] as usize;
+        let mut offset = 17;
+        let mut actual_sources = 0;
+        
+        // Should break when not enough data
+        for _ in 0..source_count {
+            if offset + 6 > payload.len() {
+                break;
+            }
+            actual_sources += 1;
+            offset += 6;
+        }
+        
+        assert_eq!(actual_sources, 0); // No complete sources parsed
+    }}

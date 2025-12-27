@@ -28,6 +28,7 @@ async fn test_extract_ftp_sources_from_metadata() {
         key_fingerprint: None,
         parent_hash: None,
         cids: None,
+        manifest: None,
         encrypted_key_bundle: None,
         ftp_sources: Some(vec![
             FtpSourceInfo {
