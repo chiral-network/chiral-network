@@ -1276,9 +1276,6 @@ impl Ed2kPeerServer {
     }
 }
 
-use std::sync::Arc;
-use std::path::PathBuf;
-
 #[cfg(test)]
 mod tests {
     use super::*;
