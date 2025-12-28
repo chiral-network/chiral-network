@@ -993,6 +993,194 @@ impl Ed2kClient {
     }
 }
 
+/// ED2K Peer Server - Listens for incoming peer connections and serves file chunks
+pub struct Ed2kPeerServer {
+    /// Port to listen on
+    port: u16,
+    /// Files available for upload (file_hash -> file_path)
+    shared_files: Arc<tokio::sync::RwLock<std::collections::HashMap<String, PathBuf>>>,
+    /// Server shutdown signal
+    shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+}
+
+impl Ed2kPeerServer {
+    /// Create a new peer server on the specified port
+    pub fn new(port: u16) -> Self {
+        Self {
+            port,
+            shared_files: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            shutdown_tx: None,
+        }
+    }
+
+    /// Add a file to the list of shared files
+    pub async fn share_file(&self, file_hash: String, file_path: PathBuf) {
+        let mut files = self.shared_files.write().await;
+        info!("ED2K: Now sharing file {} from {:?}", file_hash, file_path);
+        files.insert(file_hash, file_path);
+    }
+
+    /// Remove a file from sharing
+    pub async fn unshare_file(&self, file_hash: &str) {
+        let mut files = self.shared_files.write().await;
+        files.remove(file_hash);
+        info!("ED2K: Stopped sharing file {}", file_hash);
+    }
+
+    /// Start the peer server (listens for incoming connections)
+    pub async fn start(&mut self) -> Result<(), Ed2kError> {
+        use tokio::net::TcpListener;
+
+        let addr = format!("0.0.0.0:{}", self.port);
+        let listener = TcpListener::bind(&addr)
+            .await
+            .map_err(|e| Ed2kError::ConnectionError(format!("Failed to bind to {}: {}", addr, e)))?;
+
+        info!("ED2K peer server listening on {}", addr);
+
+        let shared_files = self.shared_files.clone();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Ok((stream, peer_addr)) = listener.accept() => {
+                        info!("ED2K: Accepted connection from {}", peer_addr);
+                        let files = shared_files.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = Self::handle_peer_connection(stream, files).await {
+                                tracing::warn!("ED2K: Error handling peer {}: {}", peer_addr, e);
+                            }
+                        });
+                    }
+                    _ = shutdown_rx.recv() => {
+                        info!("ED2K: Peer server shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Handle an incoming peer connection
+    async fn handle_peer_connection(
+        mut stream: TcpStream,
+        shared_files: Arc<tokio::sync::RwLock<std::collections::HashMap<String, PathBuf>>>,
+    ) -> Result<(), Ed2kError> {
+        loop {
+            // Receive packet from peer
+            let (opcode, payload) = match Ed2kClient::receive_packet(&mut stream, 60).await {
+                Ok(packet) => packet,
+                Err(e) => {
+                    debug!("ED2K: Connection closed or error: {}", e);
+                    break;
+                }
+            };
+
+            match opcode {
+                opcodes::OP_REQUESTPARTS => {
+                    // Peer is requesting file chunks
+                    Self::handle_request_parts(&mut stream, &payload, &shared_files).await?;
+                }
+                _ => {
+                    debug!("ED2K: Ignoring unsupported opcode: 0x{:02x}", opcode);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle OP_REQUESTPARTS - peer requesting file chunks
+    async fn handle_request_parts(
+        stream: &mut TcpStream,
+        payload: &[u8],
+        shared_files: &Arc<tokio::sync::RwLock<std::collections::HashMap<String, PathBuf>>>,
+    ) -> Result<(), Ed2kError> {
+        // Parse request: [file_hash:16][start_offset:8][end_offset:8]
+        if payload.len() < 32 {
+            return Err(Ed2kError::ProtocolError("Invalid REQUESTPARTS payload".to_string()));
+        }
+
+        let file_hash = hex::encode(&payload[0..16]);
+        let start_offset = u64::from_le_bytes(payload[16..24].try_into().unwrap());
+        let end_offset = u64::from_le_bytes(payload[24..32].try_into().unwrap());
+
+        debug!(
+            "ED2K: Peer requesting file {} offset {}-{}",
+            file_hash, start_offset, end_offset
+        );
+
+        // Check if we have this file
+        let file_path = {
+            let files = shared_files.read().await;
+            files.get(&file_hash).cloned()
+        };
+
+        let file_path = match file_path {
+            Some(path) => path,
+            None => {
+                debug!("ED2K: File {} not found in shared files", file_hash);
+                return Ok(()); // Silently ignore requests for files we don't have
+            }
+        };
+
+        // Read the requested chunk from file
+        let chunk_data = Self::read_file_chunk(&file_path, start_offset, end_offset).await?;
+
+        // Send OP_SENDINGPART response
+        let mut response_payload = Vec::new();
+        response_payload.extend_from_slice(&payload[0..16]); // File hash
+        response_payload.extend_from_slice(&start_offset.to_le_bytes());
+        response_payload.extend_from_slice(&end_offset.to_le_bytes());
+        response_payload.extend_from_slice(&chunk_data);
+
+        Ed2kClient::send_packet(stream, opcodes::OP_SENDINGPART, &response_payload).await?;
+
+        info!(
+            "ED2K: Sent {} bytes to peer for file {}",
+            chunk_data.len(),
+            file_hash
+        );
+
+        Ok(())
+    }
+
+    /// Read a chunk from a file
+    async fn read_file_chunk(
+        file_path: &Path,
+        start_offset: u64,
+        end_offset: u64,
+    ) -> Result<Vec<u8>, Ed2kError> {
+        let mut file = File::open(file_path).await?;
+        
+        let size = (end_offset - start_offset) as usize;
+        let mut buffer = vec![0u8; size];
+
+        // Seek to start position
+        use tokio::io::AsyncSeekExt;
+        file.seek(tokio::io::SeekFrom::Start(start_offset)).await?;
+
+        // Read the chunk
+        file.read_exact(&mut buffer).await?;
+
+        Ok(buffer)
+    }
+
+    /// Stop the peer server
+    pub fn stop(&self) {
+        if let Some(tx) = &self.shutdown_tx {
+            let _ = tx.send(());
+        }
+    }
+}
+
+use std::sync::Arc;
+use std::path::PathBuf;
+
 #[cfg(test)]
 mod tests {
     use super::*;
