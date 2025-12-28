@@ -112,6 +112,12 @@ const CHUNK_SIZE: u64 = 256 * 1024;
 /// - Leaves headroom for WebRTC/Bitswap downloads happening simultaneously
 const MAX_CONCURRENT_CHUNKS: usize = 5;
 
+/// Maximum number of retry attempts for a failed chunk download
+const MAX_CHUNK_RETRIES: u32 = 3;
+
+/// Delay between retry attempts (in milliseconds)
+const RETRY_DELAY_MS: u64 = 1000;
+
 /// Configuration for a download with event bus integration
 #[derive(Clone)]
 pub struct HttpDownloadConfig {
@@ -138,7 +144,9 @@ impl HttpDownloadClient {
     pub fn new() -> Self {
         Self {
             http_client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                // Use longer timeout for chunk downloads (60 seconds)
+                // This accounts for large chunks and slow networks
+                .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .expect("Failed to create HTTP client"),
             download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
@@ -151,7 +159,7 @@ impl HttpDownloadClient {
     pub fn new_with_peer_id(downloader_peer_id: Option<String>) -> Self {
         Self {
             http_client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .expect("Failed to create HTTP client"),
             download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
@@ -164,7 +172,7 @@ impl HttpDownloadClient {
     pub fn new_with_event_bus(app_handle: AppHandle) -> Self {
         Self {
             http_client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .expect("Failed to create HTTP client"),
             download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
@@ -180,7 +188,7 @@ impl HttpDownloadClient {
     ) -> Self {
         Self {
             http_client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .expect("Failed to create HTTP client"),
             download_semaphore: std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_CHUNKS)),
@@ -643,28 +651,24 @@ impl HttpDownloadClient {
                     .await
                     .map_err(|e| format!("Failed to acquire semaphore: {}", e))?;
 
-                tracing::debug!(
-                    "Downloading chunk {} (bytes {}-{}) from {}",
-                    index,
-                    start,
-                    end,
-                    url
-                );
-
-                // Make request with Range header and optional peer ID
-                let mut request = client
-                    .get(&url)
-                    .header("Range", format!("bytes={}-{}", start, end));
-
-                if let Some(ref peer_id) = downloader_peer_id {
-                    request = request.header("X-Downloader-Peer-ID", peer_id);
-                }
-
-                let response = match request.send().await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        let error_msg = format!("Failed to download chunk {}: {}", index, e);
-                        // Emit chunk failed event
+                // Retry logic for chunk download
+                let mut last_error = None;
+                let mut retry_count = 0u32;
+                
+                for attempt in 0..=MAX_CHUNK_RETRIES {
+                    if attempt > 0 {
+                        retry_count = attempt;
+                        // Wait before retry (exponential backoff)
+                        let delay_ms = RETRY_DELAY_MS * (1 << (attempt - 1)).min(4); // Cap at 4x
+                        tracing::warn!(
+                            "Retrying chunk {} (attempt {}/{}), waiting {}ms",
+                            index,
+                            attempt,
+                            MAX_CHUNK_RETRIES,
+                            delay_ms
+                        );
+                        
+                        // Emit retry event
                         if let Some(ref bus) = event_bus {
                             bus.emit_chunk_failed(ChunkFailedEvent {
                                 transfer_id: config.transfer_id.clone(),
@@ -672,152 +676,202 @@ impl HttpDownloadClient {
                                 source_id: source_id.clone(),
                                 source_type: SourceType::Http,
                                 failed_at: current_timestamp_ms(),
-                                error: error_msg.clone(),
-                                retry_count: 0,
-                                will_retry: false,
-                                next_retry_at: None,
+                                error: format!("Retrying chunk {} (attempt {})", index, attempt),
+                                retry_count: retry_count - 1,
+                                will_retry: attempt < MAX_CHUNK_RETRIES,
+                                next_retry_at: Some(current_timestamp_ms() + delay_ms),
                             });
                         }
-                        return Err(error_msg);
+                        
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                     }
-                };
 
-                // Verify 206 Partial Content response
-                if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                    let error_msg = format!(
-                        "Chunk {} request failed: expected 206 Partial Content, got {}",
+                    tracing::debug!(
+                        "Downloading chunk {} (bytes {}-{}) from {} (attempt {})",
                         index,
-                        response.status()
+                        start,
+                        end,
+                        url,
+                        attempt + 1
                     );
-                    // Emit chunk failed event
-                    if let Some(ref bus) = event_bus {
-                        bus.emit_chunk_failed(ChunkFailedEvent {
-                            transfer_id: config.transfer_id.clone(),
-                            chunk_id: index as u32,
-                            source_id: source_id.clone(),
-                            source_type: SourceType::Http,
-                            failed_at: current_timestamp_ms(),
-                            error: error_msg.clone(),
-                            retry_count: 0,
-                            will_retry: false,
-                            next_retry_at: None,
-                        });
-                    }
-                    return Err(error_msg);
-                }
 
-                // Read chunk data
-                let data = match response.bytes().await {
-                    Ok(bytes) => bytes.to_vec(),
-                    Err(e) => {
-                        let error_msg = format!("Failed to read chunk {} data: {}", index, e);
-                        // Emit chunk failed event
-                        if let Some(ref bus) = event_bus {
-                            bus.emit_chunk_failed(ChunkFailedEvent {
-                                transfer_id: config.transfer_id.clone(),
-                                chunk_id: index as u32,
-                                source_id: source_id.clone(),
-                                source_type: SourceType::Http,
-                                failed_at: current_timestamp_ms(),
-                                error: error_msg.clone(),
-                                retry_count: 0,
-                                will_retry: false,
-                                next_retry_at: None,
-                            });
+                    // Make request with Range header and optional peer ID
+                    let mut request = client
+                        .get(&url)
+                        .header("Range", format!("bytes={}-{}", start, end));
+
+                    if let Some(ref peer_id) = downloader_peer_id {
+                        request = request.header("X-Downloader-Peer-ID", peer_id);
+                    }
+
+                    match request.send().await {
+                        Ok(response) => {
+                            // Verify 206 Partial Content response
+                            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                                let error = format!(
+                                    "Chunk {} request failed: expected 206 Partial Content, got {}",
+                                    index,
+                                    response.status()
+                                );
+                                last_error = Some(error.clone());
+                                
+                                // Don't retry on 4xx errors (client errors)
+                                if response.status().is_client_error() {
+                                    if let Some(ref bus) = event_bus {
+                                        bus.emit_chunk_failed(ChunkFailedEvent {
+                                            transfer_id: config.transfer_id.clone(),
+                                            chunk_id: index as u32,
+                                            source_id: source_id.clone(),
+                                            source_type: SourceType::Http,
+                                            failed_at: current_timestamp_ms(),
+                                            error: error.clone(),
+                                            retry_count,
+                                            will_retry: false,
+                                            next_retry_at: None,
+                                        });
+                                    }
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            // Read chunk data
+                            match response.bytes().await {
+                                Ok(bytes) => {
+                                    let data = bytes.to_vec();
+                                    let expected_size = (end - start + 1) as usize;
+                                    
+                                    if data.len() != expected_size {
+                                        let error = format!(
+                                            "Chunk {} size mismatch: expected {}, got {}",
+                                            index,
+                                            expected_size,
+                                            data.len()
+                                        );
+                                        last_error = Some(error);
+                                        continue;
+                                    }
+
+                                    // Success - break out of retry loop
+                                    let chunk_duration_ms = chunk_start_time.elapsed().as_millis() as u64;
+                                    let chunk_size = data.len() as u64;
+
+                                    // Update atomic counters
+                                    let new_bytes = completed_bytes.fetch_add(chunk_size, Ordering::SeqCst) + chunk_size;
+                                    let new_chunks = completed_chunks.fetch_add(1, Ordering::SeqCst) + 1;
+
+                                    tracing::debug!("Downloaded chunk {} ({} bytes in {} ms)", index, data.len(), chunk_duration_ms);
+
+                                    // Emit chunk completed event
+                                    if let Some(ref bus) = event_bus {
+                                        bus.emit_chunk_completed(ChunkCompletedEvent {
+                                            transfer_id: config.transfer_id.clone(),
+                                            chunk_id: index as u32,
+                                            chunk_size: data.len(),
+                                            source_id: source_id.clone(),
+                                            source_type: SourceType::Http,
+                                            completed_at: current_timestamp_ms(),
+                                            download_duration_ms: chunk_duration_ms,
+                                            verified: true,
+                                        });
+
+                                        // Emit progress event (every few chunks to avoid flooding)
+                                        if new_chunks % 5 == 0 || new_chunks as usize == total_chunks {
+                                            let elapsed_secs = start_time.elapsed().as_secs_f64();
+                                            let speed = if elapsed_secs > 0.0 {
+                                                new_bytes as f64 / elapsed_secs
+                                            } else {
+                                                0.0
+                                            };
+                                            let remaining = file_size.saturating_sub(new_bytes);
+                                            let eta = calculate_eta(remaining, speed);
+
+                                            bus.emit_progress(TransferProgressEvent {
+                                                transfer_id: config.transfer_id.clone(),
+                                                downloaded_bytes: new_bytes,
+                                                total_bytes: file_size,
+                                                completed_chunks: new_chunks as u32,
+                                                total_chunks: total_chunks as u32,
+                                                progress_percentage: calculate_progress(new_bytes, file_size),
+                                                download_speed_bps: speed,
+                                                upload_speed_bps: 0.0,
+                                                eta_seconds: eta,
+                                                active_sources: 1,
+                                                timestamp: current_timestamp_ms(),
+                                            });
+                                        }
+                                    }
+
+                                    // Send legacy progress update
+                                    if let Some(tx) = progress_tx {
+                                        let _ = tx
+                                            .send(HttpDownloadProgress {
+                                                file_hash: file_hash.clone(),
+                                                chunks_total: total_chunks,
+                                                chunks_downloaded: new_chunks as usize,
+                                                bytes_downloaded: new_bytes,
+                                                bytes_total: file_size,
+                                                status: DownloadStatus::Downloading,
+                                            })
+                                            .await;
+                                    }
+
+                                    return Ok::<(usize, Vec<u8>), String>((index, data));
+                                }
+                                Err(e) => {
+                                    let error = format!("Failed to read chunk {} data: {}", index, e);
+                                    last_error = Some(error);
+                                    continue;
+                                }
+                            }
                         }
-                        return Err(error_msg);
+                        Err(e) => {
+                            let error = format!("Failed to download chunk {}: {}", index, e);
+                            last_error = Some(error.clone());
+                            
+                            // Check if error is retryable
+                            if e.is_timeout() || e.is_connect() || e.is_request() {
+                                continue; // Retry on network errors
+                            }
+                            
+                            // Don't retry on other errors
+                            if let Some(ref bus) = event_bus {
+                                bus.emit_chunk_failed(ChunkFailedEvent {
+                                    transfer_id: config.transfer_id.clone(),
+                                    chunk_id: index as u32,
+                                    source_id: source_id.clone(),
+                                    source_type: SourceType::Http,
+                                    failed_at: current_timestamp_ms(),
+                                    error: error.clone(),
+                                    retry_count,
+                                    will_retry: false,
+                                    next_retry_at: None,
+                                });
+                            }
+                            break;
+                        }
                     }
-                };
-
-                let expected_size = (end - start + 1) as usize;
-                if data.len() != expected_size {
-                    let error_msg = format!(
-                        "Chunk {} size mismatch: expected {}, got {}",
-                        index,
-                        expected_size,
-                        data.len()
-                    );
-                    // Emit chunk failed event
-                    if let Some(ref bus) = event_bus {
-                        bus.emit_chunk_failed(ChunkFailedEvent {
-                            transfer_id: config.transfer_id.clone(),
-                            chunk_id: index as u32,
-                            source_id: source_id.clone(),
-                            source_type: SourceType::Http,
-                            failed_at: current_timestamp_ms(),
-                            error: error_msg.clone(),
-                            retry_count: 0,
-                            will_retry: false,
-                            next_retry_at: None,
-                        });
-                    }
-                    return Err(error_msg);
                 }
 
-                let chunk_duration_ms = chunk_start_time.elapsed().as_millis() as u64;
-                let chunk_size = data.len() as u64;
-
-                // Update atomic counters
-                let new_bytes = completed_bytes.fetch_add(chunk_size, Ordering::SeqCst) + chunk_size;
-                let new_chunks = completed_chunks.fetch_add(1, Ordering::SeqCst) + 1;
-
-                tracing::debug!("Downloaded chunk {} ({} bytes in {} ms)", index, data.len(), chunk_duration_ms);
-
-                // Emit chunk completed event
+                // All retries exhausted
+                let final_error = last_error.unwrap_or_else(|| format!("Chunk {} download failed after {} attempts", index, MAX_CHUNK_RETRIES + 1));
+                
+                // Emit final failed event
                 if let Some(ref bus) = event_bus {
-                    bus.emit_chunk_completed(ChunkCompletedEvent {
+                    bus.emit_chunk_failed(ChunkFailedEvent {
                         transfer_id: config.transfer_id.clone(),
                         chunk_id: index as u32,
-                        chunk_size: data.len(),
                         source_id: source_id.clone(),
                         source_type: SourceType::Http,
-                        completed_at: current_timestamp_ms(),
-                        download_duration_ms: chunk_duration_ms,
-                        verified: true,
+                        failed_at: current_timestamp_ms(),
+                        error: final_error.clone(),
+                        retry_count: MAX_CHUNK_RETRIES,
+                        will_retry: false,
+                        next_retry_at: None,
                     });
-
-                    // Emit progress event (every few chunks to avoid flooding)
-                    if new_chunks % 5 == 0 || new_chunks as usize == total_chunks {
-                        let elapsed_secs = start_time.elapsed().as_secs_f64();
-                        let speed = if elapsed_secs > 0.0 {
-                            new_bytes as f64 / elapsed_secs
-                        } else {
-                            0.0
-                        };
-                        let remaining = file_size.saturating_sub(new_bytes);
-                        let eta = calculate_eta(remaining, speed);
-
-                        bus.emit_progress(TransferProgressEvent {
-                            transfer_id: config.transfer_id.clone(),
-                            downloaded_bytes: new_bytes,
-                            total_bytes: file_size,
-                            completed_chunks: new_chunks as u32,
-                            total_chunks: total_chunks as u32,
-                            progress_percentage: calculate_progress(new_bytes, file_size),
-                            download_speed_bps: speed,
-                            upload_speed_bps: 0.0,
-                            eta_seconds: eta,
-                            active_sources: 1,
-                            timestamp: current_timestamp_ms(),
-                        });
-                    }
                 }
-
-                // Send legacy progress update
-                if let Some(tx) = progress_tx {
-                    let _ = tx
-                        .send(HttpDownloadProgress {
-                            file_hash: file_hash.clone(),
-                            chunks_total: total_chunks,
-                            chunks_downloaded: new_chunks as usize,
-                            bytes_downloaded: new_bytes,
-                            bytes_total: file_size,
-                            status: DownloadStatus::Downloading,
-                        })
-                        .await;
-                }
-
-                Ok::<(usize, Vec<u8>), String>((index, data))
+                
+                Err(final_error)
             });
 
             tasks.push(task);
@@ -947,6 +1001,7 @@ impl HttpDownloadClient {
         file_size: u64,
     ) -> Result<Vec<Vec<u8>>, String> {
         let mut tasks = Vec::new();
+        let file_hash_for_progress = file_hash.to_string();
 
         for range in ranges {
             let client = self.http_client.clone();
@@ -968,68 +1023,98 @@ impl HttpDownloadClient {
                     .await
                     .map_err(|e| format!("Failed to acquire semaphore: {}", e))?;
 
-                tracing::debug!(
-                    "Downloading chunk {} (bytes {}-{}) from {}",
-                    index,
-                    start,
-                    end,
-                    url
-                );
+                // Retry logic for chunk download
+                let mut last_error = None;
+                for attempt in 0..=MAX_CHUNK_RETRIES {
+                    if attempt > 0 {
+                        // Wait before retry (exponential backoff)
+                        let delay_ms = RETRY_DELAY_MS * (1 << (attempt - 1)).min(4); // Cap at 4x
+                        tracing::warn!(
+                            "Retrying chunk {} (attempt {}/{}), waiting {}ms",
+                            index,
+                            attempt,
+                            MAX_CHUNK_RETRIES,
+                            delay_ms
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                    }
 
-                // Make request with Range header and optional peer ID
-                let mut request = client
-                    .get(&url)
-                    .header("Range", format!("bytes={}-{}", start, end));
-                
-                if let Some(ref peer_id) = downloader_peer_id {
-                    request = request.header("X-Downloader-Peer-ID", peer_id);
-                }
-                
-                let response = request.send().await.map_err(|e| format!("Failed to download chunk {}: {}", index, e))?;
-
-                // Verify 206 Partial Content response
-                if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                    return Err(format!(
-                        "Chunk {} request failed: expected 206 Partial Content, got {}",
+                    tracing::debug!(
+                        "Downloading chunk {} (bytes {}-{}) from {} (attempt {})",
                         index,
-                        response.status()
-                    ));
+                        start,
+                        end,
+                        url,
+                        attempt + 1
+                    );
+
+                    // Make request with Range header and optional peer ID
+                    let mut request = client
+                        .get(&url)
+                        .header("Range", format!("bytes={}-{}", start, end));
+                    
+                    if let Some(ref peer_id) = downloader_peer_id {
+                        request = request.header("X-Downloader-Peer-ID", peer_id);
+                    }
+                    
+                    match request.send().await {
+                        Ok(response) => {
+                            // Verify 206 Partial Content response
+                            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                                let error = format!(
+                                    "Chunk {} request failed: expected 206 Partial Content, got {}",
+                                    index,
+                                    response.status()
+                                );
+                                last_error = Some(error);
+                                // Don't retry on 4xx errors (client errors)
+                                if response.status().is_client_error() {
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            // Read chunk data
+                            match response.bytes().await {
+                                Ok(bytes) => {
+                                    let data = bytes.to_vec();
+                                    let expected_size = (end - start + 1) as usize;
+                                    
+                                    if data.len() != expected_size {
+                                        let error = format!(
+                                            "Chunk {} size mismatch: expected {}, got {}",
+                                            index,
+                                            expected_size,
+                                            data.len()
+                                        );
+                                        last_error = Some(error);
+                                        continue;
+                                    }
+
+                                    tracing::debug!("Downloaded chunk {} ({} bytes)", index, data.len());
+                                    return Ok::<(usize, Vec<u8>), String>((index, data));
+                                }
+                                Err(e) => {
+                                    let error = format!("Failed to read chunk {} data: {}", index, e);
+                                    last_error = Some(error);
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let error = format!("Failed to download chunk {}: {}", index, e);
+                            last_error = Some(error);
+                            // Check if error is retryable
+                            if e.is_timeout() || e.is_connect() || e.is_request() {
+                                continue; // Retry on network errors
+                            }
+                            break; // Don't retry on other errors
+                        }
+                    }
                 }
 
-                // Read chunk data
-                let data = response
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("Failed to read chunk {} data: {}", index, e))?
-                    .to_vec();
-
-                let expected_size = (end - start + 1) as usize;
-                if data.len() != expected_size {
-                    return Err(format!(
-                        "Chunk {} size mismatch: expected {}, got {}",
-                        index,
-                        expected_size,
-                        data.len()
-                    ));
-                }
-
-                tracing::debug!("Downloaded chunk {} ({} bytes)", index, data.len());
-
-                // Send progress update
-                if let Some(tx) = progress_tx {
-                    let _ = tx
-                        .send(HttpDownloadProgress {
-                            file_hash: file_hash.clone(),
-                            chunks_total: total_chunks,
-                            chunks_downloaded: index + 1,
-                            bytes_downloaded: data.len() as u64,
-                            bytes_total: file_size,
-                            status: DownloadStatus::Downloading,
-                        })
-                        .await;
-                }
-
-                Ok::<(usize, Vec<u8>), String>((index, data))
+                // All retries exhausted
+                Err(last_error.unwrap_or_else(|| format!("Chunk {} download failed after {} attempts", index, MAX_CHUNK_RETRIES + 1)))
                 // Permit automatically released when _permit is dropped
             });
 
@@ -1042,13 +1127,41 @@ impl HttpDownloadClient {
             MAX_CONCURRENT_CHUNKS
         );
 
-        // Wait for all chunks to download
+        // Wait for all chunks to download with accurate progress tracking
         let mut results = Vec::new();
+        let completed_chunks_counter = std::sync::Arc::new(AtomicU64::new(0));
+        let completed_bytes_counter = std::sync::Arc::new(AtomicU64::new(0));
+
         for task in tasks {
-            let result = task
-                .await
-                .map_err(|e| format!("Download task failed: {}", e))??;
-            results.push(result);
+            match task.await {
+                Ok(Ok((index, data))) => {
+                    let chunk_size = data.len() as u64;
+                    let new_chunks = completed_chunks_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                    let new_bytes = completed_bytes_counter.fetch_add(chunk_size, Ordering::SeqCst) + chunk_size;
+                    
+                    results.push((index, data));
+                    
+                    // Send accurate progress update
+                    if let Some(tx) = &progress_tx {
+                        let _ = tx
+                            .send(HttpDownloadProgress {
+                                file_hash: file_hash_for_progress.clone(),
+                                chunks_total: ranges.len(),
+                                chunks_downloaded: new_chunks as usize,
+                                bytes_downloaded: new_bytes,
+                                bytes_total: file_size,
+                                status: DownloadStatus::Downloading,
+                            })
+                            .await;
+                    }
+                }
+                Ok(Err(e)) => {
+                    return Err(format!("Chunk download failed: {}", e));
+                }
+                Err(e) => {
+                    return Err(format!("Download task panicked: {}", e));
+                }
+            }
         }
 
         // Sort by chunk index
