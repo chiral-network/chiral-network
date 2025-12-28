@@ -993,6 +993,11 @@ impl Ed2kClient {
     }
 }
 
+// Security limits for peer server
+const MAX_CHUNK_SIZE: u64 = 10 * 1024 * 1024; // 10MB max per request
+const MAX_CONCURRENT_CONNECTIONS: usize = 100;
+const CONNECTION_TIMEOUT_SECS: u64 = 300; // 5 minutes
+
 /// ED2K Peer Server - Listens for incoming peer connections and serves file chunks
 pub struct Ed2kPeerServer {
     /// Port to listen on
@@ -1001,6 +1006,8 @@ pub struct Ed2kPeerServer {
     shared_files: Arc<tokio::sync::RwLock<std::collections::HashMap<String, PathBuf>>>,
     /// Server shutdown signal
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+    /// Active connection count
+    active_connections: Arc<tokio::sync::RwLock<usize>>,
 }
 
 impl Ed2kPeerServer {
@@ -1010,6 +1017,7 @@ impl Ed2kPeerServer {
             port,
             shared_files: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             shutdown_tx: None,
+            active_connections: Arc::new(tokio::sync::RwLock::new(0)),
         }
     }
 
@@ -1039,6 +1047,7 @@ impl Ed2kPeerServer {
         info!("ED2K peer server listening on {}", addr);
 
         let shared_files = self.shared_files.clone();
+        let active_connections = self.active_connections.clone();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx);
 
@@ -1046,12 +1055,35 @@ impl Ed2kPeerServer {
             loop {
                 tokio::select! {
                     Ok((stream, peer_addr)) = listener.accept() => {
-                        info!("ED2K: Accepted connection from {}", peer_addr);
+                        // Check connection limit
+                        let conn_count = {
+                            let count = active_connections.read().await;
+                            *count
+                        };
+
+                        if conn_count >= MAX_CONCURRENT_CONNECTIONS {
+                            tracing::warn!("ED2K: Connection limit reached ({}), rejecting {}", MAX_CONCURRENT_CONNECTIONS, peer_addr);
+                            drop(stream);
+                            continue;
+                        }
+
+                        // Increment connection count
+                        {
+                            let mut count = active_connections.write().await;
+                            *count += 1;
+                        }
+
+                        info!("ED2K: Accepted connection from {} ({}/{})", peer_addr, conn_count + 1, MAX_CONCURRENT_CONNECTIONS);
+                        
                         let files = shared_files.clone();
+                        let conn_counter = active_connections.clone();
                         tokio::spawn(async move {
                             if let Err(e) = Self::handle_peer_connection(stream, files).await {
                                 tracing::warn!("ED2K: Error handling peer {}: {}", peer_addr, e);
                             }
+                            // Decrement connection count when done
+                            let mut count = conn_counter.write().await;
+                            *count = count.saturating_sub(1);
                         });
                     }
                     _ = shutdown_rx.recv() => {
@@ -1070,28 +1102,41 @@ impl Ed2kPeerServer {
         mut stream: TcpStream,
         shared_files: Arc<tokio::sync::RwLock<std::collections::HashMap<String, PathBuf>>>,
     ) -> Result<(), Ed2kError> {
-        loop {
-            // Receive packet from peer
-            let (opcode, payload) = match Ed2kClient::receive_packet(&mut stream, 60).await {
-                Ok(packet) => packet,
-                Err(e) => {
-                    debug!("ED2K: Connection closed or error: {}", e);
-                    break;
-                }
-            };
+        use tokio::time::{timeout, Duration};
 
-            match opcode {
-                opcodes::OP_REQUESTPARTS => {
-                    // Peer is requesting file chunks
-                    Self::handle_request_parts(&mut stream, &payload, &shared_files).await?;
-                }
-                _ => {
-                    debug!("ED2K: Ignoring unsupported opcode: 0x{:02x}", opcode);
+        // Overall connection timeout
+        let connection_future = async {
+            loop {
+                // Receive packet from peer with timeout
+                let (opcode, payload) = match Ed2kClient::receive_packet(&mut stream, 60).await {
+                    Ok(packet) => packet,
+                    Err(e) => {
+                        debug!("ED2K: Connection closed or error: {}", e);
+                        break;
+                    }
+                };
+
+                match opcode {
+                    opcodes::OP_REQUESTPARTS => {
+                        // Peer is requesting file chunks
+                        Self::handle_request_parts(&mut stream, &payload, &shared_files).await?;
+                    }
+                    _ => {
+                        debug!("ED2K: Ignoring unsupported opcode: 0x{:02x}", opcode);
+                    }
                 }
             }
-        }
+            Ok::<(), Ed2kError>(())
+        };
 
-        Ok(())
+        // Apply overall connection timeout
+        match timeout(Duration::from_secs(CONNECTION_TIMEOUT_SECS), connection_future).await {
+            Ok(result) => result,
+            Err(_) => {
+                debug!("ED2K: Connection timed out after {} seconds", CONNECTION_TIMEOUT_SECS);
+                Ok(())
+            }
+        }
     }
 
     /// Handle OP_REQUESTPARTS - peer requesting file chunks
@@ -1109,9 +1154,31 @@ impl Ed2kPeerServer {
         let start_offset = u64::from_le_bytes(payload[16..24].try_into().unwrap());
         let end_offset = u64::from_le_bytes(payload[24..32].try_into().unwrap());
 
+        // Validate hash format (32 hex characters)
+        if file_hash.len() != 32 || !file_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            tracing::warn!("ED2K: Invalid file hash format: {}", file_hash);
+            return Ok(()); // Silently reject invalid requests
+        }
+
+        // Validate chunk size to prevent resource exhaustion
+        if end_offset <= start_offset {
+            tracing::warn!("ED2K: Invalid offset range: {}-{}", start_offset, end_offset);
+            return Ok(());
+        }
+
+        let chunk_size = end_offset - start_offset;
+        if chunk_size > MAX_CHUNK_SIZE {
+            tracing::warn!(
+                "ED2K: Requested chunk size {} exceeds maximum {}",
+                chunk_size,
+                MAX_CHUNK_SIZE
+            );
+            return Ok(());
+        }
+
         debug!(
-            "ED2K: Peer requesting file {} offset {}-{}",
-            file_hash, start_offset, end_offset
+            "ED2K: Peer requesting file {} offset {}-{} ({}KB)",
+            file_hash, start_offset, end_offset, chunk_size / 1024
         );
 
         // Check if we have this file
@@ -1155,13 +1222,32 @@ impl Ed2kPeerServer {
         start_offset: u64,
         end_offset: u64,
     ) -> Result<Vec<u8>, Ed2kError> {
+        use tokio::io::AsyncSeekExt;
+
         let mut file = File::open(file_path).await?;
         
+        // Get file size and validate offsets
+        let metadata = file.metadata().await?;
+        let file_size = metadata.len();
+
+        if start_offset >= file_size || end_offset > file_size {
+            return Err(Ed2kError::ProtocolError(
+                "Requested offset exceeds file size".to_string()
+            ));
+        }
+
         let size = (end_offset - start_offset) as usize;
+        
+        // Double-check size (should already be validated, but defense in depth)
+        if size > MAX_CHUNK_SIZE as usize {
+            return Err(Ed2kError::ProtocolError(
+                "Chunk size exceeds maximum".to_string()
+            ));
+        }
+
         let mut buffer = vec![0u8; size];
 
         // Seek to start position
-        use tokio::io::AsyncSeekExt;
         file.seek(tokio::io::SeekFrom::Start(start_offset)).await?;
 
         // Read the chunk
