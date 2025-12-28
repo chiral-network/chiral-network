@@ -1151,8 +1151,20 @@ impl Ed2kPeerServer {
         }
 
         let file_hash = hex::encode(&payload[0..16]);
-        let start_offset = u64::from_le_bytes(payload[16..24].try_into().unwrap());
-        let end_offset = u64::from_le_bytes(payload[24..32].try_into().unwrap());
+        let start_offset = u64::from_le_bytes(
+            payload[16..24]
+                .try_into()
+                .map_err(|_| {
+                    Ed2kError::ProtocolError("Invalid REQUESTPARTS payload".to_string())
+                })?,
+        );
+        let end_offset = u64::from_le_bytes(
+            payload[24..32]
+                .try_into()
+                .map_err(|_| {
+                    Ed2kError::ProtocolError("Invalid REQUESTPARTS payload".to_string())
+                })?,
+        );
 
         // Validate hash format (32 hex characters)
         if file_hash.len() != 32 || !file_hash.chars().all(|c| c.is_ascii_hexdigit()) {
