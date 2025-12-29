@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::fs;
-use anyhow::{Result, Context};
+use anyhow::Result;
 use serde::{Serialize, Deserialize};
 
 /// Blockstore statistics and management

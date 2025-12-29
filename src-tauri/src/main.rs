@@ -3928,8 +3928,8 @@ async fn upload_file_to_network(
                             }
                         };
 
-                        // Reuse the manifest generated during seeding instead of regenerating it here
-                        let manifest_json = seeding_info.manifest.clone();
+                        // ED2K doesn't use manifests like BitTorrent/IPFS
+                        let manifest_json = None;
 
                         // Get the local peer ID to add as a seeder
                         let local_peer_id = {
@@ -6247,7 +6247,7 @@ fn get_disk_space_robust(path: &std::path::Path) -> Result<f64, String> {
 /// Get current storage usage across all locations
 #[tauri::command]
 async fn get_storage_usage(app_handle: tauri::AppHandle) -> Result<storage_manager::StorageUsage, String> {
-    use storage_manager::{StorageManager, StorageConfig};
+    use storage_manager::StorageManager;
 
     let config = create_storage_config(&app_handle).await
         .map_err(|e| format!("Failed to create storage config: {}", e))?;
@@ -6260,7 +6260,7 @@ async fn get_storage_usage(app_handle: tauri::AppHandle) -> Result<storage_manag
 /// Trigger manual cleanup (ignores autoCleanup setting)
 #[tauri::command]
 async fn force_storage_cleanup(app_handle: tauri::AppHandle) -> Result<storage_manager::CleanupReport, String> {
-    use storage_manager::{StorageManager, StorageConfig};
+    use storage_manager::StorageManager;
 
     tracing::info!("Manual storage cleanup requested");
 
@@ -6275,7 +6275,7 @@ async fn force_storage_cleanup(app_handle: tauri::AppHandle) -> Result<storage_m
 /// Check if cleanup is needed and perform it if auto-cleanup is enabled
 #[tauri::command]
 async fn check_and_cleanup_storage(app_handle: tauri::AppHandle) -> Result<Option<storage_manager::CleanupReport>, String> {
-    use storage_manager::{StorageManager, StorageConfig};
+    use storage_manager::StorageManager;
 
     let config = create_storage_config(&app_handle).await
         .map_err(|e| format!("Failed to create storage config: {}", e))?;
