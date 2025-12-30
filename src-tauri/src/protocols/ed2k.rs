@@ -162,16 +162,26 @@ impl Ed2kProtocolHandler {
         let mut buffer = vec![0; ED2K_CHUNK_SIZE];
 
         loop {
-            let bytes_read = file
-                .read(&mut buffer)
-                .await
-                .map_err(|e| ProtocolError::Internal(e.to_string()))?;
-            
-            if bytes_read == 0 {
-                break;
+            // Read a full ED2K_CHUNK_SIZE chunk (or until EOF)
+            let mut total_bytes_read = 0;
+            while total_bytes_read < ED2K_CHUNK_SIZE {
+                let bytes_read = file
+                    .read(&mut buffer[total_bytes_read..])
+                    .await
+                    .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+
+                if bytes_read == 0 {
+                    break; // EOF
+                }
+
+                total_bytes_read += bytes_read;
             }
 
-            let chunk_data = &buffer[..bytes_read];
+            if total_bytes_read == 0 {
+                break; // No more data
+            }
+
+            let chunk_data = &buffer[..total_bytes_read];
 
             // Calculate MD4 hash for the chunk
             let mut md4_hasher = Md4::new();

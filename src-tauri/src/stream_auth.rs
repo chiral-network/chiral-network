@@ -38,7 +38,7 @@ pub struct AuthMessage {
     pub timestamp: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AuthMessageType {
     /// Initial handshake
     Handshake,
@@ -200,7 +200,7 @@ impl StreamAuthService {
 
         // Combine all data for signing: type + data + sequence + timestamp
         let mut sign_data = Vec::new();
-        sign_data.extend_from_slice(&[message_type.clone() as u8]);
+        sign_data.extend_from_slice(&[message_type as u8]);
         sign_data.extend_from_slice(data);
         sign_data.extend_from_slice(&sequence.to_be_bytes());
         sign_data.extend_from_slice(&timestamp.to_be_bytes());
@@ -231,11 +231,12 @@ impl StreamAuthService {
             .get_mut(session_id)
             .ok_or("Session not found")?;
 
-        // Check sequence number (should be next expected)
-        if auth_msg.sequence != session.sequence + 1 {
+        // Check sequence number (must match current session sequence)
+        // Note: sign_data() already incremented the session sequence
+        if auth_msg.sequence != session.sequence {
             warn!(
                 "Sequence mismatch: expected {}, got {}",
-                session.sequence + 1,
+                session.sequence,
                 auth_msg.sequence
             );
             return Ok(false);
@@ -256,7 +257,7 @@ impl StreamAuthService {
 
         // Recreate the data that was signed
         let mut sign_data = Vec::new();
-        sign_data.extend_from_slice(&[auth_msg.message_type.clone() as u8]);
+        sign_data.extend_from_slice(&[auth_msg.message_type as u8]);
         sign_data.extend_from_slice(&auth_msg.data);
         sign_data.extend_from_slice(&auth_msg.sequence.to_be_bytes());
         sign_data.extend_from_slice(&auth_msg.timestamp.to_be_bytes());
@@ -326,10 +327,12 @@ impl StreamAuthService {
         chunk_index: u32,
         file_hash: &str,
     ) -> Result<AuthMessage, String> {
-        // Create chunk metadata
+        // Create chunk metadata: chunk_index (4 bytes) + hash_len (4 bytes) + file_hash + chunk_data
         let mut metadata = Vec::new();
+        let file_hash_bytes = file_hash.as_bytes();
         metadata.extend_from_slice(&chunk_index.to_be_bytes());
-        metadata.extend_from_slice(file_hash.as_bytes());
+        metadata.extend_from_slice(&(file_hash_bytes.len() as u32).to_be_bytes());
+        metadata.extend_from_slice(file_hash_bytes);
         metadata.extend_from_slice(chunk_data);
 
         self.sign_data(session_id, &metadata, AuthMessageType::DataChunk)
@@ -346,13 +349,19 @@ impl StreamAuthService {
         }
 
         if let AuthMessageType::DataChunk = auth_msg.message_type {
-            // Extract chunk data (skip metadata)
-            if auth_msg.data.len() < 4 {
-                return Err("Invalid chunk data".to_string());
+            // Extract chunk data: chunk_index (4) + hash_len (4) + file_hash (variable) + chunk_data
+            if auth_msg.data.len() < 8 {
+                return Err("Invalid chunk data: too short".to_string());
             }
 
-            // Skip chunk_index (4 bytes) and file_hash (32 bytes for SHA-256)
-            let data_start = 4 + 32; // chunk_index + file_hash
+            // Read hash length
+            let hash_len_bytes: [u8; 4] = auth_msg.data[4..8]
+                .try_into()
+                .map_err(|_| "Invalid hash length")?;
+            let hash_len = u32::from_be_bytes(hash_len_bytes) as usize;
+
+            // Calculate data start position
+            let data_start = 8 + hash_len; // chunk_index + hash_len + file_hash
             if auth_msg.data.len() <= data_start {
                 return Err("No chunk data found".to_string());
             }
