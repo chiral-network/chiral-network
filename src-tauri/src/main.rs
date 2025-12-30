@@ -3928,22 +3928,8 @@ async fn upload_file_to_network(
                             }
                         };
 
-                        // Generate FileManifest with SHA256 chunk hashes for 256KB chunks
-                        let manifest_json = match protocols::ed2k::Ed2kProtocolHandler::generate_manifest_for_upload(&file_path_buf).await {
-                            Ok(manifest) => {
-                                match serde_json::to_string(&manifest) {
-                                    Ok(json) => Some(json),
-                                    Err(e) => {
-                                        warn!("Failed to serialize ED2K manifest: {}", e);
-                                        None
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Failed to generate ED2K manifest: {}", e);
-                                None
-                            }
-                        };
+                        // ED2K doesn't use manifests like BitTorrent/IPFS
+                        let manifest_json = None;
 
                         // Get the local peer ID to add as a seeder
                         let local_peer_id = {

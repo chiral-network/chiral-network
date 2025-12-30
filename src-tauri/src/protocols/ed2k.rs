@@ -30,6 +30,8 @@ pub struct Ed2kProtocolHandler {
     download_progress: Arc<Mutex<HashMap<String, DownloadProgress>>>,
     /// Track seeding files
     seeding_files: Arc<Mutex<HashMap<String, SeedingInfo>>>,
+    /// ED2K peer server for serving file chunks
+    peer_server: Arc<Mutex<Option<Arc<crate::ed2k_client::Ed2kPeerServer>>>>,
 }
 
 /// Internal state for an ED2K download
@@ -54,6 +56,7 @@ impl Ed2kProtocolHandler {
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             seeding_files: Arc::new(Mutex::new(HashMap::new())),
+            peer_server: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -65,6 +68,7 @@ impl Ed2kProtocolHandler {
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             seeding_files: Arc::new(Mutex::new(HashMap::new())),
+            peer_server: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -76,6 +80,7 @@ impl Ed2kProtocolHandler {
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_progress: Arc::new(Mutex::new(HashMap::new())),
             seeding_files: Arc::new(Mutex::new(HashMap::new())),
+            peer_server: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -607,6 +612,28 @@ impl ProtocolHandler for Ed2kProtocolHandler {
         let mut file_info = Self::parse_ed2k_link(&ed2k_link)?;
         // Store the 9.28MB ED2K chunk hashes for server communication
         file_info.chunk_hashes = sha256_ed2k_chunk_hashes;
+
+        // Start peer server if not already running
+        {
+            let mut peer_server_guard = self.peer_server.lock().await;
+            if peer_server_guard.is_none() {
+                let mut server = crate::ed2k_client::Ed2kPeerServer::new(4661);
+                if let Err(e) = server.start().await {
+                    warn!("ED2K: Failed to start peer server: {}", e);
+                    // Continue anyway - we can still seed via other mechanisms
+                } else {
+                    info!("ED2K: Peer server started on port 4661");
+                    *peer_server_guard = Some(Arc::new(server));
+                }
+            }
+
+            // Add this file to the peer server's shared files
+            if let Some(server) = peer_server_guard.as_ref() {
+                // Extract MD4 hash from ed2k link for peer server
+                let file_hash = file_info.file_hash.clone();
+                server.share_file(file_hash, file_path.clone()).await;
+            }
+        }
 
         // ED2K now works in a decentralized P2P mode
         // Files are made available locally and can be discovered via DHT
