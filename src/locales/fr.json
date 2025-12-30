@@ -19,7 +19,6 @@
   "settings.diagnostics.copyFailed": "Échec de la copie",
   "settings.diagnostics.resultsTitle": "Résultats",
   "badges.unsaved": "Modifications non enregistrées",
-
   "storage.title": "Stockage",
   "storage.location": "Emplacement de stockage",
   "storage.locationPick": "Choisir un emplacement de stockage",
@@ -29,7 +28,6 @@
   "storage.maxSize": "Taille maximale de stockage (Go)",
   "storage.cleanupThreshold": "Seuil de nettoyage automatique (%)",
   "storage.enableCleanup": "Activer le nettoyage automatique lorsque le stockage est plein",
-
   "network": {
     "title": "Réseau",
     "subtitle": "Surveillez la santé du réseau et découvrez des pairs",
@@ -314,7 +312,6 @@
       }
     }
   },
-
   "download": {
     "title": "Télécharger des fichiers",
     "subtitle": "Téléchargez des fichiers depuis le réseau Chiral",
@@ -438,12 +435,10 @@
     "currentProtocol": "Protocole actuel",
     "changeProtocol": "Changer de protocole"
   },
-
   "regions.usEast": "US East",
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
   "regions.apac": "Asia Pacific",
-
   "language.title": "Langue",
   "language.select": "Sélectionner la langue",
   "language.english": "English",
@@ -456,7 +451,6 @@
   "language.french": "Français",
   "language.bengali": "বাংলা",
   "language.arabic": "العربية",
-
   "nav": {
     "menu": "Menu",
     "download": "Télécharger",
@@ -477,7 +471,6 @@
     "collapseSidebar": "Réduire la barre latérale",
     "closeSidebarMenu": "Fermer le menu latéral"
   },
-
   "privacy.title": "Confidentialité et sécurité",
   "privacy.enableProxy": "Activer le routage via proxy pour l’anonymat",
   "privacy.proxyAddress": "Adresse du proxy",
@@ -486,13 +479,11 @@
   "privacy.shareAnalytics": "Partager des statistiques d’utilisation anonymisées",
   "privacy.autoLockWallet": "Verrouiller automatiquement le portefeuille après inactivité",
   "privacy.autoLockWalletHint": "Vous déconnecte automatiquement après une heure sans activité.",
-
   "notifications.title": "Notifications",
   "notifications.enable": "Activer les notifications de bureau",
   "notifications.notifyComplete": "Notifier lorsque les téléchargements sont terminés",
   "notifications.notifyError": "Notifier en cas d’erreurs",
   "notifications.soundAlerts": "Activer les alertes sonores",
-
   "advanced.title": "Avancé",
   "advanced.chunkSize": "Taille des blocs (Ko)",
   "advanced.cacheSize": "Taille du cache (Mo)",
@@ -509,15 +500,12 @@
   "advanced.exportSuccess": "Paramètres exportés dans le dossier de téléchargement de votre navigateur.",
   "advanced.importSuccess": "Paramètres importés avec succès.",
   "advanced.importError": "Fichier JSON invalide. Veuillez sélectionner une exportation valide.",
-
   "actions.resetDefaults": "Réinitialiser les valeurs par défaut",
   "actions.cancel": "Annuler",
   "actions.save": "Enregistrer les paramètres",
   "actions.confirm": "Confirmer la réinitialisation",
-
   "confirm.title": "Êtes-vous sûr ?",
   "confirm.resetBody": "Tous les paramètres seront réinitialisés à leurs valeurs par défaut. Cette action sera enregistrée immédiatement.",
-
   "validation.min": "{label} doit être ≥ {min}.",
   "validation.between": "{label} doit être compris entre {min} et {max}.",
   "button": {
@@ -1771,6 +1759,131 @@
       "copied": "{label} copié dans le presse-papiers",
       "copyError": "Impossible de copier {label}",
       "exported": "Transaction exportée"
+    }
+  },
+  "commandPalette": {
+    "searchPlaceholder": "Search for actions or pages...",
+    "searchLabel": "Command palette search",
+    "noResults": "No results found",
+    "tryDifferentQuery": "Try a different search term",
+    "navigate": "Navigate",
+    "select": "Select",
+    "close": "Close",
+    "actions": {
+      "goToDownload": "Go to Download",
+      "goToUpload": "Go to Upload",
+      "goToNetwork": "Go to Network",
+      "goToMining": "Go to Mining",
+      "goToRelay": "Go to Relay",
+      "goToAnalytics": "Go to Analytics",
+      "goToReputation": "Go to Reputation",
+      "goToBlockchain": "Go to Blockchain",
+      "goToAccount": "Go to Account",
+      "goToSettings": "Go to Settings"
+    }
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "close": "Close",
+    "tip": "Press ? or F1 anytime to view this help",
+    "categories": {
+      "navigation": "Navigation",
+      "application": "Application",
+      "window": "Window"
+    },
+    "navigation": {
+      "download": "Go to Download page",
+      "upload": "Go to Upload page",
+      "network": "Go to Network page",
+      "mining": "Go to Mining page",
+      "account": "Go to Account page",
+      "settings": "Open Settings"
+    },
+    "application": {
+      "commandPalette": "Open Command Palette",
+      "showHelp": "Show keyboard shortcuts",
+      "closeModal": "Close modal/dialog",
+      "refresh": "Refresh current page",
+      "reload": "Reload application"
+    },
+    "window": {
+      "fullscreen": "Toggle fullscreen",
+      "quit": "Quit application"
+    }
+  },
+  "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
+  "settings.diagnostics.circuitRelay": "Circuit Relay",
+  "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
+  "settings.diagnostics.diskSpace": "Disk Space",
+  "settings.diagnostics.encryptionSupport": "Encryption Support",
+  "settings.diagnostics.localStorage": "LocalStorage",
+  "settings.diagnostics.natTraversal": "NAT Traversal",
+  "settings.diagnostics.peerConnections": "Peer Connections",
+  "settings.diagnostics.proxyConfig": "Proxy Configuration",
+  "settings.diagnostics.storagePath": "Storage Path",
+  "settings.diagnostics.webrtcSupport": "WebRTC Support",
+  "pureClientMode": {
+    "warnings": {
+      "forcedMode": "Vous avez activé manuellement le mode client pur dans les Paramètres. Vous ne pouvez pas partager de fichiers ni agir en tant que serveur DHT. La blockchain utilise le mode de synchronisation légère (téléchargement minimal).",
+      "forcedModeMining": "Vous avez activé manuellement le mode client pur dans les Paramètres. La blockchain ne synchronise que les ~100 derniers blocs au lieu de la synchronisation complète (~10 000 blocs). Le minage est disponible mais utilise un stockage minimal.",
+      "natDetected": "AutoNAT a détecté que vous êtes derrière un NAT ou un pare-feu restrictif. Vous pouvez télécharger des fichiers mais ne pouvez pas les partager avec d'autres pairs.",
+      "natDetectedMining": "AutoNAT a détecté que vous êtes derrière un NAT ou un pare-feu restrictif. La blockchain ne synchronise que les ~100 derniers blocs pour réduire les besoins en bande passante/stockage. Le minage est disponible avec un stockage réduit.",
+      "settingsForced": "⚠️ Mode client forcé : Vous ne pourrez pas partager de fichiers ni agir en tant que serveur DHT. La blockchain utilise la synchronisation partielle (seulement les ~100 derniers blocs) au lieu de la synchronisation complète (~10 000 blocs). Minage disponible avec stockage réduit. Nécessite un redémarrage DHT.",
+      "serverModeDisabled": "ℹ️ Le mode serveur est désactivé lorsque le mode client est forcé."
+    },
+    "banner": {
+      "title": {
+        "forced": "Mode Client Uniquement Activé (Forcé)",
+        "nat": "Mode Client Uniquement (Derrière NAT)",
+        "default": "Mode Client Uniquement",
+        "forcedMining": "Mode Client Uniquement Activé (Forcé) - Synchronisation Blockchain Limitée",
+        "natMining": "Mode Client Uniquement (Derrière NAT) - Synchronisation Blockchain Limitée",
+        "defaultMining": "Mode Client Uniquement - Synchronisation Blockchain Limitée"
+      },
+      "description": {
+        "default": "Vous êtes en mode client uniquement et ne pouvez pas partager de fichiers.",
+        "defaultMining": "Vous êtes en mode client uniquement. La blockchain ne synchronise que les ~100 derniers blocs (stockage minimal). Le minage est disponible."
+      },
+      "help": {
+        "forced": "Pour activer le partage, désactivez \"Forcer le Mode Client Uniquement\" dans Paramètres → Développeurs → Mode Client DHT.",
+        "nat": "Vos fichiers seront toujours enregistrés localement, mais ne seront pas partagés sur le réseau. Pour activer le partage, configurez la redirection de port ou utilisez un VPN avec une IP publique.",
+        "default": "Vérifiez vos paramètres réseau ou votre configuration AutoNAT.",
+        "forcedMining": "Pour activer la synchronisation blockchain complète (10 000 blocs), désactivez \"Forcer le Mode Client Uniquement\" dans Paramètres → Développeurs.",
+        "natMining": "Les nœuds complets synchronisent ~10 000 blocs. Pour passer en mode complet, configurez la redirection de port ou utilisez un VPN avec une IP publique pour devenir publiquement accessible.",
+        "defaultMining": "Vérifiez vos paramètres réseau ou votre configuration AutoNAT pour une fonctionnalité complète."
+      }
+    },
+    "settings": {
+      "dht": {
+        "clientMode": {
+          "title": "Mode Client DHT (Substitution)",
+          "label": "Forcer le Mode Client Uniquement",
+          "descriptionOverride": "Substitution développeur :",
+          "descriptionText": "Force le nœud à rester en mode client même s'il est publiquement accessible.",
+          "noteLabel": "Remarque :",
+          "noteText": "AutoNAT vous maintient automatiquement en mode client si vous êtes derrière un NAT - vous n'avez pas besoin d'activer ceci manuellement sauf si vous voulez le forcer.",
+          "autoBehaviorLabel": "Comportement automatique :",
+          "autoBehaviorText": "Si AutoNAT détecte que vous êtes derrière un NAT, vous resterez automatiquement en mode client sans avoir besoin de ce bouton."
+        },
+        "serverMode": {
+          "title": "Mode Serveur DHT (Substitution)",
+          "label": "Forcer le Mode Serveur",
+          "descriptionOverride": "Substitution développeur :",
+          "descriptionText": "Force le nœud à agir en tant que serveur DHT même derrière un NAT (pour tests uniquement).",
+          "noteLabel": "Remarque :",
+          "noteText": "Cela peut ne pas fonctionner si vous êtes derrière un NAT/pare-feu strict. AutoNAT vous met automatiquement à niveau en mode serveur lorsque vous êtes publiquement accessible.",
+          "warningLabel": "Mode serveur forcé :",
+          "warningText": "Le nœud tentera d'agir en tant que serveur DHT même derrière un NAT. Cela peut entraîner des problèmes de connectivité. Nécessite un redémarrage DHT.",
+          "autoBehaviorLabel": "Comportement automatique :",
+          "autoBehaviorText": "Si AutoNAT détecte que vous êtes publiquement accessible, vous serez automatiquement mis à niveau en mode serveur sans avoir besoin de ce bouton."
+        }
+      }
+    }
+  },
+  "wallet": {
+    "testWallet": {
+      "header": "Pour Tests Uniquement",
+      "button": "Créer un Portefeuille de Test"
     }
   }
 }

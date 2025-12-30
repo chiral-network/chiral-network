@@ -1384,29 +1384,29 @@
         <div class="flex-1 space-y-2">
           <p class="text-sm font-semibold text-yellow-800">
             {#if clientModeReason === "forced"}
-              Client-Only Mode Enabled (Forced)
+              {$t('pureClientMode.banner.title.forced')}
             {:else if clientModeReason === "nat"}
-              Client-Only Mode (Behind NAT)
+              {$t('pureClientMode.banner.title.nat')}
             {:else}
-              Client-Only Mode
+              {$t('pureClientMode.banner.title.default')}
             {/if}
           </p>
           <p class="text-sm text-yellow-700">
             {#if clientModeReason === "forced"}
-              You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).
+              {$t('pureClientMode.warnings.forcedMode')}
             {:else if clientModeReason === "nat"}
-              AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.
+              {$t('pureClientMode.warnings.natDetected')}
             {:else}
-              You are in client-only mode and cannot seed files.
+              {$t('pureClientMode.banner.description.default')}
             {/if}
           </p>
           <p class="text-xs text-yellow-600">
             {#if clientModeReason === "forced"}
-              To enable seeding, disable "Force Client-Only Mode" in Settings → Developers → DHT Client Mode.
+              {$t('pureClientMode.banner.help.forced')}
             {:else if clientModeReason === "nat"}
-              Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.
+              {$t('pureClientMode.banner.help.nat')}
             {:else}
-              Check your network settings or AutoNAT configuration.
+              {$t('pureClientMode.banner.help.default')}
             {/if}
           </p>
         </div>

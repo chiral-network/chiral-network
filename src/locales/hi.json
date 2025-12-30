@@ -1761,5 +1761,130 @@
       "copyError": "{label} कॉपी करने में विफल",
       "exported": "लेनदेन निर्यात किया गया"
     }
+  },
+  "commandPalette": {
+    "searchPlaceholder": "Search for actions or pages...",
+    "searchLabel": "Command palette search",
+    "noResults": "No results found",
+    "tryDifferentQuery": "Try a different search term",
+    "navigate": "Navigate",
+    "select": "Select",
+    "close": "Close",
+    "actions": {
+      "goToDownload": "Go to Download",
+      "goToUpload": "Go to Upload",
+      "goToNetwork": "Go to Network",
+      "goToMining": "Go to Mining",
+      "goToRelay": "Go to Relay",
+      "goToAnalytics": "Go to Analytics",
+      "goToReputation": "Go to Reputation",
+      "goToBlockchain": "Go to Blockchain",
+      "goToAccount": "Go to Account",
+      "goToSettings": "Go to Settings"
+    }
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "close": "Close",
+    "tip": "Press ? or F1 anytime to view this help",
+    "categories": {
+      "navigation": "Navigation",
+      "application": "Application",
+      "window": "Window"
+    },
+    "navigation": {
+      "download": "Go to Download page",
+      "upload": "Go to Upload page",
+      "network": "Go to Network page",
+      "mining": "Go to Mining page",
+      "account": "Go to Account page",
+      "settings": "Open Settings"
+    },
+    "application": {
+      "commandPalette": "Open Command Palette",
+      "showHelp": "Show keyboard shortcuts",
+      "closeModal": "Close modal/dialog",
+      "refresh": "Refresh current page",
+      "reload": "Reload application"
+    },
+    "window": {
+      "fullscreen": "Toggle fullscreen",
+      "quit": "Quit application"
+    }
+  },
+  "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
+  "settings.diagnostics.circuitRelay": "Circuit Relay",
+  "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
+  "settings.diagnostics.diskSpace": "Disk Space",
+  "settings.diagnostics.encryptionSupport": "Encryption Support",
+  "settings.diagnostics.localStorage": "LocalStorage",
+  "settings.diagnostics.natTraversal": "NAT Traversal",
+  "settings.diagnostics.peerConnections": "Peer Connections",
+  "settings.diagnostics.proxyConfig": "Proxy Configuration",
+  "settings.diagnostics.storagePath": "Storage Path",
+  "settings.diagnostics.webrtcSupport": "WebRTC Support",
+  "pureClientMode": {
+    "warnings": {
+      "forcedMode": "आपने सेटिंग्स में प्योर क्लाइंट मोड को मैन्युअल रूप से सक्षम किया है। आप फ़ाइलों को सीड नहीं कर सकते या DHT सर्वर के रूप में कार्य नहीं कर सकते। ब्लॉकचेन लाइट सिंक मोड (न्यूनतम डाउनलोड) का उपयोग करता है।",
+      "forcedModeMining": "आपने सेटिंग्स में प्योर क्लाइंट मोड को मैन्युअल रूप से सक्षम किया है। ब्लॉकचेन पूर्ण सिंक (~10,000 ब्लॉक) के बजाय केवल अंतिम ~100 ब्लॉक सिंक करता है। माइनिंग उपलब्ध है लेकिन न्यूनतम स्टोरेज का उपयोग करती है।",
+      "natDetected": "AutoNAT ने पता लगाया कि आप NAT या प्रतिबंधात्मक फ़ायरवॉल के पीछे हैं। आप फ़ाइलें डाउनलोड कर सकते हैं लेकिन उन्हें अन्य पीयर्स को सीड नहीं कर सकते।",
+      "natDetectedMining": "AutoNAT ने पता लगाया कि आप NAT या प्रतिबंधात्मक फ़ायरवॉल के पीछे हैं। ब्लॉकचेन बैंडविड्थ/स्टोरेज आवश्यकताओं को कम करने के लिए केवल अंतिम ~100 ब्लॉक सिंक करता है। कम स्टोरेज के साथ माइनिंग उपलब्ध है।",
+      "settingsForced": "⚠️ क्लाइंट मोड मजबूर: आप फ़ाइलों को सीड नहीं कर पाएंगे या DHT सर्वर के रूप में कार्य नहीं कर पाएंगे। ब्लॉकचेन पूर्ण सिंक (~10,000 ब्लॉक) के बजाय आंशिक सिंक (केवल अंतिम ~100 ब्लॉक) का उपयोग करता है। कम स्टोरेज के साथ माइनिंग उपलब्ध। DHT पुनः प्रारंभ की आवश्यकता है।",
+      "serverModeDisabled": "ℹ️ जब क्लाइंट मोड मजबूर होता है तो सर्वर मोड अक्षम होता है।"
+    },
+    "banner": {
+      "title": {
+        "forced": "क्लाइंट-ओनली मोड सक्षम (मजबूर)",
+        "nat": "क्लाइंट-ओनली मोड (NAT के पीछे)",
+        "default": "क्लाइंट-ओनली मोड",
+        "forcedMining": "क्लाइंट-ओनली मोड सक्षम (मजबूर) - सीमित ब्लॉकचेन सिंक",
+        "natMining": "क्लाइंट-ओनली मोड (NAT के पीछे) - सीमित ब्लॉकचेन सिंक",
+        "defaultMining": "क्लाइंट-ओनली मोड - सीमित ब्लॉकचेन सिंक"
+      },
+      "description": {
+        "default": "आप क्लाइंट-ओनली मोड में हैं और फ़ाइलों को सीड नहीं कर सकते।",
+        "defaultMining": "आप क्लाइंट-ओनली मोड में हैं। ब्लॉकचेन केवल अंतिम ~100 ब्लॉक सिंक करता है (न्यूनतम स्टोरेज)। माइनिंग उपलब्ध है।"
+      },
+      "help": {
+        "forced": "सीडिंग सक्षम करने के लिए, सेटिंग्स → डेवलपर्स → DHT क्लाइंट मोड में \"फोर्स क्लाइंट-ओनली मोड\" अक्षम करें।",
+        "nat": "आपकी फ़ाइलें अभी भी स्थानीय रूप से सहेजी जाएंगी, लेकिन नेटवर्क के साथ साझा नहीं की जाएंगी। सीडिंग सक्षम करने के लिए, पोर्ट फ़ॉरवर्डिंग कॉन्फ़िगर करें या सार्वजनिक IP वाले VPN का उपयोग करें।",
+        "default": "अपनी नेटवर्क सेटिंग्स या AutoNAT कॉन्फ़िगरेशन जांचें।",
+        "forcedMining": "पूर्ण ब्लॉकचेन सिंक (10,000 ब्लॉक) सक्षम करने के लिए, सेटिंग्स → डेवलपर्स में \"फोर्स क्लाइंट-ओनली मोड\" अक्षम करें।",
+        "natMining": "पूर्ण नोड्स ~10,000 ब्लॉक सिंक करते हैं। अपग्रेड करने के लिए, पोर्ट फ़ॉरवर्डिंग कॉन्फ़िगर करें या सार्वजनिक रूप से पहुंचने योग्य बनने के लिए सार्वजनिक IP वाले VPN का उपयोग करें।",
+        "defaultMining": "पूर्ण कार्यक्षमता के लिए अपनी नेटवर्क सेटिंग्स या AutoNAT कॉन्फ़िगरेशन जांचें।"
+      }
+    },
+    "settings": {
+      "dht": {
+        "clientMode": {
+          "title": "DHT क्लाइंट मोड (ओवरराइड)",
+          "label": "फोर्स क्लाइंट-ओनली मोड",
+          "descriptionOverride": "डेवलपर ओवरराइड:",
+          "descriptionText": "सार्वजनिक रूप से पहुंचने योग्य होने पर भी नोड को क्लाइंट मोड में रहने के लिए मजबूर करता है।",
+          "noteLabel": "नोट:",
+          "noteText": "यदि आप NAT के पीछे हैं तो AutoNAT स्वचालित रूप से आपको क्लाइंट मोड में रखता है - जब तक आप इसे मजबूर नहीं करना चाहते, आपको इसे मैन्युअल रूप से सक्षम करने की आवश्यकता नहीं है।",
+          "autoBehaviorLabel": "स्वचालित व्यवहार:",
+          "autoBehaviorText": "यदि AutoNAT पता लगाता है कि आप NAT के पीछे हैं, तो आप इस टॉगल की आवश्यकता के बिना स्वचालित रूप से क्लाइंट मोड में रहेंगे।"
+        },
+        "serverMode": {
+          "title": "DHT सर्वर मोड (ओवरराइड)",
+          "label": "फोर्स सर्वर मोड",
+          "descriptionOverride": "डेवलपर ओवरराइड:",
+          "descriptionText": "NAT के पीछे होने पर भी नोड को DHT सर्वर के रूप में कार्य करने के लिए मजबूर करता है (केवल परीक्षण के लिए)।",
+          "noteLabel": "नोट:",
+          "noteText": "यदि आप सख्त NAT/फ़ायरवॉल के पीछे हैं तो यह काम नहीं कर सकता है। जब सार्वजनिक रूप से पहुंचने योग्य होते हैं तो AutoNAT स्वचालित रूप से आपको सर्वर मोड में अपग्रेड करता है।",
+          "warningLabel": "सर्वर मोड मजबूर:",
+          "warningText": "NAT के पीछे होने पर भी नोड DHT सर्वर के रूप में कार्य करने का प्रयास करेगा। इससे कनेक्टिविटी समस्याएं हो सकती हैं। DHT पुनः प्रारंभ की आवश्यकता है।",
+          "autoBehaviorLabel": "स्वचालित व्यवहार:",
+          "autoBehaviorText": "यदि AutoNAT पता लगाता है कि आप सार्वजनिक रूप से पहुंचने योग्य हैं, तो आप इस टॉगल की आवश्यकता के बिना स्वचालित रूप से सर्वर मोड में अपग्रेड हो जाएंगे।"
+        }
+      }
+    }
+  },
+  "wallet": {
+    "testWallet": {
+      "header": "केवल परीक्षण के लिए",
+      "button": "टेस्ट वॉलेट बनाएं"
+    }
   }
 }
