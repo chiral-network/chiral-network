@@ -1223,7 +1223,7 @@ impl MultiSourceDownloadService {
 
                     // Get FTP connection from pool or create new one
                     let download_result = {
-                        let mut ftp_stream = {
+                        let ftp_stream = {
                             let mut connections_guard = connections.lock().await;
                             let pool = connections_guard.entry(ftp_url.clone()).or_insert_with(Vec::new);
                             
