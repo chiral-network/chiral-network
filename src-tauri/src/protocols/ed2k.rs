@@ -6,7 +6,7 @@ use super::traits::{
     DownloadHandle, DownloadOptions, DownloadProgress, DownloadStatus,
     ProtocolCapabilities, ProtocolError, ProtocolHandler, SeedOptions, SeedingInfo,
 };
-use crate::ed2k_client::{Ed2kClient, Ed2kConfig, Ed2kFileInfo, ED2K_CHUNK_SIZE};
+use crate::ed2k_client::{Ed2kClient, Ed2kConfig, Ed2kFileInfo, Ed2kUploadStats, ED2K_CHUNK_SIZE};
 use async_trait::async_trait;
 use md4::{Md4, Digest};
 use sha2::Sha256;
@@ -918,6 +918,18 @@ impl ProtocolHandler for Ed2kProtocolHandler {
             supports_multi_source: true,
             supports_encryption: false, // ED2K doesn't have built-in encryption
             supports_dht: true,         // Can use DHT for peer discovery
+        }
+    }
+}
+
+impl Ed2kProtocolHandler {
+    /// Get upload statistics from the peer server
+    pub async fn get_upload_stats(&self) -> Option<Ed2kUploadStats> {
+        let peer_server = self.peer_server.lock().await;
+        if let Some(server) = peer_server.as_ref() {
+            Some(server.get_stats().await)
+        } else {
+            None
         }
     }
 }

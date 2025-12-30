@@ -998,6 +998,30 @@ impl Ed2kClient {
 const MAX_CHUNK_SIZE: u64 = 10 * 1024 * 1024; // 10MB max per request
 const MAX_CONCURRENT_CONNECTIONS: usize = 100;
 const CONNECTION_TIMEOUT_SECS: u64 = 300; // 5 minutes
+const MAX_REQUESTS_PER_IP_PER_MINUTE: u32 = 60; // Rate limit per IP
+const BANDWIDTH_LIMIT_BYTES_PER_SEC: u64 = 1_048_576; // 1 MB/s per connection
+
+/// Upload statistics for the peer server
+#[derive(Debug, Clone, Default)]
+pub struct Ed2kUploadStats {
+    /// Total bytes uploaded since server start
+    pub total_bytes_uploaded: u64,
+    /// Number of active upload connections
+    pub active_connections: usize,
+    /// Number of rejected connections (rate limit or connection limit)
+    pub rejected_connections: u64,
+    /// Number of requests served
+    pub requests_served: u64,
+}
+
+/// Rate limiter entry per IP address
+#[derive(Debug, Clone)]
+struct RateLimitEntry {
+    /// Number of requests in current minute
+    request_count: u32,
+    /// Timestamp of the current minute window (seconds since epoch)
+    window_start: u64,
+}
 
 /// ED2K Peer Server - Listens for incoming peer connections and serves file chunks
 pub struct Ed2kPeerServer {
@@ -1009,6 +1033,10 @@ pub struct Ed2kPeerServer {
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
     /// Active connection count
     active_connections: Arc<tokio::sync::RwLock<usize>>,
+    /// Upload statistics
+    upload_stats: Arc<tokio::sync::RwLock<Ed2kUploadStats>>,
+    /// Rate limiting per IP address (IP -> rate limit entry)
+    rate_limits: Arc<tokio::sync::RwLock<std::collections::HashMap<std::net::IpAddr, RateLimitEntry>>>,
 }
 
 impl Ed2kPeerServer {
@@ -1019,7 +1047,18 @@ impl Ed2kPeerServer {
             shared_files: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             shutdown_tx: None,
             active_connections: Arc::new(tokio::sync::RwLock::new(0)),
+            upload_stats: Arc::new(tokio::sync::RwLock::new(Ed2kUploadStats::default())),
+            rate_limits: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Get current upload statistics
+    pub async fn get_stats(&self) -> Ed2kUploadStats {
+        let mut stats = self.upload_stats.read().await.clone();
+        // Update active connections count
+        let conn_count = *self.active_connections.read().await;
+        stats.active_connections = conn_count;
+        stats
     }
 
     /// Add a file to the list of shared files
@@ -1049,6 +1088,8 @@ impl Ed2kPeerServer {
 
         let shared_files = self.shared_files.clone();
         let active_connections = self.active_connections.clone();
+        let upload_stats = self.upload_stats.clone();
+        let rate_limits = self.rate_limits.clone();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx);
 
@@ -1056,6 +1097,18 @@ impl Ed2kPeerServer {
             loop {
                 tokio::select! {
                     Ok((stream, peer_addr)) = listener.accept() => {
+                        // Check rate limit for this IP
+                        let ip_addr = peer_addr.ip();
+                        let rate_limited = Self::check_rate_limit(&rate_limits, ip_addr).await;
+                        
+                        if rate_limited {
+                            tracing::warn!("ED2K: Rate limit exceeded for {}, rejecting connection", ip_addr);
+                            let mut stats = upload_stats.write().await;
+                            stats.rejected_connections += 1;
+                            drop(stream);
+                            continue;
+                        }
+
                         // Check connection limit
                         let conn_count = {
                             let count = active_connections.read().await;
@@ -1064,6 +1117,8 @@ impl Ed2kPeerServer {
 
                         if conn_count >= MAX_CONCURRENT_CONNECTIONS {
                             tracing::warn!("ED2K: Connection limit reached ({}), rejecting {}", MAX_CONCURRENT_CONNECTIONS, peer_addr);
+                            let mut stats = upload_stats.write().await;
+                            stats.rejected_connections += 1;
                             drop(stream);
                             continue;
                         }
@@ -1078,8 +1133,9 @@ impl Ed2kPeerServer {
                         
                         let files = shared_files.clone();
                         let conn_counter = active_connections.clone();
+                        let stats_clone = upload_stats.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = Self::handle_peer_connection(stream, files).await {
+                            if let Err(e) = Self::handle_peer_connection(stream, files, stats_clone).await {
                                 tracing::warn!("ED2K: Error handling peer {}: {}", peer_addr, e);
                             }
                             // Decrement connection count when done
@@ -1102,6 +1158,7 @@ impl Ed2kPeerServer {
     async fn handle_peer_connection(
         mut stream: TcpStream,
         shared_files: Arc<tokio::sync::RwLock<std::collections::HashMap<String, PathBuf>>>,
+        upload_stats: Arc<tokio::sync::RwLock<Ed2kUploadStats>>,
     ) -> Result<(), Ed2kError> {
         use tokio::time::{timeout, Duration};
 
@@ -1120,7 +1177,7 @@ impl Ed2kPeerServer {
                 match opcode {
                     opcodes::OP_REQUESTPARTS => {
                         // Peer is requesting file chunks
-                        Self::handle_request_parts(&mut stream, &payload, &shared_files).await?;
+                        Self::handle_request_parts(&mut stream, &payload, &shared_files, &upload_stats).await?;
                     }
                     _ => {
                         debug!("ED2K: Ignoring unsupported opcode: 0x{:02x}", opcode);
@@ -1140,12 +1197,73 @@ impl Ed2kPeerServer {
         }
     }
 
+    /// Check rate limit for an IP address
+    async fn check_rate_limit(
+        rate_limits: &Arc<tokio::sync::RwLock<std::collections::HashMap<std::net::IpAddr, RateLimitEntry>>>,
+        ip: std::net::IpAddr,
+    ) -> bool {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let current_window = now / 60; // 1-minute windows
+
+        let mut limits = rate_limits.write().await;
+        
+        let entry = limits.entry(ip).or_insert(RateLimitEntry {
+            request_count: 0,
+            window_start: current_window,
+        });
+
+        // Reset counter if we're in a new window
+        if entry.window_start != current_window {
+            entry.request_count = 0;
+            entry.window_start = current_window;
+        }
+
+        // Check if rate limit exceeded
+        if entry.request_count >= MAX_REQUESTS_PER_IP_PER_MINUTE {
+            return true; // Rate limited
+        }
+
+        // Increment counter
+        entry.request_count += 1;
+        
+        // Cleanup old entries (keep map from growing unbounded)
+        if limits.len() > 1000 {
+            limits.retain(|_, v| v.window_start == current_window);
+        }
+
+        false // Not rate limited
+    }
+
+    /// Apply bandwidth throttling by sleeping if necessary
+    async fn apply_bandwidth_throttle(bytes_sent: usize, start_time: std::time::Instant) {
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let current_rate = bytes_sent as f64 / elapsed.max(0.001);
+        
+        if current_rate > BANDWIDTH_LIMIT_BYTES_PER_SEC as f64 {
+            // Calculate how long to sleep to maintain target rate
+            let target_duration = bytes_sent as f64 / BANDWIDTH_LIMIT_BYTES_PER_SEC as f64;
+            let sleep_duration = target_duration - elapsed;
+            
+            if sleep_duration > 0.0 {
+                tokio::time::sleep(std::time::Duration::from_secs_f64(sleep_duration)).await;
+            }
+        }
+    }
+
     /// Handle OP_REQUESTPARTS - peer requesting file chunks
     async fn handle_request_parts(
         stream: &mut TcpStream,
         payload: &[u8],
         shared_files: &Arc<tokio::sync::RwLock<std::collections::HashMap<String, PathBuf>>>,
+        upload_stats: &Arc<tokio::sync::RwLock<Ed2kUploadStats>>,
     ) -> Result<(), Ed2kError> {
+        use std::time::Instant;
+        let request_start = Instant::now();
         // Parse request: [file_hash:16][start_offset:8][end_offset:8]
         if payload.len() < 32 {
             return Err(Ed2kError::ProtocolError("Invalid REQUESTPARTS payload".to_string()));
@@ -1211,6 +1329,10 @@ impl Ed2kPeerServer {
         // Read the requested chunk from file
         let chunk_data = Self::read_file_chunk(&file_path, start_offset, end_offset).await?;
 
+        // Apply bandwidth throttling
+        let bytes_to_send = chunk_data.len();
+        Self::apply_bandwidth_throttle(bytes_to_send, request_start).await;
+
         // Send OP_SENDINGPART response
         let mut response_payload = Vec::new();
         response_payload.extend_from_slice(&payload[0..16]); // File hash
@@ -1220,10 +1342,18 @@ impl Ed2kPeerServer {
 
         Ed2kClient::send_packet(stream, opcodes::OP_SENDINGPART, &response_payload).await?;
 
+        // Update upload statistics
+        {
+            let mut stats = upload_stats.write().await;
+            stats.total_bytes_uploaded += bytes_to_send as u64;
+            stats.requests_served += 1;
+        }
+
         info!(
-            "ED2K: Sent {} bytes to peer for file {}",
+            "ED2K: Sent {} bytes to peer for file {} (total uploaded: {} MB)",
             chunk_data.len(),
-            file_hash
+            file_hash,
+            upload_stats.read().await.total_bytes_uploaded / 1_048_576
         );
 
         Ok(())
