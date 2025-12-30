@@ -202,6 +202,9 @@ export interface MiningPaginationState {
   batchSize: number; // Number of blocks to scan per batch (default: 5000)
 }
 
+// Global auth wizard visibility flag (e.g., first-run / re-login flow)
+export const showAuthWizard = writable(false);
+
 export interface BlacklistEntry {
   chiral_address: string;
   reason: string;

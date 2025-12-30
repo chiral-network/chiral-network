@@ -223,7 +223,7 @@
 </script>
 
 {#if mode === 'welcome'}
-  <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="fixed inset-0 z-50 bg-background/90 backdrop-blur-lg flex items-center justify-center p-4">
     <Card class="w-full max-w-3xl p-8 space-y-6">
       <div class="space-y-2">
         <h2 class="text-3xl font-bold text-center">{$t('account.firstRun.welcome')}</h2>

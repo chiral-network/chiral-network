@@ -15,7 +15,7 @@
     import Blockchain from './pages/Blockchain.svelte'
     import NotFound from './pages/NotFound.svelte'
     // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
-import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount } from './lib/stores'
+import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount, showAuthWizard } from './lib/stores'
 import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
     import {onMount, onDestroy, setContext} from 'svelte';
@@ -69,6 +69,7 @@ let isExiting = false;
 let exitError: string | null = null;
 let transferStoreUnsubscribe: (() => void) | null = null;
 let unlistenExitPrompt: (() => void) | null = null;
+let unsubscribeAuthWizard: (() => void) | null = null;
 const notifiedCompletedTransfers = new Set<string>();
 const scrollPositions: Record<string, number> = {};
 
@@ -166,6 +167,7 @@ const navigateTo = (page: string, path: string) => {
 // First-run wizard handlers
 function handleFirstRunComplete() {
   showFirstRunWizard = false;
+  showAuthWizard.set(false);
   // Navigate to account page after completing wizard
   navigateTo('account', '/account');
 }
@@ -391,6 +393,10 @@ async function handleConfirmExit() {
         }
       }
 
+      unsubscribeAuthWizard = showAuthWizard.subscribe((visible) => {
+        showFirstRunWizard = visible;
+      });
+
         // setup i18n
         await setupI18n();
 
@@ -462,7 +468,7 @@ async function handleConfirmExit() {
           // Show wizard if no account AND no keystore files exist
           // (Don't rely on first-run flag since user may have cleared data)
           if (!hasAccount && !hasKeystoreFiles) {
-            showFirstRunWizard = true;
+            showAuthWizard.set(true);
           }
         } catch (error) {
           console.warn('Failed to check first-run status:', error);
@@ -1015,6 +1021,7 @@ async function handleConfirmExit() {
     unsubscribeScheduler?.();
     unsubscribeBandwidth?.();
     transferStoreUnsubscribe?.();
+    unsubscribeAuthWizard?.();
   });
 </script>
 
