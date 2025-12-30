@@ -260,6 +260,109 @@ impl FtpDownloader {
         ))
     }
 
+    /// Download a byte range with a hard timeout by moving the FTP stream into a blocking task.
+    ///
+    /// Why this exists:
+    /// - `suppaftp::FtpStream::retr` performs blocking I/O on the *data* socket.
+    /// - Even if the control socket has read/write timeouts, the data socket can hang indefinitely
+    ///   (common when passive ports are blocked by firewall/NAT).
+    /// - In async code, this leads to "forever running" downloads and 10-minute E2E timeouts.
+    ///
+    /// Returns:
+    /// - Ok((stream, data)) on success
+    /// - Err((Some(stream), err)) on a non-timeout error where the stream is still returned
+    /// - Err((None, err)) on timeout (the stream is considered poisoned / lost)
+    pub async fn download_range_with_timeout(
+        &self,
+        stream: FtpStream,
+        remote_path: String,
+        start_byte: u64,
+        size: u64,
+    ) -> Result<(FtpStream, Vec<u8>), (Option<FtpStream>, String)> {
+        if size == 0 {
+            return Ok((stream, Vec::new()));
+        }
+
+        let max_retries = self.config.max_retries.max(1);
+        let timeout = Duration::from_secs(self.config.timeout_secs.max(1));
+        let mut last_error = String::new();
+        let mut stream_opt: Option<FtpStream> = Some(stream);
+
+        for attempt in 1..=max_retries {
+            let path_clone = remote_path.clone();
+            let mut stream_for_task = match stream_opt.take() {
+                Some(s) => s,
+                None => {
+                    return Err((
+                        None,
+                        "FTP stream unavailable for retry (previous attempt likely timed out)".to_string(),
+                    ))
+                }
+            };
+            let fut = task::spawn_blocking(move || {
+                let res =
+                    Self::try_download_range_blocking(&mut stream_for_task, &path_clone, start_byte, size);
+                (stream_for_task, res)
+            });
+
+            match tokio::time::timeout(timeout, fut).await {
+                Ok(joined) => match joined {
+                    Ok((returned_stream, Ok(data))) => {
+                        if data.len() != size as usize {
+                            last_error = format!(
+                                "Size mismatch: expected {} bytes, got {}",
+                                size,
+                                data.len()
+                            );
+                            warn!("Attempt {}/{}: {}", attempt, max_retries, last_error);
+                            stream_opt = Some(returned_stream);
+                            if attempt < max_retries {
+                                tokio::time::sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                                continue;
+                            }
+                        } else {
+                            info!(
+                                "Successfully downloaded {} bytes from FTP (attempt {})",
+                                data.len(),
+                                attempt
+                            );
+                            return Ok((returned_stream, data));
+                        }
+                    }
+                    Ok((returned_stream, Err(e))) => {
+                        last_error = e;
+                        warn!("Attempt {}/{} failed: {}", attempt, max_retries, last_error);
+                        stream_opt = Some(returned_stream);
+                        if attempt < max_retries {
+                            tokio::time::sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        last_error = format!("Task join error: {}", e);
+                        warn!("Attempt {}/{} failed: {}", attempt, max_retries, last_error);
+                        return Err((None, last_error));
+                    }
+                },
+                Err(_) => {
+                    last_error = format!(
+                        "FTP range download timed out after {}s (likely passive port blocked): {}",
+                        timeout.as_secs(),
+                        remote_path
+                    );
+                    warn!("Attempt {}/{} timed out: {}", attempt, max_retries, last_error);
+                    // Can't recover the moved stream; consider it lost.
+                    return Err((None, last_error));
+                }
+            }
+        }
+
+        Err((
+            stream_opt,
+            format!("Failed after {} attempts: {}", max_retries, last_error),
+        ))
+    }
+
     /// Blocking implementation of range download (called from spawn_blocking)
     fn try_download_range_blocking(
         stream: &mut FtpStream,
