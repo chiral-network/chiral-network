@@ -2569,7 +2569,7 @@ function sectionMatches(section: string, query: string) {
 
         <!-- DHT Client Mode -->
         <div class="space-y-3 border-t pt-3">
-          <h4 class="font-medium">DHT Client Mode (Override)</h4>
+          <h4 class="font-medium">{$t('pureClientMode.settings.dht.clientMode.title')}</h4>
 
           <div class="space-y-2">
             <div class="flex items-center gap-2">
@@ -2579,28 +2579,28 @@ function sectionMatches(section: string, query: string) {
                 bind:checked={localSettings.pureClientMode}
               />
               <Label for="pure-client-mode" class="cursor-pointer">
-                Force Client-Only Mode
+                {$t('pureClientMode.settings.dht.clientMode.label')}
               </Label>
             </div>
             <p class="text-xs text-muted-foreground ml-6">
-              <strong>Developer override:</strong> Forces node to stay in client mode even if publicly reachable.
+              <strong>{$t('pureClientMode.settings.dht.clientMode.descriptionOverride')}</strong> {$t('pureClientMode.settings.dht.clientMode.descriptionText')}
               <br/>
-              <strong>Note:</strong> AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.
+              <strong>{$t('pureClientMode.settings.dht.clientMode.noteLabel')}</strong> {$t('pureClientMode.settings.dht.clientMode.noteText')}
             </p>
             {#if localSettings.pureClientMode}
               <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800 dark:bg-yellow-950/30 dark:border-yellow-800 dark:text-yellow-200">
-                ⚠️ <strong>Client mode forced:</strong> You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.
+                {$t('pureClientMode.warnings.settingsForced')}
               </div>
             {/if}
             <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-              ℹ️ <strong>Automatic behavior:</strong> If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle.
+              ℹ️ <strong>{$t('pureClientMode.settings.dht.clientMode.autoBehaviorLabel')}</strong> {$t('pureClientMode.settings.dht.clientMode.autoBehaviorText')}
             </div>
           </div>
         </div>
 
         <!-- DHT Server Mode -->
         <div class="space-y-3 border-t pt-3">
-          <h4 class="font-medium">DHT Server Mode (Override)</h4>
+          <h4 class="font-medium">{$t('pureClientMode.settings.dht.serverMode.title')}</h4>
 
           <div class="space-y-2">
             <div class="flex items-center gap-2">
@@ -2611,26 +2611,26 @@ function sectionMatches(section: string, query: string) {
                 disabled={localSettings.pureClientMode}
               />
               <Label for="force-server-mode" class="cursor-pointer">
-                Force Server Mode
+                {$t('pureClientMode.settings.dht.serverMode.label')}
               </Label>
             </div>
             <p class="text-xs text-muted-foreground ml-6">
-              <strong>Developer override:</strong> Forces node to act as DHT server even if behind NAT (for testing only).
+              <strong>{$t('pureClientMode.settings.dht.serverMode.descriptionOverride')}</strong> {$t('pureClientMode.settings.dht.serverMode.descriptionText')}
               <br/>
-              <strong>Note:</strong> This may not work if you're behind a strict NAT/firewall. AutoNAT automatically upgrades you to server mode when publicly reachable.
+              <strong>{$t('pureClientMode.settings.dht.serverMode.noteLabel')}</strong> {$t('pureClientMode.settings.dht.serverMode.noteText')}
             </p>
             {#if localSettings.forceServerMode}
               <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                ⚠️ <strong>Server mode forced:</strong> Node will attempt to act as DHT server even behind NAT. This may result in connectivity issues. Requires DHT restart.
+                ⚠️ <strong>{$t('pureClientMode.settings.dht.serverMode.warningLabel')}</strong> {$t('pureClientMode.settings.dht.serverMode.warningText')}
               </div>
             {/if}
             {#if localSettings.pureClientMode}
               <div class="ml-6 p-2 bg-gray-50 border border-gray-200 rounded text-xs text-gray-600">
-                ℹ️ Server mode is disabled when client mode is forced.
+                {$t('pureClientMode.warnings.serverModeDisabled')}
               </div>
             {/if}
             <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-              ℹ️ <strong>Automatic behavior:</strong> If AutoNAT detects you're publicly reachable, you'll automatically be upgraded to server mode without needing this toggle.
+              ℹ️ <strong>{$t('pureClientMode.settings.dht.serverMode.autoBehaviorLabel')}</strong> {$t('pureClientMode.settings.dht.serverMode.autoBehaviorText')}
             </div>
           </div>
         </div>

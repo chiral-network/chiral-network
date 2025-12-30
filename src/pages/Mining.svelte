@@ -1335,29 +1335,29 @@
         <div class="flex-1 space-y-2">
           <p class="text-sm font-semibold text-yellow-800">
             {#if clientModeReason === "forced"}
-              Client-Only Mode Enabled (Forced) - Limited Blockchain Sync
+              {$t('pureClientMode.banner.title.forcedMining')}
             {:else if clientModeReason === "nat"}
-              Client-Only Mode (Behind NAT) - Limited Blockchain Sync
+              {$t('pureClientMode.banner.title.natMining')}
             {:else}
-              Client-Only Mode - Limited Blockchain Sync
+              {$t('pureClientMode.banner.title.defaultMining')}
             {/if}
           </p>
           <p class="text-sm text-yellow-700">
             {#if clientModeReason === "forced"}
-              You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.
+              {$t('pureClientMode.warnings.forcedModeMining')}
             {:else if clientModeReason === "nat"}
-              AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.
+              {$t('pureClientMode.warnings.natDetectedMining')}
             {:else}
-              You are in client-only mode. Blockchain syncs only last ~100 blocks (minimal storage). Mining is available.
+              {$t('pureClientMode.banner.description.defaultMining')}
             {/if}
           </p>
           <p class="text-xs text-yellow-600">
             {#if clientModeReason === "forced"}
-              To enable full blockchain sync (10,000 blocks), disable "Force Client-Only Mode" in Settings → Developers.
+              {$t('pureClientMode.banner.help.forcedMining')}
             {:else if clientModeReason === "nat"}
-              Full nodes sync ~10,000 blocks. To upgrade, configure port forwarding or use a VPN with a public IP to become publicly reachable.
+              {$t('pureClientMode.banner.help.natMining')}
             {:else}
-              Check your network settings or AutoNAT configuration for full functionality.
+              {$t('pureClientMode.banner.help.defaultMining')}
             {/if}
           </p>
         </div>

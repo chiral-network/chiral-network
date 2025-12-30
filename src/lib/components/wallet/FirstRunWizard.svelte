@@ -223,7 +223,7 @@
 </script>
 
 {#if mode === 'welcome'}
-  <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="fixed inset-0 z-50 bg-background/90 backdrop-blur-lg flex items-center justify-center p-4">
     <Card class="w-full max-w-3xl p-8 space-y-6">
       <div class="space-y-2">
         <h2 class="text-3xl font-bold text-center">{$t('account.firstRun.welcome')}</h2>
@@ -259,16 +259,16 @@
                 <span class="w-full border-t border-muted"></span>
               </div>
               <div class="relative flex justify-center text-xs uppercase">
-                <span class="bg-background px-2 text-muted-foreground">For Testing Only</span>
+                <span class="bg-background px-2 text-muted-foreground">{$t('wallet.testWallet.header')}</span>
               </div>
             </div>
 
-            <Button 
-              on:click={handleCreateTestWallet} 
-              variant="outline" 
+            <Button
+              on:click={handleCreateTestWallet}
+              variant="outline"
               class="w-full py-4 border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
             >
-              Create Test Wallet
+              {$t('wallet.testWallet.button')}
             </Button>
           {/if}
         </div>
