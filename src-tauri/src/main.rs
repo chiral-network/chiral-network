@@ -37,7 +37,7 @@ pub mod blockstore_manager;
 // Re-export modules from the lib crate
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source,
-    ed2k_client, encryption, file_transfer, ftp_client, http_download, keystore,
+    ed2k_client, encryption, file_transfer, ftp_client, ftp_bookmarks, http_download, keystore,
     logger, manager, multi_source_download, peer_selection, protocols,
     reputation, stream_auth, webrtc_service,
 };
@@ -4482,6 +4482,188 @@ async fn upload_file_to_network(
     // This code path should no longer be reached for WebRTC uploads
     Err("Unexpected code path in upload_file_to_network".to_string())
 }
+/// List files in an FTP directory
+#[tauri::command]
+async fn list_ftp_directory(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<Vec<ftp_client::FtpFileEntry>, String> {
+    use crate::download_source::FtpSourceInfo;
+
+    let source_info = FtpSourceInfo {
+        url,
+        username,
+        encrypted_password: None,
+        passive_mode,
+        use_ftps,
+        timeout_secs: Some(30),
+    };
+
+    ftp_client::list_ftp_directory(&source_info)
+        .await
+        .map_err(|e| format!("Failed to list FTP directory: {}", e))
+}
+
+/// Delete a file or directory on FTP server
+#[tauri::command]
+async fn delete_ftp_file(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String> {
+    use crate::download_source::FtpSourceInfo;
+
+    let source_info = FtpSourceInfo {
+        url,
+        username,
+        encrypted_password: None,
+        passive_mode,
+        use_ftps,
+        timeout_secs: Some(30),
+    };
+
+    ftp_client::delete_ftp_file(&source_info)
+        .await
+        .map_err(|e| format!("Failed to delete FTP file: {}", e))
+}
+
+/// Rename a file or directory on FTP server
+#[tauri::command]
+async fn rename_ftp_file(
+    url: String,
+    new_name: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String> {
+    use crate::download_source::FtpSourceInfo;
+
+    let source_info = FtpSourceInfo {
+        url,
+        username,
+        encrypted_password: None,
+        passive_mode,
+        use_ftps,
+        timeout_secs: Some(30),
+    };
+
+    ftp_client::rename_ftp_file(&source_info, &new_name)
+        .await
+        .map_err(|e| format!("Failed to rename FTP file: {}", e))
+}
+
+/// Create a directory on FTP server
+#[tauri::command]
+async fn create_ftp_directory(
+    url: String,
+    username: Option<String>,
+    password: Option<String>,
+    use_ftps: bool,
+    passive_mode: bool,
+) -> Result<(), String> {
+    use crate::download_source::FtpSourceInfo;
+
+    let source_info = FtpSourceInfo {
+        url,
+        username,
+        encrypted_password: None,
+        passive_mode,
+        use_ftps,
+        timeout_secs: Some(30),
+    };
+
+    ftp_client::create_ftp_directory(&source_info)
+        .await
+        .map_err(|e| format!("Failed to create FTP directory: {}", e))
+}
+
+/// Load all FTP bookmarks
+#[tauri::command]
+async fn load_ftp_bookmarks(app: tauri::AppHandle) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.load_bookmarks()
+        .map_err(|e| format!("Failed to load bookmarks: {}", e))
+}
+
+/// Add a new FTP bookmark
+#[tauri::command]
+async fn add_ftp_bookmark(
+    app: tauri::AppHandle,
+    bookmark: ftp_bookmarks::FtpBookmark,
+) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.add_bookmark(bookmark)
+        .map_err(|e| format!("Failed to add bookmark: {}", e))
+}
+
+/// Update an existing FTP bookmark
+#[tauri::command]
+async fn update_ftp_bookmark(
+    app: tauri::AppHandle,
+    bookmark: ftp_bookmarks::FtpBookmark,
+) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.update_bookmark(bookmark)
+        .map_err(|e| format!("Failed to update bookmark: {}", e))
+}
+
+/// Delete an FTP bookmark
+#[tauri::command]
+async fn delete_ftp_bookmark(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.delete_bookmark(&id)
+        .map_err(|e| format!("Failed to delete bookmark: {}", e))
+}
+
+/// Search FTP bookmarks
+#[tauri::command]
+async fn search_ftp_bookmarks(
+    app: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<ftp_bookmarks::FtpBookmark>, String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.search_bookmarks(&query)
+        .map_err(|e| format!("Failed to search bookmarks: {}", e))
+}
+
+/// Record bookmark usage
+#[tauri::command]
+async fn record_ftp_bookmark_usage(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir()
+        .map_err(|e| format!("Failed to get config directory: {}", e))?;
+
+    let manager = ftp_bookmarks::FtpBookmarksManager::new(config_dir);
+    manager.record_usage(&id)
+        .map_err(|e| format!("Failed to record usage: {}", e))
+}
+
 /// Test FTP connection to external server
 #[tauri::command]
 async fn test_ftp_connection(
@@ -9150,6 +9332,16 @@ fn main() {
             start_file_transfer_service,
             download_file_from_network,
             upload_file_to_network,
+            list_ftp_directory,
+            delete_ftp_file,
+            rename_ftp_file,
+            create_ftp_directory,
+            load_ftp_bookmarks,
+            add_ftp_bookmark,
+            update_ftp_bookmark,
+            delete_ftp_bookmark,
+            search_ftp_bookmarks,
+            record_ftp_bookmark_usage,
             test_ftp_connection,
             upload_to_external_ftp,
             start_ftp_download,
