@@ -167,16 +167,26 @@ impl Ed2kProtocolHandler {
         let mut buffer = vec![0; ED2K_CHUNK_SIZE];
 
         loop {
-            let bytes_read = file
-                .read(&mut buffer)
-                .await
-                .map_err(|e| ProtocolError::Internal(e.to_string()))?;
-            
-            if bytes_read == 0 {
-                break;
+            // Read a full ED2K_CHUNK_SIZE chunk (or until EOF)
+            let mut total_bytes_read = 0;
+            while total_bytes_read < ED2K_CHUNK_SIZE {
+                let bytes_read = file
+                    .read(&mut buffer[total_bytes_read..])
+                    .await
+                    .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+
+                if bytes_read == 0 {
+                    break; // EOF
+                }
+
+                total_bytes_read += bytes_read;
             }
 
-            let chunk_data = &buffer[..bytes_read];
+            if total_bytes_read == 0 {
+                break; // No more data
+            }
+
+            let chunk_data = &buffer[..total_bytes_read];
 
             // Calculate MD4 hash for the chunk
             let mut md4_hasher = Md4::new();
@@ -298,10 +308,14 @@ impl Ed2kProtocolHandler {
             hasher.update(&[]);
             hex::encode(hasher.finalize())
         } else {
-            // Stream hashes into hasher instead of concatenating strings
+            // Stream hashes into hasher instead of concatenating strings.
+            // Decode each hex-encoded chunk hash to raw bytes before hashing,
+            // to ensure we hash the actual hash values, not their ASCII representation.
             let mut hasher = Sha256::new();
             for chunk_info in &chunk_infos {
-                hasher.update(chunk_info.hash.as_bytes());
+                let hash_bytes = hex::decode(&chunk_info.hash)
+                    .map_err(|e| ProtocolError::Internal(format!("Invalid chunk hash hex: {e}")))?;
+                hasher.update(&hash_bytes);
             }
             hex::encode(hasher.finalize())
         };

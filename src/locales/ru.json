@@ -1658,5 +1658,197 @@
       "copyError": "Не удалось скопировать {label}",
       "exported": "Транзакция экспортирована"
     }
+  },
+  "commandPalette": {
+    "searchPlaceholder": "Search for actions or pages...",
+    "searchLabel": "Command palette search",
+    "noResults": "No results found",
+    "tryDifferentQuery": "Try a different search term",
+    "navigate": "Navigate",
+    "select": "Select",
+    "close": "Close",
+    "actions": {
+      "goToDownload": "Go to Download",
+      "goToUpload": "Go to Upload",
+      "goToNetwork": "Go to Network",
+      "goToMining": "Go to Mining",
+      "goToRelay": "Go to Relay",
+      "goToAnalytics": "Go to Analytics",
+      "goToReputation": "Go to Reputation",
+      "goToBlockchain": "Go to Blockchain",
+      "goToAccount": "Go to Account",
+      "goToSettings": "Go to Settings"
+    }
+  },
+  "downloadHistory": {
+    "title": "Download History",
+    "subtitle": "View and manage your download history",
+    "showHistory": "Show History",
+    "hideHistory": "Hide History",
+    "empty": "No download history yet",
+    "emptyDescription": "Completed, failed, and canceled downloads will appear here",
+    "search": "Search history...",
+    "filterAll": "All",
+    "filterCompleted": "Completed",
+    "filterFailed": "Failed",
+    "filterCanceled": "Canceled",
+    "redownload": "Re-download",
+    "remove": "Remove",
+    "clearHistory": "Clear History",
+    "clearFailed": "Clear Failed",
+    "clearCanceled": "Clear Canceled",
+    "exportHistory": "Export History",
+    "importHistory": "Import History",
+    "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
+    "confirmClearFailed": "Clear all failed downloads from history?",
+    "confirmClearCanceled": "Clear all canceled downloads from history?",
+    "stats": {
+      "total": "Total Downloads",
+      "completed": "Completed",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "totalSize": "Total Size",
+      "totalPrice": "Total Spent"
+    },
+    "messages": {
+      "historyCleared": "Download history cleared",
+      "failedCleared": "Failed downloads cleared",
+      "canceledCleared": "Canceled downloads cleared",
+      "entryRemoved": "Entry removed from history",
+      "exportSuccess": "History exported successfully",
+      "importSuccess": "Imported {count} history entries",
+      "importError": "Failed to import history: {error}",
+      "redownloadStarted": "Re-downloading {name}..."
+    }
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "close": "Close",
+    "tip": "Press ? or F1 anytime to view this help",
+    "categories": {
+      "navigation": "Navigation",
+      "application": "Application",
+      "window": "Window"
+    },
+    "navigation": {
+      "download": "Go to Download page",
+      "upload": "Go to Upload page",
+      "network": "Go to Network page",
+      "mining": "Go to Mining page",
+      "account": "Go to Account page",
+      "settings": "Open Settings"
+    },
+    "application": {
+      "commandPalette": "Open Command Palette",
+      "showHelp": "Show keyboard shortcuts",
+      "closeModal": "Close modal/dialog",
+      "refresh": "Refresh current page",
+      "reload": "Reload application"
+    },
+    "window": {
+      "fullscreen": "Toggle fullscreen",
+      "quit": "Quit application"
+    }
+  },
+  "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
+  "settings.diagnostics.circuitRelay": "Circuit Relay",
+  "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
+  "settings.diagnostics.diskSpace": "Disk Space",
+  "settings.diagnostics.encryptionSupport": "Encryption Support",
+  "settings.diagnostics.localStorage": "LocalStorage",
+  "settings.diagnostics.natTraversal": "NAT Traversal",
+  "settings.diagnostics.peerConnections": "Peer Connections",
+  "settings.diagnostics.proxyConfig": "Proxy Configuration",
+  "settings.diagnostics.storagePath": "Storage Path",
+  "settings.diagnostics.webrtcSupport": "WebRTC Support",
+  "settingsBackup": {
+    "title": "Backup & Restore",
+    "description": "Export or import your settings configuration",
+    "export": "Export Settings",
+    "import": "Import Settings",
+    "exportButton": "Export Settings",
+    "importButton": "Import Settings",
+    "downloadBackup": "Download Backup File",
+    "selectFile": "Select Backup File",
+    "merge": "Merge with Current Settings",
+    "replace": "Replace All Settings",
+    "autoBackup": "Automatic Backups",
+    "autoBackupDescription": "Automatic backups are created before major changes",
+    "restoreAutoBackup": "Restore",
+    "messages": {
+      "exportSuccess": "Settings exported successfully",
+      "exportError": "Failed to export settings: {error}",
+      "importSuccess": "Settings imported successfully",
+      "importWarnings": "Settings imported with warnings: {warnings}",
+      "importError": "Failed to import settings: {error}",
+      "autoBackupCreated": "Automatic backup created",
+      "autoBackupRestored": "Settings restored from backup",
+      "invalidFile": "Invalid backup file format",
+      "confirmReplace": "This will replace all current settings. Continue?"
+    }
+  },
+  "pureClientMode": {
+    "warnings": {
+      "forcedMode": "Вы вручную включили режим чистого клиента в Настройках. Вы не можете раздавать файлы или действовать как DHT-сервер. Блокчейн использует режим легкой синхронизации (минимальная загрузка).",
+      "forcedModeMining": "Вы вручную включили режим чистого клиента в Настройках. Блокчейн синхронизирует только последние ~100 блоков вместо полной синхронизации (~10 000 блоков). Майнинг доступен, но использует минимальное хранилище.",
+      "natDetected": "AutoNAT обнаружил, что вы за NAT или ограничительным брандмауэром. Вы можете скачивать файлы, но не можете раздавать их другим участникам.",
+      "natDetectedMining": "AutoNAT обнаружил, что вы за NAT или ограничительным брандмауэром. Блокчейн синхронизирует только последние ~100 блоков для снижения требований к пропускной способности/хранилищу. Майнинг доступен с уменьшенным хранилищем.",
+      "settingsForced": "⚠️ Режим клиента принудительно включен: Вы не сможете раздавать файлы или действовать как DHT-сервер. Блокчейн использует частичную синхронизацию (только последние ~100 блоков) вместо полной синхронизации (~10 000 блоков). Майнинг доступен с уменьшенным хранилищем. Требуется перезапуск DHT.",
+      "serverModeDisabled": "ℹ️ Режим сервера отключен при принудительном режиме клиента."
+    },
+    "banner": {
+      "title": {
+        "forced": "Режим Только Клиент Включен (Принудительно)",
+        "nat": "Режим Только Клиент (За NAT)",
+        "default": "Режим Только Клиент",
+        "forcedMining": "Режим Только Клиент Включен (Принудительно) - Ограниченная Синхронизация Блокчейна",
+        "natMining": "Режим Только Клиент (За NAT) - Ограниченная Синхронизация Блокчейна",
+        "defaultMining": "Режим Только Клиент - Ограниченная Синхронизация Блокчейна"
+      },
+      "description": {
+        "default": "Вы в режиме только клиента и не можете раздавать файлы.",
+        "defaultMining": "Вы в режиме только клиента. Блокчейн синхронизирует только последние ~100 блоков (минимальное хранилище). Майнинг доступен."
+      },
+      "help": {
+        "forced": "Чтобы включить раздачу, отключите \"Принудительный Режим Только Клиент\" в Настройки → Разработчики → Режим DHT Клиента.",
+        "nat": "Ваши файлы по-прежнему будут сохранены локально, но не будут переданы в сеть. Чтобы включить раздачу, настройте переадресацию портов или используйте VPN с публичным IP.",
+        "default": "Проверьте настройки сети или конфигурацию AutoNAT.",
+        "forcedMining": "Чтобы включить полную синхронизацию блокчейна (10 000 блоков), отключите \"Принудительный Режим Только Клиент\" в Настройки → Разработчики.",
+        "natMining": "Полные узлы синхронизируют ~10 000 блоков. Чтобы обновиться, настройте переадресацию портов или используйте VPN с публичным IP, чтобы стать публично доступным.",
+        "defaultMining": "Проверьте настройки сети или конфигурацию AutoNAT для полной функциональности."
+      }
+    },
+    "settings": {
+      "dht": {
+        "clientMode": {
+          "title": "Режим DHT Клиента (Переопределение)",
+          "label": "Принудительный Режим Только Клиент",
+          "descriptionOverride": "Переопределение разработчика:",
+          "descriptionText": "Принудительно оставляет узел в режиме клиента, даже если он публично доступен.",
+          "noteLabel": "Примечание:",
+          "noteText": "AutoNAT автоматически оставляет вас в режиме клиента, если вы за NAT - вам не нужно включать это вручную, если только вы не хотите принудительно установить его.",
+          "autoBehaviorLabel": "Автоматическое поведение:",
+          "autoBehaviorText": "Если AutoNAT обнаружит, что вы за NAT, вы автоматически останетесь в режиме клиента без необходимости этого переключателя."
+        },
+        "serverMode": {
+          "title": "Режим DHT Сервера (Переопределение)",
+          "label": "Принудительный Режим Сервера",
+          "descriptionOverride": "Переопределение разработчика:",
+          "descriptionText": "Принудительно заставляет узел действовать как DHT-сервер, даже если он за NAT (только для тестирования).",
+          "noteLabel": "Примечание:",
+          "noteText": "Это может не работать, если вы за строгим NAT/брандмауэром. AutoNAT автоматически повышает вас до режима сервера, когда вы публично доступны.",
+          "warningLabel": "Режим сервера принудительно включен:",
+          "warningText": "Узел попытается действовать как DHT-сервер, даже за NAT. Это может привести к проблемам с подключением. Требуется перезапуск DHT.",
+          "autoBehaviorLabel": "Автоматическое поведение:",
+          "autoBehaviorText": "Если AutoNAT обнаружит, что вы публично доступны, вы автоматически будете повышены до режима сервера без необходимости этого переключателя."
+        }
+      }
+    }
+  },
+  "wallet": {
+    "testWallet": {
+      "header": "Только для Тестирования",
+      "button": "Создать Тестовый Кошелек"
+    }
   }
 }

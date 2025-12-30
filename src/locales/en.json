@@ -677,8 +677,7 @@
       "savePasswordDisabled": "For security, the 'Save Password' feature is currently disabled. Please enter your password each time you unlock your account.",
       "savePasswordWarning": "Warning: Saving your password locally is convenient but less secure. Use with caution.",
       "addressMismatch": "Decryption error: address does not match."
-    }
-    ,
+    },
     "delete": {
       "confirm": "Delete keystore account {address}? This cannot be undone.",
       "success": "Keystore account removed.",
@@ -1879,6 +1878,70 @@
       "goToBlockchain": "Go to Blockchain",
       "goToAccount": "Go to Account",
       "goToSettings": "Go to Settings"
+    }
+  },
+  "pureClientMode": {
+    "warnings": {
+      "forcedMode": "You have manually enabled pure client mode in Settings. You cannot seed files or act as a DHT server. Blockchain uses light sync mode (minimal download).",
+      "forcedModeMining": "You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.",
+      "natDetected": "AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them to other peers.",
+      "natDetectedMining": "AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.",
+      "settingsForced": "⚠️ Client mode forced: You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.",
+      "serverModeDisabled": "ℹ️ Server mode is disabled when client mode is forced."
+    },
+    "banner": {
+      "title": {
+        "forced": "Client-Only Mode Enabled (Forced)",
+        "nat": "Client-Only Mode (Behind NAT)",
+        "default": "Client-Only Mode",
+        "forcedMining": "Client-Only Mode Enabled (Forced) - Limited Blockchain Sync",
+        "natMining": "Client-Only Mode (Behind NAT) - Limited Blockchain Sync",
+        "defaultMining": "Client-Only Mode - Limited Blockchain Sync"
+      },
+      "description": {
+        "default": "You are in client-only mode and cannot seed files.",
+        "defaultMining": "You are in client-only mode. Blockchain syncs only last ~100 blocks (minimal storage). Mining is available."
+      },
+      "help": {
+        "forced": "To enable seeding, disable \"Force Client-Only Mode\" in Settings → Developers → DHT Client Mode.",
+        "nat": "Your files will still be saved locally, but won't be shared with the network. To enable seeding, configure port forwarding or use a VPN with a public IP.",
+        "default": "Check your network settings or AutoNAT configuration.",
+        "forcedMining": "To enable full blockchain sync (10,000 blocks), disable \"Force Client-Only Mode\" in Settings → Developers.",
+        "natMining": "Full nodes sync ~10,000 blocks. To upgrade, configure port forwarding or use a VPN with a public IP to become publicly reachable.",
+        "defaultMining": "Check your network settings or AutoNAT configuration for full functionality."
+      }
+    },
+    "settings": {
+      "dht": {
+        "clientMode": {
+          "title": "DHT Client Mode (Override)",
+          "label": "Force Client-Only Mode",
+          "descriptionOverride": "Developer override:",
+          "descriptionText": "Forces node to stay in client mode even if publicly reachable.",
+          "noteLabel": "Note:",
+          "noteText": "AutoNAT automatically keeps you in client mode if behind NAT - you don't need to enable this manually unless you want to force it.",
+          "autoBehaviorLabel": "Automatic behavior:",
+          "autoBehaviorText": "If AutoNAT detects you're behind NAT, you'll automatically stay in client mode without needing this toggle."
+        },
+        "serverMode": {
+          "title": "DHT Server Mode (Override)",
+          "label": "Force Server Mode",
+          "descriptionOverride": "Developer override:",
+          "descriptionText": "Forces node to act as DHT server even if behind NAT (for testing only).",
+          "noteLabel": "Note:",
+          "noteText": "This may not work if you're behind a strict NAT/firewall. AutoNAT automatically upgrades you to server mode when publicly reachable.",
+          "warningLabel": "Server mode forced:",
+          "warningText": "Node will attempt to act as DHT server even behind NAT. This may result in connectivity issues. Requires DHT restart.",
+          "autoBehaviorLabel": "Automatic behavior:",
+          "autoBehaviorText": "If AutoNAT detects you're publicly reachable, you'll automatically be upgraded to server mode without needing this toggle."
+        }
+      }
+    }
+  },
+  "wallet": {
+    "testWallet": {
+      "header": "For Testing Only",
+      "button": "Create Test Wallet"
     }
   }
 }
