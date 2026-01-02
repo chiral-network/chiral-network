@@ -1274,6 +1274,7 @@ async function loadAndResumeDownloads() {
       protocol: detectedProtocol, // Store the selected protocol with the file
       uploaderAddress: metadata.uploaderAddress, // Wallet address for payment
       // Pass protocol-specific sources
+      ftpSources: metadata.ftpSources,
       httpSources: metadata.httpSources,
       ed2kSources: metadata.ed2kSources,
       infoHash: metadata.infoHash
@@ -2025,6 +2026,54 @@ async function loadAndResumeDownloads() {
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.error('ED2K download error:', errorMsg);
         showToast(`ED2K download failed: ${errorMsg}`, 'error');
+        files.update(f => f.map(file =>
+          file.id === fileId ? { ...file, status: 'failed' } : file
+        ));
+        activeSimulations.delete(fileId);
+        return;
+      }
+    }
+
+    // Handle FTP downloads
+    if ((fileToDownload as any).ftpSources && (fileToDownload as any).ftpSources.length > 0) {
+      const ftpSource = (fileToDownload as any).ftpSources[0];
+      try {
+        const { join } = await import('@tauri-apps/api/path');
+        const storagePath = await invoke('get_download_directory');
+        await invoke('ensure_directory_exists', { path: storagePath });
+        const outputPath = await join(storagePath, fileToDownload.name);
+
+        showToast(`Downloading from FTP: ${fileToDownload.name}`, 'info');
+
+        // Update status to downloading
+        files.update(f => f.map(file =>
+          file.id === fileId ? { ...file, status: 'downloading', progress: 0 } : file
+        ));
+
+        // Call the backend FTP download command
+        const downloadedPath = await invoke('start_ftp_download', {
+          url: ftpSource.url,
+          outputPath: outputPath,
+          username: ftpSource.username || null,
+          password: ftpSource.password || null
+        });
+
+        // FTP download completed - the backend already saved the file
+        // The backend emits transfer events that update the UI via transferStore
+        // Just mark as completed here
+        files.update(f => f.map(file =>
+          file.id === fileId
+            ? { ...file, status: 'completed', progress: 100, downloadPath: String(downloadedPath) }
+            : file
+        ));
+
+        showToast(`FTP download completed: ${fileToDownload.name}`, 'success');
+        activeSimulations.delete(fileId);
+        return;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error('FTP download error:', errorMsg);
+        showToast(`FTP download failed: ${errorMsg}`, 'error');
         files.update(f => f.map(file =>
           file.id === fileId ? { ...file, status: 'failed' } : file
         ));
