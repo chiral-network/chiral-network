@@ -69,6 +69,7 @@ let showExitPrompt = false;
 let isExiting = false;
 let isLockingAccount = false;
 let exitError: string | null = null;
+let canShowLockAction = true;
 let transferStoreUnsubscribe: (() => void) | null = null;
 let unlistenExitPrompt: (() => void) | null = null;
 let unsubscribeAuthWizard: (() => void) | null = null;
@@ -210,6 +211,8 @@ async function handleLockFromExitPrompt() {
     isLockingAccount = false;
   }
 }
+
+$: canShowLockAction = !showFirstRunWizard;
 
 
   onMount(() => {
@@ -1282,6 +1285,7 @@ async function handleLockFromExitPrompt() {
   <ExitPrompt
     isExiting={isExiting}
     isLocking={isLockingAccount}
+    canLock={canShowLockAction}
     error={exitError}
     onStay={handleStayInApp}
     onLockAccount={handleLockFromExitPrompt}
