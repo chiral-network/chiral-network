@@ -414,19 +414,27 @@
 
             if (completedFile && !paidFiles.has(completedFile.hash)) {
                 // Process payment for Bitswap download (only once per file)
-                diagnosticLogger.info('Download', 'Bitswap download completed, processing payment', { fileName: completedFile.name });
+                diagnosticLogger.info('Download', 'Bitswap download completed, processing payment', { 
+                  fileName: completedFile.name,
+                  uploaderAddress: completedFile.uploaderAddress,
+                  seederAddresses: completedFile.seederAddresses
+                });
                 const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
                 
                 // Payment is always required (minimum 0.0001 Chiral enforced by paymentService)
 
 
                 const seederPeerId = completedFile.seederAddresses?.[0];
-                const seederWalletAddress = paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
-                  ? completedFile.seederAddresses?.[0]!
-                  : null;                if (!seederWalletAddress) {
+                const seederWalletAddress = completedFile.uploaderAddress || 
+                                             (paymentService.isValidWalletAddress(completedFile.seederAddresses?.[0])
+                                               ? completedFile.seederAddresses?.[0]!
+                                               : null);
+                if (!seederWalletAddress) {
                   diagnosticLogger.warn('Download', 'Skipping Bitswap payment due to missing or invalid uploader wallet address', {
                       file: completedFile.name,
-                      seederAddresses: completedFile.seederAddresses
+                      seederAddresses: completedFile.seederAddresses,
+                      uploaderAddress: completedFile.uploaderAddress,
+                      fileObject: completedFile
                   });
                   showToast('Payment skipped: missing uploader wallet address', 'warning');
               } else {
@@ -681,7 +689,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     const completedFile = $files.find(f => f.hash === data.fileHash);
     
     if (completedFile && !paidFiles.has(completedFile.hash)) {
-      diagnosticLogger.info('Download', 'WebRTC download completed, processing payment', { fileName: completedFile.name });
+      diagnosticLogger.info('Download', 'WebRTC download completed, processing payment', { 
+        fileName: completedFile.name,
+        uploaderAddress: completedFile.uploaderAddress,
+        seederAddresses: completedFile.seederAddresses
+      });
       const paymentAmount = await paymentService.calculateDownloadCost(completedFile.size);
       
       // Get seeder information from file metadata
@@ -695,7 +707,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
         diagnosticLogger.warn('Download', 'Skipping WebRTC payment due to missing or invalid uploader wallet address', {
           file: completedFile.name,
           seederAddresses: completedFile.seederAddresses,
-          uploaderAddress: completedFile.uploaderAddress
+          uploaderAddress: completedFile.uploaderAddress,
+          fileObject: completedFile
         });
         showToast('Payment skipped: missing uploader wallet address', 'warning');
       } else {
@@ -1189,7 +1202,9 @@ async function loadAndResumeDownloads() {
       fileName: metadata.fileName,
       selectedProtocol: metadata.selectedProtocol,
       seeders: metadata.seeders?.length,
-      cids: metadata.cids?.length
+      cids: metadata.cids?.length,
+      uploaderAddress: metadata.uploaderAddress,
+      hasUploaderAddress: !!metadata.uploaderAddress
     });
 
     // Use user's protocol selection if provided, otherwise auto-detect
@@ -2085,15 +2100,23 @@ async function loadAndResumeDownloads() {
 
         // 3. Process payment for encrypted download (only if not already paid)
         if (!paidFiles.has(fileToDownload.hash)) {
+          diagnosticLogger.info('Download', 'Encrypted download completed, processing payment', { 
+            fileName: fileToDownload.name,
+            uploaderAddress: fileToDownload.uploaderAddress,
+            seederAddresses: fileToDownload.seederAddresses
+          });
           const seederPeerId = seeders[0];
-          const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
-            ? fileToDownload.seederAddresses?.[0]!
-            : null;
+          const seederWalletAddress = fileToDownload.uploaderAddress || 
+                                       (paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                                         ? fileToDownload.seederAddresses?.[0]!
+                                         : null);
 
           if (!seederWalletAddress) {
             diagnosticLogger.warn('Download', 'Skipping encrypted download payment due to missing or invalid uploader wallet address', {
               file: fileToDownload.name,
-              seederAddresses: fileToDownload.seederAddresses
+              seederAddresses: fileToDownload.seederAddresses,
+              uploaderAddress: fileToDownload.uploaderAddress,
+              fileObject: fileToDownload
             });
             showToast('Payment skipped: missing uploader wallet address', 'warning');
           } else {
@@ -2155,15 +2178,23 @@ async function loadAndResumeDownloads() {
 
             // Process payment for multi-source download (only if not already paid)
             if (!paidFiles.has(fileToDownload.hash)) {
+              diagnosticLogger.info('Download', 'Multi-source download completed, processing payment', { 
+                fileName: fileToDownload.name,
+                uploaderAddress: fileToDownload.uploaderAddress,
+                seederAddresses: fileToDownload.seederAddresses
+              });
               const seederPeerId = seeders[0];
-              const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
-                ? fileToDownload.seederAddresses?.[0]!
-                : null;
+              const seederWalletAddress = fileToDownload.uploaderAddress || 
+                                           (paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                                             ? fileToDownload.seederAddresses?.[0]!
+                                             : null);
 
               if (!seederWalletAddress) {
                 diagnosticLogger.warn('Download', 'Skipping multi-source payment due to missing or invalid uploader wallet address', {
                   file: fileToDownload.name,
-                  seederAddresses: fileToDownload.seederAddresses
+                  seederAddresses: fileToDownload.seederAddresses,
+                  uploaderAddress: fileToDownload.uploaderAddress,
+                  fileObject: fileToDownload
                 });
                 showToast('Payment skipped: missing uploader wallet address', 'warning');
               } else {
@@ -2299,15 +2330,23 @@ async function loadAndResumeDownloads() {
                 if (transfer.status === 'completed' && fileToDownload) {
                   // Process payment for P2P download (only if not already paid)
                   if (!paidFiles.has(fileToDownload.hash)) {
+                    diagnosticLogger.info('Download', 'P2P download completed, processing payment', { 
+                      fileName: fileToDownload.name,
+                      uploaderAddress: fileToDownload.uploaderAddress,
+                      seederAddresses: fileToDownload.seederAddresses
+                    });
                     const seederPeerId = seeders[0];
-                    const seederWalletAddress = paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
-                      ? fileToDownload.seederAddresses?.[0]!
-                      : null;
+                    const seederWalletAddress = fileToDownload.uploaderAddress || 
+                                                 (paymentService.isValidWalletAddress(fileToDownload.seederAddresses?.[0])
+                                                   ? fileToDownload.seederAddresses?.[0]!
+                                                   : null);
 
                     if (!seederWalletAddress) {
                       diagnosticLogger.warn('Download', 'Skipping P2P payment due to missing or invalid uploader wallet address', {
                         file: fileToDownload.name,
-                        seederAddresses: fileToDownload.seederAddresses
+                        seederAddresses: fileToDownload.seederAddresses,
+                        uploaderAddress: fileToDownload.uploaderAddress,
+                        fileObject: fileToDownload
                       });
                       showToast('Payment skipped: missing uploader wallet address', 'warning');
                     } else {
