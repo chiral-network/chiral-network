@@ -24,6 +24,10 @@
   import { goto } from '@mateothegreat/svelte5-router';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
+  const msg = (k: string, fallback: string): string => {
+    const val = $t(k);
+    return val === k ? fallback : val;
+  }
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
 
   // SECURITY NOTE: Removed weak XOR obfuscation. Sensitive data should not be stored in frontend.
@@ -1654,14 +1658,14 @@
   <div class="grid grid-cols-1 {$etcAccount ? 'lg:grid-cols-2' : ''} gap-3 sm:gap-4">
     <Card class="p-4 sm:p-6">
       <div class="flex items-center justify-between mb-3 sm:mb-4">
-        <h2 class="text-base sm:text-lg font-semibold">{$t('wallet.title')}</h2>
+        <h2 class="text-base sm:text-lg font-semibold">{msg('wallet.title', 'Wallet')}</h2>
         <Wallet class="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground" />
       </div>
       
       <div class="space-y-3 sm:space-y-4">
         {#if !$etcAccount}
           <div class="space-y-3">
-            <p class="text-sm text-muted-foreground">{$t('wallet.cta.intro')}</p>
+            <p class="text-sm text-muted-foreground">{msg('wallet.cta.intro', 'Create or import a wallet to get started.')}</p>
             
             <Button 
               class="w-full" 
@@ -1674,11 +1678,11 @@
             <div class="flex flex-col sm:flex-row gap-2">
               <Button variant="outline" class="w-full sm:flex-1" on:click={openCreateMnemonic}>
                 <KeyRound class="h-4 w-4 mr-1.5" /> 
-                <span class="text-sm sm:text-base">{$t('wallet.hd.create_via_phrase')}</span>
+                <span class="text-sm sm:text-base">{msg('wallet.hd.create_via_phrase', 'Create via recovery phrase')}</span>
               </Button>
               <Button variant="outline" class="w-full sm:flex-1" on:click={openImportMnemonic}>
                 <Import class="h-4 w-4 mr-1.5" /> 
-                <span class="text-sm sm:text-base">{$t('wallet.hd.import_phrase')}</span>
+                <span class="text-sm sm:text-base">{msg('wallet.hd.import_phrase', 'Import recovery phrase')}</span>
               </Button>
             </div>
             
@@ -1702,7 +1706,7 @@
                   title="Import private key from wallet JSON"
                 >
                   <FileText class="h-4 w-4 mr-1.5 sm:mr-2" />
-                  <span class="truncate">{$t('wallet.hd.load_from_wallet')}</span>
+                  <span class="truncate">{msg('wallet.hd.load_from_wallet', 'Load from wallet')}</span>
                 </Button>
               </div>
               <Button 
@@ -1721,7 +1725,7 @@
                 <span class="w-full border-t"></span>
               </div>
               <div class="relative flex justify-center text-xs uppercase">
-                <span class="bg-card px-2 text-muted-foreground">{$t('wallet.cta.or')}</span>
+                <span class="bg-card px-2 text-muted-foreground">{msg('wallet.cta.or', 'Or')}</span>
               </div>
             </div>
 
@@ -1792,7 +1796,7 @@
           </div>
         {:else}
         <div>
-          <p class="text-sm text-muted-foreground">{$t('wallet.balance')}</p>
+          <p class="text-sm text-muted-foreground">{msg('wallet.balance', 'Balance')}</p>
           <p class="text-3xl font-bold text-foreground">{$wallet.balance.toFixed(8)} Chiral</p>
         </div>
         
@@ -1817,7 +1821,7 @@
               <div class="bg-green-100 rounded p-1">
                 <ArrowDownLeft class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-green-600" />
               </div>
-            <p class="text-[10px] sm:text-xs text-muted-foreground truncate">{$t('wallet.totalReceived')} {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
+            <p class="text-[10px] sm:text-xs text-muted-foreground truncate">{msg('wallet.totalReceived', 'Total received')} {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
               <p class="text-sm sm:text-base font-semibold text-foreground break-words">+{$accurateTotals.totalReceived.toFixed(8)}</p>
@@ -1831,7 +1835,7 @@
               <div class="bg-red-100 rounded p-1">
                 <ArrowUpRight class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-red-600" />
               </div>
-            <p class="text-[10px] sm:text-xs text-muted-foreground truncate">{$t('wallet.totalSpent')} {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
+            <p class="text-[10px] sm:text-xs text-muted-foreground truncate">{msg('wallet.totalSpent', 'Total spent')} {#if !$accurateTotals}<span class="text-[10px] sm:text-xs opacity-60">(est.)</span>{/if}</p>
             </div>
             {#if $accurateTotals}
               <p class="text-sm sm:text-base font-semibold text-foreground break-words">-{$accurateTotals.totalSent.toFixed(8)}</p>
@@ -1914,7 +1918,7 @@
                           <div class="bg-purple-100 p-1.5 sm:p-2.5 rounded-xl shadow-sm">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-600 sm:w-[22px] sm:h-[22px]"><path d="M5 5h3v3H5zM5 16h3v3H5zM16 5h3v3h-3zM16 16h3v3h-3zM10.5 5h3M10.5 19h3M5 10.5v3M19 10.5v3M10.5 10.5h3v3h-3z"/></svg>
                           </div>
-                          <h3 class="text-lg sm:text-2xl font-bold text-gray-900">{$t('wallet.qrModal.title')}</h3>
+                          <h3 class="text-lg sm:text-2xl font-bold text-gray-900">{msg('wallet.qrModal.title', 'Your wallet address')}</h3>
                         </div>
                         <button
                           on:click={() => showQrCodeModal = false}
@@ -1927,7 +1931,7 @@
                       
                       <!-- QR Code -->
                       <div class="bg-white p-4 sm:p-6 rounded-2xl border-2 border-purple-200 shadow-lg inline-block mb-4 sm:mb-6 transition-transform hover:scale-105 duration-200">
-                        <img src={qrCodeDataUrl} alt={$t('wallet.qrModal.alt')} class="mx-auto rounded-lg w-full max-w-[200px] sm:max-w-none" />
+                        <img src={qrCodeDataUrl} alt={msg('wallet.qrModal.alt', 'Wallet address QR code')} class="mx-auto rounded-lg w-full max-w-[200px] sm:max-w-none" />
                       </div>
                       
                       <!-- Address -->
@@ -1952,7 +1956,7 @@
             </div>
             
             <div class="mt-4">
-              <p class="text-sm text-muted-foreground">{$t('wallet.privateKey')}</p>
+              <p class="text-sm text-muted-foreground">{msg('wallet.privateKey', 'Private key')}</p>
                 <div class="flex items-center gap-2 mt-1">
                   <Input
                     type="text"
@@ -1984,7 +1988,7 @@
             <div class="mt-6 space-y-2">
               <div class="grid grid-cols-2 gap-2">
                 <Button type="button" variant="outline" on:click={exportWallet}>
-                  {$t('wallet.export')}
+                  {msg('wallet.export', 'Export wallet')}
                 </Button>
                 <Button type="button" variant="destructive" on:click={handleLogout}>
                   {$t('actions.lockWallet')}
