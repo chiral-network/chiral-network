@@ -9,6 +9,7 @@
   import { wallet, etcAccount, blacklist, showAuthWizard } from '$lib/stores'
   import { gethStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
+  import { lockAccount } from '$lib/services/accountLock';
   import { transactions, transactionPagination, miningPagination } from '$lib/stores';
   import { derived } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -1508,96 +1509,13 @@
   //   logout();
   // }
   
-  // Update your handleLogout function
+  // Locks account using shared helper (used by closing wizard and this page)
   async function handleLogout() {
+    privateKeyVisible = false;
     try {
-      // Stop mining if it's currently running
-      if ($miningState.isMining) {
-        await invoke('stop_miner');
-      }
-      
-      // Call backend logout to clear active account from app state
-      if (isTauri) {
-        await invoke('logout');
-      }
-      
-      // Clear the account store
-      etcAccount.set(null);
-
-      // Clear wallet data - reset to 0 balance, not a default value
-      wallet.update((w: any) => ({
-        ...w,
-        address: "",
-        balance: 0, // Reset to 0 for logout
-        totalEarned: 0,
-        totalSpent: 0,
-        totalReceived: 0,
-        pendingTransactions: 0
-      }));
-
-      // Clear mining state completely
-      miningState.update((state: any) => ({
-        ...state,
-        isMining: false,
-        hashRate: "0 H/s",
-        totalRewards: 0,
-        blocksFound: 0,
-        activeThreads: 0,
-        recentBlocks: [],
-        sessionStartTime: undefined
-      }));
-
-      // Clear accurate totals (will recalculate on next login)
-      accurateTotals.set(null);
-
-      // Clear transaction history
-      transactions.set([]);
-
-      // Reset pagination states
-      transactionPagination.set({
-        accountAddress: null,
-        oldestBlockScanned: null,
-        isLoading: false,
-        hasMore: true,
-        batchSize: 5000,
-      });
-      miningPagination.set({
-        accountAddress: null,
-        oldestBlockScanned: null,
-        isLoading: false,
-        hasMore: true,
-        batchSize: 5000,
-      });
-
-      // Clear any stored session data from both localStorage and sessionStorage
-      if (typeof localStorage !== 'undefined') {
-        const walletKeys = [
-          'lastAccount',
-          'miningSession',
-          'chiral_wallet',
-          'chiral_transactions',
-          'transactionPagination',
-          'miningPagination',
-          'chiral_keystore_passwords',
-        ];
-        walletKeys.forEach(key => localStorage.removeItem(key));
-        // Clear all sessionStorage data for security
-        sessionStorage.clear();
-      }
-      
-      privateKeyVisible = false;
-      
-      // Show success message and trigger re-login wizard
-      showToast(tr('toasts.account.logout.locked'), 'success');
-      showAuthWizard.set(true);
-      
+      await lockAccount();
     } catch (error) {
       console.error('Error during logout:', error);
-      // showToast('Error during logout: ' + String(error), 'error');
-      showToast(
-        tr('toasts.account.logout.error', { values: { error: String(error) } }),
-        'error'
-      );
     }
   }
 

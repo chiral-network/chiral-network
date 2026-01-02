@@ -26,12 +26,13 @@ import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import SimpleToast from './lib/components/SimpleToast.svelte';
     import FirstRunWizard from './lib/components/wallet/FirstRunWizard.svelte';
     import KeyboardShortcutsPanel from './lib/components/KeyboardShortcutsPanel.svelte';
-    import CommandPalette from './lib/components/CommandPalette.svelte';
+import CommandPalette from './lib/components/CommandPalette.svelte';
 import ExitPrompt from './lib/components/ExitPrompt.svelte';
 import { startNetworkMonitoring } from './lib/services/networkService';
 import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { bandwidthScheduler } from '$lib/services/bandwidthScheduler';
     import { detectUserRegion } from '$lib/services/geolocation';
+import { lockAccount } from '$lib/services/accountLock';
 import { paymentService } from '$lib/services/paymentService';
 import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
     import { showToast } from '$lib/toast';
@@ -66,6 +67,7 @@ let showShortcutsPanel = false;
 let showCommandPalette = false;
 let showExitPrompt = false;
 let isExiting = false;
+let isLockingAccount = false;
 let exitError: string | null = null;
 let transferStoreUnsubscribe: (() => void) | null = null;
 let unlistenExitPrompt: (() => void) | null = null;
@@ -189,6 +191,23 @@ async function handleConfirmExit() {
     console.error('Failed to exit app:', error);
     exitError = 'Could not close the app. Please try again.';
     isExiting = false;
+  }
+}
+
+async function handleLockFromExitPrompt() {
+  if (isLockingAccount || isExiting) return;
+  isLockingAccount = true;
+  exitError = null;
+
+  try {
+    await lockAccount();
+    showExitPrompt = false;
+    isExiting = false;
+  } catch (error) {
+    console.error('Failed to lock account:', error);
+    exitError = 'Could not lock the account. Please try again.';
+  } finally {
+    isLockingAccount = false;
   }
 }
 
@@ -1262,8 +1281,10 @@ async function handleConfirmExit() {
 {#if showExitPrompt}
   <ExitPrompt
     isExiting={isExiting}
+    isLocking={isLockingAccount}
     error={exitError}
     onStay={handleStayInApp}
+    onLockAccount={handleLockFromExitPrompt}
     onExit={handleConfirmExit}
   />
 {/if}
