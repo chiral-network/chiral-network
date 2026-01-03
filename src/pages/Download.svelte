@@ -1942,6 +1942,98 @@ async function loadAndResumeDownloads() {
       return;
     }
 
+    // Handle HTTP downloads
+    if ((fileToDownload as any).httpSources && (fileToDownload as any).httpSources.length > 0) {
+      const httpSource = (fileToDownload as any).httpSources[0];
+      try {
+        const { join } = await import('@tauri-apps/api/path');
+        const storagePath = await invoke('get_download_directory');
+        await invoke('ensure_directory_exists', { path: storagePath });
+        const outputPath = await join(storagePath, fileToDownload.name);
+
+        showToast(`Downloading from HTTP: ${fileToDownload.name}`, 'info');
+
+        // Update status to downloading
+        files.update(f => f.map(file =>
+          file.id === fileId ? { ...file, status: 'downloading', progress: 0 } : file
+        ));
+
+        // Use multi-source download with HTTP source
+        await invoke('download_file_multi_source', {
+          fileHash: fileToDownload.hash,
+          outputPath: outputPath,
+          preferMultiSource: true,
+          maxPeers: 1
+        });
+
+        // HTTP download completed
+        files.update(f => f.map(file =>
+          file.id === fileId
+            ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
+            : file
+        ));
+
+        showToast(`HTTP download completed: ${fileToDownload.name}`, 'success');
+        activeSimulations.delete(fileId);
+        return;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error('HTTP download error:', errorMsg);
+        showToast(`HTTP download failed: ${errorMsg}`, 'error');
+        files.update(f => f.map(file =>
+          file.id === fileId ? { ...file, status: 'failed' } : file
+        ));
+        activeSimulations.delete(fileId);
+        return;
+      }
+    }
+
+    // Handle ED2K downloads
+    if ((fileToDownload as any).ed2kSources && (fileToDownload as any).ed2kSources.length > 0) {
+      const ed2kSource = (fileToDownload as any).ed2kSources[0];
+      try {
+        const { join } = await import('@tauri-apps/api/path');
+        const storagePath = await invoke('get_download_directory');
+        await invoke('ensure_directory_exists', { path: storagePath });
+        const outputPath = await join(storagePath, fileToDownload.name);
+
+        showToast(`Downloading from ED2K: ${fileToDownload.name}`, 'info');
+
+        // Update status to downloading
+        files.update(f => f.map(file =>
+          file.id === fileId ? { ...file, status: 'downloading', progress: 0 } : file
+        ));
+
+        // Use multi-source download with ED2K source
+        await invoke('download_file_multi_source', {
+          fileHash: fileToDownload.hash,
+          outputPath: outputPath,
+          preferMultiSource: true,
+          maxPeers: 1
+        });
+
+        // ED2K download completed
+        files.update(f => f.map(file =>
+          file.id === fileId
+            ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath }
+            : file
+        ));
+
+        showToast(`ED2K download completed: ${fileToDownload.name}`, 'success');
+        activeSimulations.delete(fileId);
+        return;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error('ED2K download error:', errorMsg);
+        showToast(`ED2K download failed: ${errorMsg}`, 'error');
+        files.update(f => f.map(file =>
+          file.id === fileId ? { ...file, status: 'failed' } : file
+        ));
+        activeSimulations.delete(fileId);
+        return;
+      }
+    }
+
     // Handle FTP downloads
     if ((fileToDownload as any).ftpSources && (fileToDownload as any).ftpSources.length > 0) {
       const ftpSource = (fileToDownload as any).ftpSources[0];
