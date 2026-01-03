@@ -35,9 +35,11 @@ let cleaning = false;
 let lastCleanupReport: CleanupReport | null = null;
 let updateInterval: number;
 
-function formatBytes(bytes: number): string {
+function formatBytes(size: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = bytes;
+  if (size === undefined){
+    return "0 B"
+  }
   let unitIndex = 0;
 
   while (size >= 1024 && unitIndex < units.length - 1) {
