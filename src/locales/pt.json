@@ -623,7 +623,13 @@
       "timestamp": "Carimbo de data/hora",
       "close": "Fechar Recibo"
     },
-    "searchPlaceholder": "Pesquisar por endereço, descrição ou ID..."
+    "searchPlaceholder": "Pesquisar por endereço, descrição ou ID...",
+    "clearSearch": "Limpar pesquisa",
+    "miningRewards": {
+      "scannedUpTo": "Recompensas de mineração escaneadas até o bloco #{block}",
+      "allLoaded": "Todas as recompensas de mineração carregadas",
+      "scannedAll": "Todos os blocos escaneados de #0 até o atual"
+    }
   },
   "keystore": {
     "title": "Salvar no Keystore Local",

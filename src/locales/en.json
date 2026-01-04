@@ -658,7 +658,13 @@
       "timestamp": "Timestamp",
       "close": "Close Receipt"
     },
-    "searchPlaceholder": "Search by address, description, or ID..."
+    "searchPlaceholder": "Search by address, description, or ID...",
+    "clearSearch": "Clear search",
+    "miningRewards": {
+      "scannedUpTo": "Mining rewards scanned up to block #{block}",
+      "allLoaded": "All mining rewards loaded",
+      "scannedAll": "Scanned all blocks from #0 to current"
+    }
   },
   "keystore": {
     "title": "Save to Local Keystore",

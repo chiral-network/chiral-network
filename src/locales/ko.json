@@ -508,7 +508,13 @@
       "timestamp": "타임스탬프",
       "close": "영수증 닫기"
     },
-    "searchPlaceholder": "주소, 설명 또는 ID로 검색..."
+    "searchPlaceholder": "주소, 설명 또는 ID로 검색...",
+    "clearSearch": "검색 지우기",
+    "miningRewards": {
+      "scannedUpTo": "블록 #{block}까지 채굴 보상 스캔됨",
+      "allLoaded": "모든 채굴 보상 로드됨",
+      "scannedAll": "#0부터 현재까지 모든 블록 스캔됨"
+    }
   },
   "fees": {
     "low": "낮음",
