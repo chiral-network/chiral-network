@@ -4,7 +4,7 @@ import Badge from '$lib/components/ui/badge.svelte'
 import Progress from '$lib/components/ui/progress.svelte'
 import StorageAnalytics from '$lib/components/StorageAnalytics.svelte'
 import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-import { files, wallet, settings } from '$lib/stores';
+import { files, wallet, settings, blacklist } from '$lib/stores';
 import { proxyNodes } from '$lib/proxy';
 import { onMount, onDestroy } from 'svelte'
 import { t } from 'svelte-i18n'
@@ -483,19 +483,54 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
     rateLimitStatus = reputationRateLimiter.getStatus();
   }
 
-  // Generate mock latency history once on mount
+  // Generate real suspicious activity alerts based on system events
   onMount(() => {
     const now = new Date();
-    // Options to include the timezone name
     const dateOptions: Intl.DateTimeFormatOptions = {
       dateStyle: 'medium',
       timeStyle: 'long',
     };
-    suspiciousActivity.set([
-        { type: 'Unusual Upload', description: 'File > 1GB uploaded unusually fast', date: now.toLocaleString(undefined, dateOptions), severity: 'high' },
-        { type: 'Multiple Logins', description: 'User logged in from different countries in 5 mins', date: now.toLocaleString(undefined, dateOptions), severity: 'medium' },
-        { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: now.toLocaleString(undefined, dateOptions), severity: 'low' },
-      ]);
+
+    // Monitor real system events for suspicious activity
+    const alerts: { type: string; description: string; date: string; severity: 'low' | 'medium' | 'high' }[] = [];
+
+    // Check for failed downloads
+    const failedFiles = $files.filter(f => f.status === 'failed');
+    if (failedFiles.length >= 3) {
+      alerts.push({
+        type: 'Failed Downloads',
+        description: `${failedFiles.length} download(s) failed recently`,
+        date: now.toLocaleString(undefined, dateOptions),
+        severity: 'medium'
+      });
+    }
+
+    // Check for blacklisted peers
+    const recentBlacklist = $blacklist.filter((entry: any) => {
+      const daysSince = (now.getTime() - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+      return daysSince <= 7;
+    });
+    if (recentBlacklist.length > 0) {
+      alerts.push({
+        type: 'Blacklisted Peers',
+        description: `${recentBlacklist.length} peer(s) blacklisted in the last week`,
+        date: now.toLocaleString(undefined, dateOptions),
+        severity: 'high'
+      });
+    }
+
+    // Check for excessive bandwidth usage
+    const totalBandwidthGb = (bandwidthUsed.upload + bandwidthUsed.download) / 1024;
+    if (totalBandwidthGb > 100) {
+      alerts.push({
+        type: 'High Bandwidth Usage',
+        description: `Total bandwidth usage: ${totalBandwidthGb.toFixed(2)} GB`,
+        date: now.toLocaleString(undefined, dateOptions),
+        severity: 'low'
+      });
+    }
+
+    suspiciousActivity.set(alerts);
 
     // Initialize latency stats and history
     computeLatencyStats()
