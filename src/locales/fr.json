@@ -622,7 +622,13 @@
       "timestamp": "Horodatage",
       "close": "Fermer le reçu"
     },
-    "searchPlaceholder": "Rechercher par adresse, description ou ID..."
+    "searchPlaceholder": "Rechercher par adresse, description ou ID...",
+    "clearSearch": "Effacer la recherche",
+    "miningRewards": {
+      "scannedUpTo": "Récompenses de minage scannées jusqu'au bloc #{block}",
+      "allLoaded": "Toutes les récompenses de minage chargées",
+      "scannedAll": "Tous les blocs scannés du #0 au bloc actuel"
+    }
   },
   "keystore": {
     "title": "Sauvegarder dans le keystore local",

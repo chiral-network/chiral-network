@@ -622,7 +622,13 @@
       "timestamp": "الطابع الزمني",
       "close": "إغلاق الإيصال"
     },
-    "searchPlaceholder": "البحث بواسطة العنوان أو الوصف أو المعرّف..."
+    "searchPlaceholder": "البحث بواسطة العنوان أو الوصف أو المعرّف...",
+    "clearSearch": "مسح البحث",
+    "miningRewards": {
+      "scannedUpTo": "تم فحص مكافآت التعدين حتى الكتلة #{block}",
+      "allLoaded": "تم تحميل جميع مكافآت التعدين",
+      "scannedAll": "تم فحص جميع الكتل من #0 إلى الحالي"
+    }
   },
   "keystore": {
     "title": "الحفظ في Keystore المحلي",
