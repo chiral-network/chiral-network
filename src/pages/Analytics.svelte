@@ -4,7 +4,7 @@ import Badge from '$lib/components/ui/badge.svelte'
 import Progress from '$lib/components/ui/progress.svelte'
 import StorageAnalytics from '$lib/components/StorageAnalytics.svelte'
 import { TrendingUp, Upload, DollarSign, HardDrive, Award, BarChart3, TrendingUp as LineChart } from 'lucide-svelte'
-import { files, wallet, settings } from '$lib/stores';
+import { files, wallet, settings, blacklist } from '$lib/stores';
 import { proxyNodes } from '$lib/proxy';
 import { onMount, onDestroy } from 'svelte'
 import { t } from 'svelte-i18n'
@@ -327,33 +327,38 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
     }
   }
 
-  // Function for dynamic data generation
-  function generateMockHistory(start: Date, end: Date) {
+  // Generate real earnings history from mining data
+  function generateRealHistory(start: Date, end: Date) {
     const history = [];
-    let cumulative = 0; // We can simulate a running total if needed
+    const dailyEarnings = new Map<string, number>();
+
+    // Group recent blocks by date
+    const blocks = $miningState.recentBlocks || [];
+    for (const block of blocks) {
+      const blockDate = new Date(block.timestamp);
+      if (blockDate >= start && blockDate <= end) {
+        const dateKey = blockDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        dailyEarnings.set(dateKey, (dailyEarnings.get(dateKey) || 0) + block.reward);
+      }
+    }
+
+    // Fill in all dates in range
+    let cumulative = 0;
     let d = new Date(start);
 
-    // Use the start date to create a deterministic "random" seed
-    const seed = start.getTime() / 100000;
-    
     while (d <= end) {
-      // Use a sine wave based on the day of the year for seasonal variation
-      const dayOfYear = (d.getTime() - new Date(d.getFullYear(), 0, 0).getTime()) / 86400000;
-      const seasonalFactor = (Math.sin((dayOfYear / 365.25) * 2 * Math.PI) + 1.2); //
-      
-      // Create a pseudo-random value based on the date for daily jitter
-      const dailyJitter = Math.sin(d.getTime() / 100000 + seed) * 10 - 5;
-      
-      const dailyEarning = Math.max(0, 5 * seasonalFactor + dailyJitter);
+      const dateKey = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const dailyEarning = dailyEarnings.get(dateKey) || 0;
       cumulative += dailyEarning;
 
       history.push({
-        date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        date: dateKey,
         earnings: dailyEarning,
         cumulative: cumulative
       });
       d.setDate(d.getDate() + 1);
     }
+
     return history;
   }
 
@@ -393,8 +398,8 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
     }
 
     if (start && end && start <= end) {
-      // Generate data dynamically for the calculated range
-      return generateMockHistory(start, end);
+      // Generate real earnings data from mining blocks
+      return generateRealHistory(start, end);
     }
     
     // Return empty array if the range is invalid or not set
@@ -478,19 +483,54 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
     rateLimitStatus = reputationRateLimiter.getStatus();
   }
 
-  // Generate mock latency history once on mount
+  // Generate real suspicious activity alerts based on system events
   onMount(() => {
     const now = new Date();
-    // Options to include the timezone name
     const dateOptions: Intl.DateTimeFormatOptions = {
       dateStyle: 'medium',
       timeStyle: 'long',
     };
-    suspiciousActivity.set([
-        { type: 'Unusual Upload', description: 'File > 1GB uploaded unusually fast', date: now.toLocaleString(undefined, dateOptions), severity: 'high' },
-        { type: 'Multiple Logins', description: 'User logged in from different countries in 5 mins', date: now.toLocaleString(undefined, dateOptions), severity: 'medium' },
-        { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: now.toLocaleString(undefined, dateOptions), severity: 'low' },
-      ]);
+
+    // Monitor real system events for suspicious activity
+    const alerts: { type: string; description: string; date: string; severity: 'low' | 'medium' | 'high' }[] = [];
+
+    // Check for failed downloads
+    const failedFiles = $files.filter(f => f.status === 'failed');
+    if (failedFiles.length >= 3) {
+      alerts.push({
+        type: 'Failed Downloads',
+        description: `${failedFiles.length} download(s) failed recently`,
+        date: now.toLocaleString(undefined, dateOptions),
+        severity: 'medium'
+      });
+    }
+
+    // Check for blacklisted peers
+    const recentBlacklist = $blacklist.filter((entry: any) => {
+      const daysSince = (now.getTime() - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+      return daysSince <= 7;
+    });
+    if (recentBlacklist.length > 0) {
+      alerts.push({
+        type: 'Blacklisted Peers',
+        description: `${recentBlacklist.length} peer(s) blacklisted in the last week`,
+        date: now.toLocaleString(undefined, dateOptions),
+        severity: 'high'
+      });
+    }
+
+    // Check for excessive bandwidth usage
+    const totalBandwidthGb = (bandwidthUsed.upload + bandwidthUsed.download) / 1024;
+    if (totalBandwidthGb > 100) {
+      alerts.push({
+        type: 'High Bandwidth Usage',
+        description: `Total bandwidth usage: ${totalBandwidthGb.toFixed(2)} GB`,
+        date: now.toLocaleString(undefined, dateOptions),
+        severity: 'low'
+      });
+    }
+
+    suspiciousActivity.set(alerts);
 
     // Initialize latency stats and history
     computeLatencyStats()

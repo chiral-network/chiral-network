@@ -463,6 +463,7 @@
     "proxySelfTest": "प्रॉक्सी स्व-परीक्षण",
     "analytics": "विश्लेषण",
     "reputation": "प्रतिष्ठा",
+    "blockchain": "ब्लॉकचेन",
     "account": "खाता",
     "settings": "सेटिंग्स",
     "connected": "कनेक्टेड",
@@ -622,7 +623,13 @@
       "from": "से",
       "to": "को"
     },
-    "searchPlaceholder": "पते, विवरण या ID द्वारा खोजें..."
+    "searchPlaceholder": "पते, विवरण या ID द्वारा खोजें...",
+    "clearSearch": "खोज साफ़ करें",
+    "miningRewards": {
+      "scannedUpTo": "ब्लॉक #{block} तक माइनिंग पुरस्कार स्कैन किए गए",
+      "allLoaded": "सभी माइनिंग पुरस्कार लोड हो गए",
+      "scannedAll": "#0 से वर्तमान तक सभी ब्लॉक स्कैन किए गए"
+    }
   },
   "keystore": {
     "title": "स्थानीय कीस्टोर में सहेजें",
