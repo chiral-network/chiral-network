@@ -434,28 +434,72 @@ pub async fn get_current_pool_info() -> Result<Option<JoinedPoolInfo>, String> {
 
 #[command]
 pub async fn get_pool_stats() -> Result<Option<PoolStats>, String> {
-    let current_pool = CURRENT_POOL.lock().await;
+    let mut current_pool = CURRENT_POOL.lock().await;
 
-    if let Some(ref pool_info) = *current_pool {
-        // Simulate updated stats with some randomization
-        let mut updated_stats = pool_info.stats.clone();
-
-        // Simulate some mining activity
+    if let Some(ref mut pool_info) = *current_pool {
         let time_mining = get_current_timestamp() - pool_info.joined_at;
-        if time_mining > 30 {
-            // After 30 seconds of "mining"
-            updated_stats.shares_submitted += (time_mining / 30) as u32;
-            updated_stats.shares_accepted = (updated_stats.shares_submitted as f32 * 0.95) as u32; // 95% acceptance rate
-            updated_stats.your_hashrate = "125.7 KH/s".to_string(); // Simulated hashrate
-            updated_stats.your_share_percentage = 0.05; // Simulated share percentage
-            updated_stats.estimated_payout_24h = updated_stats.your_share_percentage * 5.0; // Simulated earnings
-            updated_stats.last_share_time = get_current_timestamp() - (time_mining % 30);
+
+        // Update stats based on actual time connected
+        pool_info.stats.connected_miners = pool_info.pool.miners_count;
+        pool_info.stats.pool_hashrate = pool_info.pool.total_hashrate.clone();
+
+        // Calculate shares based on time mining (1 share per 30 seconds)
+        let expected_shares = (time_mining / 30) as u32;
+        if expected_shares > pool_info.stats.shares_submitted {
+            pool_info.stats.shares_submitted = expected_shares;
+            // 95% acceptance rate
+            pool_info.stats.shares_accepted = (expected_shares as f32 * 0.95) as u32;
+            pool_info.stats.last_share_time = get_current_timestamp();
         }
 
-        Ok(Some(updated_stats))
+        // Calculate hashrate based on shares submitted
+        if time_mining > 0 {
+            let shares_per_second = pool_info.stats.shares_submitted as f64 / time_mining as f64;
+            let hashrate_khs = shares_per_second * 1000.0; // Convert to KH/s
+            pool_info.stats.your_hashrate = format!("{:.1} KH/s", hashrate_khs);
+
+            // Calculate share percentage of pool
+            if let Ok(pool_hashrate_str) = extract_hashrate_number(&pool_info.pool.total_hashrate) {
+                let your_hashrate = hashrate_khs;
+                let pool_hashrate = pool_hashrate_str * 1_000_000.0; // Pool is in MH/s or GH/s
+                pool_info.stats.your_share_percentage = (your_hashrate / pool_hashrate) * 100.0;
+
+                // Estimate 24h payout based on share percentage and pool blocks
+                let daily_blocks = pool_info.pool.blocks_found_24h as f64;
+                let block_reward = 2.0; // Chiral block reward
+                let expected_reward = (pool_info.stats.your_share_percentage / 100.0) * daily_blocks * block_reward;
+                pool_info.stats.estimated_payout_24h = expected_reward;
+            }
+        }
+
+        Ok(Some(pool_info.stats.clone()))
     } else {
         Ok(None)
     }
+}
+
+/// Extract numeric hashrate value from string (e.g., "2.4 GH/s" -> 2400.0 MH/s)
+fn extract_hashrate_number(hashrate_str: &str) -> Result<f64, String> {
+    let parts: Vec<&str> = hashrate_str.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err("Invalid hashrate format".to_string());
+    }
+
+    let number: f64 = parts[0]
+        .parse()
+        .map_err(|_| "Failed to parse hashrate number".to_string())?;
+
+    // Convert to MH/s base
+    let multiplier = match parts[1] {
+        "H/s" => 0.000001,
+        "KH/s" => 0.001,
+        "MH/s" => 1.0,
+        "GH/s" => 1000.0,
+        "TH/s" => 1_000_000.0,
+        _ => return Err("Unknown hashrate unit".to_string()),
+    };
+
+    Ok(number * multiplier)
 }
 
 #[command]
