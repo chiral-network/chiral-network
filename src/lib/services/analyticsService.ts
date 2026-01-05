@@ -50,6 +50,15 @@ export interface ContributionDataPoint {
   filesSeeded: number;
 }
 
+export interface SuspiciousActivityAlert {
+  id: string;
+  type: string;
+  description: string;
+  severity: "low" | "medium" | "high";
+  timestamp: number;
+  details: Record<string, string>;
+}
+
 export class AnalyticsService {
   private static instance: AnalyticsService | null = null;
   private updateInterval: number | null = null;
@@ -172,6 +181,29 @@ export class AnalyticsService {
     } catch (error) {
       console.error("Failed to reset analytics:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Get suspicious activity alerts
+   */
+  async getSuspiciousAlerts(): Promise<SuspiciousActivityAlert[]> {
+    try {
+      return await invoke<SuspiciousActivityAlert[]>("get_suspicious_alerts");
+    } catch (error) {
+      console.error("Failed to get suspicious alerts:", error);
+      return [];
+    }
+  }
+
+  /**
+   * Check for suspicious patterns and generate alerts
+   */
+  async checkSuspiciousPatterns(): Promise<void> {
+    try {
+      await invoke("check_suspicious_patterns");
+    } catch (error) {
+      console.error("Failed to check suspicious patterns:", error);
     }
   }
 

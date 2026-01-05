@@ -475,23 +475,29 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
       };
     }
 
+    // Check for suspicious patterns and fetch alerts
+    await analyticsService.checkSuspiciousPatterns();
+    const alerts = await analyticsService.getSuspiciousAlerts();
+    
+    // Format alerts for display
+    const dateOptions: Intl.DateTimeFormatOptions = {
+      dateStyle: 'medium',
+      timeStyle: 'long',
+    };
+    suspiciousActivity.set(
+      alerts.map((alert) => ({
+        type: alert.type,
+        description: alert.description,
+        date: new Date(alert.timestamp * 1000).toLocaleString(undefined, dateOptions),
+        severity: alert.severity,
+      }))
+    );
+
     rateLimitStatus = reputationRateLimiter.getStatus();
   }
 
   // Generate mock latency history once on mount
   onMount(() => {
-    const now = new Date();
-    // Options to include the timezone name
-    const dateOptions: Intl.DateTimeFormatOptions = {
-      dateStyle: 'medium',
-      timeStyle: 'long',
-    };
-    suspiciousActivity.set([
-        { type: 'Unusual Upload', description: 'File > 1GB uploaded unusually fast', date: now.toLocaleString(undefined, dateOptions), severity: 'high' },
-        { type: 'Multiple Logins', description: 'User logged in from different countries in 5 mins', date: now.toLocaleString(undefined, dateOptions), severity: 'medium' },
-        { type: 'Failed Downloads', description: 'Several failed download attempts detected', date: now.toLocaleString(undefined, dateOptions), severity: 'low' },
-      ]);
-
     // Initialize latency stats and history
     computeLatencyStats()
     latencyHistory = Array(30).fill({
@@ -499,7 +505,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
       latency: avgLatency
     });
 
-    // Fetch initial analytics data
+    // Fetch initial analytics data (including suspicious activity)
     fetchAnalyticsData();
 
     // Update bandwidth & latency periodically
