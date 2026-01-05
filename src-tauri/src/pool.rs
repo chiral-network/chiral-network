@@ -255,6 +255,28 @@ async fn check_pool_connectivity(host: &str, port: u16) -> bool {
     }
 }
 
+/// Check pool connectivity with retry logic
+async fn check_pool_connectivity_with_retry(host: &str, port: u16, max_retries: u32) -> Result<(), String> {
+    use tokio::time::{sleep, Duration};
+
+    for attempt in 1..=max_retries {
+        info!("Connection attempt {}/{} to {}:{}", attempt, max_retries, host, port);
+
+        if check_pool_connectivity(host, port).await {
+            return Ok(());
+        }
+
+        if attempt < max_retries {
+            // Exponential backoff: 1s, 2s, 4s
+            let delay_ms = 1000 * (2_u64.pow(attempt - 1));
+            info!("Retrying in {}ms...", delay_ms);
+            sleep(Duration::from_millis(delay_ms)).await;
+        }
+    }
+
+    Err(format!("Failed to connect to {}:{} after {} attempts", host, port, max_retries))
+}
+
 #[command]
 pub async fn discover_mining_pools(app_handle: AppHandle) -> Result<Vec<MiningPool>, String> {
     info!("Discovering available mining pools");
@@ -373,12 +395,9 @@ pub async fn join_mining_pool(pool_id: String, address: String) -> Result<Joined
     // Validate pool URL format
     let (host, port) = validate_pool_url(&pool.url)?;
 
-    // Check pool connectivity
-    info!("Checking connectivity to {}:{}", host, port);
-    let is_reachable = check_pool_connectivity(&host, port).await;
-    if !is_reachable {
-        return Err(format!("Unable to connect to pool at {}:{}", host, port));
-    }
+    // Check pool connectivity with retry logic (3 attempts)
+    info!("Connecting to pool at {}:{}", host, port);
+    check_pool_connectivity_with_retry(&host, port, 3).await?;
 
     let stats = PoolStats {
         connected_miners: pool.miners_count + 1,
