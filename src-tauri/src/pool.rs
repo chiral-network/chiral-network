@@ -319,12 +319,27 @@ pub async fn create_mining_pool(
         name, address
     );
 
+    // Validate pool name
     if name.trim().is_empty() {
         return Err("Pool name cannot be empty".to_string());
     }
+    if name.len() > 100 {
+        return Err("Pool name must be 100 characters or less".to_string());
+    }
 
+    // Validate fee percentage
     if fee_percentage < 0.0 || fee_percentage > 10.0 {
         return Err("Fee percentage must be between 0% and 10%".to_string());
+    }
+
+    // Validate minimum payout
+    if min_payout < 0.0 {
+        return Err("Minimum payout must be positive".to_string());
+    }
+
+    // Validate address format
+    if address.len() < 8 {
+        return Err("Invalid wallet address format".to_string());
     }
 
     let pool_id = format!(
@@ -436,12 +451,11 @@ pub async fn leave_mining_pool() -> Result<(), String> {
     let pool_name = current_pool.as_ref()
         .map(|p| p.pool.name.clone())
         .unwrap_or_else(|| "Unknown Pool".to_string());
+
+    // Clear current pool connection
     *current_pool = None;
 
-    // Simulate disconnection delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    info!("Successfully left pool: {}", pool_name);
+    info!("Successfully disconnected from pool: {}", pool_name);
     Ok(())
 }
 
