@@ -625,6 +625,9 @@
     },
     "searchPlaceholder": "Pesquisar por endereço, descrição ou ID...",
     "clearSearch": "Limpar pesquisa",
+    "export": "Exportar CSV",
+    "exportCSV": "Exportar histórico de transações como CSV",
+    "exportSuccess": "Exportadas {count} transações para CSV",
     "miningRewards": {
       "scannedUpTo": "Recompensas de mineração escaneadas até o bloco #{block}",
       "allLoaded": "Todas as recompensas de mineração carregadas",

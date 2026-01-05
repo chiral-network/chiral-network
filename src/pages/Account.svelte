@@ -4,7 +4,7 @@
   import Input from '$lib/components/ui/input.svelte'
   import Label from '$lib/components/ui/label.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw } from 'lucide-svelte'
+  import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw, Download } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist, showAuthWizard } from '$lib/stores'
   import { gethStatus } from '$lib/services/gethService'
@@ -1371,17 +1371,50 @@
       exported: new Date().toISOString(),
       blacklist: $blacklist
     };
-    
-    const blob = new Blob([JSON.stringify(data, null, 2)], { 
-      type: 'application/json' 
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: 'application/json'
     });
-    
+
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     link.download = `chiral-blacklist-${new Date().toISOString().split('T')[0]}.json`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function exportTransactionsCSV() {
+    // CSV header
+    const headers = ['Date', 'Type', 'Amount (CN)', 'From', 'To', 'Description', 'Status', 'Hash', 'Block Number'];
+
+    // Convert filtered transactions to CSV rows
+    const rows = filteredTransactions.map(tx => {
+      const date = tx.date instanceof Date ? tx.date.toISOString() : new Date(tx.date).toISOString();
+      const amount = tx.amount?.toFixed(8) || '0.00000000';
+      const from = tx.from || '';
+      const to = tx.to || '';
+      const description = (tx.description || '').replace(/"/g, '""'); // Escape quotes
+      const status = tx.status || '';
+      const hash = tx.hash || tx.txHash || '';
+      const blockNumber = tx.block_number || '';
+
+      return [date, tx.type, amount, from, to, `"${description}"`, status, hash, blockNumber].join(',');
+    });
+
+    // Combine header and rows
+    const csv = [headers.join(','), ...rows].join('\n');
+
+    // Create and download file
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `chiral-transactions-${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    showToast($t('transactions.exportSuccess', { values: { count: filteredTransactions.length } }), 'success');
   }
 
   function handleImportFile(event: Event) {
@@ -2438,20 +2471,32 @@
   <div class="flex-1"></div>
 
   <div class="flex flex-col gap-1 items-end">
-    <button
-      type="button"
-      class="border border-red-300 dark:border-red-700 rounded-md px-4 py-2 text-sm h-9 bg-red-50 hover:bg-red-100 text-red-700 dark:text-red-400 transition-colors font-medium flex items-center gap-2"
-      on:click={() => {
-        filterType = 'transactions';
-        filterDateFrom = '';
-        filterDateTo = '';
-        sortDescending = true;
-        searchQuery = '';
-      }}
-    >
-      <RefreshCw class="h-3.5 w-3.5" />
-      {$t('filters.reset')}
-    </button>
+    <div class="flex gap-2">
+      <button
+        type="button"
+        class="border border-blue-300 dark:border-blue-700 rounded-md px-4 py-2 text-sm h-9 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:text-blue-400 transition-colors font-medium flex items-center gap-2"
+        on:click={exportTransactionsCSV}
+        disabled={filteredTransactions.length === 0}
+        title={$t('transactions.exportCSV')}
+      >
+        <Download class="h-3.5 w-3.5" />
+        {$t('transactions.export')}
+      </button>
+      <button
+        type="button"
+        class="border border-red-300 dark:border-red-700 rounded-md px-4 py-2 text-sm h-9 bg-red-50 hover:bg-red-100 text-red-700 dark:text-red-400 transition-colors font-medium flex items-center gap-2"
+        on:click={() => {
+          filterType = 'transactions';
+          filterDateFrom = '';
+          filterDateTo = '';
+          sortDescending = true;
+          searchQuery = '';
+        }}
+      >
+        <RefreshCw class="h-3.5 w-3.5" />
+        {$t('filters.reset')}
+      </button>
+    </div>
   </div>
 </div>
 

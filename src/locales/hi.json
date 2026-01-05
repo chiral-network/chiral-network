@@ -625,6 +625,9 @@
     },
     "searchPlaceholder": "पते, विवरण या ID द्वारा खोजें...",
     "clearSearch": "खोज साफ़ करें",
+    "export": "CSV निर्यात करें",
+    "exportCSV": "लेनदेन इतिहास को CSV के रूप में निर्यात करें",
+    "exportSuccess": "{count} लेनदेन CSV में निर्यात किए गए",
     "miningRewards": {
       "scannedUpTo": "ब्लॉक #{block} तक माइनिंग पुरस्कार स्कैन किए गए",
       "allLoaded": "सभी माइनिंग पुरस्कार लोड हो गए",

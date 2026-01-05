@@ -624,6 +624,9 @@
     },
     "searchPlaceholder": "البحث بواسطة العنوان أو الوصف أو المعرّف...",
     "clearSearch": "مسح البحث",
+    "export": "تصدير CSV",
+    "exportCSV": "تصدير سجل المعاملات بتنسيق CSV",
+    "exportSuccess": "تم تصدير {count} معاملة إلى CSV",
     "miningRewards": {
       "scannedUpTo": "تم فحص مكافآت التعدين حتى الكتلة #{block}",
       "allLoaded": "تم تحميل جميع مكافآت التعدين",
