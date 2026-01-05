@@ -333,6 +333,7 @@
     "proxySelfTest": "Proxy Self-Test",
     "analytics": "Analíticas",
     "reputation": "Reputación",
+    "blockchain": "Cadena de bloques",
     "account": "Cuenta",
     "settings": "Configuración",
     "connected": "Conectado",
@@ -507,7 +508,13 @@
       "timestamp": "Marca de tiempo",
       "close": "Cerrar recibo"
     },
-    "searchPlaceholder": "Buscar por dirección, descripción o ID..."
+    "searchPlaceholder": "Buscar por dirección, descripción o ID...",
+    "clearSearch": "Borrar búsqueda",
+    "miningRewards": {
+      "scannedUpTo": "Recompensas de minería escaneadas hasta el bloque #{block}",
+      "allLoaded": "Todas las recompensas de minería cargadas",
+      "scannedAll": "Todos los bloques escaneados desde #0 hasta el actual"
+    }
   },
   "keystore": {
     "title": "Guardar en almacén local",

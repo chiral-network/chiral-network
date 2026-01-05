@@ -7665,6 +7665,19 @@ async fn reset_analytics(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn get_suspicious_alerts(
+    state: State<'_, AppState>,
+) -> Result<Vec<analytics::SuspiciousActivityAlert>, String> {
+    Ok(state.analytics.get_suspicious_alerts().await)
+}
+
+#[tauri::command]
+async fn check_suspicious_patterns(state: State<'_, AppState>) -> Result<(), String> {
+    state.analytics.check_suspicious_patterns().await;
+    Ok(())
+}
+
 // Logger configuration commands
 /// Saves application settings to a JSON file in the app data directory
 #[tauri::command]
@@ -9395,6 +9408,8 @@ fn main() {
             get_resource_contribution,
             get_contribution_history,
             reset_analytics,
+            get_suspicious_alerts,
+            check_suspicious_patterns,
             reset_network_services,
             // ed2k server commands
             add_ed2k_source,
