@@ -2,11 +2,12 @@
 // Implements pool discovery and management for distributed mining
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::command;
+use tauri::{command, AppHandle, Manager};
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MiningPool {
@@ -153,19 +154,72 @@ fn get_current_timestamp() -> u64 {
         .as_secs()
 }
 
+/// Get path to user pools storage file
+fn get_user_pools_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+
+    Ok(app_data_dir.join("user_pools.json"))
+}
+
+/// Load user-created pools from persistent storage
+async fn load_user_pools(app_handle: &AppHandle) -> Result<Vec<MiningPool>, String> {
+    let pools_path = get_user_pools_path(app_handle)?;
+
+    if !pools_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&pools_path)
+        .map_err(|e| format!("Failed to read user pools: {}", e))?;
+
+    let pools: Vec<MiningPool> = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse user pools: {}", e))?;
+
+    info!("Loaded {} user-created pools from storage", pools.len());
+    Ok(pools)
+}
+
+/// Save user-created pools to persistent storage
+async fn save_user_pools(app_handle: &AppHandle, pools: &[MiningPool]) -> Result<(), String> {
+    let pools_path = get_user_pools_path(app_handle)?;
+
+    let content = serde_json::to_string_pretty(pools)
+        .map_err(|e| format!("Failed to serialize user pools: {}", e))?;
+
+    std::fs::write(&pools_path, content)
+        .map_err(|e| format!("Failed to write user pools: {}", e))?;
+
+    info!("Saved {} user-created pools to storage", pools.len());
+    Ok(())
+}
+
 #[command]
-pub async fn discover_mining_pools() -> Result<Vec<MiningPool>, String> {
-    info!("Discovering available mining pools in decentralized network");
+pub async fn discover_mining_pools(app_handle: AppHandle) -> Result<Vec<MiningPool>, String> {
+    info!("Discovering available mining pools");
 
     let pools = AVAILABLE_POOLS.lock().await;
     let mut all_pools = pools.clone();
 
-    // Add user-created pools
-    let user_pools = USER_CREATED_POOLS.lock().await;
-    all_pools.extend(user_pools.clone());
-
-    // Simulate network discovery delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Load user-created pools from persistent storage
+    match load_user_pools(&app_handle).await {
+        Ok(loaded_pools) => {
+            let mut user_pools = USER_CREATED_POOLS.lock().await;
+            *user_pools = loaded_pools.clone();
+            all_pools.extend(loaded_pools);
+        }
+        Err(e) => {
+            error!("Failed to load user pools from storage: {}", e);
+            // Fallback to in-memory pools
+            let user_pools = USER_CREATED_POOLS.lock().await;
+            all_pools.extend(user_pools.clone());
+        }
+    }
 
     info!("Found {} mining pools", all_pools.len());
     Ok(all_pools)
@@ -173,6 +227,7 @@ pub async fn discover_mining_pools() -> Result<Vec<MiningPool>, String> {
 
 #[command]
 pub async fn create_mining_pool(
+    app_handle: AppHandle,
     address: String,
     name: String,
     description: String,
@@ -182,7 +237,7 @@ pub async fn create_mining_pool(
     region: String,
 ) -> Result<MiningPool, String> {
     info!(
-        "Creating new decentralized mining pool: {} by {}",
+        "Creating new mining pool: {} by {}",
         name, address
     );
 
@@ -202,10 +257,10 @@ pub async fn create_mining_pool(
     let new_pool = MiningPool {
         id: pool_id.clone(),
         name: name.clone(),
-        url: format!("stratum+tcp://{}:3333", pool_id), // Simulated URL
+        url: format!("stratum+tcp://{}:3333", pool_id),
         description,
         fee_percentage,
-        miners_count: 1, // Creator is the first miner
+        miners_count: 1,
         total_hashrate: "0 H/s".to_string(),
         last_block_time: 0,
         blocks_found_24h: 0,
@@ -216,14 +271,17 @@ pub async fn create_mining_pool(
         created_by: Some(address.clone()),
     };
 
-    // Add to user-created pools
+    // Add to in-memory pools
     let mut user_pools = USER_CREATED_POOLS.lock().await;
     user_pools.push(new_pool.clone());
 
-    // Simulate DHT announcement delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    // Persist to storage
+    if let Err(e) = save_user_pools(&app_handle, &user_pools).await {
+        error!("Failed to save user pools: {}", e);
+        // Continue even if save fails
+    }
 
-    info!("Successfully created and announced pool: {}", name);
+    info!("Successfully created pool: {}", name);
     Ok(new_pool)
 }
 
