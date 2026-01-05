@@ -460,27 +460,56 @@ pub async fn get_pool_stats() -> Result<Option<PoolStats>, String> {
 
 #[command]
 pub async fn update_pool_discovery() -> Result<(), String> {
-    info!("Updating pool discovery from decentralized network");
+    info!("Updating pool health status");
 
-    // Simulate discovering new pools or updating existing ones
     let mut pools = AVAILABLE_POOLS.lock().await;
 
-    // Simulate some network changes
+    // Check health of each pool
     for pool in pools.iter_mut() {
-        // Simulate minor fluctuations in miner count
-        let change = (rand::random::<i32>() % 10) - 5; // -5 to +4
-        pool.miners_count = ((pool.miners_count as i32 + change).max(1)) as u32;
+        // Validate URL and check connectivity
+        if let Ok((host, port)) = validate_pool_url(&pool.url) {
+            let is_reachable = check_pool_connectivity(&host, port).await;
 
-        // Update last block time occasionally
-        if rand::random::<f32>() < 0.1 {
-            // 10% chance
-            pool.last_block_time = get_current_timestamp();
-            pool.blocks_found_24h += 1;
+            // Update pool status based on connectivity
+            if is_reachable {
+                if matches!(pool.status, PoolStatus::Offline) {
+                    pool.status = PoolStatus::Active;
+                    info!("Pool {} is now online", pool.name);
+                }
+            } else {
+                if !matches!(pool.status, PoolStatus::Offline) {
+                    pool.status = PoolStatus::Offline;
+                    info!("Pool {} is now offline", pool.name);
+                }
+            }
+        } else {
+            // Invalid URL format
+            if !matches!(pool.status, PoolStatus::Offline) {
+                pool.status = PoolStatus::Offline;
+                error!("Pool {} has invalid URL format", pool.name);
+            }
         }
     }
 
-    // Simulate network delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    drop(pools);
+
+    // Also check user-created pools
+    let mut user_pools = USER_CREATED_POOLS.lock().await;
+    for pool in user_pools.iter_mut() {
+        if let Ok((host, port)) = validate_pool_url(&pool.url) {
+            let is_reachable = check_pool_connectivity(&host, port).await;
+
+            if is_reachable {
+                if matches!(pool.status, PoolStatus::Offline) {
+                    pool.status = PoolStatus::Active;
+                }
+            } else {
+                if !matches!(pool.status, PoolStatus::Offline) {
+                    pool.status = PoolStatus::Offline;
+                }
+            }
+        }
+    }
 
     Ok(())
 }
