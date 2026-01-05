@@ -1395,11 +1395,11 @@
       // Translate transaction type
       let translatedType = tx.type;
       if (tx.type === 'sent') {
-        translatedType = $t('filters.typeSent');
+        translatedType = tr('filters.typeSent');
       } else if (tx.type === 'received') {
-        translatedType = $t('filters.typeReceived');
+        translatedType = tr('filters.typeReceived');
       } else if (tx.type === 'mining') {
-        translatedType = $t('filters.typeMining');
+        translatedType = tr('filters.typeMining');
       }
 
       const amount = tx.amount?.toFixed(8) || '0.00000000';
