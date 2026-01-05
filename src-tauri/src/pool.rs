@@ -199,6 +199,62 @@ async fn save_user_pools(app_handle: &AppHandle, pools: &[MiningPool]) -> Result
     Ok(())
 }
 
+/// Validate pool URL format
+fn validate_pool_url(url: &str) -> Result<(String, u16), String> {
+    // Check if URL starts with stratum protocol
+    if !url.starts_with("stratum+tcp://") && !url.starts_with("stratum://") {
+        return Err("Pool URL must use stratum+tcp:// or stratum:// protocol".to_string());
+    }
+
+    // Extract host and port
+    let url_without_protocol = url
+        .strip_prefix("stratum+tcp://")
+        .or_else(|| url.strip_prefix("stratum://"))
+        .ok_or("Invalid pool URL format".to_string())?;
+
+    let parts: Vec<&str> = url_without_protocol.split(':').collect();
+    if parts.len() != 2 {
+        return Err("Pool URL must include host:port (e.g., stratum+tcp://pool.example.com:3333)".to_string());
+    }
+
+    let host = parts[0].to_string();
+    let port = parts[1]
+        .parse::<u16>()
+        .map_err(|_| "Invalid port number".to_string())?;
+
+    if host.is_empty() {
+        return Err("Pool host cannot be empty".to_string());
+    }
+
+    if port == 0 {
+        return Err("Pool port must be greater than 0".to_string());
+    }
+
+    Ok((host, port))
+}
+
+/// Check if pool URL is reachable
+async fn check_pool_connectivity(host: &str, port: u16) -> bool {
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+
+    let address = format!("{}:{}", host, port);
+    match timeout(Duration::from_secs(5), TcpStream::connect(&address)).await {
+        Ok(Ok(_)) => {
+            info!("Pool {}:{} is reachable", host, port);
+            true
+        }
+        Ok(Err(e)) => {
+            info!("Pool {}:{} connection failed: {}", host, port, e);
+            false
+        }
+        Err(_) => {
+            info!("Pool {}:{} connection timed out", host, port);
+            false
+        }
+    }
+}
+
 #[command]
 pub async fn discover_mining_pools(app_handle: AppHandle) -> Result<Vec<MiningPool>, String> {
     info!("Discovering available mining pools");
@@ -314,8 +370,15 @@ pub async fn join_mining_pool(pool_id: String, address: String) -> Result<Joined
         return Err("Pool is currently offline".to_string());
     }
 
-    // Simulate connection process
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    // Validate pool URL format
+    let (host, port) = validate_pool_url(&pool.url)?;
+
+    // Check pool connectivity
+    info!("Checking connectivity to {}:{}", host, port);
+    let is_reachable = check_pool_connectivity(&host, port).await;
+    if !is_reachable {
+        return Err(format!("Unable to connect to pool at {}:{}", host, port));
+    }
 
     let stats = PoolStats {
         connected_miners: pool.miners_count + 1,
