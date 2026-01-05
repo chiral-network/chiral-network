@@ -2500,10 +2500,9 @@
     <div class="flex gap-2">
       <button
         type="button"
-        class="border border-blue-300 dark:border-blue-700 rounded-md px-4 py-2 text-sm h-9 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:text-blue-400 transition-colors font-medium flex items-center gap-2"
+        class="border border-blue-300 dark:border-blue-700 rounded-md px-4 py-2 text-sm h-9 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:text-blue-400 transition-colors font-medium flex items-center gap-2 {filteredTransactions.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
         on:click={exportTransactionsCSV}
-        disabled={filteredTransactions.length === 0}
-        title={$t('transactions.exportCSV')}
+        title={filteredTransactions.length === 0 ? 'No transactions to export' : $t('transactions.exportCSV')}
       >
         <Download class="h-3.5 w-3.5" />
         {$t('transactions.export')}
