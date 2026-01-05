@@ -1391,6 +1391,17 @@
     // Convert filtered transactions to CSV rows
     const rows = filteredTransactions.map(tx => {
       const date = tx.date instanceof Date ? tx.date.toISOString() : new Date(tx.date).toISOString();
+
+      // Translate transaction type
+      let translatedType = tx.type;
+      if (tx.type === 'sent') {
+        translatedType = $t('filters.typeSent');
+      } else if (tx.type === 'received') {
+        translatedType = $t('filters.typeReceived');
+      } else if (tx.type === 'mining') {
+        translatedType = $t('filters.typeMining');
+      }
+
       const amount = tx.amount?.toFixed(8) || '0.00000000';
       const from = tx.from || '';
       const to = tx.to || '';
@@ -1399,7 +1410,7 @@
       const hash = tx.hash || tx.txHash || '';
       const blockNumber = tx.block_number || '';
 
-      return [date, tx.type, amount, from, to, `"${description}"`, status, hash, blockNumber].join(',');
+      return [date, translatedType, amount, from, to, `"${description}"`, status, hash, blockNumber].join(',');
     });
 
     // Combine header and rows
@@ -2296,7 +2307,7 @@
           {/if}
         </Button>
 
-        <Button type="button" class="w-full justify-center border border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-950/30 text-gray-800 dark:text-gray-200 rounded transition-colors py-2 font-medium" on:click={() => showPending = !showPending} aria-label={$t('transfer.viewPending')}>
+        <Button type="button" variant="outline" class="w-full justify-center bg-white dark:bg-gray-800 border border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-950/30 text-gray-800 dark:text-gray-200 rounded transition-colors py-2 font-medium" on:click={() => showPending = !showPending} aria-label={$t('transfer.viewPending')}>
           <span class="flex items-center gap-2">
             <div class="relative">
               <svg class="h-4 w-4 text-orange-600 dark:text-orange-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
