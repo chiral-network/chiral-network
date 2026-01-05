@@ -1385,47 +1385,62 @@
   }
 
   function exportTransactionsCSV() {
-    // CSV header
-    const headers = ['Date', 'Type', 'Amount (CN)', 'From', 'To', 'Description', 'Status', 'Hash', 'Block Number'];
+    try {
+      console.log('Export CSV clicked, transaction count:', filteredTransactions.length);
 
-    // Convert filtered transactions to CSV rows
-    const rows = filteredTransactions.map(tx => {
-      const date = tx.date instanceof Date ? tx.date.toISOString() : new Date(tx.date).toISOString();
-
-      // Translate transaction type
-      let translatedType = tx.type;
-      if (tx.type === 'sent') {
-        translatedType = tr('filters.typeSent');
-      } else if (tx.type === 'received') {
-        translatedType = tr('filters.typeReceived');
-      } else if (tx.type === 'mining') {
-        translatedType = tr('filters.typeMining');
+      if (filteredTransactions.length === 0) {
+        showToast('No transactions to export', 'warning');
+        return;
       }
 
-      const amount = tx.amount?.toFixed(8) || '0.00000000';
-      const from = tx.from || '';
-      const to = tx.to || '';
-      const description = (tx.description || '').replace(/"/g, '""'); // Escape quotes
-      const status = tx.status || '';
-      const hash = tx.hash || tx.txHash || '';
-      const blockNumber = tx.block_number || '';
+      // CSV header
+      const headers = ['Date', 'Type', 'Amount (CN)', 'From', 'To', 'Description', 'Status', 'Hash', 'Block Number'];
 
-      return [date, translatedType, amount, from, to, `"${description}"`, status, hash, blockNumber].join(',');
-    });
+      // Convert filtered transactions to CSV rows
+      const rows = filteredTransactions.map(tx => {
+        const date = tx.date instanceof Date ? tx.date.toISOString() : new Date(tx.date).toISOString();
 
-    // Combine header and rows
-    const csv = [headers.join(','), ...rows].join('\n');
+        // Translate transaction type
+        let translatedType = tx.type;
+        if (tx.type === 'sent') {
+          translatedType = tr('filters.typeSent');
+        } else if (tx.type === 'received') {
+          translatedType = tr('filters.typeReceived');
+        } else if (tx.type === 'mining') {
+          translatedType = tr('filters.typeMining');
+        }
 
-    // Create and download file
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `chiral-transactions-${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+        const amount = tx.amount?.toFixed(8) || '0.00000000';
+        const from = tx.from || '';
+        const to = tx.to || '';
+        const description = (tx.description || '').replace(/"/g, '""'); // Escape quotes
+        const status = tx.status || '';
+        const hash = tx.hash || tx.txHash || '';
+        const blockNumber = tx.block_number || '';
 
-    showToast($t('transactions.exportSuccess', { values: { count: filteredTransactions.length } }), 'success');
+        return [date, translatedType, amount, from, to, `"${description}"`, status, hash, blockNumber].join(',');
+      });
+
+      // Combine header and rows
+      const csv = [headers.join(','), ...rows].join('\n');
+
+      // Create and download file
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `chiral-transactions-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      console.log('CSV export completed successfully');
+      showToast(tr('transactions.exportSuccess', { count: filteredTransactions.length }), 'success');
+    } catch (error) {
+      console.error('CSV export error:', error);
+      showToast('Failed to export transactions: ' + error.message, 'error');
+    }
   }
 
   function handleImportFile(event: Event) {
