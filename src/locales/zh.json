@@ -333,6 +333,7 @@
     "proxySelfTest": "Proxy Self-Test",
     "analytics": "分析",
     "reputation": "信誉",
+    "blockchain": "区块链",
     "account": "账户",
     "settings": "设置",
     "connected": "已连接",
@@ -507,7 +508,13 @@
       "timestamp": "时间戳",
       "close": "关闭收据"
     },
-    "searchPlaceholder": "按地址、描述或ID搜索..."
+    "searchPlaceholder": "按地址、描述或ID搜索...",
+    "clearSearch": "清除搜索",
+    "miningRewards": {
+      "scannedUpTo": "已扫描到区块 #{block} 的挖矿奖励",
+      "allLoaded": "所有挖矿奖励已加载",
+      "scannedAll": "已扫描从 #0 到当前的所有区块"
+    }
   },
   "fees": {
     "low": "低",

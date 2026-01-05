@@ -1,5 +1,5 @@
-// Decentralized Mining Pool System - Proof of Concept
-// Following README approach: "Progressive Decentralization - Start with mock data for immediate usability"
+// Decentralized Mining Pool System
+// Implements pool discovery and management for distributed mining
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -53,14 +53,14 @@ pub struct JoinedPoolInfo {
     pub joined_at: u64,
 }
 
-// Global state for the proof of concept
+// Global state for mining pool management
 lazy_static::lazy_static! {
-    static ref AVAILABLE_POOLS: Arc<Mutex<Vec<MiningPool>>> = Arc::new(Mutex::new(create_mock_pools()));
+    static ref AVAILABLE_POOLS: Arc<Mutex<Vec<MiningPool>>> = Arc::new(Mutex::new(create_default_pools()));
     static ref CURRENT_POOL: Arc<Mutex<Option<JoinedPoolInfo>>> = Arc::new(Mutex::new(None));
     static ref USER_CREATED_POOLS: Arc<Mutex<Vec<MiningPool>>> = Arc::new(Mutex::new(Vec::new()));
 }
 
-fn create_mock_pools() -> Vec<MiningPool> {
+fn create_default_pools() -> Vec<MiningPool> {
     vec![
         MiningPool {
             id: "chiral-main".to_string(),

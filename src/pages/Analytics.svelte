@@ -327,33 +327,38 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
     }
   }
 
-  // Function for dynamic data generation
-  function generateMockHistory(start: Date, end: Date) {
+  // Generate real earnings history from mining data
+  function generateRealHistory(start: Date, end: Date) {
     const history = [];
-    let cumulative = 0; // We can simulate a running total if needed
+    const dailyEarnings = new Map<string, number>();
+
+    // Group recent blocks by date
+    const blocks = $miningState.recentBlocks || [];
+    for (const block of blocks) {
+      const blockDate = new Date(block.timestamp);
+      if (blockDate >= start && blockDate <= end) {
+        const dateKey = blockDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        dailyEarnings.set(dateKey, (dailyEarnings.get(dateKey) || 0) + block.reward);
+      }
+    }
+
+    // Fill in all dates in range
+    let cumulative = 0;
     let d = new Date(start);
 
-    // Use the start date to create a deterministic "random" seed
-    const seed = start.getTime() / 100000;
-    
     while (d <= end) {
-      // Use a sine wave based on the day of the year for seasonal variation
-      const dayOfYear = (d.getTime() - new Date(d.getFullYear(), 0, 0).getTime()) / 86400000;
-      const seasonalFactor = (Math.sin((dayOfYear / 365.25) * 2 * Math.PI) + 1.2); //
-      
-      // Create a pseudo-random value based on the date for daily jitter
-      const dailyJitter = Math.sin(d.getTime() / 100000 + seed) * 10 - 5;
-      
-      const dailyEarning = Math.max(0, 5 * seasonalFactor + dailyJitter);
+      const dateKey = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const dailyEarning = dailyEarnings.get(dateKey) || 0;
       cumulative += dailyEarning;
 
       history.push({
-        date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        date: dateKey,
         earnings: dailyEarning,
         cumulative: cumulative
       });
       d.setDate(d.getDate() + 1);
     }
+
     return history;
   }
 
@@ -393,8 +398,8 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
     }
 
     if (start && end && start <= end) {
-      // Generate data dynamically for the calculated range
-      return generateMockHistory(start, end);
+      // Generate real earnings data from mining blocks
+      return generateRealHistory(start, end);
     }
     
     // Return empty array if the range is invalid or not set

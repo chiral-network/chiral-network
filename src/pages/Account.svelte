@@ -2359,8 +2359,8 @@
             type="button"
             class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 transition-colors"
             on:click={() => searchQuery = ''}
-            title="Clear search"
-            aria-label="Clear search"
+            title={$t('transactions.clearSearch')}
+            aria-label={$t('transactions.clearSearch')}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
@@ -2548,14 +2548,14 @@
                   {/if}
                 </Button>
                 <p class="text-xs text-muted-foreground mt-2">
-                  Mining rewards scanned up to block #{$miningPagination.oldestBlockScanned.toLocaleString()}
+                  {$t('transactions.miningRewards.scannedUpTo', { block: $miningPagination.oldestBlockScanned.toLocaleString() })}
                 </p>
               </div>
             {:else if !$miningPagination.hasMore && $miningPagination.oldestBlockScanned !== null}
               <div class="text-center py-3 border-t">
-                <p class="text-sm text-green-600">✓ All mining rewards loaded</p>
+                <p class="text-sm text-green-600">✓ {$t('transactions.miningRewards.allLoaded')}</p>
                 <p class="text-xs text-muted-foreground mt-1">
-                  Scanned all blocks from #0 to current
+                  {$t('transactions.miningRewards.scannedAll')}
                 </p>
               </div>
             {/if}
@@ -2865,7 +2865,7 @@
                   class="absolute right-2 top-1/2 -translate-y-1/2 text-red-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition-colors"
                   on:click={clearBlacklistSearch}
                   title={$t('tooltips.clearSearch')}
-                  aria-label="Clear search"
+                  aria-label={$t('transactions.clearSearch')}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
@@ -2920,7 +2920,7 @@
                         class="opacity-0 group-hover:opacity-100 transition-all p-1.5 bg-red-100 hover:bg-red-200 border border-red-300 hover:border-red-400 rounded flex-shrink-0 shadow-sm hover:shadow-md"
                       on:click={() => copyToClipboard(entry.chiral_address)}
                       title={$t('blacklist.actions.copyAddress')}
-                        aria-label="Copy address"
+                        aria-label={$t('blacklist.actions.copyAddress')}
                     >
                         <Copy class="h-3.5 w-3.5 text-red-700" />
                     </button>
