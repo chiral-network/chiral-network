@@ -74,8 +74,22 @@ pub struct ContributionDataPoint {
     pub files_seeded: usize,
 }
 
+/// Suspicious activity alert
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuspiciousActivityAlert {
+    pub id: String,
+    pub r#type: String,
+    pub description: String,
+    pub severity: String, // "low", "medium", "high"
+    pub timestamp: u64,
+    pub details: std::collections::HashMap<String, String>,
+}
+
 const MAX_HISTORY_SIZE: usize = 1000;
 const HISTORY_INTERVAL_SECONDS: u64 = 60; // Record every minute
+const MAX_ALERTS: usize = 100;
+const ALERT_RETENTION_SECONDS: u64 = 86400; // Keep alerts for 24 hours
 
 pub struct AnalyticsService {
     bandwidth_history: Arc<Mutex<VecDeque<BandwidthDataPoint>>>,
@@ -86,6 +100,7 @@ pub struct AnalyticsService {
     resource_contribution: Arc<Mutex<ResourceContribution>>,
     last_history_update: Arc<Mutex<u64>>,
     unique_peers: Arc<Mutex<std::collections::HashSet<String>>>,
+    suspicious_alerts: Arc<Mutex<VecDeque<SuspiciousActivityAlert>>>,
 }
 
 impl AnalyticsService {
@@ -131,6 +146,7 @@ impl AnalyticsService {
             })),
             last_history_update: Arc::new(Mutex::new(now)),
             unique_peers: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            suspicious_alerts: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -578,6 +594,113 @@ impl AnalyticsService {
             failed.file_hash, failed.error, failed.downloaded_bytes, failed.total_bytes
         );
     }
+
+    /// Get suspicious activity alerts
+    pub async fn get_suspicious_alerts(&self) -> Vec<SuspiciousActivityAlert> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_secs();
+
+        let mut alerts = self.suspicious_alerts.lock().await;
+        
+        // Remove expired alerts
+        while let Some(alert) = alerts.front() {
+            if now.saturating_sub(alert.timestamp) > ALERT_RETENTION_SECONDS {
+                alerts.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        alerts.iter().cloned().collect()
+    }
+
+    /// Add a suspicious activity alert
+    pub async fn add_suspicious_alert(
+        &self,
+        alert_type: String,
+        description: String,
+        severity: String,
+        details: std::collections::HashMap<String, String>,
+    ) {
+        let alert = SuspiciousActivityAlert {
+            id: uuid::Uuid::new_v4().to_string(),
+            r#type: alert_type,
+            description,
+            severity,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_secs(),
+            details,
+        };
+
+        let mut alerts = self.suspicious_alerts.lock().await;
+        alerts.push_back(alert);
+
+        // Keep only the latest MAX_ALERTS
+        while alerts.len() > MAX_ALERTS {
+            alerts.pop_front();
+        }
+    }
+
+    /// Check for suspicious activity patterns
+    pub async fn check_suspicious_patterns(&self) {
+        let perf = self.performance.lock().await;
+        let bandwidth = self.current_bandwidth.lock().await;
+        let activity = self.network_activity.lock().await;
+
+        // Detect unusually high failed transfer rate
+        if perf.total_connections > 0 {
+            let failure_rate = perf.failed_transfers as f64 / perf.total_connections as f64;
+            if failure_rate > 0.5 {
+                let mut details = std::collections::HashMap::new();
+                details.insert("failureRate".to_string(), format!("{:.2}%", failure_rate * 100.0));
+                details.insert("totalConnections".to_string(), perf.total_connections.to_string());
+                details.insert("failedTransfers".to_string(), perf.failed_transfers.to_string());
+
+                self.add_suspicious_alert(
+                    "High Failure Rate".to_string(),
+                    format!("Transfer failure rate is {:.2}% (expected < 50%)", failure_rate * 100.0),
+                    "medium".to_string(),
+                    details,
+                )
+                .await;
+            }
+        }
+
+        // Detect unusual activity patterns (many active transfers)
+        let total_active = activity.active_uploads + activity.active_downloads;
+        if total_active > 20 {
+            let mut details = std::collections::HashMap::new();
+            details.insert("activeUploads".to_string(), activity.active_uploads.to_string());
+            details.insert("activeDownloads".to_string(), activity.active_downloads.to_string());
+
+            self.add_suspicious_alert(
+                "High Concurrent Activity".to_string(),
+                format!("Detected {} concurrent transfers", total_active),
+                "low".to_string(),
+                details,
+            )
+            .await;
+        }
+
+        // Detect very high bandwidth usage
+        if bandwidth.upload_bytes > 10_000_000_000 || bandwidth.download_bytes > 10_000_000_000 {
+            let mut details = std::collections::HashMap::new();
+            details.insert("uploadBytes".to_string(), bandwidth.upload_bytes.to_string());
+            details.insert("downloadBytes".to_string(), bandwidth.download_bytes.to_string());
+
+            self.add_suspicious_alert(
+                "Unusual Upload Volume".to_string(),
+                "File > 1GB uploaded unusually fast".to_string(),
+                "high".to_string(),
+                details,
+            )
+            .await;
+        }
+    }
 }
 
 impl Clone for AnalyticsService {
@@ -591,6 +714,7 @@ impl Clone for AnalyticsService {
             resource_contribution: Arc::clone(&self.resource_contribution),
             last_history_update: Arc::clone(&self.last_history_update),
             unique_peers: Arc::clone(&self.unique_peers),
+            suspicious_alerts: Arc::clone(&self.suspicious_alerts),
         }
     }
 }
