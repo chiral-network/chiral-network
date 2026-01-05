@@ -618,6 +618,7 @@
   "filters": {
     "type": "Tipo",
     "typeAll": "Todas",
+    "typeTransactions": "Todas las transacciones",
     "typeSent": "Enviadas",
     "typeReceived": "Recibidas",
     "from": "De",

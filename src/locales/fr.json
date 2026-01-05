@@ -732,6 +732,7 @@
   "filters": {
     "type": "Type",
     "typeAll": "Tous",
+    "typeTransactions": "Toutes les transactions",
     "typeSent": "Envoyés",
     "typeReceived": "Reçus",
     "from": "De",

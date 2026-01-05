@@ -627,6 +627,7 @@
   "filters": {
     "type": "类型",
     "typeAll": "全部",
+    "typeTransactions": "所有交易",
     "typeSent": "已发送",
     "typeReceived": "已接收",
     "from": "来自",

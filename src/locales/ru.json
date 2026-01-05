@@ -713,6 +713,7 @@
   "filters": {
     "type": "Тип",
     "typeAll": "Все",
+    "typeTransactions": "Все транзакции",
     "typeSent": "Отправленные",
     "typeReceived": "Полученные",
     "from": "От",

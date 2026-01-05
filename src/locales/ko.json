@@ -599,6 +599,7 @@
   "filters": {
     "type": "유형",
     "typeAll": "전체",
+    "typeTransactions": "모든 거래",
     "typeSent": "보냄",
     "typeReceived": "받음",
     "from": "시작일",

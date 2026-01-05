@@ -733,6 +733,7 @@
   "filters": {
     "type": "प्रकार",
     "typeAll": "सभी",
+    "typeTransactions": "सभी लेनदेन",
     "typeSent": "भेजे गए",
     "typeReceived": "प्राप्त किए गए",
     "from": "से",

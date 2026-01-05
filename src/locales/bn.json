@@ -732,6 +732,7 @@
   "filters": {
     "type": "ধরন",
     "typeAll": "সব",
+    "typeTransactions": "সমস্ত লেনদেন",
     "typeSent": "পাঠানো",
     "typeReceived": "গৃহীত",
     "from": "হতে",

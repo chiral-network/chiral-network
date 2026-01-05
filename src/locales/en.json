@@ -774,6 +774,7 @@
   "filters": {
     "type": "Type",
     "typeAll": "All",
+    "typeTransactions": "All Transactions",
     "typeSent": "Sent",
     "typeReceived": "Received",
     "typeMining": "Mining Rewards",

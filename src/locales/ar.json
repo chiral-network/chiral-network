@@ -732,6 +732,7 @@
   "filters": {
     "type": "النوع",
     "typeAll": "الكل",
+    "typeTransactions": "جميع المعاملات",
     "typeSent": "المرسلة",
     "typeReceived": "المستلمة",
     "from": "من",
