@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { AlertTriangle, DownloadCloud, PlugZap } from 'lucide-svelte';
+  import { AlertTriangle, DownloadCloud, Lock, PlugZap } from 'lucide-svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Card from '$lib/components/ui/card.svelte';
 
   export let isExiting = false;
+  export let isLocking = false;
+  export let canLock = true;
   export let onStay: () => void;
+  export let onLockAccount: () => void;
   export let onExit: () => void;
   export let error: string | null = null;
 </script>
@@ -67,11 +70,19 @@
     {/if}
 
     <div class="flex flex-col sm:flex-row gap-3">
-      <Button class="flex-1" variant="secondary" on:click={onStay} disabled={isExiting}>
+      <Button class="flex-1" variant="secondary" on:click={onStay} disabled={isExiting || isLocking}>
         Stay online
       </Button>
+      {#if canLock}
+        <Button class="flex-1" variant="outline" on:click={onLockAccount} disabled={isExiting || isLocking}>
+          <div class="flex items-center justify-center gap-2">
+            <Lock class="h-4 w-4" />
+            {isLocking ? 'Locking...' : 'Lock account'}
+          </div>
+        </Button>
+      {/if}
       <Button class="flex-1" variant="destructive" on:click={onExit} disabled={isExiting}>
-        {isExiting ? 'Shutting down…' : 'Quit Chiral'}
+        {isExiting ? 'Shutting down...' : 'Quit Chiral'}
       </Button>
     </div>
   </Card>
