@@ -2682,6 +2682,27 @@
                 </p>
               {/if}
             </div>
+          {:else if $transactionPagination.hasMore && $transactionPagination.oldestBlockScanned !== null && filterType !== 'mining'}
+            <!-- Manual Load More Button for Regular Transactions -->
+            <div class="text-center py-3 border-t">
+              <Button
+                on:click={() => walletService.loadMoreTransactions()}
+                disabled={$transactionPagination.isLoading}
+                variant="outline"
+                class="gap-2"
+              >
+                {#if $transactionPagination.isLoading}
+                  <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                  Loading Transactions...
+                {:else}
+                  <History class="w-4 h-4" />
+                  Load More Transactions
+                {/if}
+              </Button>
+              <p class="text-xs text-muted-foreground mt-2">
+                Scanned up to block #{$transactionPagination.oldestBlockScanned.toLocaleString()}
+              </p>
+            </div>
           {/if}
 
           <!-- Mining Rewards Manual Loading - Only show when filterType is 'mining' -->
