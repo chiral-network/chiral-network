@@ -258,9 +258,13 @@
           const matchesMinGas = minGasPrice === 0 || gasPrice >= minGasPrice;
           const matchesMaxGas = maxGasPrice === null || gasPrice <= maxGasPrice;
 
+          // Block number filter
+          const matchesBlock = !blockNumberSearch ||
+            (tx.blockNumber && tx.blockNumber.toString() === blockNumberSearch);
+
           return matchesType && fromOk && toOk && matchesSearch &&
                  matchesMinAmount && matchesMaxAmount &&
-                 matchesMinGas && matchesMaxGas;
+                 matchesMinGas && matchesMaxGas && matchesBlock;
         })
         .slice()
         .sort((a, b) => {
@@ -2572,6 +2576,19 @@
     />
   </div>
 
+  <div>
+    <label for="block-number" class="block text-xs font-semibold mb-1.5 text-foreground">
+      Block Number
+    </label>
+    <input
+      id="block-number"
+      type="text"
+      bind:value={blockNumberSearch}
+      placeholder="Block #"
+      class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 w-28 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+    />
+  </div>
+
   <div class="flex-1"></div>
 
   <div class="flex flex-col gap-1 items-end">
@@ -2597,6 +2614,7 @@
           txHashSearch = '';
           minAmount = 0;
           maxAmount = null;
+          blockNumberSearch = '';
           minGasPrice = 0;
           maxGasPrice = null;
           hashSearchResult = null;
