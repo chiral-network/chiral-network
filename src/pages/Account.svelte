@@ -249,7 +249,7 @@
             (tx.id && tx.id.toString().includes(searchQuery));
 
           // Amount range filter
-          const amount = parseFloat(tx.amount) || 0;
+          const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount.toString()) || 0;
           const matchesMinAmount = minAmount === 0 || amount >= minAmount;
           const matchesMaxAmount = maxAmount === null || amount <= maxAmount;
 
@@ -260,7 +260,7 @@
 
           // Block number filter
           const matchesBlock = !blockNumberSearch ||
-            (tx.blockNumber && tx.blockNumber.toString() === blockNumberSearch);
+            (tx.block_number && tx.block_number.toString() === blockNumberSearch);
 
           return matchesType && fromOk && toOk && matchesSearch &&
                  matchesMinAmount && matchesMaxAmount &&
