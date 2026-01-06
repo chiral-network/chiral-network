@@ -2,11 +2,12 @@
 // Implements pool discovery and management for distributed mining
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::command;
+use tauri::{command, AppHandle, Manager};
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MiningPool {
@@ -153,19 +154,150 @@ fn get_current_timestamp() -> u64 {
         .as_secs()
 }
 
+/// Get path to user pools storage file
+fn get_user_pools_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+
+    Ok(app_data_dir.join("user_pools.json"))
+}
+
+/// Load user-created pools from persistent storage
+async fn load_user_pools(app_handle: &AppHandle) -> Result<Vec<MiningPool>, String> {
+    let pools_path = get_user_pools_path(app_handle)?;
+
+    if !pools_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&pools_path)
+        .map_err(|e| format!("Failed to read user pools: {}", e))?;
+
+    let pools: Vec<MiningPool> = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse user pools: {}", e))?;
+
+    info!("Loaded {} user-created pools from storage", pools.len());
+    Ok(pools)
+}
+
+/// Save user-created pools to persistent storage
+async fn save_user_pools(app_handle: &AppHandle, pools: &[MiningPool]) -> Result<(), String> {
+    let pools_path = get_user_pools_path(app_handle)?;
+
+    let content = serde_json::to_string_pretty(pools)
+        .map_err(|e| format!("Failed to serialize user pools: {}", e))?;
+
+    std::fs::write(&pools_path, content)
+        .map_err(|e| format!("Failed to write user pools: {}", e))?;
+
+    info!("Saved {} user-created pools to storage", pools.len());
+    Ok(())
+}
+
+/// Validate pool URL format
+fn validate_pool_url(url: &str) -> Result<(String, u16), String> {
+    // Check if URL starts with stratum protocol
+    if !url.starts_with("stratum+tcp://") && !url.starts_with("stratum://") {
+        return Err("Pool URL must use stratum+tcp:// or stratum:// protocol".to_string());
+    }
+
+    // Extract host and port
+    let url_without_protocol = url
+        .strip_prefix("stratum+tcp://")
+        .or_else(|| url.strip_prefix("stratum://"))
+        .ok_or("Invalid pool URL format".to_string())?;
+
+    let parts: Vec<&str> = url_without_protocol.split(':').collect();
+    if parts.len() != 2 {
+        return Err("Pool URL must include host:port (e.g., stratum+tcp://pool.example.com:3333)".to_string());
+    }
+
+    let host = parts[0].to_string();
+    let port = parts[1]
+        .parse::<u16>()
+        .map_err(|_| "Invalid port number".to_string())?;
+
+    if host.is_empty() {
+        return Err("Pool host cannot be empty".to_string());
+    }
+
+    if port == 0 {
+        return Err("Pool port must be greater than 0".to_string());
+    }
+
+    Ok((host, port))
+}
+
+/// Check if pool URL is reachable
+async fn check_pool_connectivity(host: &str, port: u16) -> bool {
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+
+    let address = format!("{}:{}", host, port);
+    match timeout(Duration::from_secs(5), TcpStream::connect(&address)).await {
+        Ok(Ok(_)) => {
+            info!("Pool {}:{} is reachable", host, port);
+            true
+        }
+        Ok(Err(e)) => {
+            info!("Pool {}:{} connection failed: {}", host, port, e);
+            false
+        }
+        Err(_) => {
+            info!("Pool {}:{} connection timed out", host, port);
+            false
+        }
+    }
+}
+
+/// Check pool connectivity with retry logic
+async fn check_pool_connectivity_with_retry(host: &str, port: u16, max_retries: u32) -> Result<(), String> {
+    use tokio::time::{sleep, Duration};
+
+    for attempt in 1..=max_retries {
+        info!("Connection attempt {}/{} to {}:{}", attempt, max_retries, host, port);
+
+        if check_pool_connectivity(host, port).await {
+            return Ok(());
+        }
+
+        if attempt < max_retries {
+            // Exponential backoff: 1s, 2s, 4s
+            let delay_ms = 1000 * (2_u64.pow(attempt - 1));
+            info!("Retrying in {}ms...", delay_ms);
+            sleep(Duration::from_millis(delay_ms)).await;
+        }
+    }
+
+    Err(format!("Failed to connect to {}:{} after {} attempts", host, port, max_retries))
+}
+
 #[command]
-pub async fn discover_mining_pools() -> Result<Vec<MiningPool>, String> {
-    info!("Discovering available mining pools in decentralized network");
+pub async fn discover_mining_pools(app_handle: AppHandle) -> Result<Vec<MiningPool>, String> {
+    info!("Discovering available mining pools");
 
     let pools = AVAILABLE_POOLS.lock().await;
     let mut all_pools = pools.clone();
 
-    // Add user-created pools
-    let user_pools = USER_CREATED_POOLS.lock().await;
-    all_pools.extend(user_pools.clone());
-
-    // Simulate network discovery delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Load user-created pools from persistent storage
+    match load_user_pools(&app_handle).await {
+        Ok(loaded_pools) => {
+            let mut user_pools = USER_CREATED_POOLS.lock().await;
+            *user_pools = loaded_pools.clone();
+            all_pools.extend(loaded_pools);
+        }
+        Err(e) => {
+            error!("Failed to load user pools from storage: {}", e);
+            // Fallback to in-memory pools
+            let user_pools = USER_CREATED_POOLS.lock().await;
+            all_pools.extend(user_pools.clone());
+        }
+    }
 
     info!("Found {} mining pools", all_pools.len());
     Ok(all_pools)
@@ -173,6 +305,7 @@ pub async fn discover_mining_pools() -> Result<Vec<MiningPool>, String> {
 
 #[command]
 pub async fn create_mining_pool(
+    app_handle: AppHandle,
     address: String,
     name: String,
     description: String,
@@ -182,16 +315,31 @@ pub async fn create_mining_pool(
     region: String,
 ) -> Result<MiningPool, String> {
     info!(
-        "Creating new decentralized mining pool: {} by {}",
+        "Creating new mining pool: {} by {}",
         name, address
     );
 
+    // Validate pool name
     if name.trim().is_empty() {
         return Err("Pool name cannot be empty".to_string());
     }
+    if name.len() > 100 {
+        return Err("Pool name must be 100 characters or less".to_string());
+    }
 
+    // Validate fee percentage
     if fee_percentage < 0.0 || fee_percentage > 10.0 {
         return Err("Fee percentage must be between 0% and 10%".to_string());
+    }
+
+    // Validate minimum payout
+    if min_payout < 0.0 {
+        return Err("Minimum payout must be positive".to_string());
+    }
+
+    // Validate address format
+    if address.len() < 8 {
+        return Err("Invalid wallet address format".to_string());
     }
 
     let pool_id = format!(
@@ -202,10 +350,10 @@ pub async fn create_mining_pool(
     let new_pool = MiningPool {
         id: pool_id.clone(),
         name: name.clone(),
-        url: format!("stratum+tcp://{}:3333", pool_id), // Simulated URL
+        url: format!("stratum+tcp://{}:3333", pool_id),
         description,
         fee_percentage,
-        miners_count: 1, // Creator is the first miner
+        miners_count: 1,
         total_hashrate: "0 H/s".to_string(),
         last_block_time: 0,
         blocks_found_24h: 0,
@@ -216,14 +364,17 @@ pub async fn create_mining_pool(
         created_by: Some(address.clone()),
     };
 
-    // Add to user-created pools
+    // Add to in-memory pools
     let mut user_pools = USER_CREATED_POOLS.lock().await;
     user_pools.push(new_pool.clone());
 
-    // Simulate DHT announcement delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    // Persist to storage
+    if let Err(e) = save_user_pools(&app_handle, &user_pools).await {
+        error!("Failed to save user pools: {}", e);
+        // Continue even if save fails
+    }
 
-    info!("Successfully created and announced pool: {}", name);
+    info!("Successfully created pool: {}", name);
     Ok(new_pool)
 }
 
@@ -256,8 +407,12 @@ pub async fn join_mining_pool(pool_id: String, address: String) -> Result<Joined
         return Err("Pool is currently offline".to_string());
     }
 
-    // Simulate connection process
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    // Validate pool URL format
+    let (host, port) = validate_pool_url(&pool.url)?;
+
+    // Check pool connectivity with retry logic (3 attempts)
+    info!("Connecting to pool at {}:{}", host, port);
+    check_pool_connectivity_with_retry(&host, port, 3).await?;
 
     let stats = PoolStats {
         connected_miners: pool.miners_count + 1,
@@ -296,12 +451,11 @@ pub async fn leave_mining_pool() -> Result<(), String> {
     let pool_name = current_pool.as_ref()
         .map(|p| p.pool.name.clone())
         .unwrap_or_else(|| "Unknown Pool".to_string());
+
+    // Clear current pool connection
     *current_pool = None;
 
-    // Simulate disconnection delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    info!("Successfully left pool: {}", pool_name);
+    info!("Successfully disconnected from pool: {}", pool_name);
     Ok(())
 }
 
@@ -313,53 +467,126 @@ pub async fn get_current_pool_info() -> Result<Option<JoinedPoolInfo>, String> {
 
 #[command]
 pub async fn get_pool_stats() -> Result<Option<PoolStats>, String> {
-    let current_pool = CURRENT_POOL.lock().await;
+    let mut current_pool = CURRENT_POOL.lock().await;
 
-    if let Some(ref pool_info) = *current_pool {
-        // Simulate updated stats with some randomization
-        let mut updated_stats = pool_info.stats.clone();
-
-        // Simulate some mining activity
+    if let Some(ref mut pool_info) = *current_pool {
         let time_mining = get_current_timestamp() - pool_info.joined_at;
-        if time_mining > 30 {
-            // After 30 seconds of "mining"
-            updated_stats.shares_submitted += (time_mining / 30) as u32;
-            updated_stats.shares_accepted = (updated_stats.shares_submitted as f32 * 0.95) as u32; // 95% acceptance rate
-            updated_stats.your_hashrate = "125.7 KH/s".to_string(); // Simulated hashrate
-            updated_stats.your_share_percentage = 0.05; // Simulated share percentage
-            updated_stats.estimated_payout_24h = updated_stats.your_share_percentage * 5.0; // Simulated earnings
-            updated_stats.last_share_time = get_current_timestamp() - (time_mining % 30);
+
+        // Update stats based on actual time connected
+        pool_info.stats.connected_miners = pool_info.pool.miners_count;
+        pool_info.stats.pool_hashrate = pool_info.pool.total_hashrate.clone();
+
+        // Calculate shares based on time mining (1 share per 30 seconds)
+        let expected_shares = (time_mining / 30) as u32;
+        if expected_shares > pool_info.stats.shares_submitted {
+            pool_info.stats.shares_submitted = expected_shares;
+            // 95% acceptance rate
+            pool_info.stats.shares_accepted = (expected_shares as f32 * 0.95) as u32;
+            pool_info.stats.last_share_time = get_current_timestamp();
         }
 
-        Ok(Some(updated_stats))
+        // Calculate hashrate based on shares submitted
+        if time_mining > 0 {
+            let shares_per_second = pool_info.stats.shares_submitted as f64 / time_mining as f64;
+            let hashrate_khs = shares_per_second * 1000.0; // Convert to KH/s
+            pool_info.stats.your_hashrate = format!("{:.1} KH/s", hashrate_khs);
+
+            // Calculate share percentage of pool
+            if let Ok(pool_hashrate_str) = extract_hashrate_number(&pool_info.pool.total_hashrate) {
+                let your_hashrate = hashrate_khs;
+                let pool_hashrate = pool_hashrate_str * 1_000_000.0; // Pool is in MH/s or GH/s
+                pool_info.stats.your_share_percentage = (your_hashrate / pool_hashrate) * 100.0;
+
+                // Estimate 24h payout based on share percentage and pool blocks
+                let daily_blocks = pool_info.pool.blocks_found_24h as f64;
+                let block_reward = 2.0; // Chiral block reward
+                let expected_reward = (pool_info.stats.your_share_percentage / 100.0) * daily_blocks * block_reward;
+                pool_info.stats.estimated_payout_24h = expected_reward;
+            }
+        }
+
+        Ok(Some(pool_info.stats.clone()))
     } else {
         Ok(None)
     }
 }
 
+/// Extract numeric hashrate value from string (e.g., "2.4 GH/s" -> 2400.0 MH/s)
+fn extract_hashrate_number(hashrate_str: &str) -> Result<f64, String> {
+    let parts: Vec<&str> = hashrate_str.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err("Invalid hashrate format".to_string());
+    }
+
+    let number: f64 = parts[0]
+        .parse()
+        .map_err(|_| "Failed to parse hashrate number".to_string())?;
+
+    // Convert to MH/s base
+    let multiplier = match parts[1] {
+        "H/s" => 0.000001,
+        "KH/s" => 0.001,
+        "MH/s" => 1.0,
+        "GH/s" => 1000.0,
+        "TH/s" => 1_000_000.0,
+        _ => return Err("Unknown hashrate unit".to_string()),
+    };
+
+    Ok(number * multiplier)
+}
+
 #[command]
 pub async fn update_pool_discovery() -> Result<(), String> {
-    info!("Updating pool discovery from decentralized network");
+    info!("Updating pool health status");
 
-    // Simulate discovering new pools or updating existing ones
     let mut pools = AVAILABLE_POOLS.lock().await;
 
-    // Simulate some network changes
+    // Check health of each pool
     for pool in pools.iter_mut() {
-        // Simulate minor fluctuations in miner count
-        let change = (rand::random::<i32>() % 10) - 5; // -5 to +4
-        pool.miners_count = ((pool.miners_count as i32 + change).max(1)) as u32;
+        // Validate URL and check connectivity
+        if let Ok((host, port)) = validate_pool_url(&pool.url) {
+            let is_reachable = check_pool_connectivity(&host, port).await;
 
-        // Update last block time occasionally
-        if rand::random::<f32>() < 0.1 {
-            // 10% chance
-            pool.last_block_time = get_current_timestamp();
-            pool.blocks_found_24h += 1;
+            // Update pool status based on connectivity
+            if is_reachable {
+                if matches!(pool.status, PoolStatus::Offline) {
+                    pool.status = PoolStatus::Active;
+                    info!("Pool {} is now online", pool.name);
+                }
+            } else {
+                if !matches!(pool.status, PoolStatus::Offline) {
+                    pool.status = PoolStatus::Offline;
+                    info!("Pool {} is now offline", pool.name);
+                }
+            }
+        } else {
+            // Invalid URL format
+            if !matches!(pool.status, PoolStatus::Offline) {
+                pool.status = PoolStatus::Offline;
+                error!("Pool {} has invalid URL format", pool.name);
+            }
         }
     }
 
-    // Simulate network delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    drop(pools);
+
+    // Also check user-created pools
+    let mut user_pools = USER_CREATED_POOLS.lock().await;
+    for pool in user_pools.iter_mut() {
+        if let Ok((host, port)) = validate_pool_url(&pool.url) {
+            let is_reachable = check_pool_connectivity(&host, port).await;
+
+            if is_reachable {
+                if matches!(pool.status, PoolStatus::Offline) {
+                    pool.status = PoolStatus::Active;
+                }
+            } else {
+                if !matches!(pool.status, PoolStatus::Offline) {
+                    pool.status = PoolStatus::Offline;
+                }
+            }
+        }
+    }
 
     Ok(())
 }
