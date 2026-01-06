@@ -2404,7 +2404,7 @@
     </div>
 
     <!-- Transaction Hash Search -->
-    <div class="mb-4 p-4 border border-blue-200 dark:border-blue-800 rounded-lg bg-blue-50 dark:bg-blue-950">
+    <div class="mb-4 p-4 border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800">
       <label for="tx-hash-search" class="block text-xs font-semibold mb-2 text-foreground">
         Search by Transaction Hash
       </label>
