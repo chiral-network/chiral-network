@@ -605,6 +605,9 @@
     },
     "searchPlaceholder": "Поиск по адресу, описанию или ID...",
     "clearSearch": "Очистить поиск",
+    "export": "Экспорт CSV",
+    "exportCSV": "Экспортировать историю транзакций в CSV",
+    "exportSuccess": "Экспортировано {count} транзакций в CSV",
     "miningRewards": {
       "scannedUpTo": "Награды за майнинг отсканированы до блока #{block}",
       "allLoaded": "Все награды за майнинг загружены",
@@ -710,6 +713,7 @@
   "filters": {
     "type": "Тип",
     "typeAll": "Все",
+    "typeTransactions": "Все транзакции",
     "typeSent": "Отправленные",
     "typeReceived": "Полученные",
     "from": "От",

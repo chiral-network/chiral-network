@@ -510,6 +510,9 @@
     },
     "searchPlaceholder": "주소, 설명 또는 ID로 검색...",
     "clearSearch": "검색 지우기",
+    "export": "CSV 내보내기",
+    "exportCSV": "거래 내역을 CSV로 내보내기",
+    "exportSuccess": "{count}개의 거래를 CSV로 내보냈습니다",
     "miningRewards": {
       "scannedUpTo": "블록 #{block}까지 채굴 보상 스캔됨",
       "allLoaded": "모든 채굴 보상 로드됨",
@@ -596,6 +599,7 @@
   "filters": {
     "type": "유형",
     "typeAll": "전체",
+    "typeTransactions": "모든 거래",
     "typeSent": "보냄",
     "typeReceived": "받음",
     "from": "시작일",

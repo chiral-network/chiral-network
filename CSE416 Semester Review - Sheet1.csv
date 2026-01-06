@@ -20,12 +20,12 @@ Analytics/Top-Earning-Files,Yes,No,
 Blockchain/Balance-Checker,Yes,Yes,
 Blockchain/Latest-Blocks,Yes,Yes,
 Blockchain/Overview,Yes,Yes,
-Blockchain/Search,Kinda,Yes,
-Download/Download/Bitswap,Kinda,Yes,Download works but transactions only kind of work
+Blockchain/Search,Yes,Yes,Fully functional - supports address/transaction/block search
+Download/Download/Bitswap,N/A,No,Not being used - deprecated in favor of WebRTC
 Download/Download/BitTorrent,Yes,Yes,
 Download/Download/ED2K,Yes,Yes,
 Download/Download/FTP,Yes,Yes,
-Download/Download/WebRTC,Kinda,Yes,Download works but transactions only kind of work
+Download/Download/WebRTC,Yes,Yes,Fully functional - downloads and on-chain payments working
 Download/Protocol-Tests,Yes,No,
 Download/Search/.torrent,Yes,Yes,
 Download/Search/ED2K,Yes,Yes,
@@ -47,7 +47,7 @@ Network/DHT-Network,Yes,Yes,
 Network/Geographic-Distribution,Yes,No,
 Network/Node-Lifecycle,Yes,Yes,
 Network/Peer-Discovery,Yes,Yes,
-Network/Quick-Actions,No,No,Feature doesn't exist
+Network/Quick-Actions,Yes,No,Action buttons throughout Network page (copy peer ID, start/stop DHT, etc.)
 Network/Relay-Health-and-Monitoring,Yes,Yes,Same component as Relay page
 Network/Relay-Pool,Yes,Yes,Same component as Relay page
 Network/Smart-Peer-Selection,Yes,Yes,
@@ -78,7 +78,7 @@ Settings/Network/User-Location,Yes,No,
 Settings/Notifications,Yes,No,
 Settings/Privacy-and-Security/Hide-IP,Yes,No,
 Settings/Privacy-and-Security/NAT-Traversal-Reachability,Yes,Yes,
-Settings/Privacy-and-Security/Proxy-Routing,Yes,Kinda,
+Settings/Privacy-and-Security/Proxy-Routing,N/A,No,Not being developed
 Settings/Storage/Auto-Cleanup,Yes,No,
 Settings/Storage/Location,Yes,Yes,
 Upload/Add,Yes,Yes,

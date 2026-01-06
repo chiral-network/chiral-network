@@ -510,6 +510,9 @@
     },
     "searchPlaceholder": "Buscar por dirección, descripción o ID...",
     "clearSearch": "Borrar búsqueda",
+    "export": "Exportar CSV",
+    "exportCSV": "Exportar historial de transacciones como CSV",
+    "exportSuccess": "Se exportaron {count} transacciones a CSV",
     "miningRewards": {
       "scannedUpTo": "Recompensas de minería escaneadas hasta el bloque #{block}",
       "allLoaded": "Todas las recompensas de minería cargadas",
@@ -615,6 +618,7 @@
   "filters": {
     "type": "Tipo",
     "typeAll": "Todas",
+    "typeTransactions": "Todas las transacciones",
     "typeSent": "Enviadas",
     "typeReceived": "Recibidas",
     "from": "De",
