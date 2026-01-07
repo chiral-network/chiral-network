@@ -2808,13 +2808,6 @@ async function loadAndResumeDownloads() {
     </div>
   </Card>
 
-  <!-- Favorites Section -->
-  <Card class="p-6">
-    <FavoritesPanel
-      on:download={(event) => handleFavoriteDownload(event.detail)}
-    />
-  </Card>
-
   <!-- BitTorrent Downloads List -->
   {#if torrentDownloads.size > 0}
     <Card class="p-6">
@@ -3442,6 +3435,13 @@ async function loadAndResumeDownloads() {
         />
       </div>
     {/if}
+  </Card>
+
+  <!-- Favorites Section -->
+  <Card class="p-6">
+    <FavoritesPanel
+      on:download={(event) => handleFavoriteDownload(event.detail)}
+    />
   </Card>
 
   <!-- Download History Section -->
