@@ -3358,6 +3358,13 @@ async function loadAndResumeDownloads() {
     {/if}
   </Card>
 
+  <!-- Favorites Section -->
+  <Card class="p-6">
+    <FavoritesPanel
+      on:download={(event) => handleFavoriteDownload(event.detail)}
+    />
+  </Card>
+
   <!-- Restartable HTTP Download Section -->
   <Card class="p-6">
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -3435,13 +3442,6 @@ async function loadAndResumeDownloads() {
         />
       </div>
     {/if}
-  </Card>
-
-  <!-- Favorites Section -->
-  <Card class="p-6">
-    <FavoritesPanel
-      on:download={(event) => handleFavoriteDownload(event.detail)}
-    />
   </Card>
 
   <!-- Download History Section -->
