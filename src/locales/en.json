@@ -466,6 +466,19 @@
     "currentProtocol": "Current Protocol",
     "changeProtocol": "Change Protocol"
   },
+  "favorites": {
+    "title": "Favorites",
+    "add": "Add to favorites",
+    "remove": "Remove from favorites",
+    "download": "Download",
+    "clearAll": "Clear All",
+    "confirmClear": "Are you sure you want to clear all favorites?",
+    "seeders": "seeders",
+    "empty": {
+      "title": "No favorites yet",
+      "description": "Star files in search results to add them here for quick access"
+    }
+  },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
@@ -1833,6 +1846,12 @@
         "successWithHash": "Payment successful! Transaction: {hash}...",
         "success": "Payment successful!"
       }
+    },
+    "favorites": {
+      "added": "Added to favorites",
+      "removed": "Removed from favorites",
+      "notFound": "{name} not found in DHT",
+      "downloadFailed": "Failed to download favorite file"
     },
     "transactions": {
       "copied": "{label} copied to clipboard",
