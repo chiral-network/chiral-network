@@ -6,7 +6,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw, Download } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist, showAuthWizard } from '$lib/stores'
+  import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { gethStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
   import { lockAccount } from '$lib/services/accountLock';
