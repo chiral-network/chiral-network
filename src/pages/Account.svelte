@@ -1498,7 +1498,8 @@
       showToast(tr('transactions.exportSuccess', { count: filteredTransactions.length }), 'success');
     } catch (error) {
       console.error('CSV export error:', error);
-      showToast('Failed to export transactions: ' + error.message, 'error');
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      showToast('Failed to export transactions: ' + errorMessage, 'error');
     }
   }
 
