@@ -10,6 +10,7 @@
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
+  import FavoritesPanel from '$lib/components/download/FavoritesPanel.svelte'
   import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
@@ -1195,6 +1196,23 @@ async function loadAndResumeDownloads() {
   function handleSearchMessage(event: CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' | 'warning'; duration?: number }>) {
     const { message, type = 'info' } = event.detail
     showToast(message, type)
+  }
+
+  async function handleFavoriteDownload(detail: { hash: string; name: string }) {
+    console.log('⭐ handleFavoriteDownload called:', detail);
+
+    // Search for the file in DHT by hash
+    try {
+      const metadata = await dhtService.getFile(detail.hash);
+      if (metadata) {
+        await handleSearchDownload(metadata);
+      } else {
+        showToast(tr('toasts.favorites.notFound', { values: { name: detail.name } }), 'warning');
+      }
+    } catch (error) {
+      console.error('Failed to download favorite:', error);
+      showToast(tr('toasts.favorites.downloadFailed'), 'error');
+    }
   }
 
   async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
@@ -2788,6 +2806,13 @@ async function loadAndResumeDownloads() {
         on:message={handleSearchMessage}
       />
     </div>
+  </Card>
+
+  <!-- Favorites Section -->
+  <Card class="p-6">
+    <FavoritesPanel
+      on:download={(event) => handleFavoriteDownload(event.detail)}
+    />
   </Card>
 
   <!-- BitTorrent Downloads List -->
