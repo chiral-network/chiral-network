@@ -249,12 +249,12 @@
             (tx.id && tx.id.toString().includes(searchQuery));
 
           // Amount range filter
-          const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount.toString()) || 0;
+          const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(String(tx.amount)) || 0;
           const matchesMinAmount = minAmount === 0 || amount >= minAmount;
           const matchesMaxAmount = maxAmount === null || amount <= maxAmount;
 
           // Gas price range filter (if gas data exists)
-          const gasPrice = tx.gas_price ? parseFloat(tx.gas_price.toString()) : 0;
+          const gasPrice = tx.gas_price ? parseFloat(String(tx.gas_price)) : 0;
           const matchesMinGas = minGasPrice === 0 || gasPrice >= minGasPrice;
           const matchesMaxGas = maxGasPrice === null || gasPrice <= maxGasPrice;
 
