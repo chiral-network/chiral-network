@@ -49,14 +49,12 @@
 
   async function copyMultiaddress() {
     if (!multiaddress) {
-      // TODO: Use i18n key when added
-      showToast('Multiaddress not available', 'warning');
+      showToast($t('network.quickActions.copyMultiaddr.tooltipUnavailable'), 'warning');
       return;
     }
     try {
       await navigator.clipboard.writeText(multiaddress);
-      // TODO: Use i18n key when added
-      showToast('Multiaddress copied!', 'success');
+      showToast($t('network.quickActions.copyMultiaddr.success'), 'success');
     } catch {
       showToast('Failed to copy', 'error');
     }
@@ -117,10 +115,12 @@
       size="sm"
       disabled={!multiaddress}
       on:click={copyMultiaddress}
-      title={multiaddress ? 'Copy your full connection address' : 'Multiaddress not available'}
+      title={multiaddress 
+        ? $t('network.quickActions.copyMultiaddr.tooltip')
+        : $t('network.quickActions.copyMultiaddr.tooltipUnavailable')}
     >
       <Link class="h-4 w-4 mr-1.5" />
-      Copy Address
+      {$t('network.quickActions.copyMultiaddr.button')}
     </Button>
 
     <!-- Discover Peers -->
@@ -142,11 +142,13 @@
       variant={autorelayEnabled ? 'default' : 'outline'}
       size="sm"
       on:click={handleToggleAutorelay}
-      title="Toggle automatic relay connections"
+      title={$t('network.quickActions.toggleAutorelay.tooltip')}
       class={autorelayEnabled ? 'bg-emerald-600 hover:bg-emerald-700' : ''}
     >
       <Radio class="h-4 w-4 mr-1.5" />
-      {autorelayEnabled ? 'Relay: On' : 'Relay: Off'}
+      {autorelayEnabled 
+        ? $t('network.quickActions.toggleAutorelay.buttonOn')
+        : $t('network.quickActions.toggleAutorelay.buttonOff')}
     </Button>
 
     <!-- Start/Stop DHT -->
@@ -155,22 +157,24 @@
         variant="outline" 
         size="sm"
         on:click={handleStopDht}
-        title="Disconnect from the DHT network"
+        title={$t('network.quickActions.startStopDht.stopTooltip')}
         class="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:border-red-800 dark:hover:bg-red-950"
       >
         <Square class="h-4 w-4 mr-1.5" />
-        {isConnecting ? 'Cancel' : 'Disconnect'}
+        {isConnecting 
+          ? $t('network.quickActions.startStopDht.cancelButton')
+          : $t('network.quickActions.startStopDht.stopButton')}
       </Button>
     {:else}
       <Button 
         variant="outline" 
         size="sm"
         on:click={handleStartDht}
-        title="Connect to the DHT network"
+        title={$t('network.quickActions.startStopDht.startTooltip')}
         class="text-emerald-600 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:border-emerald-800 dark:hover:bg-emerald-950"
       >
         <Play class="h-4 w-4 mr-1.5" />
-        Connect
+        {$t('network.quickActions.startStopDht.startButton')}
       </Button>
     {/if}
   </div>
