@@ -1959,10 +1959,9 @@ async function loadAndResumeDownloads() {
 
     // Handle HTTP downloads
     if ((fileToDownload as any).httpSources && (fileToDownload as any).httpSources.length > 0) {
-      const httpSource = (fileToDownload as any).httpSources[0];
       try {
         const { join } = await import('@tauri-apps/api/path');
-        const storagePath = await invoke('get_download_directory');
+        const storagePath = await invoke('get_download_directory') as string;
         await invoke('ensure_directory_exists', { path: storagePath });
         const outputPath = await join(storagePath, fileToDownload.name);
 
@@ -2005,10 +2004,9 @@ async function loadAndResumeDownloads() {
 
     // Handle ED2K downloads
     if ((fileToDownload as any).ed2kSources && (fileToDownload as any).ed2kSources.length > 0) {
-      const ed2kSource = (fileToDownload as any).ed2kSources[0];
       try {
         const { join } = await import('@tauri-apps/api/path');
-        const storagePath = await invoke('get_download_directory');
+        const storagePath = await invoke('get_download_directory') as string;
         await invoke('ensure_directory_exists', { path: storagePath });
         const outputPath = await join(storagePath, fileToDownload.name);
 
@@ -2054,7 +2052,7 @@ async function loadAndResumeDownloads() {
       const ftpSource = (fileToDownload as any).ftpSources[0];
       try {
         const { join } = await import('@tauri-apps/api/path');
-        const storagePath = await invoke('get_download_directory');
+        const storagePath = await invoke('get_download_directory') as string;
         await invoke('ensure_directory_exists', { path: storagePath });
         const outputPath = await join(storagePath, fileToDownload.name);
 
