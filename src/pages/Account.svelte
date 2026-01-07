@@ -1460,7 +1460,7 @@
         const date = tx.date instanceof Date ? tx.date.toISOString() : new Date(tx.date).toISOString();
 
         // Translate transaction type
-        let translatedType = tx.type;
+        let translatedType: string = tx.type;
         if (tx.type === 'sent') {
           translatedType = tr('filters.typeSent');
         } else if (tx.type === 'received') {
