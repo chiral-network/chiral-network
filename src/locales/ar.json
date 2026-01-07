@@ -1779,6 +1779,12 @@
         "success": "تم الدفع بنجاح!"
       }
     },
+    "favorites": {
+      "added": "تمت الإضافة إلى المفضلة",
+      "removed": "تمت الإزالة من المفضلة",
+      "notFound": "لم يتم العثور على {name} في DHT",
+      "downloadFailed": "فشل تنزيل الملف المفضل"
+    },
     "transactions": {
       "copied": "تم نسخ {label} إلى الحافظة",
       "copyError": "فشل نسخ {label}",

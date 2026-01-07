@@ -1678,6 +1678,12 @@
         "success": "¡Pago exitoso!"
       }
     },
+    "favorites": {
+      "added": "Agregado a favoritos",
+      "removed": "Eliminado de favoritos",
+      "notFound": "{name} no encontrado en DHT",
+      "downloadFailed": "Error al descargar archivo favorito"
+    },
     "transactions": {
       "copied": "{label} copiado al portapapeles",
       "copyError": "No se pudo copiar {label}",

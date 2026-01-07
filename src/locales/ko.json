@@ -1665,6 +1665,12 @@
         "success": "결제 성공!"
       }
     },
+    "favorites": {
+      "added": "즐겨찾기에 추가됨",
+      "removed": "즐겨찾기에서 제거됨",
+      "notFound": "DHT에서 {name}을(를) 찾을 수 없습니다",
+      "downloadFailed": "즐겨찾기 파일 다운로드 실패"
+    },
     "transactions": {
       "copied": "{label}이(가) 클립보드에 복사되었습니다",
       "copyError": "{label}을(를) 복사하지 못했습니다",

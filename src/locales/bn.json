@@ -1779,6 +1779,12 @@
         "success": "পেমেন্ট সফল!"
       }
     },
+    "favorites": {
+      "added": "প্রিয়তে যোগ করা হয়েছে",
+      "removed": "প্রিয় থেকে সরানো হয়েছে",
+      "notFound": "DHT তে {name} পাওয়া যায়নি",
+      "downloadFailed": "প্রিয় ফাইল ডাউনলোড ব্যর্থ"
+    },
     "transactions": {
       "copied": "{label} ক্লিপবোর্ডে কপি হয়েছে",
       "copyError": "{label} কপি করতে ব্যর্থ",

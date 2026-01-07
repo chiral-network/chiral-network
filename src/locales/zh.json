@@ -1694,6 +1694,12 @@
         "success": "付款成功！"
       }
     },
+    "favorites": {
+      "added": "已添加到收藏夹",
+      "removed": "已从收藏夹移除",
+      "notFound": "在 DHT 中找不到 {name}",
+      "downloadFailed": "下载收藏文件失败"
+    },
     "transactions": {
       "copied": "{label} 已复制到剪贴板",
       "copyError": "复制 {label} 失败",
