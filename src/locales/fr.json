@@ -435,6 +435,19 @@
     "currentProtocol": "Protocole actuel",
     "changeProtocol": "Changer de protocole"
   },
+  "favorites": {
+    "title": "Favoris",
+    "add": "Ajouter aux favoris",
+    "remove": "Retirer des favoris",
+    "download": "Télécharger",
+    "clearAll": "Tout effacer",
+    "confirmClear": "Êtes-vous sûr de vouloir effacer tous les favoris ?",
+    "seeders": "seeders",
+    "empty": {
+      "title": "Pas encore de favoris",
+      "description": "Marquez des fichiers dans les résultats de recherche pour les ajouter ici pour un accès rapide"
+    }
+  },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
