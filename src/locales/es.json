@@ -1346,6 +1346,19 @@
     "currentProtocol": "Protocolo Actual",
     "changeProtocol": "Cambiar Protocolo"
   },
+  "favorites": {
+    "title": "Favoritos",
+    "add": "Agregar a favoritos",
+    "remove": "Quitar de favoritos",
+    "download": "Descargar",
+    "clearAll": "Limpiar todo",
+    "confirmClear": "¿Estás seguro de que quieres limpiar todos los favoritos?",
+    "seeders": "semillas",
+    "empty": {
+      "title": "Aún no hay favoritos",
+      "description": "Marca archivos en los resultados de búsqueda para agregarlos aquí y acceder rápidamente"
+    }
+  },
   "upload": {
     "title": "Subir archivos",
     "subtitle": "Comparte tus archivos en la Red Chiral",
