@@ -302,6 +302,24 @@
         "button": "Reiniciar Nodo",
         "success": "Nodo reiniciado",
         "notRunning": "No se puede reiniciar: El nodo no está en ejecución"
+      },
+      "copyMultiaddr": {
+        "tooltip": "Copiar tu dirección de conexión completa",
+        "tooltipUnavailable": "Multidirección no disponible",
+        "button": "Copiar Dirección",
+        "success": "¡Multidirección copiada!"
+      },
+      "toggleAutorelay": {
+        "tooltip": "Alternar conexiones de retransmisión automática",
+        "buttonOn": "Relay: Activo",
+        "buttonOff": "Relay: Inactivo"
+      },
+      "startStopDht": {
+        "startTooltip": "Conectar a la red DHT",
+        "stopTooltip": "Desconectar de la red DHT",
+        "startButton": "Conectar",
+        "stopButton": "Desconectar",
+        "cancelButton": "Cancelar"
       }
     }
   },

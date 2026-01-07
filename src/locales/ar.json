@@ -309,6 +309,24 @@
         "button": "إعادة التشغيل",
         "success": "تمت إعادة التشغيل",
         "notRunning": "لا يمكن إعادة التشغيل: العقدة غير قيد التشغيل"
+      },
+      "copyMultiaddr": {
+        "tooltip": "نسخ عنوان الاتصال الكامل",
+        "tooltipUnavailable": "العنوان المتعدد غير متاح",
+        "button": "نسخ العنوان",
+        "success": "تم نسخ العنوان المتعدد!"
+      },
+      "toggleAutorelay": {
+        "tooltip": "تبديل اتصالات الترحيل التلقائية",
+        "buttonOn": "الترحيل: مفعل",
+        "buttonOff": "الترحيل: معطل"
+      },
+      "startStopDht": {
+        "startTooltip": "الاتصال بشبكة DHT",
+        "stopTooltip": "قطع الاتصال بشبكة DHT",
+        "startButton": "اتصال",
+        "stopButton": "قطع الاتصال",
+        "cancelButton": "إلغاء"
       }
     }
   },

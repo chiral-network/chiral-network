@@ -305,6 +305,24 @@
         "button": "Перезапустить узел",
         "success": "Узел перезапущен",
         "notRunning": "Невозможно перезапустить: узел не запущен"
+      },
+      "copyMultiaddr": {
+        "tooltip": "Скопировать полный адрес подключения",
+        "tooltipUnavailable": "Мультиадрес недоступен",
+        "button": "Копировать адрес",
+        "success": "Мультиадрес скопирован!"
+      },
+      "toggleAutorelay": {
+        "tooltip": "Переключить автоматические relay-соединения",
+        "buttonOn": "Relay: Вкл",
+        "buttonOff": "Relay: Выкл"
+      },
+      "startStopDht": {
+        "startTooltip": "Подключиться к сети DHT",
+        "stopTooltip": "Отключиться от сети DHT",
+        "startButton": "Подключить",
+        "stopButton": "Отключить",
+        "cancelButton": "Отмена"
       }
     }
   },

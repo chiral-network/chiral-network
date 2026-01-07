@@ -309,6 +309,24 @@
         "button": "Reiniciar Nó",
         "success": "Nó reiniciado",
         "notRunning": "Não é possível reiniciar: Nó não está em execução"
+      },
+      "copyMultiaddr": {
+        "tooltip": "Copiar seu endereço de conexão completo",
+        "tooltipUnavailable": "Multiendereço não disponível",
+        "button": "Copiar Endereço",
+        "success": "Multiendereço copiado!"
+      },
+      "toggleAutorelay": {
+        "tooltip": "Alternar conexões de retransmissão automática",
+        "buttonOn": "Relay: Ativo",
+        "buttonOff": "Relay: Inativo"
+      },
+      "startStopDht": {
+        "startTooltip": "Conectar à rede DHT",
+        "stopTooltip": "Desconectar da rede DHT",
+        "startButton": "Conectar",
+        "stopButton": "Desconectar",
+        "cancelButton": "Cancelar"
       }
     }
   },

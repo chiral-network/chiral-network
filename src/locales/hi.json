@@ -309,6 +309,24 @@
         "button": "नोड पुनरारंभ करें",
         "success": "नोड पुनरारंभ किया गया",
         "notRunning": "पुनरारंभ नहीं किया जा सकता: नोड चल नहीं रहा है"
+      },
+      "copyMultiaddr": {
+        "tooltip": "अपना पूर्ण कनेक्शन पता कॉपी करें",
+        "tooltipUnavailable": "मल्टीएड्रेस उपलब्ध नहीं है",
+        "button": "पता कॉपी करें",
+        "success": "मल्टीएड्रेस कॉपी किया गया!"
+      },
+      "toggleAutorelay": {
+        "tooltip": "स्वचालित रिले कनेक्शन टॉगल करें",
+        "buttonOn": "रिले: चालू",
+        "buttonOff": "रिले: बंद"
+      },
+      "startStopDht": {
+        "startTooltip": "DHT नेटवर्क से कनेक्ट करें",
+        "stopTooltip": "DHT नेटवर्क से डिस्कनेक्ट करें",
+        "startButton": "कनेक्ट करें",
+        "stopButton": "डिस्कनेक्ट करें",
+        "cancelButton": "रद्द करें"
       }
     }
   },
