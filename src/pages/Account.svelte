@@ -137,8 +137,17 @@
   let filterDateTo: string = '';
   let sortDescending: boolean = true;
   let searchQuery: string = '';
-  
-  
+  let txHashSearch: string = '';
+  let minAmount: number = 0;
+  let maxAmount: number | null = null;
+  let blockNumberSearch: string = '';
+  let minGasPrice: number = 0;
+  let maxGasPrice: number | null = null;
+  let hashSearchResult: any = null;
+  let isSearchingHash = false;
+  let hashSearchError = '';
+
+
   // Confirmation for sending transaction
   let isConfirming = false
   let countdown = 0
@@ -239,7 +248,23 @@
             tx.from?.toLowerCase().includes(searchQuery.toLowerCase()) ||
             (tx.id && tx.id.toString().includes(searchQuery));
 
-          return matchesType && fromOk && toOk && matchesSearch;
+          // Amount range filter
+          const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount.toString()) || 0;
+          const matchesMinAmount = minAmount === 0 || amount >= minAmount;
+          const matchesMaxAmount = maxAmount === null || amount <= maxAmount;
+
+          // Gas price range filter (if gas data exists)
+          const gasPrice = tx.gas_price ? parseFloat(tx.gas_price.toString()) : 0;
+          const matchesMinGas = minGasPrice === 0 || gasPrice >= minGasPrice;
+          const matchesMaxGas = maxGasPrice === null || gasPrice <= maxGasPrice;
+
+          // Block number filter
+          const matchesBlock = !blockNumberSearch ||
+            (tx.block_number && tx.block_number.toString() === blockNumberSearch);
+
+          return matchesType && fromOk && toOk && matchesSearch &&
+                 matchesMinAmount && matchesMaxAmount &&
+                 matchesMinGas && matchesMaxGas && matchesBlock;
         })
         .slice()
         .sort((a, b) => {
@@ -605,6 +630,39 @@
   function closeTransactionReceipt() {
     showTransactionReceipt = false;
     selectedTransaction = null;
+  }
+
+  async function searchByTransactionHash() {
+    if (!txHashSearch || !isTauri) {
+      hashSearchResult = null;
+      hashSearchError = '';
+      return;
+    }
+
+    // Validate hash format
+    if (!txHashSearch.startsWith('0x') || txHashSearch.length !== 66) {
+      hashSearchError = 'Invalid transaction hash format (must be 0x followed by 64 hex characters)';
+      hashSearchResult = null;
+      return;
+    }
+
+    isSearchingHash = true;
+    hashSearchError = '';
+    hashSearchResult = null;
+
+    try {
+      const result = await invoke('get_transaction_by_hash', { txHash: txHashSearch });
+      if (result) {
+        hashSearchResult = result;
+      } else {
+        hashSearchError = 'Transaction not found';
+      }
+    } catch (error) {
+      console.error('Failed to search transaction by hash:', error);
+      hashSearchError = 'Failed to retrieve transaction';
+    } finally {
+      isSearchingHash = false;
+    }
   }
 
   // Ensure wallet.pendingTransactions matches actual pending transactions
@@ -2345,6 +2403,52 @@
       </div>
     </div>
 
+    <!-- Transaction Hash Search -->
+    <div class="mb-4 p-4 border border-gray-200 dark:border-gray-700 rounded-lg" style="background-color: white;">
+      <label for="tx-hash-search" class="block text-xs font-semibold mb-2 text-foreground">
+        Search by Transaction Hash
+      </label>
+      <div class="flex gap-2">
+        <input
+          id="tx-hash-search"
+          type="text"
+          bind:value={txHashSearch}
+          placeholder="0x..."
+          class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+        />
+        <button
+          type="button"
+          class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          on:click={searchByTransactionHash}
+          disabled={isSearchingHash || !txHashSearch}
+        >
+          {isSearchingHash ? 'Searching...' : 'Search'}
+        </button>
+        {#if txHashSearch}
+          <button
+            type="button"
+            class="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-100 transition-colors"
+            on:click={() => { txHashSearch = ''; hashSearchResult = null; hashSearchError = ''; }}
+          >
+            Clear
+          </button>
+        {/if}
+      </div>
+      {#if hashSearchError}
+        <p class="text-xs text-red-600 mt-2">{hashSearchError}</p>
+      {/if}
+      {#if hashSearchResult}
+        <div class="mt-3 p-3 border border-green-300 dark:border-green-700 rounded bg-white dark:bg-gray-800">
+          <p class="text-xs font-semibold text-green-700 dark:text-green-400 mb-2">Transaction Found</p>
+          <p class="text-xs"><span class="font-semibold">Hash:</span> {hashSearchResult.hash || 'N/A'}</p>
+          <p class="text-xs"><span class="font-semibold">From:</span> {hashSearchResult.from || 'N/A'}</p>
+          <p class="text-xs"><span class="font-semibold">To:</span> {hashSearchResult.to || 'N/A'}</p>
+          <p class="text-xs"><span class="font-semibold">Value:</span> {hashSearchResult.value || 'N/A'} CHR</p>
+          <p class="text-xs"><span class="font-semibold">Block:</span> {hashSearchResult.blockNumber || 'Pending'}</p>
+        </div>
+      {/if}
+    </div>
+
     <!-- Filters -->
     <div class="flex flex-wrap gap-3 mb-4 items-end p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
   <div>
@@ -2412,6 +2516,79 @@
     </button>
   </div>
 
+  <div>
+    <label for="min-amount" class="block text-xs font-semibold mb-1.5 text-foreground">
+      Min Amount (CHR)
+    </label>
+    <input
+      id="min-amount"
+      type="number"
+      bind:value={minAmount}
+      min="0"
+      step="0.01"
+      placeholder="0"
+      class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 w-28 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+    />
+  </div>
+
+  <div>
+    <label for="max-amount" class="block text-xs font-semibold mb-1.5 text-foreground">
+      Max Amount (CHR)
+    </label>
+    <input
+      id="max-amount"
+      type="number"
+      bind:value={maxAmount}
+      min="0"
+      step="0.01"
+      placeholder="∞"
+      class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 w-28 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+    />
+  </div>
+
+  <div>
+    <label for="min-gas" class="block text-xs font-semibold mb-1.5 text-foreground">
+      Min Gas (Gwei)
+    </label>
+    <input
+      id="min-gas"
+      type="number"
+      bind:value={minGasPrice}
+      min="0"
+      step="0.1"
+      placeholder="0"
+      class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 w-28 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+    />
+  </div>
+
+  <div>
+    <label for="max-gas" class="block text-xs font-semibold mb-1.5 text-foreground">
+      Max Gas (Gwei)
+    </label>
+    <input
+      id="max-gas"
+      type="number"
+      bind:value={maxGasPrice}
+      min="0"
+      step="0.1"
+      placeholder="∞"
+      class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 w-28 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+    />
+  </div>
+
+  <div>
+    <label for="block-number" class="block text-xs font-semibold mb-1.5 text-foreground">
+      Block Number
+    </label>
+    <input
+      id="block-number"
+      type="text"
+      bind:value={blockNumberSearch}
+      placeholder="Block #"
+      class="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm h-9 w-28 bg-white hover:border-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+    />
+  </div>
+
   <div class="flex-1"></div>
 
   <div class="flex flex-col gap-1 items-end">
@@ -2434,6 +2611,14 @@
           filterDateTo = '';
           sortDescending = true;
           searchQuery = '';
+          txHashSearch = '';
+          minAmount = 0;
+          maxAmount = null;
+          blockNumberSearch = '';
+          minGasPrice = 0;
+          maxGasPrice = null;
+          hashSearchResult = null;
+          hashSearchError = '';
         }}
       >
         <RefreshCw class="h-3.5 w-3.5" />
@@ -2514,6 +2699,27 @@
                   Scanned all blocks from #{$transactionPagination.oldestBlockScanned.toLocaleString()} to current
                 </p>
               {/if}
+            </div>
+          {:else if $transactionPagination.hasMore && $transactionPagination.oldestBlockScanned !== null && filterType !== 'mining'}
+            <!-- Manual Load More Button for Regular Transactions -->
+            <div class="text-center py-3 border-t">
+              <Button
+                on:click={() => walletService.loadMoreTransactions()}
+                disabled={$transactionPagination.isLoading}
+                variant="outline"
+                class="gap-2"
+              >
+                {#if $transactionPagination.isLoading}
+                  <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                  Loading Transactions...
+                {:else}
+                  <History class="w-4 h-4" />
+                  Load More Transactions
+                {/if}
+              </Button>
+              <p class="text-xs text-muted-foreground mt-2">
+                Scanned up to block #{$transactionPagination.oldestBlockScanned.toLocaleString()}
+              </p>
             </div>
           {/if}
 
