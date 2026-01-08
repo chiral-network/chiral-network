@@ -1716,16 +1716,16 @@
     "select": "Select",
     "close": "Close",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "Перейти к Загрузкам",
+      "goToUpload": "Перейти к Раздаче",
+      "goToNetwork": "Перейти к Сети",
+      "goToMining": "Перейти к Майнингу",
+      "goToRelay": "Перейти к Ретрансляции",
+      "goToAnalytics": "Перейти к Аналитике",
+      "goToReputation": "Перейти к Репутации",
+      "goToBlockchain": "Перейти к Блокчейну",
+      "goToAccount": "Перейти к Аккаунту",
+      "goToSettings": "Перейти к Настройкам"
     }
   },
   "downloadHistory": {
