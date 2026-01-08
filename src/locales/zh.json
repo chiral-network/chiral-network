@@ -1733,16 +1733,16 @@
     "select": "Select",
     "close": "Close",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "前往下载",
+      "goToUpload": "前往上传",
+      "goToNetwork": "前往网络",
+      "goToMining": "前往挖矿",
+      "goToRelay": "前往中继",
+      "goToAnalytics": "前往分析",
+      "goToReputation": "前往声誉",
+      "goToBlockchain": "前往区块链",
+      "goToAccount": "前往账户",
+      "goToSettings": "前往设置"
     }
   },
   "downloadHistory": {
