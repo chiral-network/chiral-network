@@ -1818,16 +1818,16 @@
     "select": "Select",
     "close": "Close",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "Aller aux Téléchargements",
+      "goToUpload": "Aller au Partage",
+      "goToNetwork": "Aller au Réseau",
+      "goToMining": "Aller au Minage",
+      "goToRelay": "Aller au Relais",
+      "goToAnalytics": "Aller aux Analyses",
+      "goToReputation": "Aller à la Réputation",
+      "goToBlockchain": "Aller à la Blockchain",
+      "goToAccount": "Aller au Compte",
+      "goToSettings": "Aller aux Paramètres"
     }
   },
   "shortcuts": {
