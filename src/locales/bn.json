@@ -1562,10 +1562,12 @@
     "remove": "অপসারণ",
     "clearHistory": "ইতিহাস সাফ করুন",
     "clearFailed": "ব্যর্থগুলো সাফ করুন",
+    "clearCanceled": "বাতিলগুলো সাফ করুন",
     "exportHistory": "ইতিহাস এক্সপোর্ট করুন",
     "importHistory": "ইতিহাস ইমপোর্ট করুন",
     "confirmClear": "আপনি কি সত্যিই সব ডাউনলোড ইতিহাস সাফ করতে চান? এটি পূর্বাবস্থায় ফেরানো যাবে না।",
     "confirmClearFailed": "ইতিহাসের সব ব্যর্থ ডাউনলোড সাফ করবেন?",
+    "confirmClearCanceled": "ইতিহাসের সব বাতিল ডাউনলোড সাফ করবেন?",
     "stats": {
       "total": "মোট ডাউনলোড",
       "completed": "সম্পন্ন",
@@ -1577,6 +1579,7 @@
     "messages": {
       "historyCleared": "ডাউনলোড ইতিহাস সাফ করা হয়েছে",
       "failedCleared": "ব্যর্থ ডাউনলোডগুলো সাফ করা হয়েছে",
+      "canceledCleared": "বাতিল ডাউনলোডগুলো সাফ করা হয়েছে",
       "entryRemoved": "ইতিহাস থেকে এন্ট্রি অপসারণ করা হয়েছে",
       "exportSuccess": "ইতিহাস সফলভাবে এক্সপোর্ট হয়েছে",
       "importSuccess": "{count}টি ইতিহাস এন্ট্রি ইমপোর্ট করা হয়েছে",
@@ -1810,13 +1813,13 @@
     }
   },
   "commandPalette": {
-    "searchPlaceholder": "Search for actions or pages...",
-    "searchLabel": "Command palette search",
-    "noResults": "No results found",
-    "tryDifferentQuery": "Try a different search term",
-    "navigate": "Navigate",
-    "select": "Select",
-    "close": "Close",
+    "searchPlaceholder": "কর্ম বা পৃষ্ঠা খুঁজুন...",
+    "searchLabel": "কমান্ড প্যালেট অনুসন্ধান",
+    "noResults": "কোন ফলাফল পাওয়া যায়নি",
+    "tryDifferentQuery": "একটি ভিন্ন অনুসন্ধান শব্দ চেষ্টা করুন",
+    "navigate": "নেভিগেট করুন",
+    "select": "নির্বাচন করুন",
+    "close": "বন্ধ করুন",
     "actions": {
       "goToDownload": "ডাউনলোডে যান",
       "goToUpload": "আপলোডে যান",
@@ -1831,32 +1834,32 @@
     }
   },
   "shortcuts": {
-    "title": "Keyboard Shortcuts",
-    "close": "Close",
-    "tip": "Press ? or F1 anytime to view this help",
+    "title": "কীবোর্ড শর্টকাট",
+    "close": "বন্ধ করুন",
+    "tip": "এই সাহায্য দেখতে যেকোনো সময় ? বা F1 চাপুন",
     "categories": {
-      "navigation": "Navigation",
-      "application": "Application",
-      "window": "Window"
+      "navigation": "নেভিগেশন",
+      "application": "অ্যাপ্লিকেশন",
+      "window": "উইন্ডো"
     },
     "navigation": {
-      "download": "Go to Download page",
-      "upload": "Go to Upload page",
-      "network": "Go to Network page",
-      "mining": "Go to Mining page",
-      "account": "Go to Account page",
-      "settings": "Open Settings"
+      "download": "ডাউনলোড পৃষ্ঠায় যান",
+      "upload": "আপলোড পৃষ্ঠায় যান",
+      "network": "নেটওয়ার্ক পৃষ্ঠায় যান",
+      "mining": "মাইনিং পৃষ্ঠায় যান",
+      "account": "অ্যাকাউন্ট পৃষ্ঠায় যান",
+      "settings": "সেটিংস খুলুন"
     },
     "application": {
-      "commandPalette": "Open Command Palette",
-      "showHelp": "Show keyboard shortcuts",
-      "closeModal": "Close modal/dialog",
-      "refresh": "Refresh current page",
-      "reload": "Reload application"
+      "commandPalette": "কমান্ড প্যালেট খুলুন",
+      "showHelp": "কীবোর্ড শর্টকাট দেখান",
+      "closeModal": "মোডাল/ডায়ালগ বন্ধ করুন",
+      "refresh": "বর্তমান পৃষ্ঠা রিফ্রেশ করুন",
+      "reload": "অ্যাপ্লিকেশন পুনরায় লোড করুন"
     },
     "window": {
-      "fullscreen": "Toggle fullscreen",
-      "quit": "Quit application"
+      "fullscreen": "পূর্ণ স্ক্রীন টগল করুন",
+      "quit": "অ্যাপ্লিকেশন বন্ধ করুন"
     }
   },
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
