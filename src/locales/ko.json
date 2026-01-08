@@ -1704,16 +1704,16 @@
     "select": "Select",
     "close": "Close",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "다운로드로 이동",
+      "goToUpload": "업로드로 이동",
+      "goToNetwork": "네트워크로 이동",
+      "goToMining": "채굴로 이동",
+      "goToRelay": "릴레이로 이동",
+      "goToAnalytics": "분석으로 이동",
+      "goToReputation": "평판으로 이동",
+      "goToBlockchain": "블록체인으로 이동",
+      "goToAccount": "계정으로 이동",
+      "goToSettings": "설정으로 이동"
     }
   },
   "downloadHistory": {
