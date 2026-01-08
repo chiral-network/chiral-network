@@ -27,6 +27,7 @@
   import { createWebRTCSession } from '$lib/services/webrtcService';
   import { peerDiscoveryStore, startPeerEventStream, type PeerDiscovery } from '$lib/services/peerEventService';
   import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte'
+  import NetworkQuickActions from '$lib/components/network/NetworkQuickActions.svelte'
   import type { GeoRegionConfig } from '$lib/geo';
   import { calculateRegionDistance } from '$lib/services/geolocation';
   import { diagnosticLogger, errorLogger, networkLogger } from '$lib/diagnostics/logger';
@@ -1577,6 +1578,20 @@
     {#if activeTab === 'overview'}
       <div class="space-y-6">
         
+        <!-- Quick Actions Panel -->
+        <NetworkQuickActions 
+          {dhtPeerId}
+          {dhtHealth}
+          {dhtStatus}
+          {discoveryRunning}
+          autorelayEnabled={$settings.enableAutorelay}
+          on:discover={runDiscovery}
+          on:addPeer={(e) => { newPeerAddress = e.detail.address; connectToPeer(); }}
+          on:toggleAutorelay={() => setAutorelay(!$settings.enableAutorelay)}
+          on:startDht={startDht}
+          on:stopDht={stopDht}
+        />
+
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <!-- Blockchain Node Lifecycle -->
           <Card class="p-6">

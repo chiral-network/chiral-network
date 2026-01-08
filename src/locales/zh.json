@@ -302,6 +302,24 @@
         "button": "重启节点",
         "success": "节点已重启",
         "notRunning": "无法重启：节点未运行"
+      },
+      "copyMultiaddr": {
+        "tooltip": "复制您的完整连接地址",
+        "tooltipUnavailable": "多地址不可用",
+        "button": "复制地址",
+        "success": "多地址已复制！"
+      },
+      "toggleAutorelay": {
+        "tooltip": "切换自动中继连接",
+        "buttonOn": "中继：开启",
+        "buttonOff": "中继：关闭"
+      },
+      "startStopDht": {
+        "startTooltip": "连接到DHT网络",
+        "stopTooltip": "断开DHT网络连接",
+        "startButton": "连接",
+        "stopButton": "断开",
+        "cancelButton": "取消"
       }
     }
   },

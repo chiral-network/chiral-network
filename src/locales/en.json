@@ -340,6 +340,24 @@
         "button": "Restart Node",
         "success": "Node restarted",
         "notRunning": "Cannot restart: Node is not running"
+      },
+      "copyMultiaddr": {
+        "tooltip": "Copy your full connection address",
+        "tooltipUnavailable": "Multiaddress not available",
+        "button": "Copy Address",
+        "success": "Multiaddress copied!"
+      },
+      "toggleAutorelay": {
+        "tooltip": "Toggle automatic relay connections",
+        "buttonOn": "Relay: On",
+        "buttonOff": "Relay: Off"
+      },
+      "startStopDht": {
+        "startTooltip": "Connect to the DHT network",
+        "stopTooltip": "Disconnect from the DHT network",
+        "startButton": "Connect",
+        "stopButton": "Disconnect",
+        "cancelButton": "Cancel"
       }
     }
   },

@@ -308,7 +308,25 @@
         "tooltip": "Redémarrer le nœud local",
         "button": "Redémarrer le nœud",
         "success": "Nœud redémarré",
-        "notRunning": "Impossible de redémarrer : le nœud n’est pas en cours d’exécution"
+        "notRunning": "Impossible de redémarrer : le nœud n'est pas en cours d'exécution"
+      },
+      "copyMultiaddr": {
+        "tooltip": "Copier votre adresse de connexion complète",
+        "tooltipUnavailable": "Multiadresse non disponible",
+        "button": "Copier l'adresse",
+        "success": "Multiadresse copiée !"
+      },
+      "toggleAutorelay": {
+        "tooltip": "Activer/désactiver les connexions relais automatiques",
+        "buttonOn": "Relais : Activé",
+        "buttonOff": "Relais : Désactivé"
+      },
+      "startStopDht": {
+        "startTooltip": "Se connecter au réseau DHT",
+        "stopTooltip": "Se déconnecter du réseau DHT",
+        "startButton": "Connecter",
+        "stopButton": "Déconnecter",
+        "cancelButton": "Annuler"
       }
     }
   },

@@ -309,6 +309,24 @@
         "button": "নোড রিস্টার্ট করুন",
         "success": "নোড রিস্টার্ট হয়েছে",
         "notRunning": "রিস্টার্ট করা যাচ্ছে না: নোড চলছে না"
+      },
+      "copyMultiaddr": {
+        "tooltip": "আপনার সম্পূর্ণ সংযোগ ঠিকানা কপি করুন",
+        "tooltipUnavailable": "মাল্টিঅ্যাড্রেস উপলব্ধ নয়",
+        "button": "ঠিকানা কপি করুন",
+        "success": "মাল্টিঅ্যাড্রেস কপি হয়েছে!"
+      },
+      "toggleAutorelay": {
+        "tooltip": "স্বয়ংক্রিয় রিলে সংযোগ টগল করুন",
+        "buttonOn": "রিলে: চালু",
+        "buttonOff": "রিলে: বন্ধ"
+      },
+      "startStopDht": {
+        "startTooltip": "DHT নেটওয়ার্কে সংযোগ করুন",
+        "stopTooltip": "DHT নেটওয়ার্ক থেকে সংযোগ বিচ্ছিন্ন করুন",
+        "startButton": "সংযোগ করুন",
+        "stopButton": "সংযোগ বিচ্ছিন্ন করুন",
+        "cancelButton": "বাতিল করুন"
       }
     }
   },
