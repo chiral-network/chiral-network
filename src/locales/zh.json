@@ -1493,6 +1493,19 @@
     "currentProtocol": "当前协议",
     "changeProtocol": "更改协议"
   },
+  "favorites": {
+    "title": "收藏夹",
+    "add": "添加到收藏夹",
+    "remove": "从收藏夹移除",
+    "download": "下载",
+    "clearAll": "清除全部",
+    "confirmClear": "您确定要清除所有收藏吗？",
+    "seeders": "做种者",
+    "empty": {
+      "title": "还没有收藏",
+      "description": "在搜索结果中标记文件以添加到此处以便快速访问"
+    }
+  },
   "blockchain": {
     "title": "区块链浏览器",
     "subtitle": "在 Chiral 网络上查看区块、交易和账户余额",
@@ -1680,6 +1693,12 @@
         "successWithHash": "付款成功！交易：{hash}...",
         "success": "付款成功！"
       }
+    },
+    "favorites": {
+      "added": "已添加到收藏夹",
+      "removed": "已从收藏夹移除",
+      "notFound": "在 DHT 中找不到 {name}",
+      "downloadFailed": "下载收藏文件失败"
     },
     "transactions": {
       "copied": "{label} 已复制到剪贴板",

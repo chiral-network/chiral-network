@@ -1464,6 +1464,19 @@
     "currentProtocol": "현재 프로토콜",
     "changeProtocol": "프로토콜 변경"
   },
+  "favorites": {
+    "title": "즐겨찾기",
+    "add": "즐겨찾기에 추가",
+    "remove": "즐겨찾기에서 제거",
+    "download": "다운로드",
+    "clearAll": "모두 지우기",
+    "confirmClear": "모든 즐겨찾기를 지우시겠습니까?",
+    "seeders": "시더",
+    "empty": {
+      "title": "아직 즐겨찾기가 없습니다",
+      "description": "검색 결과에서 파일을 별표시하여 빠른 액세스를 위해 여기에 추가하세요"
+    }
+  },
   "blockchain": {
     "title": "블록체인 탐색기",
     "subtitle": "카이럴 네트워크의 블록, 트랜잭션 및 계정 잔액을 확인하세요",
@@ -1651,6 +1664,12 @@
         "successWithHash": "결제 성공! 트랜잭션: {hash}...",
         "success": "결제 성공!"
       }
+    },
+    "favorites": {
+      "added": "즐겨찾기에 추가됨",
+      "removed": "즐겨찾기에서 제거됨",
+      "notFound": "DHT에서 {name}을(를) 찾을 수 없습니다",
+      "downloadFailed": "즐겨찾기 파일 다운로드 실패"
     },
     "transactions": {
       "copied": "{label}이(가) 클립보드에 복사되었습니다",

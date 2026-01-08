@@ -435,6 +435,19 @@
     "currentProtocol": "البروتوكول الحالي",
     "changeProtocol": "تغيير البروتوكول"
   },
+  "favorites": {
+    "title": "المفضلة",
+    "add": "إضافة إلى المفضلة",
+    "remove": "إزالة من المفضلة",
+    "download": "تنزيل",
+    "clearAll": "مسح الكل",
+    "confirmClear": "هل أنت متأكد أنك تريد مسح جميع المفضلات؟",
+    "seeders": "المشاركين",
+    "empty": {
+      "title": "لا توجد مفضلات بعد",
+      "description": "ضع نجمة على الملفات في نتائج البحث لإضافتها هنا للوصول السريع"
+    }
+  },
   "regions.usEast": "US East",
   "regions.usWest": "US West",
   "regions.euWest": "Europe West",
@@ -1765,6 +1778,12 @@
         "successWithHash": "تم الدفع بنجاح! المعاملة: {hash}...",
         "success": "تم الدفع بنجاح!"
       }
+    },
+    "favorites": {
+      "added": "تمت الإضافة إلى المفضلة",
+      "removed": "تمت الإزالة من المفضلة",
+      "notFound": "لم يتم العثور على {name} في DHT",
+      "downloadFailed": "فشل تنزيل الملف المفضل"
     },
     "transactions": {
       "copied": "تم نسخ {label} إلى الحافظة",

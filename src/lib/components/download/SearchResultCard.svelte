@@ -2,11 +2,12 @@
   import Card from '$lib/components/ui/card.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import { FileIcon, Copy, Download, Server, Globe, Blocks } from 'lucide-svelte';
+  import { FileIcon, Copy, Download, Server, Globe, Blocks, Star } from 'lucide-svelte';
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
   import { files, wallet } from '$lib/stores';
+  import { favorites } from '$lib/stores/favorites';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
@@ -288,6 +289,26 @@
     showDecryptDialog = false;
   }
 
+  // Favorites functionality
+  $: isFavorite = favorites.isFavorite(metadata.fileHash, $favorites);
+
+  function toggleFavorite() {
+    if (isFavorite) {
+      favorites.remove(metadata.fileHash);
+      showToast(tr('toasts.favorites.removed'), 'info');
+    } else {
+      favorites.add({
+        hash: metadata.fileHash,
+        name: metadata.fileName,
+        size: metadata.fileSize,
+        protocol: availableProtocols[0]?.id,
+        seeders: metadata.seeders?.length,
+        leechers: metadata.leechers?.length
+      });
+      showToast(tr('toasts.favorites.added'), 'success');
+    }
+  }
+
   const seederIds = metadata.seeders?.map((address, index) => ({
     id: `${metadata.fileHash}-${index}`,
     address,
@@ -559,6 +580,15 @@
       {/if}
     </div>
     <div class="flex items-center gap-2">
+      <Button
+        variant="ghost"
+        size="icon"
+        on:click={toggleFavorite}
+        class="h-9 w-9 {isFavorite ? 'text-yellow-500 hover:text-yellow-600' : 'text-gray-400 hover:text-gray-600'}"
+        title={isFavorite ? tr('favorites.remove') : tr('favorites.add')}
+      >
+        <Star class="h-4 w-4 {isFavorite ? 'fill-current' : ''}" />
+      </Button>
       <Button
         on:click={handleDownload}
         disabled={isBusy || checkingBalance || (!canAfford && currentPrice && currentPrice > 0 && !isSeeding)}

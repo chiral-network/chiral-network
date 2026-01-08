@@ -435,6 +435,19 @@
     "currentProtocol": "वर्तमान प्रोटोकॉल",
     "changeProtocol": "प्रोटोकॉल बदलें"
   },
+  "favorites": {
+    "title": "पसंदीदा",
+    "add": "पसंदीदा में जोड़ें",
+    "remove": "पसंदीदा से हटाएं",
+    "download": "डाउनलोड करें",
+    "clearAll": "सभी साफ़ करें",
+    "confirmClear": "क्या आप सभी पसंदीदा साफ़ करना चाहते हैं?",
+    "seeders": "सीडर्स",
+    "empty": {
+      "title": "अभी तक कोई पसंदीदा नहीं है",
+      "description": "त्वरित पहुंच के लिए खोज परिणामों में फ़ाइलों को स्टार करें"
+    }
+  },
   "regions.usEast": "यूएस पूर्व",
   "regions.usWest": "यूएस पश्चिम",
   "regions.euWest": "यूरोप पश्चिम",
@@ -1766,6 +1779,12 @@
         "successWithHash": "भुगतान सफल! लेनदेन: {hash}...",
         "success": "भुगतान सफल!"
       }
+    },
+    "favorites": {
+      "added": "पसंदीदा में जोड़ा गया",
+      "removed": "पसंदीदा से हटाया गया",
+      "notFound": "DHT में {name} नहीं मिली",
+      "downloadFailed": "पसंदीदा फ़ाइल डाउनलोड करने में विफल"
     },
     "transactions": {
       "copied": "{label} क्लिपबोर्ड पर कॉपी किया गया",

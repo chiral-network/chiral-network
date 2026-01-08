@@ -435,6 +435,19 @@
     "currentProtocol": "Protocolo Atual",
     "changeProtocol": "Alterar Protocolo"
   },
+  "favorites": {
+    "title": "Favoritos",
+    "add": "Adicionar aos favoritos",
+    "remove": "Remover dos favoritos",
+    "download": "Baixar",
+    "clearAll": "Limpar tudo",
+    "confirmClear": "Tem certeza que deseja limpar todos os favoritos?",
+    "seeders": "seeders",
+    "empty": {
+      "title": "Ainda não há favoritos",
+      "description": "Marque arquivos nos resultados da pesquisa para adicioná-los aqui para acesso rápido"
+    }
+  },
   "regions.usEast": "Leste dos EUA",
   "regions.usWest": "Oeste dos EUA",
   "regions.euWest": "Europa Ocidental",
@@ -1766,6 +1779,12 @@
         "successWithHash": "Pagamento bem-sucedido! Transação: {hash}...",
         "success": "Pagamento bem-sucedido!"
       }
+    },
+    "favorites": {
+      "added": "Adicionado aos favoritos",
+      "removed": "Removido dos favoritos",
+      "notFound": "{name} não encontrado no DHT",
+      "downloadFailed": "Falha ao baixar arquivo favorito"
     },
     "transactions": {
       "copied": "{label} copiado para a área de transferência",
