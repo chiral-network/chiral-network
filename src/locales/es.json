@@ -1717,16 +1717,16 @@
     "select": "Select",
     "close": "Close",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "Ir a Descargas",
+      "goToUpload": "Ir a Compartir",
+      "goToNetwork": "Ir a Red",
+      "goToMining": "Ir a Minería",
+      "goToRelay": "Ir a Relay",
+      "goToAnalytics": "Ir a Analítica",
+      "goToReputation": "Ir a Reputación",
+      "goToBlockchain": "Ir a Blockchain",
+      "goToAccount": "Ir a Cuenta",
+      "goToSettings": "Ir a Configuración"
     }
   },
   "downloadHistory": {
