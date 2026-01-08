@@ -1709,13 +1709,13 @@
     }
   },
   "commandPalette": {
-    "searchPlaceholder": "Search for actions or pages...",
-    "searchLabel": "Command palette search",
-    "noResults": "No results found",
-    "tryDifferentQuery": "Try a different search term",
-    "navigate": "Navigate",
-    "select": "Select",
-    "close": "Close",
+    "searchPlaceholder": "Buscar acciones o páginas...",
+    "searchLabel": "Búsqueda de paleta de comandos",
+    "noResults": "No se encontraron resultados",
+    "tryDifferentQuery": "Intenta con un término diferente",
+    "navigate": "Navegar",
+    "select": "Seleccionar",
+    "close": "Cerrar",
     "actions": {
       "goToDownload": "Ir a Descargas",
       "goToUpload": "Ir a Compartir",
@@ -1797,32 +1797,126 @@
     }
   },
   "shortcuts": {
-    "title": "Keyboard Shortcuts",
-    "close": "Close",
-    "tip": "Press ? or F1 anytime to view this help",
+    "title": "Atajos de Teclado",
+    "close": "Cerrar",
+    "tip": "Presione ? o F1 en cualquier momento para ver esta ayuda",
     "categories": {
-      "navigation": "Navigation",
-      "application": "Application",
-      "window": "Window"
+      "navigation": "Navegación",
+      "application": "Aplicación",
+      "window": "Ventana"
     },
     "navigation": {
-      "download": "Go to Download page",
-      "upload": "Go to Upload page",
-      "network": "Go to Network page",
-      "mining": "Go to Mining page",
-      "account": "Go to Account page",
-      "settings": "Open Settings"
+      "download": "Ir a página de Descargas",
+      "upload": "Ir a página de Compartir",
+      "network": "Ir a página de Red",
+      "mining": "Ir a página de Minería",
+      "account": "Ir a página de Cuenta",
+      "settings": "Abrir Configuración"
     },
     "application": {
-      "commandPalette": "Open Command Palette",
-      "showHelp": "Show keyboard shortcuts",
-      "closeModal": "Close modal/dialog",
-      "refresh": "Refresh current page",
-      "reload": "Reload application"
+      "commandPalette": "Abrir Paleta de Comandos",
+      "showHelp": "Mostrar atajos de teclado",
+      "closeModal": "Cerrar modal/diálogo",
+      "refresh": "Actualizar página actual",
+      "reload": "Recargar aplicación"
     },
     "window": {
-      "fullscreen": "Toggle fullscreen",
-      "quit": "Quit application"
+      "fullscreen": "Alternar pantalla completa",
+      "quit": "Salir de la aplicación"
+    }
+  },
+  "shortcuts": {
+    "title": "Atajos de Teclado",
+    "close": "Cerrar",
+    "tip": "Presione ? o F1 en cualquier momento para ver esta ayuda",
+    "categories": {
+      "navigation": "Navegación",
+      "application": "Aplicación",
+      "window": "Ventana"
+    },
+    "navigation": {
+      "download": "Ir a página de Descargas",
+      "upload": "Ir a página de Compartir",
+      "network": "Ir a página de Red",
+      "mining": "Ir a página de Minería",
+      "account": "Ir a página de Cuenta",
+      "settings": "Abrir Configuración"
+    },
+    "application": {
+      "commandPalette": "Abrir Paleta de Comandos",
+      "showHelp": "Mostrar atajos de teclado",
+      "closeModal": "Cerrar modal/diálogo",
+      "refresh": "Actualizar página actual",
+      "reload": "Recargar aplicación"
+    },
+    "window": {
+      "fullscreen": "Alternar pantalla completa",
+      "quit": "Salir de la aplicación"
+    }
+  },
+  "downloadHistory": {
+    "title": "Historial de Descargas",
+    "subtitle": "Ver y gestionar su historial de descargas",
+    "showHistory": "Mostrar Historial",
+    "hideHistory": "Ocultar Historial",
+    "empty": "Aún no hay historial de descargas",
+    "emptyDescription": "Las descargas completadas, fallidas y canceladas aparecerán aquí",
+    "search": "Buscar en el historial...",
+    "filterAll": "Todas",
+    "filterCompleted": "Completadas",
+    "filterFailed": "Fallidas",
+    "filterCanceled": "Canceladas",
+    "redownload": "Volver a descargar",
+    "remove": "Eliminar",
+    "clearHistory": "Limpiar Historial",
+    "clearFailed": "Limpiar Fallidas",
+    "clearCanceled": "Limpiar Canceladas",
+    "exportHistory": "Exportar Historial",
+    "importHistory": "Importar Historial",
+    "confirmClear": "¿Está seguro de que desea borrar todo el historial de descargas? Esto no se puede deshacer.",
+    "confirmClearFailed": "¿Limpiar todas las descargas fallidas del historial?",
+    "confirmClearCanceled": "¿Limpiar todas las descargas canceladas del historial?",
+    "stats": {
+      "total": "Descargas Totales",
+      "completed": "Completadas",
+      "failed": "Fallidas",
+      "canceled": "Canceladas",
+      "totalSize": "Tamaño Total",
+      "totalPrice": "Total Gastado"
+    },
+    "messages": {
+      "historyCleared": "Historial de descargas borrado",
+      "failedCleared": "Descargas fallidas borradas",
+      "canceledCleared": "Descargas canceladas borradas",
+      "entryRemoved": "Entrada eliminada del historial",
+      "exportSuccess": "Historial exportado exitosamente",
+      "importSuccess": "Se importaron {count} entradas del historial",
+      "importError": "Error al importar historial: {error}",
+      "redownloadStarted": "Volviendo a descargar {name}..."
+    }
+  },
+  "settingsBackup": {
+    "title": "Copia de Seguridad y Restauración",
+    "description": "Exportar o importar su configuración",
+    "export": "Exportar Configuración",
+    "import": "Importar Configuración",
+    "exportButton": "Exportar Configuración",
+    "importButton": "Importar Configuración",
+    "downloadBackup": "Descargar Archivo de Copia",
+    "selectFile": "Seleccionar Archivo de Copia",
+    "success": {
+      "export": "Configuración exportada exitosamente",
+      "import": "Configuración importada exitosamente"
+    },
+    "errors": {
+      "export": "Error al exportar configuración: {error}",
+      "import": "Error al importar configuración: {error}",
+      "invalidFile": "Archivo de copia inválido",
+      "parseError": "Error al analizar el archivo de copia"
+    },
+    "warnings": {
+      "overwrite": "Esto sobrescribirá su configuración actual. ¿Desea continuar?",
+      "restart": "Es posible que deba reiniciar la aplicación para que algunos cambios surtan efecto."
     }
   },
   "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
