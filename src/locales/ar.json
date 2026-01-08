@@ -1562,10 +1562,12 @@
     "remove": "إزالة",
     "clearHistory": "مسح السجل",
     "clearFailed": "مسح الفاشلة",
+    "clearCanceled": "مسح الملغاة",
     "exportHistory": "تصدير السجل",
     "importHistory": "استيراد السجل",
     "confirmClear": "هل أنت متأكد أنك تريد مسح كل سجل التنزيلات؟ لا يمكن التراجع عن هذا الإجراء.",
     "confirmClearFailed": "مسح جميع التنزيلات الفاشلة من السجل؟",
+    "confirmClearCanceled": "مسح جميع التنزيلات الملغاة من السجل؟",
     "stats": {
       "total": "إجمالي التنزيلات",
       "completed": "المكتملة",
@@ -1577,6 +1579,7 @@
     "messages": {
       "historyCleared": "تم مسح سجل التنزيلات",
       "failedCleared": "تم مسح التنزيلات الفاشلة",
+      "canceledCleared": "تم مسح التنزيلات الملغاة",
       "entryRemoved": "تمت إزالة الإدخال من السجل",
       "exportSuccess": "تم تصدير السجل بنجاح",
       "importSuccess": "تم استيراد {count} إدخالات في السجل",
@@ -1810,13 +1813,13 @@
     }
   },
   "commandPalette": {
-    "searchPlaceholder": "Search for actions or pages...",
-    "searchLabel": "Command palette search",
-    "noResults": "No results found",
-    "tryDifferentQuery": "Try a different search term",
-    "navigate": "Navigate",
-    "select": "Select",
-    "close": "Close",
+    "searchPlaceholder": "البحث عن إجراءات أو صفحات...",
+    "searchLabel": "بحث لوحة الأوامر",
+    "noResults": "لم يتم العثور على نتائج",
+    "tryDifferentQuery": "جرب مصطلح بحث مختلف",
+    "navigate": "تنقل",
+    "select": "تحديد",
+    "close": "إغلاق",
     "actions": {
       "goToDownload": "الانتقال إلى التنزيلات",
       "goToUpload": "الانتقال إلى المشاركة",
@@ -1831,32 +1834,32 @@
     }
   },
   "shortcuts": {
-    "title": "Keyboard Shortcuts",
-    "close": "Close",
-    "tip": "Press ? or F1 anytime to view this help",
+    "title": "اختصارات لوحة المفاتيح",
+    "close": "إغلاق",
+    "tip": "اضغط على ? أو F1 في أي وقت لعرض هذه المساعدة",
     "categories": {
-      "navigation": "Navigation",
-      "application": "Application",
-      "window": "Window"
+      "navigation": "التنقل",
+      "application": "التطبيق",
+      "window": "النافذة"
     },
     "navigation": {
-      "download": "Go to Download page",
-      "upload": "Go to Upload page",
-      "network": "Go to Network page",
-      "mining": "Go to Mining page",
-      "account": "Go to Account page",
-      "settings": "Open Settings"
+      "download": "الانتقال إلى صفحة التنزيلات",
+      "upload": "الانتقال إلى صفحة المشاركة",
+      "network": "الانتقال إلى صفحة الشبكة",
+      "mining": "الانتقال إلى صفحة التعدين",
+      "account": "الانتقال إلى صفحة الحساب",
+      "settings": "فتح الإعدادات"
     },
     "application": {
-      "commandPalette": "Open Command Palette",
-      "showHelp": "Show keyboard shortcuts",
-      "closeModal": "Close modal/dialog",
-      "refresh": "Refresh current page",
-      "reload": "Reload application"
+      "commandPalette": "فتح لوحة الأوامر",
+      "showHelp": "عرض اختصارات لوحة المفاتيح",
+      "closeModal": "إغلاق النافذة المنبثقة/مربع الحوار",
+      "refresh": "تحديث الصفحة الحالية",
+      "reload": "إعادة تحميل التطبيق"
     },
     "window": {
-      "fullscreen": "Toggle fullscreen",
-      "quit": "Quit application"
+      "fullscreen": "تبديل ملء الشاشة",
+      "quit": "إنهاء التطبيق"
     }
   },
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
