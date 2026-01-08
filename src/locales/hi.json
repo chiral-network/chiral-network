@@ -1819,16 +1819,16 @@
     "select": "Select",
     "close": "Close",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "डाउनलोड पर जाएं",
+      "goToUpload": "अपलोड पर जाएं",
+      "goToNetwork": "नेटवर्क पर जाएं",
+      "goToMining": "माइनिंग पर जाएं",
+      "goToRelay": "रिले पर जाएं",
+      "goToAnalytics": "विश्लेषण पर जाएं",
+      "goToReputation": "प्रतिष्ठा पर जाएं",
+      "goToBlockchain": "ब्लॉकचेन पर जाएं",
+      "goToAccount": "खाता पर जाएं",
+      "goToSettings": "सेटिंग्स पर जाएं"
     }
   },
   "shortcuts": {
