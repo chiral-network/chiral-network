@@ -6,7 +6,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import { Wallet, Copy, ArrowUpRight, ArrowDownLeft, History, Coins, Plus, Import, BadgeX, KeyRound, FileText, AlertCircle, RefreshCw, Download } from 'lucide-svelte'
   import DropDown from "$lib/components/ui/dropDown.svelte";
-  import { wallet, etcAccount, blacklist, showAuthWizard } from '$lib/stores'
+  import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { gethStatus } from '$lib/services/gethService'
   import { walletService } from '$lib/wallet';
   import { lockAccount } from '$lib/services/accountLock';
@@ -249,12 +249,12 @@
             (tx.id && tx.id.toString().includes(searchQuery));
 
           // Amount range filter
-          const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount.toString()) || 0;
+          const amount = typeof tx.amount === 'number' ? tx.amount : parseFloat(String(tx.amount)) || 0;
           const matchesMinAmount = minAmount === 0 || amount >= minAmount;
           const matchesMaxAmount = maxAmount === null || amount <= maxAmount;
 
           // Gas price range filter (if gas data exists)
-          const gasPrice = tx.gas_price ? parseFloat(tx.gas_price.toString()) : 0;
+          const gasPrice = tx.gas_price ? parseFloat(String(tx.gas_price)) : 0;
           const matchesMinGas = minGasPrice === 0 || gasPrice >= minGasPrice;
           const matchesMaxGas = maxGasPrice === null || gasPrice <= maxGasPrice;
 
@@ -1460,7 +1460,7 @@
         const date = tx.date instanceof Date ? tx.date.toISOString() : new Date(tx.date).toISOString();
 
         // Translate transaction type
-        let translatedType = tx.type;
+        let translatedType: string = tx.type;
         if (tx.type === 'sent') {
           translatedType = tr('filters.typeSent');
         } else if (tx.type === 'received') {
@@ -1498,7 +1498,8 @@
       showToast(tr('transactions.exportSuccess', { count: filteredTransactions.length }), 'success');
     } catch (error) {
       console.error('CSV export error:', error);
-      showToast('Failed to export transactions: ' + error.message, 'error');
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      showToast('Failed to export transactions: ' + errorMessage, 'error');
     }
   }
 

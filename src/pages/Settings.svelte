@@ -29,7 +29,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { userLocation } from "$lib/stores";
   import { GEO_REGIONS, UNKNOWN_REGION_ID } from '$lib/geo';
-  import { changeLocale, loadLocale, saveLocale } from "../i18n/i18n";
+  import { changeLocale, loadLocale } from "../i18n/i18n";
   import { t } from "svelte-i18n";
   import { get } from "svelte/store";
   import { showToast } from "$lib/toast";
