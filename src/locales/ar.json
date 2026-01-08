@@ -1818,16 +1818,16 @@
     "select": "Select",
     "close": "Close",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "الانتقال إلى التنزيلات",
+      "goToUpload": "الانتقال إلى المشاركة",
+      "goToNetwork": "الانتقال إلى الشبكة",
+      "goToMining": "الانتقال إلى التعدين",
+      "goToRelay": "الانتقال إلى الترحيل",
+      "goToAnalytics": "الانتقال إلى التحليلات",
+      "goToReputation": "الانتقال إلى السمعة",
+      "goToBlockchain": "الانتقال إلى البلوكشين",
+      "goToAccount": "الانتقال إلى الحساب",
+      "goToSettings": "الانتقال إلى الإعدادات"
     }
   },
   "shortcuts": {
