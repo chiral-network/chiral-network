@@ -9381,6 +9381,199 @@ mod tests {
         bootstrap_node.shutdown().await.unwrap();
     }
 
+    #[tokio::test]
+    async fn test_file_upload_discovery() {
+        // 1. Setup the Network Backbone (Bootstrap Node)
+        let b_config = DhtConfig::default_bootstrap_config();
+        let bootstrap_node = DhtService::new_with_config(b_config, None, None, None)
+            .await
+            .unwrap();
+        let b_addrs = wait_for_address(&bootstrap_node, 10).await;
+        let b_addr = b_addrs[0].clone();
+
+        // 2. Setup Uploader (Node A) and Searcher (Node B)
+        let node_a = spawn_test_node(vec![b_addr.clone()]).await;
+        let node_b = spawn_test_node(vec![b_addr.clone()]).await;
+
+        // Ensure they are connected to the backbone
+        let mut connected = false;
+        for _ in 0..20 {
+            if node_a.get_peer_count().await >= 1 && node_b.get_peer_count().await >= 1 {
+                connected = true;
+                break;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+        assert!(connected, "Nodes failed to connect to bootstrap");
+
+        // 3. Prepare and Publish File Metadata (Node A)
+        let file_hash =
+            "deadbeef12345678deadbeef12345678deadbeef12345678deadbeef12345678".to_string();
+        let file_name = "discovery_test.bin".to_string();
+        let file_size = 1024 * 1024; // 1MB
+
+        let metadata = node_a
+            .prepare_file_metadata(
+                file_hash.clone(),
+                file_name.clone(),
+                file_size,
+                vec![0u8; 100], // Small inline data for discovery test
+                unix_timestamp(),
+                Some("application/octet-stream".into()),
+                None,  // No encryption for this basic test
+                false, // is_encrypted
+                None,  // encryption_method
+                None,  // key_fingerprint
+                0.0,   // price
+                Some(node_a.get_peer_id().await),
+            )
+            .await
+            .unwrap();
+
+        info!("Node A: Publishing file metadata...");
+        node_a
+            .publish_file(metadata, None)
+            .await
+            .expect("Failed to publish file");
+
+        // 4. Discover Metadata (Node B)
+        // DHT propagation can take a moment. We use a retry loop or the
+        // internal timeout of synchronous_search_metadata.
+        info!("Node B: Attempting to discover file metadata...");
+
+        let mut discovered_metadata: Option<FileMetadata> = None;
+        for i in 0..10 {
+            // Search with a 2-second timeout per attempt
+            match node_b
+                .synchronous_search_metadata(file_hash.clone(), 2000)
+                .await
+            {
+                Ok(Some(meta)) => {
+                    discovered_metadata = Some(meta);
+                    break;
+                }
+                _ => {
+                    debug!("Attempt {}: Metadata not found yet, retrying...", i + 1);
+                    sleep(Duration::from_millis(1000)).await;
+                }
+            }
+        }
+
+        // 5. Verification
+        let found = discovered_metadata.expect("Node B failed to discover Node A's file metadata");
+        assert_eq!(found.merkle_root, file_hash);
+        assert_eq!(found.file_name, file_name);
+        assert_eq!(found.file_size, file_size);
+
+        // Verify that Node A is listed as a seeder in the discovered record
+        let node_a_id = node_a.get_peer_id().await;
+        assert!(
+            found.seeders.contains(&node_a_id),
+            "Node A's PeerId missing from seeder list"
+        );
+
+        // 6. Cleanup
+        node_a.shutdown().await.unwrap();
+        node_b.shutdown().await.unwrap();
+        bootstrap_node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_multi_uploader_and_node_departure() {
+        // 1. Setup Network Backbone
+        let b_config = DhtConfig::default_bootstrap_config();
+        let bootstrap = DhtService::new_with_config(b_config, None, None, None)
+            .await
+            .unwrap();
+        let b_addr = wait_for_address(&bootstrap, 10).await[0].clone();
+
+        // 2. Setup two Seeders (A, B) and one Searcher (C)
+        let seeder_a = spawn_test_node(vec![b_addr.clone()]).await;
+        let seeder_b = spawn_test_node(vec![b_addr.clone()]).await;
+        let searcher_c = spawn_test_node(vec![b_addr.clone()]).await;
+
+        let file_hash = "cafebabe".repeat(8); // 32-byte hex
+        let file_name = "resilience_test.dat".to_string();
+        let file_size = 500_000;
+
+        // 3. Both nodes publish the SAME file
+        for node in &[&seeder_a, &seeder_b] {
+            let meta = node
+                .prepare_file_metadata(
+                    file_hash.clone(),
+                    file_name.clone(),
+                    file_size,
+                    vec![],
+                    unix_timestamp(),
+                    None,
+                    None,
+                    false,
+                    None,
+                    Some(node.get_peer_id().await),
+                    0.0,
+                    Some(node.get_peer_id().await),
+                )
+                .await
+                .unwrap();
+            node.publish_file(meta, None).await.unwrap();
+        }
+
+        // 4. Verify Searcher C sees BOTH seeders
+        let mut both_seeders_found = false;
+        for _ in 0..10 {
+            if let Ok(Some(found)) = searcher_c
+                .synchronous_search_metadata(file_hash.clone(), 2000)
+                .await
+            {
+                if found.seeders.len() >= 2 {
+                    assert!(found.seeders.contains(&seeder_a.get_peer_id().await));
+                    assert!(found.seeders.contains(&seeder_b.get_peer_id().await));
+                    both_seeders_found = true;
+                    break;
+                }
+            }
+            sleep(Duration::from_millis(1000)).await;
+        }
+        assert!(
+            both_seeders_found,
+            "Searcher failed to find both seeders for the same hash"
+        );
+
+        // 5. Node A leaves the network (Graceful Shutdown)
+        info!("📉 Node A leaving the network...");
+        seeder_a.shutdown().await.unwrap();
+
+        // 6. Verify Searcher C now only sees Node B
+        // We wait for the DHT maintenance/pruning logic to kick in.
+        // In your code, `ConnectionClosed` triggers an immediate heartbeat cache update.
+        let mut only_seeder_b_remains = false;
+        for _ in 0..15 {
+            if let Ok(Some(found)) = searcher_c
+                .synchronous_search_metadata(file_hash.clone(), 2000)
+                .await
+            {
+                let has_a = found.seeders.contains(&seeder_a.get_peer_id().await);
+                let has_b = found.seeders.contains(&seeder_b.get_peer_id().await);
+
+                if !has_a && has_b {
+                    only_seeder_b_remains = true;
+                    break;
+                }
+            }
+            sleep(Duration::from_millis(1000)).await;
+        }
+
+        assert!(
+            only_seeder_b_remains,
+            "Node A was not pruned from the seeder list after leaving"
+        );
+        println!("✅ Multi-uploader resilience test passed!");
+
+        // Cleanup
+        seeder_b.shutdown().await.unwrap();
+        searcher_c.shutdown().await.unwrap();
+        bootstrap.shutdown().await.unwrap();
+    }
     #[test]
     fn test_parse_magnet_uri_full() {
         let magnet = "magnet:?xt=urn:btih:b263275b1e3138b29596356533f685c33103575c&dn=My+Awesome+File.txt&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969";
