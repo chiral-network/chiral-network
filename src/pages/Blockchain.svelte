@@ -94,7 +94,6 @@
 
       if (currentBlockNumber === 0) {
         console.log('No blocks mined yet. Is Geth running? Is mining active?');
-        // showToast('No blocks found. Start mining to create blocks.', 'info');
         showToast(tr('toasts.blockchain.noBlocks'), 'info');
         latestBlocks = [];
         return;
@@ -160,7 +159,6 @@
   // Search functionality
   async function performSearch() {
     if (!searchQuery.trim()) {
-      // showToast(tr('blockchain.search.emptyQuery') || 'Please enter a search query', 'warning');
       showToast(tr('blockchain.search.emptyQuery'), 'warning');
       return;
     }
@@ -222,7 +220,6 @@
   // Check balance
   async function checkBalance() {
     if (!balanceAddress.trim()) {
-      // showToast(tr('blockchain.balance.emptyAddress') || 'Please enter an address', 'warning');
       showToast(tr('blockchain.balance.emptyAddress'), 'warning');
       return;
     }
@@ -266,7 +263,6 @@
   // Copy to clipboard
   function copyToClipboard(text: string) {
     navigator.clipboard.writeText(text);
-    // showToast(tr('blockchain.copied') || 'Copied to clipboard', 'success');
     showToast(tr('blockchain.copied'), 'success');
   }
 
@@ -284,7 +280,6 @@
       fetchLatestBlocks(),
       fetchNetworkStats()
     ]);
-    // showToast(tr('blockchain.refreshed') || 'Data refreshed', 'success');
     showToast(tr('blockchain.refreshed'), 'success');
   }
 
