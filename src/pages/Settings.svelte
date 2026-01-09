@@ -49,6 +49,7 @@
     validateMultiaddr
   } from "$lib/utils/validation";
   import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte';
+  import DownloadRestartControls from '$lib/components/download/DownloadRestartControls.svelte';
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -62,6 +63,13 @@
   let notificationsSectionOpen = false;
   let diagnosticsSectionOpen = false;
   let developersSectionOpen = false;
+
+  // Restartable HTTP Download variables
+  let showRestartSection = false;
+  let restartDownloadId = '';
+  let restartSourceUrl = '';
+  let restartDestinationPath = '';
+  let restartSha256 = '';
 
   // Dynamic placeholder for storage path
   let storagePathPlaceholder = "Select download directory";
@@ -886,6 +894,29 @@
       showToast(tr("settings.diagnostics.copied"));
     } catch (e) {
       showToast(tr("settings.diagnostics.copyFailed"), "error");
+    }
+  }
+
+  async function chooseRestartDestination() {
+    try {
+      const defaultDir = await homeDir();
+      const suggestedPath =
+        restartDestinationPath || `${defaultDir.replace(/\/$/, '')}/Downloads/restart-download.bin`;
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const selection = await save({
+        defaultPath: suggestedPath,
+        filters: [
+          {
+            name: 'All Files',
+            extensions: ['*']
+          }
+        ]
+      });
+      if (selection) {
+        restartDestinationPath = selection;
+      }
+    } catch (error) {
+      console.error('Failed to choose destination path', error);
     }
   }
 
@@ -2643,6 +2674,82 @@ function sectionMatches(section: string, query: string) {
             Test and verify protocol functionality for development and debugging.
           </p>
           <ProtocolTestPanel />
+        </div>
+
+        <!-- Restartable HTTP Download -->
+        <div class="space-y-3 border-t pt-3">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h4 class="font-medium">Restartable HTTP Download (Beta)</h4>
+              <p class="text-xs text-muted-foreground mt-1">
+                Download any HTTP resource with pause/resume support. Not P2P - uses centralized HTTP servers.
+              </p>
+            </div>
+            <Button size="xs" variant="outline" on:click={() => (showRestartSection = !showRestartSection)}>
+              {showRestartSection ? 'Hide' : 'Show'}
+            </Button>
+          </div>
+
+          {#if showRestartSection}
+            <div class="mt-4 space-y-4">
+              <div class="grid gap-3 md:grid-cols-2">
+                <div class="space-y-2">
+                  <Label for="restart-url">HTTP Source URL</Label>
+                  <Input
+                    id="restart-url"
+                    type="url"
+                    placeholder="https://example.com/file.bin"
+                    bind:value={restartSourceUrl}
+                  />
+                </div>
+                <div class="space-y-2">
+                  <Label for="restart-hash">Expected SHA-256 (optional)</Label>
+                  <Input
+                    id="restart-hash"
+                    placeholder="64-character hex"
+                    bind:value={restartSha256}
+                  />
+                </div>
+                <div class="space-y-2">
+                  <Label for="restart-id">Download ID (optional)</Label>
+                  <Input
+                    id="restart-id"
+                    placeholder="Leave blank to auto-generate"
+                    bind:value={restartDownloadId}
+                  />
+                </div>
+              </div>
+              <div class="space-y-2">
+                <Label for="restart-dest">Destination Path</Label>
+                <div class="flex flex-col gap-2 md:flex-row">
+                  <Input
+                    id="restart-dest"
+                    placeholder="/home/user/Downloads/file.bin"
+                    bind:value={restartDestinationPath}
+                    class="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="xs" on:click={chooseRestartDestination}>
+                    Choose Path
+                  </Button>
+                </div>
+              </div>
+
+              <div class="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                <p>
+                  Enter a direct HTTP URL and destination path, then use the controls below to start,
+                  pause, or resume the transfer. Metadata is stored next to the destination as
+                  <code>.filename.chiral.meta.json</code> so progress survives restarts.
+                </p>
+              </div>
+
+              <DownloadRestartControls
+                bind:downloadId={restartDownloadId}
+                sourceUrl={restartSourceUrl}
+                destinationPath={restartDestinationPath}
+                expectedSha256={restartSha256 ? restartSha256 : null}
+              />
+            </div>
+          {/if}
         </div>
       </div>
     </Expandable>
