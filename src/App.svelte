@@ -37,7 +37,7 @@ import { paymentService } from '$lib/services/paymentService';
 import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
     import { showToast } from '$lib/toast';
 import { walletService } from '$lib/wallet';
-import { listen } from '@tauri-apps/api/event';
+import { listen, type Event } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { diagnosticLogger } from './lib/diagnostics/logger';
@@ -76,6 +76,30 @@ let unlistenExitPrompt: (() => void) | null = null;
 let unsubscribeAuthWizard: (() => void) | null = null;
 const notifiedCompletedTransfers = new Set<string>();
 const scrollPositions: Record<string, number> = {};
+
+// Event payload types
+interface TorrentSeederPaymentPayload {
+  seeder_wallet_address: string;
+  info_hash: string;
+  file_name: string;
+  file_size: number;
+  downloader_address: string;
+  transaction_hash: string;
+}
+
+interface SeederPaymentPayload {
+  seeder_wallet_address: string;
+  file_hash: string;
+  file_name: string;
+  file_size: number;
+  downloader_address: string;
+  downloader_peer_id?: string;
+  transaction_hash: string;
+}
+
+interface GethDownloadProgressPayload {
+  percentage: number;
+}
 
 // Helper to get the main scroll container (if present)
 const getMainContent = () =>
@@ -309,7 +333,7 @@ $: canShowLockAction = !showFirstRunWizard;
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
           // Listener for BitTorrent protocol payments
-          listen("torrent_seeder_payment_received", async (event: any) => {
+          listen<TorrentSeederPaymentPayload>("torrent_seeder_payment_received", async (event: Event<TorrentSeederPaymentPayload>) => {
               const payload = event.payload;
               diagnosticLogger.info('PAYMENT', 'Torrent seeder payment notification received', { payload });
 
@@ -348,7 +372,7 @@ $: canShowLockAction = !showFirstRunWizard;
               diagnosticLogger.error('PAYMENT', 'Failed to setup torrent payment listener', { error: errorMsg });
             });
 
-          listen("seeder_payment_received", async (event: any) => {
+          listen<SeederPaymentPayload>("seeder_payment_received", async (event: Event<SeederPaymentPayload>) => {
             const payload = event.payload;
             diagnosticLogger.info('PAYMENT', 'Seeder payment notification received', { payload });
 
@@ -698,7 +722,7 @@ $: canShowLockAction = !showFirstRunWizard;
                 showToast("Downloading Geth blockchain node...", "info");
 
                 // Listen for download progress
-                const unlisten = await listen('geth-download-progress', (event: any) => {
+                const unlisten = await listen<GethDownloadProgressPayload>('geth-download-progress', (event: Event<GethDownloadProgressPayload>) => {
                   const progress = event.payload;
                   if (progress.percentage >= 100) {
                     diagnosticLogger.info('GETH', 'Geth download complete');
