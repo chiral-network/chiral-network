@@ -3,18 +3,15 @@
     import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server, Database } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
-    // import ProxyPage from './pages/Proxy.svelte' // DISABLED
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
-    // import TorrentDownloadPage from './pages/TorrentDownload.svelte' // INTEGRATED INTO DOWNLOAD/UPLOAD PAGES
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
     import Blockchain from './pages/Blockchain.svelte'
     import NotFound from './pages/NotFound.svelte'
-    // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount, showAuthWizard } from './lib/stores'
 import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
@@ -37,9 +34,10 @@ import { paymentService } from '$lib/services/paymentService';
 import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
     import { showToast } from '$lib/toast';
 import { walletService } from '$lib/wallet';
-import { listen } from '@tauri-apps/api/event';
+import { listen, type Event } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { diagnosticLogger } from './lib/diagnostics/logger';
     // gets path name not entire url:
     // ex: http://locatlhost:1420/download -> /download
     
@@ -75,6 +73,30 @@ let unlistenExitPrompt: (() => void) | null = null;
 let unsubscribeAuthWizard: (() => void) | null = null;
 const notifiedCompletedTransfers = new Set<string>();
 const scrollPositions: Record<string, number> = {};
+
+// Event payload types
+interface TorrentSeederPaymentPayload {
+  seeder_wallet_address: string;
+  info_hash: string;
+  file_name: string;
+  file_size: number;
+  downloader_address: string;
+  transaction_hash: string;
+}
+
+interface SeederPaymentPayload {
+  seeder_wallet_address: string;
+  file_hash: string;
+  file_name: string;
+  file_size: number;
+  downloader_address: string;
+  downloader_peer_id?: string;
+  transaction_hash: string;
+}
+
+interface GethDownloadProgressPayload {
+  percentage: number;
+}
 
 // Helper to get the main scroll container (if present)
 const getMainContent = () =>
@@ -163,7 +185,8 @@ const navigateTo = (page: string, path: string) => {
     uploadKbps,
     downloadKbps,
   }).catch((error) => {
-    console.error("Failed to apply bandwidth limits:", error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    diagnosticLogger.error('BANDWIDTH', 'Failed to apply bandwidth limits', { error: errorMsg });
   });
 };
 
@@ -189,7 +212,8 @@ async function handleConfirmExit() {
   try {
     await invoke('confirm_exit');
   } catch (error) {
-    console.error('Failed to exit app:', error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    diagnosticLogger.error('APP', 'Failed to exit app', { error: errorMsg });
     exitError = 'Could not close the app. Please try again.';
     isExiting = false;
   }
@@ -205,7 +229,8 @@ async function handleLockFromExitPrompt() {
     showExitPrompt = false;
     isExiting = false;
   } catch (error) {
-    console.error('Failed to lock account:', error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    diagnosticLogger.error('ACCOUNT', 'Failed to lock account', { error: errorMsg });
     exitError = 'Could not lock the account. Please try again.';
   } finally {
     isLockingAccount = false;
@@ -232,7 +257,7 @@ $: canShowLockAction = !showFirstRunWizard;
       // If any init step hangs (e.g., backend invoke), don't leave the UI stuck on the loading screen.
       const loadingSafetyTimer = window.setTimeout(() => {
         if (loading) {
-          console.warn("[App] init is taking too long; leaving loading screen to avoid a stuck UI");
+          diagnosticLogger.warn('APP', 'Initialization is taking too long; leaving loading screen to avoid a stuck UI');
           loading = false;
         }
       }, 2500);
@@ -268,17 +293,20 @@ $: canShowLockAction = !showFirstRunWizard;
           });
         })
         .catch((error) => {
-          console.warn("Failed to subscribe to transfer events:", error);
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          diagnosticLogger.warn('TRANSFERS', 'Failed to subscribe to transfer events', { error: errorMsg });
         });
 
       // Initialize services (non-blocking; do not block UI)
       try {
         paymentService.initialize();
       } catch (error) {
-        console.warn("Payment service init failed:", error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        diagnosticLogger.warn('PAYMENT', 'Payment service init failed', { error: errorMsg });
       }
       walletService.initialize().catch((error) => {
-        console.warn("Wallet service init failed:", error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        diagnosticLogger.warn('WALLET', 'Wallet service init failed', { error: errorMsg });
       });
 
       // When geth starts running, immediately sync wallet state (balance + txs)
@@ -292,7 +320,8 @@ $: canShowLockAction = !showFirstRunWizard;
               walletService.startProgressiveLoading();
             }
           } catch (err) {
-            console.warn('Failed to sync wallet after geth start:', err);
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            diagnosticLogger.warn('WALLET', 'Failed to sync wallet after geth start', { error: errorMsg });
           }
         }
       });
@@ -301,12 +330,9 @@ $: canShowLockAction = !showFirstRunWizard;
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
           // Listener for BitTorrent protocol payments
-          listen("torrent_seeder_payment_received", async (event: any) => {
+          listen<TorrentSeederPaymentPayload>("torrent_seeder_payment_received", async (event: Event<TorrentSeederPaymentPayload>) => {
               const payload = event.payload;
-              console.log(
-                "💰 Torrent seeder payment notification received:",
-                payload,
-              );
+              diagnosticLogger.info('PAYMENT', 'Torrent seeder payment notification received', { payload });
 
               const currentWalletAddress = get(wallet).address;
               const seederAddress = payload.seeder_wallet_address;
@@ -317,13 +343,11 @@ $: canShowLockAction = !showFirstRunWizard;
                 currentWalletAddress.toLowerCase() !==
                   seederAddress.toLowerCase()
               ) {
-                console.log("⏭️ Skipping torrent payment credit - not for us.");
+                diagnosticLogger.debug('PAYMENT', 'Skipping torrent payment credit - not for us');
                 return;
               }
 
-              console.log(
-                "✅ This torrent payment is for us! Crediting...",
-              );
+              diagnosticLogger.info('PAYMENT', 'This torrent payment is for us! Crediting...');
 
               const result = await paymentService.creditSeederPayment(
                 payload.info_hash, // For torrents, this would be the info_hash
@@ -334,31 +358,27 @@ $: canShowLockAction = !showFirstRunWizard;
               );
 
               if (!result.success) {
-                console.error(
-                  "❌ Failed to credit torrent seeder payment:",
-                  result.error,
-                );
+                diagnosticLogger.error('PAYMENT', 'Failed to credit torrent seeder payment', { error: result.error });
               }
             })
             .then((unlisten) => {
               unlistenTorrentPayment = unlisten;
             })
             .catch((error) => {
-              console.error("Failed to setup torrent payment listener:", error);
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              diagnosticLogger.error('PAYMENT', 'Failed to setup torrent payment listener', { error: errorMsg });
             });
 
-          listen("seeder_payment_received", async (event: any) => {
+          listen<SeederPaymentPayload>("seeder_payment_received", async (event: Event<SeederPaymentPayload>) => {
             const payload = event.payload;
-            console.log("💰 Seeder payment notification received:", payload);
+            diagnosticLogger.info('PAYMENT', 'Seeder payment notification received', { payload });
 
               // Only credit the payment if we are the seeder (not the downloader)
               const currentWalletAddress = get(wallet).address;
               const seederAddress = payload.seeder_wallet_address;
 
               if (!seederAddress || !currentWalletAddress) {
-                console.warn(
-                  "⚠️ Missing wallet addresses, skipping payment credit",
-                );
+                diagnosticLogger.warn('PAYMENT', 'Missing wallet addresses, skipping payment credit');
                 return;
               }
 
@@ -367,13 +387,11 @@ $: canShowLockAction = !showFirstRunWizard;
                 currentWalletAddress.toLowerCase() !==
                 seederAddress.toLowerCase()
               ) {
-                console.log(
-                  `⏭️ Skipping payment credit - not for us. Seeder: ${seederAddress}, Us: ${currentWalletAddress}`,
-                );
+                diagnosticLogger.debug('PAYMENT', 'Skipping payment credit - not for us', { seederAddress, currentWalletAddress });
                 return;
               }
 
-              console.log("✅ This payment is for us! Crediting...");
+              diagnosticLogger.info('PAYMENT', 'This payment is for us! Crediting...');
 
               // Credit the seeder's wallet
               const result = await paymentService.creditSeederPayment(
@@ -386,22 +404,21 @@ $: canShowLockAction = !showFirstRunWizard;
               );
 
               if (result.success) {
-                console.log("✅ Seeder payment credited successfully");
+                diagnosticLogger.info('PAYMENT', 'Seeder payment credited successfully');
               } else {
-                console.error(
-                  "❌ Failed to credit seeder payment:",
-                  result.error,
-                );
+                diagnosticLogger.error('PAYMENT', 'Failed to credit seeder payment', { error: result.error });
               }
             })
             .then((unlisten) => {
               unlistenSeederPayment = unlisten;
             })
             .catch((error) => {
-              console.error("Failed to setup payment listener:", error);
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              diagnosticLogger.error('PAYMENT', 'Failed to setup payment listener', { error: errorMsg });
             });
         } catch (error) {
-          console.error("Failed to setup payment listener:", error);
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          diagnosticLogger.error('PAYMENT', 'Failed to setup payment listener', { error: errorMsg });
         }
 
         try {
@@ -411,7 +428,8 @@ $: canShowLockAction = !showFirstRunWizard;
             showExitPrompt = true;
           });
         } catch (error) {
-          console.error('Failed to set up exit prompt listener:', error);
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          diagnosticLogger.error('APP', 'Failed to set up exit prompt listener', { error: errorMsg });
         }
       }
 
@@ -445,7 +463,8 @@ $: canShowLockAction = !showFirstRunWizard;
                   try {
                     privateKey = await invoke<string>('get_active_account_private_key');
                   } catch (error) {
-                    console.warn('Failed to get private key from backend:', error);
+                    const errorMsg = error instanceof Error ? error.message : String(error);
+                    diagnosticLogger.warn('ACCOUNT', 'Failed to get private key from backend', { error: errorMsg });
                   }
                   
                   // Restore account with private key
@@ -465,11 +484,13 @@ $: canShowLockAction = !showFirstRunWizard;
                   await walletService.refreshBalance();
                   walletService.startProgressiveLoading();
                 } catch (error) {
-                  console.error('Failed to restore account from backend:', error);
+                  const errorMsg = error instanceof Error ? error.message : String(error);
+                  diagnosticLogger.error('ACCOUNT', 'Failed to restore account from backend', { error: errorMsg });
                 }
               }
             } catch (error) {
-              console.warn('Failed to check account status:', error);
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              diagnosticLogger.warn('ACCOUNT', 'Failed to check account status', { error: errorMsg });
             }
           } else {
             // For web/demo mode, check frontend store
@@ -483,7 +504,8 @@ $: canShowLockAction = !showFirstRunWizard;
               const keystoreFiles = await invoke<string[]>('list_keystore_accounts');
               hasKeystoreFiles = keystoreFiles && keystoreFiles.length > 0;
             } catch (error) {
-              console.warn('Failed to check keystore files:', error);
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              diagnosticLogger.warn('ACCOUNT', 'Failed to check keystore files', { error: errorMsg });
             }
           }
 
@@ -493,13 +515,15 @@ $: canShowLockAction = !showFirstRunWizard;
             showAuthWizard.set(true);
           }
         } catch (error) {
-          console.warn('Failed to check first-run status:', error);
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          diagnosticLogger.warn('APP', 'Failed to check first-run status', { error: errorMsg });
         }
 
         // Set loading to false AFTER wizard check to prevent race conditions
         loading = false;
       } catch (error) {
-        console.error("App initialization failed:", error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        diagnosticLogger.error('APP', 'App initialization failed', { error: errorMsg });
         initError = error instanceof Error ? error.message : String(error);
       } finally {
         window.clearTimeout(loadingSafetyTimer);
@@ -518,7 +542,8 @@ $: canShowLockAction = !showFirstRunWizard;
           }
         }
       } catch (error) {
-        console.warn("Failed to load stored user location:", error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        diagnosticLogger.warn('SETTINGS', 'Failed to load stored user location', { error: errorMsg });
       }
 
       try {
@@ -546,20 +571,17 @@ $: canShowLockAction = !showFirstRunWizard;
                   localStorage.setItem("chiralSettings", JSON.stringify(next));
                 }
               } catch (storageError) {
-                console.warn(
-                  "Failed to persist detected location:",
-                  storageError,
-                );
+                const errorMsg = storageError instanceof Error ? storageError.message : String(storageError);
+                diagnosticLogger.warn('SETTINGS', 'Failed to persist detected location', { error: errorMsg });
               }
-              console.log(
-                "User region detected via ${detection.source}: ${detectedLocation}",
-              );
+              diagnosticLogger.info('GEOLOCATION', `User region detected via ${detection.source}: ${detectedLocation}`);
               return next;
             });
           }
         }
       } catch (error) {
-        console.warn("Automatic location detection failed:", error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        diagnosticLogger.warn('GEOLOCATION', 'Automatic location detection failed', { error: errorMsg });
       }
       
       // Load settings from localStorage before auto-starting services
@@ -574,7 +596,8 @@ $: canShowLockAction = !showFirstRunWizard;
           settings.update(prev => ({ ...prev, ...parsed }));
         }
       } catch (error) {
-        console.warn("Failed to load settings from localStorage:", error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        diagnosticLogger.warn('SETTINGS', 'Failed to load settings from localStorage', { error: errorMsg });
       }
       
       // Initialize backend services (DHT first - it initializes chunk manager, then File Transfer)
@@ -605,8 +628,8 @@ $: canShowLockAction = !showFirstRunWizard;
             // Update network status
             networkStatus.set('connected');
           } else {
-            console.log("🚀 Auto-starting DHT node...");
-            
+            diagnosticLogger.info('DHT', 'Auto-starting DHT node...');
+
             try {
               // Import dhtService to start DHT with full settings
               const { dhtService } = await import("$lib/dht");
@@ -635,31 +658,31 @@ $: canShowLockAction = !showFirstRunWizard;
                 pureClientMode: currentSettings.pureClientMode,
                 forceServerMode: currentSettings.forceServerMode,
               });
-              
-              console.log("✅ DHT node auto-started successfully with peer ID:", peerId);
-              
+
+              diagnosticLogger.info('DHT', 'DHT node auto-started successfully', { peerId });
+
               // Update network status
               networkStatus.set('connected');
             } catch (dhtError) {
               const dhtErrorMsg = dhtError instanceof Error ? dhtError.message : String(dhtError);
               if (dhtErrorMsg.includes("already running")) {
                 // Race condition - DHT was started between our check and start attempt
-                console.log("ℹ️ DHT started by another process (race condition)");
-                
+                diagnosticLogger.info('DHT', 'DHT started by another process (race condition)');
+
                 // Sync the peer ID since DHT is running
                 const { dhtService } = await import("$lib/dht");
                 try {
                   const peerId = await invoke<string | null>("get_dht_peer_id");
                   if (peerId) {
                     dhtService.setPeerId(peerId);
-                    console.log("✅ Synced peer ID after race condition:", peerId);
+                    diagnosticLogger.info('DHT', 'Synced peer ID after race condition', { peerId });
                   }
                 } catch {}
-                
+
                 networkStatus.set('connected');
               } else {
                 // Real error
-                console.error("❌ Failed to auto-start DHT:", dhtErrorMsg);
+                diagnosticLogger.error('DHT', 'Failed to auto-start DHT', { error: dhtErrorMsg });
               }
             }
           }
@@ -671,10 +694,10 @@ $: canShowLockAction = !showFirstRunWizard;
         } catch (ftError) {
           const ftErrorMsg = ftError instanceof Error ? ftError.message : String(ftError);
           // Suppress known non-critical warnings
-          if (!ftErrorMsg.includes("already running") && 
+          if (!ftErrorMsg.includes("already running") &&
               !ftErrorMsg.includes("already initialized") &&
               !ftErrorMsg.includes("Chunk manager not initialized")) {
-            console.warn("⚠️ File transfer service start warning:", ftErrorMsg);
+            diagnosticLogger.warn('FILE_TRANSFER', 'File transfer service start warning', { error: ftErrorMsg });
           }
         }
         
@@ -690,30 +713,30 @@ $: canShowLockAction = !showFirstRunWizard;
             } else {
               // Check if Geth is installed
               const isGethInstalled = await invoke<boolean>('check_geth_binary').catch(() => false);
-              
+
               if (!isGethInstalled) {
-                console.log("📦 Geth not installed. Downloading Geth...");
+                diagnosticLogger.info('GETH', 'Geth not installed. Downloading Geth...');
                 showToast("Downloading Geth blockchain node...", "info");
-                
+
                 // Listen for download progress
-                const unlisten = await listen('geth-download-progress', (event: any) => {
+                const unlisten = await listen<GethDownloadProgressPayload>('geth-download-progress', (event: Event<GethDownloadProgressPayload>) => {
                   const progress = event.payload;
                   if (progress.percentage >= 100) {
-                    console.log("✅ Geth download complete");
+                    diagnosticLogger.info('GETH', 'Geth download complete');
                   } else {
-                    console.log(`⬇️ Downloading Geth: ${progress.percentage.toFixed(1)}%`);
+                    diagnosticLogger.debug('GETH', `Downloading Geth: ${progress.percentage.toFixed(1)}%`);
                   }
                 });
-                
+
                 try {
                   await invoke('download_geth_binary');
                   unlisten();
-                  console.log("✅ Geth downloaded successfully");
+                  diagnosticLogger.info('GETH', 'Geth downloaded successfully');
                   showToast("Geth downloaded successfully", "success");
                 } catch (downloadError) {
                   unlisten();
                   const downloadErrorMsg = downloadError instanceof Error ? downloadError.message : String(downloadError);
-                  console.error("❌ Failed to download Geth:", downloadErrorMsg);
+                  diagnosticLogger.error('GETH', 'Failed to download Geth', { error: downloadErrorMsg });
                   showToast(`Failed to download Geth: ${downloadErrorMsg}`, "error");
                   throw downloadError; // Don't try to start if download failed
                 }
@@ -731,7 +754,8 @@ $: canShowLockAction = !showFirstRunWizard;
                       isClientMode = true;
                     }
                   } catch (err) {
-                    console.warn('Failed to check DHT reachability for client mode:', err);
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    diagnosticLogger.warn('GETH', 'Failed to check DHT reachability for client mode', { error: errorMsg });
                   }
                 }
 
@@ -746,21 +770,23 @@ $: canShowLockAction = !showFirstRunWizard;
               } catch (gethError) {
                 const gethErrorMsg = gethError instanceof Error ? gethError.message : String(gethError);
                 if (gethErrorMsg.includes("already running") || gethErrorMsg.includes("already started")) {
-                  console.log("ℹ️ Geth started by another process");
+                  diagnosticLogger.info('GETH', 'Geth started by another process');
                 } else if (gethErrorMsg.includes("not found") || gethErrorMsg.includes("No such file")) {
-                  console.log("ℹ️ Geth not downloaded yet. Download it from the Network page.");
+                  diagnosticLogger.info('GETH', 'Geth not downloaded yet. Download it from the Network page.');
                 } else {
-                  console.error("❌ Failed to auto-start Geth:", gethErrorMsg);
+                  diagnosticLogger.error('GETH', 'Failed to auto-start Geth', { error: gethErrorMsg });
                 }
               }
             }
           } catch (error) {
-            console.error("⚠️ Error checking/starting Geth:", error);
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            diagnosticLogger.error('GETH', 'Error checking/starting Geth', { error: errorMsg });
           }
         }
       } catch (error) {
         // Unexpected error in the initialization block
-        console.error("⚠️ Unexpected error during service initialization:", error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        diagnosticLogger.error('APP', 'Unexpected error during service initialization', { error: errorMsg });
       }
     })();
 
@@ -773,10 +799,6 @@ $: canShowLockAction = !showFirstRunWizard;
     // Start Geth monitoring
     stopGethMonitoring = startGethMonitoring();
 
-      // popstate - event that tracks history of current tab
-      // const onPop = () => syncFromUrl();
-      // window.addEventListener('popstate', onPop);
-      // popstate - event that tracks history of current tab
     const onPop = () => {
       // Save where we were on the page we're leaving
       saveScrollPosition(currentPage);
@@ -852,7 +874,8 @@ $: canShowLockAction = !showFirstRunWizard;
         event.preventDefault();
         const appWindow = getCurrentWebviewWindow();
         appWindow.close().catch((error) => {
-          console.error("Failed to close app window:", error);
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          diagnosticLogger.error('APP', 'Failed to close app window', { error: errorMsg });
         });
         return;
       }
@@ -969,15 +992,11 @@ $: canShowLockAction = !showFirstRunWizard;
       { id: "network", label: $t("nav.network"), icon: Globe },
       { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "relay", label: $t("nav.relay"), icon: Server },
-      // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
       { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
       { id: "reputation", label: $t("nav.reputation"), icon: Star },
       { id: "blockchain", label: $t("nav.blockchain"), icon: Database },
       { id: "account", label: $t("nav.account"), icon: Wallet },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
-
-      // DISABLED: Proxy self-test page
-      // ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
     ];
   }
 
@@ -1006,11 +1025,6 @@ $: canShowLockAction = !showFirstRunWizard;
       path: "mining",
       component: MiningPage,
     },
-    // DISABLED: Proxy page
-    // {
-    //   path: "proxy",
-    //   component: ProxyPage
-    // },
     {
       path: "analytics",
       component: AnalyticsPage,
@@ -1031,11 +1045,6 @@ $: canShowLockAction = !showFirstRunWizard;
       path: "settings",
       component: SettingsPage,
     },
-    // DISABLED: Proxy self-test page
-    // {
-    //   path: "proxy-self-test",
-    //   component: ProxySelfTest
-    // },
   ];
 
   onDestroy(() => {

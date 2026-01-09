@@ -455,11 +455,9 @@
       await applyPrivacyRoutingSettings();
       await restartDhtWithProxy();
       await updateLogConfiguration();
-      // showToast("Settings Updated!");
       showToast(tr('toasts.settings.updated'));
     } catch (error) {
       errorLogger.networkError(`Failed to apply networking settings: ${error instanceof Error ? error.message : String(error)}`);
-      // showToast("Settings saved, but networking update failed", "error");
       showToast(tr('toasts.settings.networkingError'), "error");
     }
   }
@@ -585,7 +583,6 @@
     }
 
     if (localSettings.ipPrivacyMode !== "off" && (!localSettings.trustedProxyRelays || localSettings.trustedProxyRelays.length === 0)) {
-      // showToast("Add at least one trusted proxy relay before enabling Hide My IP.", "warning");
       showToast(tr('toasts.settings.proxyRelayWarning'), "warning");
       try {
         await invoke("disable_privacy_routing");
