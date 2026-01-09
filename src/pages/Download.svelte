@@ -11,7 +11,6 @@
   import { paymentService } from '$lib/services/paymentService'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import FavoritesPanel from '$lib/components/download/FavoritesPanel.svelte'
-  import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
   import { t } from 'svelte-i18n'
@@ -2790,10 +2789,6 @@ async function loadAndResumeDownloads() {
     <h1 class="text-3xl font-bold">{$t('download.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
-
-  <!-- DEV ONLY: Protocol Test Panel - Remove before production -->
-  <!-- File: src/lib/components/ProtocolTestPanel.svelte -->
-  <ProtocolTestPanel />
 
   <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
   <Card class="">

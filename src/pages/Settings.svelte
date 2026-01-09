@@ -40,14 +40,15 @@
   import { settingsBackupService } from "$lib/services/settingsBackupService";
   import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
   import { diagnosticsService, type DiagReport } from "$lib/services/diagnosticsService";
-  import { 
-    validateStoragePath, 
-    validatePort, 
+  import {
+    validateStoragePath,
+    validatePort,
     validateProxyAddress,
     validateBandwidth,
     validatePercentage,
     validateMultiaddr
   } from "$lib/utils/validation";
+  import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte';
 
   const tr = (key: string, params?: Record<string, any>) => $t(key, params);
 
@@ -2633,6 +2634,15 @@ function sectionMatches(section: string, query: string) {
               ℹ️ <strong>{$t('pureClientMode.settings.dht.serverMode.autoBehaviorLabel')}</strong> {$t('pureClientMode.settings.dht.serverMode.autoBehaviorText')}
             </div>
           </div>
+        </div>
+
+        <!-- Protocol Test Panel -->
+        <div class="space-y-3 border-t pt-3">
+          <h4 class="font-medium">Protocol Testing</h4>
+          <p class="text-xs text-muted-foreground">
+            Test and verify protocol functionality for development and debugging.
+          </p>
+          <ProtocolTestPanel />
         </div>
       </div>
     </Expandable>
