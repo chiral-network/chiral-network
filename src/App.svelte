@@ -3,18 +3,15 @@
     import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server, Database } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
-    // import ProxyPage from './pages/Proxy.svelte' // DISABLED
     import AccountPage from './pages/Account.svelte'
     import NetworkPage from './pages/Network.svelte'
     import AnalyticsPage from './pages/Analytics.svelte'
-    // import TorrentDownloadPage from './pages/TorrentDownload.svelte' // INTEGRATED INTO DOWNLOAD/UPLOAD PAGES
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
     import RelayPage from './pages/Relay.svelte'
     import Blockchain from './pages/Blockchain.svelte'
     import NotFound from './pages/NotFound.svelte'
-    // import ProxySelfTest from './routes/proxy-self-test.svelte' // DISABLED
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount, showAuthWizard } from './lib/stores'
 import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
     import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
@@ -802,10 +799,6 @@ $: canShowLockAction = !showFirstRunWizard;
     // Start Geth monitoring
     stopGethMonitoring = startGethMonitoring();
 
-      // popstate - event that tracks history of current tab
-      // const onPop = () => syncFromUrl();
-      // window.addEventListener('popstate', onPop);
-      // popstate - event that tracks history of current tab
     const onPop = () => {
       // Save where we were on the page we're leaving
       saveScrollPosition(currentPage);
@@ -999,15 +992,11 @@ $: canShowLockAction = !showFirstRunWizard;
       { id: "network", label: $t("nav.network"), icon: Globe },
       { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "relay", label: $t("nav.relay"), icon: Server },
-      // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
       { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
       { id: "reputation", label: $t("nav.reputation"), icon: Star },
       { id: "blockchain", label: $t("nav.blockchain"), icon: Database },
       { id: "account", label: $t("nav.account"), icon: Wallet },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
-
-      // DISABLED: Proxy self-test page
-      // ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
     ];
   }
 
@@ -1036,11 +1025,6 @@ $: canShowLockAction = !showFirstRunWizard;
       path: "mining",
       component: MiningPage,
     },
-    // DISABLED: Proxy page
-    // {
-    //   path: "proxy",
-    //   component: ProxyPage
-    // },
     {
       path: "analytics",
       component: AnalyticsPage,
@@ -1061,11 +1045,6 @@ $: canShowLockAction = !showFirstRunWizard;
       path: "settings",
       component: SettingsPage,
     },
-    // DISABLED: Proxy self-test page
-    // {
-    //   path: "proxy-self-test",
-    //   component: ProxySelfTest
-    // },
   ];
 
   onDestroy(() => {
