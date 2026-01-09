@@ -21,7 +21,7 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  import { totalSpent, totalReceived, miningState, accurateTotals, isCalculatingAccurateTotals, accurateTotalsProgress } from '$lib/stores';
+  import { totalSpent, totalReceived, miningState, accurateTotals, isCalculatingAccurateTotals, accurateTotalsProgress, type Transaction } from '$lib/stores';
   import { goto } from '@mateothegreat/svelte5-router';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
@@ -63,7 +63,7 @@
   let privateKeyVisible = false
   let showPending = false
   let importPrivateKey = ''
-  let importedSnapshot: any = null
+  let importedSnapshot: { transactions: Transaction[] } | null = null
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning: boolean;
@@ -96,7 +96,7 @@
   let chainId = 98765; // Default, will be fetched from backend
 
   // Transaction receipt modal state
-  let selectedTransaction: any = null;
+  let selectedTransaction: Transaction | null = null;
   let showTransactionReceipt = false;
   
   // 2FA State
@@ -143,7 +143,7 @@
   let blockNumberSearch: string = '';
   let minGasPrice: number = 0;
   let maxGasPrice: number | null = null;
-  let hashSearchResult: any = null;
+  let hashSearchResult: Transaction | null = null;
   let isSearchingHash = false;
   let hashSearchError = '';
 
@@ -510,12 +510,12 @@
             await writable.close();
 
             exportMessage = tr('wallet.exportSuccess');
-          } catch (error: any) {
-            if (error.name !== 'AbortError') {
-              throw error;
+          } catch (error: unknown) {
+            if (error instanceof Error && error.name === 'AbortError') {
+              // User cancelled, don't show error message
+              return;
             }
-            // User cancelled, don't show error message
-            return;
+            throw error;
           }
         } else {
           // Fallback for browsers that don't support File System Access API
@@ -622,7 +622,7 @@
     return new Intl.DateTimeFormat(typeof loc === 'string' ? loc : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
   }
 
-  function handleTransactionClick(tx: any) {
+  function handleTransactionClick(tx: Transaction) {
     selectedTransaction = tx;
     showTransactionReceipt = true;
   }
@@ -812,7 +812,7 @@
     await tick();
 
     // 3. This function runs when a QR code is successfully scanned
-    function onScanSuccess(decodedText: string, _decodedResult: any) {
+    function onScanSuccess(decodedText: string, _decodedResult: unknown) {
       // Handle the scanned code
       // Paste the address into the input field
       recipientAddress = decodedText;
@@ -865,7 +865,7 @@
           wallet.update(w => ({ ...w, balance: importedSnapshot.balance, actualBalance: importedSnapshot.balance }))
         }
         if (Array.isArray(importedSnapshot.transactions)) {
-          const hydrated = importedSnapshot.transactions.map((tx: any) => ({
+          const hydrated = importedSnapshot.transactions.map((tx: Transaction) => ({
             ...tx,
             date: tx.date ? new Date(tx.date) : new Date()
           }))
@@ -944,7 +944,7 @@
             wallet.update(w => ({ ...w, balance: accountData.balance, actualBalance: accountData.balance }));
           }
           if (Array.isArray(accountData.transactions)) {
-            const hydrated = accountData.transactions.map((tx: any) => ({
+            const hydrated = accountData.transactions.map((tx: Transaction) => ({
               ...tx,
               date: tx.date ? new Date(tx.date) : new Date()
             }));
