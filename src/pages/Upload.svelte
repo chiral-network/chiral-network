@@ -164,12 +164,18 @@
   let isClientMode = false;
   let clientModeReason: "forced" | "nat" | null = null;
 
-  // Protocol selection state - read from settings with WebRTC fallback
-  $: selectedProtocol = $settings.selectedProtocol || "WebRTC";
+  // Protocol selection state - initialize with WebRTC as default
+  let selectedProtocol = $settings.selectedProtocol || "WebRTC";
 
   // Ensure settings store always has a valid protocol (defensive fix)
   $: if (!$settings.selectedProtocol) {
     settings.update(s => ({ ...s, selectedProtocol: "WebRTC" }));
+    selectedProtocol = "WebRTC";
+  }
+
+  // Sync selectedProtocol changes back to settings
+  $: if (selectedProtocol && selectedProtocol !== $settings.selectedProtocol) {
+    settings.update(s => ({ ...s, selectedProtocol }));
   }
 
   // Encrypted sharing state
@@ -1485,7 +1491,8 @@
           <DropDown
             id="upload-protocol"
             options={protocolOptions}
-            bind:value={$settings.selectedProtocol}
+            bind:value={selectedProtocol}
+            placeholder="Select Protocol"
           />
         </div>
       </div>
