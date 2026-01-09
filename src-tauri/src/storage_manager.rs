@@ -546,9 +546,19 @@ async fn calculate_directory_size(path: &Path) -> Result<u64> {
 
 /// Get available disk space for a path
 fn get_available_space(path: &Path) -> Result<u64> {
+    // If directory doesn't exist, check parent directory
+    let check_path = if path.exists() {
+        path.to_path_buf()
+    } else {
+        // Fall back to parent directory if path doesn't exist
+        path.parent()
+            .ok_or_else(|| anyhow::anyhow!("Path has no parent directory"))?
+            .to_path_buf()
+    };
+
     // Use fs2 crate for cross-platform available space
-    fs2::available_space(path)
-        .with_context(|| format!("Failed to get available space for {:?}", path))
+    fs2::available_space(&check_path)
+        .with_context(|| format!("Failed to get available space for {:?}", check_path))
 }
 
 #[cfg(test)]
