@@ -1563,10 +1563,12 @@
     "remove": "Remover",
     "clearHistory": "Limpar Histórico",
     "clearFailed": "Limpar Falhados",
+    "clearCanceled": "Limpar Cancelados",
     "exportHistory": "Exportar Histórico",
     "importHistory": "Importar Histórico",
     "confirmClear": "Tem certeza de que deseja limpar todo o histórico de downloads? Isso não pode ser desfeito.",
     "confirmClearFailed": "Limpar todos os downloads falhados do histórico?",
+    "confirmClearCanceled": "Limpar todos os downloads cancelados do histórico?",
     "stats": {
       "total": "Total de Downloads",
       "completed": "Concluídos",
@@ -1578,6 +1580,7 @@
     "messages": {
       "historyCleared": "Histórico de downloads limpo",
       "failedCleared": "Downloads falhados limpos",
+      "canceledCleared": "Downloads cancelados limpos",
       "entryRemoved": "Entrada removida do histórico",
       "exportSuccess": "Histórico exportado com sucesso",
       "importSuccess": "{count} entradas de histórico importadas",
@@ -1811,53 +1814,53 @@
     }
   },
   "commandPalette": {
-    "searchPlaceholder": "Search for actions or pages...",
-    "searchLabel": "Command palette search",
-    "noResults": "No results found",
-    "tryDifferentQuery": "Try a different search term",
-    "navigate": "Navigate",
-    "select": "Select",
-    "close": "Close",
+    "searchPlaceholder": "Buscar ações ou páginas...",
+    "searchLabel": "Busca na paleta de comandos",
+    "noResults": "Nenhum resultado encontrado",
+    "tryDifferentQuery": "Tente um termo de busca diferente",
+    "navigate": "Navegar",
+    "select": "Selecionar",
+    "close": "Fechar",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "Ir para Downloads",
+      "goToUpload": "Ir para Compartilhar",
+      "goToNetwork": "Ir para Rede",
+      "goToMining": "Ir para Mineração",
+      "goToRelay": "Ir para Retransmissão",
+      "goToAnalytics": "Ir para Análise",
+      "goToReputation": "Ir para Reputação",
+      "goToBlockchain": "Ir para Blockchain",
+      "goToAccount": "Ir para Conta",
+      "goToSettings": "Ir para Configurações"
     }
   },
   "shortcuts": {
-    "title": "Keyboard Shortcuts",
-    "close": "Close",
-    "tip": "Press ? or F1 anytime to view this help",
+    "title": "Atalhos de Teclado",
+    "close": "Fechar",
+    "tip": "Pressione ? ou F1 a qualquer momento para ver esta ajuda",
     "categories": {
-      "navigation": "Navigation",
-      "application": "Application",
-      "window": "Window"
+      "navigation": "Navegação",
+      "application": "Aplicativo",
+      "window": "Janela"
     },
     "navigation": {
-      "download": "Go to Download page",
-      "upload": "Go to Upload page",
-      "network": "Go to Network page",
-      "mining": "Go to Mining page",
-      "account": "Go to Account page",
-      "settings": "Open Settings"
+      "download": "Ir para página de Downloads",
+      "upload": "Ir para página de Compartilhar",
+      "network": "Ir para página de Rede",
+      "mining": "Ir para página de Mineração",
+      "account": "Ir para página de Conta",
+      "settings": "Abrir Configurações"
     },
     "application": {
-      "commandPalette": "Open Command Palette",
-      "showHelp": "Show keyboard shortcuts",
-      "closeModal": "Close modal/dialog",
-      "refresh": "Refresh current page",
-      "reload": "Reload application"
+      "commandPalette": "Abrir Paleta de Comandos",
+      "showHelp": "Mostrar atalhos de teclado",
+      "closeModal": "Fechar modal/diálogo",
+      "refresh": "Atualizar página atual",
+      "reload": "Recarregar aplicativo"
     },
     "window": {
-      "fullscreen": "Toggle fullscreen",
-      "quit": "Quit application"
+      "fullscreen": "Alternar tela cheia",
+      "quit": "Sair do aplicativo"
     }
   },
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
