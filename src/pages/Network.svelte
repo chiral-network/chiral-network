@@ -1542,23 +1542,20 @@
       </div>
     </Card>
   </div>
-</div>
 
   <!-- Quick Actions Panel -->
-  <div class="mb-6">
-    <NetworkQuickActions
-      {dhtPeerId}
-      {dhtHealth}
-      {dhtStatus}
-      {discoveryRunning}
-      autorelayEnabled={$settings.enableAutorelay}
-      on:discover={runDiscovery}
-      on:addPeer={(e) => { newPeerAddress = e.detail.address; connectToPeer(); }}
-      on:toggleAutorelay={() => setAutorelay(!$settings.enableAutorelay)}
-      on:startDht={startDht}
-      on:stopDht={stopDht}
-    />
-  </div>
+  <NetworkQuickActions
+    {dhtPeerId}
+    {dhtHealth}
+    {dhtStatus}
+    {discoveryRunning}
+    autorelayEnabled={$settings.enableAutorelay}
+    on:discover={runDiscovery}
+    on:addPeer={(e) => { newPeerAddress = e.detail.address; connectToPeer(); }}
+    on:toggleAutorelay={() => setAutorelay(!$settings.enableAutorelay)}
+    on:startDht={startDht}
+    on:stopDht={stopDht}
+  />
 
   <!-- Tab Navigation -->
   <div class="border-b border-border">
@@ -2208,3 +2205,4 @@
     {/if}
 
   </div>
+</div>
