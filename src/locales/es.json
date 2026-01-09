@@ -455,6 +455,10 @@
       "create_via_phrase": "Crear con Frase de Recuperación",
       "import_phrase": "Importar Frase de Recuperación",
       "load_from_wallet": "Cargar desde Billetera"
+    },
+    "testWallet": {
+      "header": "Solo para Pruebas",
+      "button": "Crear Billetera de Prueba"
     }
   },
   "transfer": {
@@ -1989,12 +1993,6 @@
           "autoBehaviorText": "Si AutoNAT detecta que es públicamente accesible, automáticamente será actualizado a modo servidor sin necesitar este interruptor."
         }
       }
-    }
-  },
-  "wallet": {
-    "testWallet": {
-      "header": "Solo para Pruebas",
-      "button": "Crear Billetera de Prueba"
     }
   }
 }

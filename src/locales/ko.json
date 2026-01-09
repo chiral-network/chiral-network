@@ -455,6 +455,10 @@
       "create_via_phrase": "복구 구문으로 생성",
       "import_phrase": "복구 구문 가져오기",
       "load_from_wallet": "지갑에서 불러오기"
+    },
+    "testWallet": {
+      "header": "테스트 전용",
+      "button": "테스트 지갑 생성"
     }
   },
   "transfer": {
@@ -1910,12 +1914,6 @@
           "autoBehaviorText": "AutoNAT가 공개적으로 접근 가능함을 감지하면 이 토글 없이 자동으로 서버 모드로 업그레이드됩니다."
         }
       }
-    }
-  },
-  "wallet": {
-    "testWallet": {
-      "header": "테스트 전용",
-      "button": "테스트 지갑 생성"
     }
   }
 }

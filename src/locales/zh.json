@@ -455,6 +455,10 @@
       "create_via_phrase": "通过恢复短语创建",
       "import_phrase": "导入恢复短语",
       "load_from_wallet": "从钱包加载"
+    },
+    "testWallet": {
+      "header": "仅用于测试",
+      "button": "创建测试钱包"
     }
   },
   "transfer": {
@@ -1911,12 +1915,6 @@
           "autoBehaviorText": "如果AutoNAT检测到您可公开访问，您将自动升级到服务器模式，无需此开关。"
         }
       }
-    }
-  },
-  "wallet": {
-    "testWallet": {
-      "header": "仅用于测试",
-      "button": "创建测试钱包"
     }
   }
 }

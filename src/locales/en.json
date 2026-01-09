@@ -617,6 +617,10 @@
       "create_via_phrase": "Create via Recovery Phrase",
       "import_phrase": "Import Recovery Phrase",
       "load_from_wallet": "Load from Wallet"
+    },
+    "testWallet": {
+      "header": "For Testing Only",
+      "button": "Create Test Wallet"
     }
   },
   "transfer": {
@@ -1983,12 +1987,6 @@
           "autoBehaviorText": "If AutoNAT detects you're publicly reachable, you'll automatically be upgraded to server mode without needing this toggle."
         }
       }
-    }
-  },
-  "wallet": {
-    "testWallet": {
-      "header": "For Testing Only",
-      "button": "Create Test Wallet"
     }
   }
 }

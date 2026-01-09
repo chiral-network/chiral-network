@@ -583,6 +583,10 @@
       "create_via_phrase": "Criar via Frase de Recuperação",
       "import_phrase": "Importar Frase de Recuperação",
       "load_from_wallet": "Carregar da Carteira"
+    },
+    "testWallet": {
+      "header": "Apenas para Testes",
+      "button": "Criar Carteira de Teste"
     }
   },
   "transfer": {
@@ -1930,12 +1934,6 @@
           "autoBehaviorText": "Se AutoNAT detectar que você está publicamente acessível, você será automaticamente atualizado para modo servidor sem precisar deste botão."
         }
       }
-    }
-  },
-  "wallet": {
-    "testWallet": {
-      "header": "Apenas para Testes",
-      "button": "Criar Carteira de Teste"
     }
   }
 }

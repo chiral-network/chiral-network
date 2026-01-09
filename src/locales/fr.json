@@ -582,6 +582,10 @@
       "create_via_phrase": "Créer via une phrase de récupération",
       "import_phrase": "Importer une phrase de récupération",
       "load_from_wallet": "Charger depuis un portefeuille"
+    },
+    "testWallet": {
+      "header": "Pour Tests Uniquement",
+      "button": "Créer un Portefeuille de Test"
     }
   },
   "transfer": {
@@ -1929,12 +1933,6 @@
           "autoBehaviorText": "Si AutoNAT détecte que vous êtes publiquement accessible, vous serez automatiquement mis à niveau en mode serveur sans avoir besoin de ce bouton."
         }
       }
-    }
-  },
-  "wallet": {
-    "testWallet": {
-      "header": "Pour Tests Uniquement",
-      "button": "Créer un Portefeuille de Test"
     }
   }
 }
