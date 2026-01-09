@@ -1544,6 +1544,22 @@
   </div>
 </div>
 
+  <!-- Quick Actions Panel -->
+  <div class="mb-6">
+    <NetworkQuickActions
+      {dhtPeerId}
+      {dhtHealth}
+      {dhtStatus}
+      {discoveryRunning}
+      autorelayEnabled={$settings.enableAutorelay}
+      on:discover={runDiscovery}
+      on:addPeer={(e) => { newPeerAddress = e.detail.address; connectToPeer(); }}
+      on:toggleAutorelay={() => setAutorelay(!$settings.enableAutorelay)}
+      on:startDht={startDht}
+      on:stopDht={stopDht}
+    />
+  </div>
+
   <!-- Tab Navigation -->
   <div class="border-b border-border">
     <nav class="flex space-x-8" aria-label="Tabs">
@@ -1577,20 +1593,6 @@
     <!-- OVERVIEW TAB -->
     {#if activeTab === 'overview'}
       <div class="space-y-6">
-        
-        <!-- Quick Actions Panel -->
-        <NetworkQuickActions 
-          {dhtPeerId}
-          {dhtHealth}
-          {dhtStatus}
-          {discoveryRunning}
-          autorelayEnabled={$settings.enableAutorelay}
-          on:discover={runDiscovery}
-          on:addPeer={(e) => { newPeerAddress = e.detail.address; connectToPeer(); }}
-          on:toggleAutorelay={() => setAutorelay(!$settings.enableAutorelay)}
-          on:startDht={startDht}
-          on:stopDht={stopDht}
-        />
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <!-- Blockchain Node Lifecycle -->
