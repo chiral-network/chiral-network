@@ -569,7 +569,7 @@ $: canShowLockAction = !showFirstRunWizard;
           const parsed = JSON.parse(storedSettings);
           // Ensure selectedProtocol always has a valid default
           if (!parsed.selectedProtocol) {
-            parsed.selectedProtocol = "Bitswap";
+            parsed.selectedProtocol = "WebRTC";
           }
           settings.update(prev => ({ ...prev, ...parsed }));
         }

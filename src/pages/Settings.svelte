@@ -154,7 +154,7 @@
     maxLogSizeMB: 10, // MB per log file
 
     // Upload Protocol
-    selectedProtocol: "Bitswap", // Default to Bitswap
+    selectedProtocol: "WebRTC", // Default to WebRTC
   };
   let localSettings: AppSettings = JSON.parse(JSON.stringify(get(settings)));
   let savedSettings: AppSettings = JSON.parse(JSON.stringify(localSettings));
