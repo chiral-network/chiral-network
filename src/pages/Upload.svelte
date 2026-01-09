@@ -22,7 +22,6 @@
      Copy,
      Share2,
     Globe,
-    Blocks,
     Network,
     Server,
   } from "lucide-svelte";
@@ -165,12 +164,12 @@
   let isClientMode = false;
   let clientModeReason: "forced" | "nat" | null = null;
 
-  // Protocol selection state - read from settings with Bitswap fallback
-  $: selectedProtocol = $settings.selectedProtocol || "Bitswap";
-  
+  // Protocol selection state - read from settings with WebRTC fallback
+  $: selectedProtocol = $settings.selectedProtocol || "WebRTC";
+
   // Ensure settings store always has a valid protocol (defensive fix)
   $: if (!$settings.selectedProtocol) {
-    settings.update(s => ({ ...s, selectedProtocol: "Bitswap" }));
+    settings.update(s => ({ ...s, selectedProtocol: "WebRTC" }));
   }
 
   // Encrypted sharing state
@@ -1219,7 +1218,7 @@
 
         // Construct protocol-specific hash for display
         let protocolHash = metadata.merkleRoot || "";
-        if ((selectedProtocol as "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP") === "BitTorrent" && metadata.infoHash) {
+        if ((selectedProtocol as "WebRTC" | "BitTorrent" | "ED2K" | "FTP") === "BitTorrent" && metadata.infoHash) {
           // Construct magnet link for BitTorrent
           const trackers = metadata.trackers
             ? metadata.trackers.join("&tr=")
@@ -1342,7 +1341,6 @@
 
   // Protocol options for dropdown
   const protocolOptions = [
-    { value: "Bitswap", label: "Bitswap" },
     { value: "WebRTC", label: "WebRTC" },
     { value: "BitTorrent", label: "BitTorrent" },
     { value: "ED2K", label: "ED2K" },
@@ -1940,19 +1938,15 @@
                             class={`text-xs px-2 py-0.5 ${
                               protocolEntry.protocol === "WebRTC"
                                 ? "bg-blue-100 text-blue-800"
-                                : protocolEntry.protocol === "Bitswap"
-                                  ? "bg-purple-100 text-purple-800"
-                                  : protocolEntry.protocol === "BitTorrent"
-                                    ? "bg-green-100 text-green-800"
-                                    : protocolEntry.protocol === "ED2K"
-                                      ? "bg-orange-100 text-orange-800"
-                                      : "bg-gray-100 text-gray-800"
+                                : protocolEntry.protocol === "BitTorrent"
+                                  ? "bg-green-100 text-green-800"
+                                  : protocolEntry.protocol === "ED2K"
+                                    ? "bg-orange-100 text-orange-800"
+                                    : "bg-gray-100 text-gray-800"
                             }`}
                           >
                             {#if protocolEntry.protocol === "WebRTC"}
                               <Globe class="h-3 w-3 mr-1" />
-                            {:else if protocolEntry.protocol === "Bitswap"}
-                              <Blocks class="h-3 w-3 mr-1" />
                             {:else if protocolEntry.protocol === "BitTorrent"}
                               <Share2 class="h-3 w-3 mr-1" />
                             {:else if protocolEntry.protocol === "ED2K"}
