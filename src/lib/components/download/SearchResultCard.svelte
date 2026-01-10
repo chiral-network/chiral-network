@@ -5,7 +5,7 @@
   import { FileIcon, Copy, Download, Server, Globe, Blocks, Star } from 'lucide-svelte';
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
-  import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
+  import { formatRelativeTime, toHumanReadableSize, formatChiral } from '$lib/utils';
   import { files, wallet } from '$lib/stores';
   import { favorites } from '$lib/stores/favorites';
   import { get } from 'svelte/store';
@@ -514,7 +514,7 @@
               {:else if checkingBalance}
                 Calculating...
               {:else if currentPrice !== null}
-                {currentPrice.toFixed(4)} Chiral
+                {formatChiral(currentPrice)} Chiral
               {:else}
                 0.0001 Chiral
               {/if}
@@ -646,7 +646,7 @@
               {#if checkingBalance}
                 Calculating...
               {:else}
-                {(currentPrice ?? 0.0001).toFixed(4)} Chiral
+                {formatChiral(currentPrice ?? 0.0001)} Chiral
               {/if}
             </p>
           </div>
@@ -654,7 +654,7 @@
       </div>
 
       <p class="text-sm text-muted-foreground text-center mb-6">
-        You will be charged ${(currentPrice ?? 0.0001).toFixed(4)} Chiral. Continue?
+        You will be charged ${formatChiral(currentPrice ?? 0.0001)} Chiral. Continue?
       </p>
 
       <div class="flex gap-3">
@@ -693,18 +693,18 @@
       <div class="space-y-4 mb-6">
         <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
           <span class="text-sm text-muted-foreground">Your Balance</span>
-          <span class="text-lg font-bold">{userBalance.toFixed(4)} Chiral</span>
+          <span class="text-lg font-bold">{formatChiral(userBalance)} Chiral</span>
         </div>
 
         <div class="flex justify-between items-center p-3 bg-blue-500/10 rounded-lg border border-blue-500/30">
           <span class="text-sm text-muted-foreground">File Price</span>
-          <span class="text-lg font-bold text-blue-600">{(currentPrice || 0).toFixed(4)} Chiral</span>
+          <span class="text-lg font-bold text-blue-600">{formatChiral(currentPrice || 0)} Chiral</span>
         </div>
 
         <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg border-2 border-border">
           <span class="text-sm font-semibold">Balance After Purchase</span>
           <span class="text-lg font-bold {canAfford ? 'text-emerald-600' : 'text-red-600'}">
-            {(userBalance - (currentPrice || 0)).toFixed(4)} Chiral
+            {formatChiral(userBalance - (currentPrice || 0))} Chiral
           </span>
         </div>
       </div>

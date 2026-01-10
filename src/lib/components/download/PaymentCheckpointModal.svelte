@@ -4,7 +4,7 @@
   import Modal from '$lib/components/Modal.svelte';
   import { wallet } from '$lib/stores';
   import { paymentService } from '$lib/services/paymentService';
-  import { toHumanReadableSize } from '$lib/utils';
+  import { toHumanReadableSize, formatChiral } from '$lib/utils';
 
   export let checkpointEvent: PaymentCheckpointEvent | null = null;
   export let fileName: string = '';
@@ -162,7 +162,7 @@
             </div>
             <div class="text-right">
               <div class="text-lg font-bold text-blue-600 dark:text-blue-400">
-                {incrementalAmount.toFixed(4)} Chiral
+                {formatChiral(incrementalAmount)} Chiral
               </div>
               <div class="text-xs text-gray-600 dark:text-gray-400">
                 {checkpointEvent.checkpointMb} MB
@@ -189,7 +189,7 @@
               </div>
             </div>
             <div class="text-right">
-              <div class="text-lg font-bold">~{estimatedRemainingCost.toFixed(4)} Chiral</div>
+              <div class="text-lg font-bold">~{formatChiral(estimatedRemainingCost)} Chiral</div>
               <div class="text-xs text-gray-600 dark:text-gray-400">Estimated</div>
             </div>
           </div>
@@ -201,7 +201,7 @@
         <div class="flex justify-between text-sm">
           <span class="text-yellow-800 dark:text-yellow-200">Available Balance:</span>
           <span class="font-semibold text-yellow-900 dark:text-yellow-100"
-            >{availableBalance.toFixed(4)} Chiral</span
+            >{formatChiral(availableBalance)} Chiral</span
           >
         </div>
         {#if !canAffordIncremental}
@@ -237,7 +237,7 @@
             {#if processing}
               Processing...
             {:else}
-              Pay {incrementalAmount.toFixed(4)} Chiral
+              Pay {formatChiral(incrementalAmount)} Chiral
             {/if}
           </button>
         {:else}
@@ -249,7 +249,7 @@
             {#if processing}
               Processing...
             {:else}
-              Pay ~{estimatedRemainingCost.toFixed(4)} Chiral
+              Pay ~{formatChiral(estimatedRemainingCost)} Chiral
             {/if}
           </button>
         {/if}

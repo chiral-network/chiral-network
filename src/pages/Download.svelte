@@ -16,7 +16,7 @@
   import { onDestroy, onMount } from 'svelte'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
-  import { toHumanReadableSize } from '$lib/utils'
+  import { toHumanReadableSize, formatChiral } from '$lib/utils'
   import { initDownloadTelemetry, disposeDownloadTelemetry } from '$lib/downloadTelemetry'
   import { MultiSourceDownloadService, type MultiSourceProgress } from '$lib/services/multiSourceDownloadService'
   import { listen } from '@tauri-apps/api/event'
@@ -473,7 +473,7 @@
                               seederPeerId 
                             });
                             showToast(
-                                `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
+                                `Download complete! Paid ${formatChiral(paymentAmount)} Chiral`,
                                 'success'
                             );
                         } else {
@@ -747,7 +747,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
               seederPeerId 
             });
             showToast(
-              `Download complete! Paid ${paymentAmount.toFixed(4)} Chiral`,
+              `Download complete! Paid ${formatChiral(paymentAmount)} Chiral`,
               'success'
             );
           } else {
@@ -2165,7 +2165,7 @@ async function loadAndResumeDownloads() {
         // Check if user has sufficient balance
         if (paymentAmount > 0 && !paymentService.hasSufficientBalance(paymentAmount)) {
           showToast(
-            `Insufficient balance. Need ${paymentAmount.toFixed(4)} Chiral, have ${$wallet.balance.toFixed(4)} Chiral`,
+            `Insufficient balance. Need ${formatChiral(paymentAmount)} Chiral, have ${formatChiral($wallet.balance)} Chiral`,
             'error'
           );
           activeSimulations.delete(fileId);
@@ -2254,7 +2254,7 @@ async function loadAndResumeDownloads() {
         files.update(f => f.map(file =>
           file.id === fileId ? { ...file, status: 'completed', progress: 100, downloadPath: outputPath } : file
         ));
-        showToast(`Successfully decrypted and saved "${fileToDownload.name}"! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
+        showToast(`Successfully decrypted and saved "${fileToDownload.name}"! Paid ${formatChiral(paymentAmount)} Chiral`, 'success');
         activeSimulations.delete(fileId);
 
       } else {
@@ -2321,7 +2321,7 @@ async function loadAndResumeDownloads() {
                     seederWalletAddress, 
                     seederPeerId 
                   });
-                  showToast(`Multi-source download completed! Paid ${paymentAmount.toFixed(4)} Chiral`, 'success');
+                  showToast(`Multi-source download completed! Paid ${formatChiral(paymentAmount)} Chiral`, 'success');
                 } else {
                   errorLogger.fileOperationError('Multi-source payment', paymentResult.error || 'Unknown error');
                   showToast(`Payment failed: ${paymentResult.error}`, 'warning');
@@ -2474,7 +2474,7 @@ async function loadAndResumeDownloads() {
                           seederPeerId 
                         });
                         showToast(
-                          `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${paymentAmount.toFixed(4)} Chiral`,
+                          `${tr('download.notifications.downloadComplete', { values: { name: fileToDownload.name } })} - Paid ${formatChiral(paymentAmount)} Chiral`,
                           'success'
                         );
                       } else {
@@ -3586,7 +3586,7 @@ async function loadAndResumeDownloads() {
                 <p class="text-xs text-muted-foreground">
                   {toHumanReadableSize(entry.size)}
                   {#if entry.price}
-                    · {entry.price.toFixed(4)} Chiral
+                    · {formatChiral(entry.price)} Chiral
                   {/if}
                   · {new Date(entry.downloadDate).toLocaleString()}
                 </p>

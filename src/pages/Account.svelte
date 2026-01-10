@@ -44,6 +44,7 @@
 
   // Validation utilities
   import { validatePrivateKeyFormat, RateLimiter } from '$lib/utils/validation'
+  import { formatChiral } from '$lib/utils'
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -325,7 +326,7 @@
         isAmountValid = false;
         sendAmount = 0;
       } else if (totalCost > $wallet.balance) {
-        const shortage = (totalCost - $wallet.balance).toFixed(4);
+        const shortage = formatChiral(totalCost - $wallet.balance);
         validationWarning = tr('errors.amount.insufficientWithGas', { values: { more: shortage } });
         isAmountValid = false;
         sendAmount = 0;
@@ -1469,7 +1470,7 @@
           translatedType = tr('filters.typeMining');
         }
 
-        const amount = tx.amount?.toFixed(8) || '0.00000000';
+        const amount = formatChiral(tx.amount ?? 0, 8);
         const from = tx.from || '';
         const to = tx.to || '';
         const description = (tx.description || '').replace(/"/g, '""'); // Escape quotes
@@ -1833,7 +1834,7 @@
         {:else}
         <div>
           <p class="text-sm text-muted-foreground">{msg('wallet.balance', 'Balance')}</p>
-          <p class="text-3xl font-bold text-foreground">{$wallet.balance.toFixed(8)} Chiral</p>
+          <p class="text-3xl font-bold text-foreground">{formatChiral($wallet.balance, 8)} Chiral</p>
         </div>
         
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 mt-3 sm:mt-4">
@@ -2149,7 +2150,7 @@
           </div>
           <div class="flex items-center justify-between mt-1">
             <p class="text-xs text-muted-foreground">
-              {$t('transfer.available', { values: { amount: $wallet.balance.toFixed(4) } })}
+              {$t('transfer.available', { values: { amount: formatChiral($wallet.balance) } })}
             </p>
             {#if validationWarning}
               <p class="text-xs text-red-500 font-medium">{validationWarning}</p>
