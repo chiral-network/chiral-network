@@ -25,7 +25,7 @@
   } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import { gethStatus, gethSyncStatus } from '$lib/services/gethService';
-  import { formatRelativeTime } from '$lib/utils';
+  import { formatRelativeTime, formatHash } from '$lib/utils';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params);
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
@@ -253,11 +253,6 @@
     return new Date(timestamp * 1000).toLocaleString();
   }
 
-  // Format hash (truncate)
-  function formatHash(hash: string): string {
-    if (!hash) return 'N/A';
-    return `${hash.substring(0, 10)}...${hash.substring(hash.length - 8)}`;
-  }
 
   // Copy to clipboard
   function copyToClipboard(text: string) {

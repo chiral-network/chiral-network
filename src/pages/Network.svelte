@@ -31,7 +31,7 @@
   import type { GeoRegionConfig } from '$lib/geo';
   import { calculateRegionDistance } from '$lib/services/geolocation';
   import { diagnosticLogger, errorLogger, networkLogger } from '$lib/diagnostics/logger';
-  import { toHumanReadableSize } from '$lib/utils';
+  import { toHumanReadableSize, formatHash } from '$lib/utils';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -1998,7 +1998,7 @@
                          <span class="font-medium">{peer.nickname || 'Anonymous'}</span>
                          <Badge variant="outline" class="text-xs py-0 h-5">⭐ {peer.reputation?.toFixed(1) || '0.0'}</Badge>
                        </div>
-                       <p class="text-xs text-muted-foreground font-mono mt-0.5">{peer.address.substring(0, 20)}...</p>
+                       <p class="text-xs text-muted-foreground font-mono mt-0.5">{formatHash(peer.address, 20, 0)}</p>
                     </div>
                  </div>
                  

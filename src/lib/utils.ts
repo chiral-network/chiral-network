@@ -171,3 +171,16 @@ export function formatChiral(amount: number, decimals: number = 4): string {
   }
   return amount.toFixed(decimals);
 }
+
+/**
+ * Format hash strings for display by truncating middle
+ * @param hash - The hash string to format
+ * @param prefixLen - Number of characters from start (default: 10)
+ * @param suffixLen - Number of characters from end (default: 8)
+ * @returns Formatted hash like "0x1234abcd...ef567890"
+ */
+export function formatHash(hash: string | null | undefined, prefixLen: number = 10, suffixLen: number = 8): string {
+  if (!hash) return 'N/A';
+  if (hash.length <= prefixLen + suffixLen) return hash;
+  return `${hash.substring(0, prefixLen)}...${hash.substring(hash.length - suffixLen)}`;
+}

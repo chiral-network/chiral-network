@@ -5,7 +5,7 @@
   import { FileIcon, Copy, Download, Server, Globe, Blocks, Star } from 'lucide-svelte';
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
-  import { formatRelativeTime, toHumanReadableSize, formatChiral } from '$lib/utils';
+  import { formatRelativeTime, toHumanReadableSize, formatChiral, formatHash } from '$lib/utils';
   import { files, wallet } from '$lib/stores';
   import { favorites } from '$lib/stores/favorites';
   import { get } from 'svelte/store';
@@ -252,7 +252,7 @@
         showToast(
           // `Payment successful! Transaction: ${paymentResult.transactionHash.substring(0, 10)}...`,
           tr('toasts.download.payment.successWithHash', {
-            values: { hash: paymentResult.transactionHash.substring(0, 10) }
+            values: { hash: formatHash(paymentResult.transactionHash, 10, 0) }
           }),
           'success'
         );
