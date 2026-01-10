@@ -184,3 +184,25 @@ export function formatHash(hash: string | null | undefined, prefixLen: number = 
   if (hash.length <= prefixLen + suffixLen) return hash;
   return `${hash.substring(0, prefixLen)}...${hash.substring(hash.length - suffixLen)}`;
 }
+
+/**
+ * Format latency in milliseconds
+ * @param ms - Latency in milliseconds
+ * @param decimals - Number of decimal places (default: 0)
+ * @returns Formatted latency like "123 ms"
+ */
+export function formatLatency(ms: number, decimals: number = 0): string {
+  if (!Number.isFinite(ms)) return 'N/A';
+  return `${ms.toFixed(decimals)} ms`;
+}
+
+/**
+ * Format percentage value
+ * @param value - Percentage value (0-100)
+ * @param decimals - Number of decimal places (default: 1)
+ * @returns Formatted percentage like "12.3%"
+ */
+export function formatPercent(value: number, decimals: number = 1): string {
+  if (!Number.isFinite(value)) return '0%';
+  return `${value.toFixed(decimals)}%`;
+}

@@ -10,7 +10,7 @@ import { onMount, onDestroy } from 'svelte'
 import { t } from 'svelte-i18n'
 import { suspiciousActivity } from '$lib/stores';
 import type { FileItem } from '$lib/stores';
-import { toHumanReadableSize, formatChiral } from '$lib/utils';
+import { toHumanReadableSize, formatChiral, formatLatency, formatPercent } from '$lib/utils';
 import { miningState } from '$lib/stores';
 import { miningProgress } from '$lib/stores';
 import { analyticsService } from '$lib/services/analyticsService';
@@ -643,7 +643,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
             class:text-green-600={percentChange >= 0}
             class:text-red-600={percentChange < 0}>
             <TrendingUp class="h-3 w-3 transform {percentChange < 0 ? 'rotate-180' : ''}" />
-            {percentChange.toFixed(1)}% share of total
+            {formatPercent(percentChange)} share of total
           </p>
         </div>
         <div class="p-2 bg-green-500/10 rounded-lg">
@@ -862,15 +862,15 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6">
         <div>
           <p class="text-xs text-muted-foreground mb-1">{$t('analytics.average')}</p>
-          <p class="text-2xl font-bold">{avgLatency.toFixed(0)} ms</p>
+          <p class="text-2xl font-bold">{formatLatency(avgLatency)}</p>
         </div>
         <div>
           <p class="text-xs text-muted-foreground mb-1">{$t('analytics.p95')}</p>
-          <p class="text-2xl font-bold">{p95Latency.toFixed(0)} ms</p>
+          <p class="text-2xl font-bold">{formatLatency(p95Latency)}</p>
         </div>
         <div>
           <p class="text-xs text-muted-foreground mb-1">{$t('analytics.best')}</p>
-          <p class="text-2xl font-bold">{bestLatency.toFixed(0)} ms</p>
+          <p class="text-2xl font-bold">{formatLatency(bestLatency)}</p>
         </div>
       </div>
 
@@ -878,7 +878,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
         <div>
           <div class="flex justify-between mb-2">
             <span class="text-sm">{$t('analytics.currentAvg')}</span>
-            <span class="text-sm font-medium">{avgLatency.toFixed(0)} ms</span>
+            <span class="text-sm font-medium">{formatLatency(avgLatency)}</span>
           </div>
           <Progress
             value={Math.min(avgLatency, 300)}
@@ -930,7 +930,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
                       tabindex="0"
                       class="flex-1 bg-gradient-to-t from-blue-400/40 to-blue-500/80 hover:from-blue-500/60 hover:to-blue-600/90 transition-all rounded-t-md shadow-sm relative"
                       style="height: {(Math.min(p.latency, 300) / 300) * 100}%"
-                      aria-label="{p.date}: {p.latency.toFixed(0)} ms"
+                      aria-label="{p.date}: {formatLatency(p.latency)}"
                       on:mouseenter={() => { hoveredLatency = p; hoveredLatencyIndex = i; }}
                       on:mouseleave={() => { hoveredLatency = null; hoveredLatencyIndex = null; }}
               >
@@ -939,7 +939,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
                           class="absolute left-1/2 -translate-x-1/2 -top-8 z-10 px-2 py-1 rounded bg-primary text-white text-xs shadow-lg pointer-events-none"
                           style="white-space:nowrap;"
                   >
-                    {hoveredLatency.date}: {hoveredLatency.latency.toFixed(0)} ms
+                    {hoveredLatency.date}: {formatLatency(hoveredLatency.latency)}
                     <span class="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0
                   border-l-6 border-l-transparent border-r-6 border-r-transparent
                   border-t-6 border-t-primary"></span>
@@ -961,8 +961,8 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
           <span>{latencyHistory[latencyHistory.length - 1]?.date}</span>
         </div>
         <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
-          <span>Min: {Math.min(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
-          <span>Max: {Math.max(...latencyHistory.map(p => p.latency)).toFixed(0)} ms</span>
+          <span>Min: {formatLatency(Math.min(...latencyHistory.map(p => p.latency)))}</span>
+          <span>Max: {formatLatency(Math.max(...latencyHistory.map(p => p.latency)))}</span>
         </div>
       {/if}
     </Card>
