@@ -1001,7 +1001,7 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
               </div>
             </div>
             <Badge variant="outline">
-              {((file.seeders || 0) * (file.size / 1000000)).toFixed(2)} MB
+              {formatSize((file.seeders || 0) * file.size)}
             </Badge>
           </div>
         {/each}

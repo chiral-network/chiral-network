@@ -31,6 +31,7 @@
   import type { GeoRegionConfig } from '$lib/geo';
   import { calculateRegionDistance } from '$lib/services/geolocation';
   import { diagnosticLogger, errorLogger, networkLogger } from '$lib/diagnostics/logger';
+  import { toHumanReadableSize } from '$lib/utils';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -180,22 +181,6 @@
   }
   */
 
-  function formatSize(bytes: number | undefined): string {
-    if (bytes === undefined || bytes === null || isNaN(bytes)) {
-      return '0 B'
-    }
-
-    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-    let size = bytes
-    let unitIndex = 0
-
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024
-      unitIndex++
-    }
-
-    return `${size.toFixed(2)} ${units[unitIndex]}`
-  }
 
   function formatPeerDate(date: Date | string | number | null | undefined): string {
     if (!date) {
@@ -2020,7 +2005,7 @@
                  <div class="flex items-center gap-6 text-sm text-muted-foreground">
                     <div class="text-right hidden md:block">
                        <p class="text-xs uppercase">Data</p>
-                       <p class="font-medium text-foreground">{formatSize(peer.totalSize)}</p>
+                       <p class="font-medium text-foreground">{toHumanReadableSize(peer.totalSize ?? 0)}</p>
                     </div>
                     <div class="text-right">
                        <p class="text-xs uppercase">Location</p>
