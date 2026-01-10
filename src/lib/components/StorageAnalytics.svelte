@@ -8,6 +8,7 @@ import { onMount } from 'svelte';
 import { t } from 'svelte-i18n';
 import { settings } from '$lib/stores';
 import { showToast } from '$lib/toast';
+import { toHumanReadableSize } from '$lib/utils';
 
 type StorageUsage = {
   totalBytes: number;
@@ -35,20 +36,6 @@ let cleaning = false;
 let lastCleanupReport: CleanupReport | null = null;
 let updateInterval: number;
 
-function formatBytes(size: number): string {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  if (size === undefined){
-    return "0 B"
-  }
-  let unitIndex = 0;
-
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex++;
-  }
-
-  return `${size.toFixed(2)} ${units[unitIndex]}`;
-}
 
 function getUsagePercentage(): number {
   if (!storageUsage) return 0;
@@ -91,7 +78,7 @@ async function performCleanup() {
     lastCleanupReport = report;
 
     if (report.bytesFreed > 0) {
-      showToast(`Cleanup complete! Freed ${formatBytes(report.bytesFreed)}`, 'success');
+      showToast(`Cleanup complete! Freed ${toHumanReadableSize(report.bytesFreed)}`, 'success');
     } else {
       showToast('No cleanup needed - storage is clean!', 'info');
     }
@@ -171,7 +158,7 @@ $: totalNonZero = breakdownData.reduce((sum, item) => sum + item.value, 0);
           <div class="flex justify-between items-baseline mb-2">
             <span class="text-sm text-muted-foreground">{$t('analytics.storage.totalUsage')}</span>
             <span class="text-2xl font-bold {getUsageColor()}">
-              {formatBytes(storageUsage.totalBytes)}
+              {toHumanReadableSize(storageUsage.totalBytes)}
             </span>
           </div>
           <Progress
@@ -182,7 +169,7 @@ $: totalNonZero = breakdownData.reduce((sum, item) => sum + item.value, 0);
           />
           <div class="flex justify-between text-xs text-muted-foreground mt-1">
             <span>{getUsagePercentage().toFixed(1)}% of {$settings.maxStorageSize} GB limit</span>
-            <span>{formatBytes(storageUsage.availableBytes)} available</span>
+            <span>{toHumanReadableSize(storageUsage.availableBytes)} available</span>
           </div>
         </div>
 
@@ -220,7 +207,7 @@ $: totalNonZero = breakdownData.reduce((sum, item) => sum + item.value, 0);
             <p class="font-medium mb-1">{$t('analytics.storage.lastCleanup')}</p>
             <div class="space-y-0.5">
               <p>• {$t('analytics.storage.filesDeleted')}: {lastCleanupReport.filesDeleted}</p>
-              <p>• {$t('analytics.storage.spaceFreed')}: {formatBytes(lastCleanupReport.bytesFreed)}</p>
+              <p>• {$t('analytics.storage.spaceFreed')}: {toHumanReadableSize(lastCleanupReport.bytesFreed)}</p>
               {#if lastCleanupReport.errors.length > 0}
                 <p class="text-red-600">• {$t('analytics.storage.errors')}: {lastCleanupReport.errors.length}</p>
               {/if}
@@ -254,7 +241,7 @@ $: totalNonZero = breakdownData.reduce((sum, item) => sum + item.value, 0);
                 <svelte:component this={item.icon} class="h-4 w-4" style="color: {item.color}" />
                 <span class="text-sm">{item.name}</span>
               </div>
-              <span class="text-sm font-medium">{formatBytes(item.value)}</span>
+              <span class="text-sm font-medium">{toHumanReadableSize(item.value)}</span>
             </div>
             <div class="relative h-2 bg-muted rounded-full overflow-hidden">
               <div

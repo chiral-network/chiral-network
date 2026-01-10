@@ -20,6 +20,7 @@
   import { showToast } from '$lib/toast';
   import { gethSyncStatus } from '$lib/services/gethService';
   import { dhtService } from '$lib/dht';
+  import { formatChiral, formatRelativeTime } from '$lib/utils';
   type TranslateParams = { values?: Record<string, unknown>; default?: string };
   // const tr = (key: string, params?: TranslateParams) => get(t)(key, params);
   const tr = (key: string, params?: TranslateParams): string =>
@@ -1073,15 +1074,6 @@
     }
   }
 
-  function formatTimestamp(timestamp: number): string {
-    const now = Date.now() / 1000;
-    const diff = now - timestamp;
-    
-    if (diff < 60) return `${Math.floor(diff)}s ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  }
 
   // Pool management functions
   function editPool(pool: MiningPool) {
@@ -1394,7 +1386,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-muted-foreground">{$t('mining.totalRewards')}</p>
-          <p class="text-2xl font-bold">{($miningState.totalRewards || 0).toFixed(4)} Chiral</p>
+          <p class="text-2xl font-bold">{formatChiral($miningState.totalRewards || 0)} Chiral</p>
           <p class="text-xs text-green-600 flex items-center gap-1 mt-1">
             <TrendingUp class="h-3 w-3" />
             {$miningState.blocksFound} {$t('mining.blocksFound')}
@@ -1550,7 +1542,7 @@
                 </div>
                 <div>
                   <p class="text-muted-foreground">{$t('mining.poolDetails.est24hPayout')}</p>
-                  <p class="font-semibold">{currentPool.stats.estimated_payout_24h.toFixed(4)} Chiral</p>
+                  <p class="font-semibold">{formatChiral(currentPool.stats.estimated_payout_24h)} Chiral</p>
                 </div>
                 <div>
                   <p class="text-muted-foreground">{$t('mining.poolDetails.shares')}</p>
@@ -1566,7 +1558,7 @@
                 </div>
                 <div>
                   <p class="text-muted-foreground">{$t('mining.poolDetails.lastShare')}</p>
-                  <p class="font-semibold">{formatTimestamp(currentPool.stats.last_share_time)}</p>
+                  <p class="font-semibold">{formatRelativeTime(currentPool.stats.last_share_time)}</p>
                 </div>
               </div>
             </div>
@@ -2048,7 +2040,7 @@
               </div>
               <div class="text-right">
                 <Badge variant="outline" class="text-green-600">
-                  +{block.reward.toFixed(4)} Chiral
+                  +{formatChiral(block.reward)} Chiral
                 </Badge>
                 <p class="text-xs text-muted-foreground mt-1">
                   {block.timestamp.toLocaleTimeString()}
@@ -2477,7 +2469,7 @@
                       </div>
                       <div>
                         <p class="text-muted-foreground">{$t('mining.poolDetails.lastBlock')}</p>
-                        <p class="font-medium">{pool.last_block_time > 0 ? formatTimestamp(pool.last_block_time) : $t('mining.poolDetails.never')}</p>
+                        <p class="font-medium">{pool.last_block_time > 0 ? formatRelativeTime(pool.last_block_time) : $t('mining.poolDetails.never')}</p>
                       </div>
                       <div>
                         <p class="text-muted-foreground">{$t('mining.poolDetails.blocks24h')}</p>

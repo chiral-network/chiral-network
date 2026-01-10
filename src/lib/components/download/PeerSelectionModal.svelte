@@ -17,7 +17,7 @@
   import Button from '$lib/components/ui/button.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import { Server, Zap, TrendingUp, Clock, X, Download, Globe, Wifi } from 'lucide-svelte';
-  import { toHumanReadableSize } from '$lib/utils';
+  import { toHumanReadableSize, formatChiral } from '$lib/utils';
 
   export let show = false;
   export let fileName: string;
@@ -259,7 +259,7 @@
                     </td>
                     <td class="p-3">
                       <div class="flex items-center gap-1 text-sm">
-                        {peer.price_per_mb.toFixed(4)} Chiral
+                        {formatChiral(peer.price_per_mb)} Chiral
                       </div>
                     </td>
                     {#if mode === 'manual'}
@@ -308,7 +308,7 @@
               {#if isSeeding}
                 Free
               {:else}
-                {Math.max(totalCost, 0.0001).toFixed(4)} Chiral
+                {formatChiral(Math.max(totalCost, 0.0001))} Chiral
               {/if}
             </span>
           </div>

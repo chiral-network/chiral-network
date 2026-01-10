@@ -15,6 +15,7 @@
   } from 'lucide-svelte'
   import { t } from 'svelte-i18n'
   import { get } from 'svelte/store'
+  import { formatChiral } from '$lib/utils'
 
   const tr = (k: string, params?: Record<string, any>) => (get(t) as (key: string, params?: any) => string)(k, params)
 
@@ -127,7 +128,7 @@
   }
 
   function formatAmount(amount: number) {
-    return amount.toFixed(4)
+    return formatChiral(amount)
   }
 
   function formatDate(date: Date) {
@@ -305,7 +306,7 @@
         </span>
         <span>
           {#if filteredTransactions.length > 0}
-            Total: {filteredTransactions.reduce((sum, tx) => sum + (tx.type === 'sent' ? -tx.amount : tx.amount), 0).toFixed(4)} CHR
+            Total: {formatChiral(filteredTransactions.reduce((sum, tx) => sum + (tx.type === 'sent' ? -tx.amount : tx.amount), 0))} CHR
           {/if}
         </span>
       </div>

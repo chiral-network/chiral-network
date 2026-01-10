@@ -7,6 +7,7 @@
   import Progress from '$lib/components/ui/progress.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import { Play, Pause, AlertCircle, CheckCircle, Download as DownloadIcon } from 'lucide-svelte'
+  import { toHumanReadableSize } from '$lib/utils'
 
   export let downloadId: string = ''
   export let sourceUrl: string = ''
@@ -178,14 +179,6 @@
     ? Math.round((status.bytes_downloaded / status.expected_size) * 100)
     : 0
 
-  // Format bytes
-  function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`
-  }
 
   // Human-readable state names
   const stateNames: Record<string, string> = {
@@ -245,7 +238,7 @@
     <div class="space-y-2">
       <div class="flex justify-between text-sm">
         <span class="text-muted-foreground">Progress</span>
-        <span class="font-medium">{formatBytes(status.bytes_downloaded)} / {formatBytes(status.expected_size)}</span>
+        <span class="font-medium">{toHumanReadableSize(status.bytes_downloaded)} / {toHumanReadableSize(status.expected_size ?? 0)}</span>
       </div>
       <Progress value={progressPercentage} max={100} />
       <div class="flex justify-between text-xs text-muted-foreground">

@@ -20,6 +20,7 @@
   import { showToast } from '$lib/toast'
   import { invoke } from '@tauri-apps/api/core'
   import { onMount } from 'svelte'
+  import { formatChiral } from '$lib/utils'
 
   const tr = (k: string, params?: Record<string, any>): string => (get(t) as (key: string, params?: any) => string)(k, params)
 
@@ -116,7 +117,7 @@
   }
 
   function formatAmount(amount: number) {
-    return amount.toFixed(6)
+    return formatChiral(amount, 6)
   }
 
   function formatDate(date: Date) {

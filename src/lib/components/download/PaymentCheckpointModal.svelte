@@ -4,6 +4,7 @@
   import Modal from '$lib/components/Modal.svelte';
   import { wallet } from '$lib/stores';
   import { paymentService } from '$lib/services/paymentService';
+  import { toHumanReadableSize, formatChiral } from '$lib/utils';
 
   export let checkpointEvent: PaymentCheckpointEvent | null = null;
   export let fileName: string = '';
@@ -106,12 +107,6 @@
     showModal = false;
   }
 
-  // Format bytes to readable size
-  function formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  }
 </script>
 
 <Modal bind:showModal on:close={handleClose}>
@@ -136,7 +131,7 @@
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-gray-600 dark:text-gray-400">Downloaded:</span>
-          <span class="text-sm font-medium">{formatBytes(checkpointEvent.bytesTransferred)}</span>
+          <span class="text-sm font-medium">{toHumanReadableSize(checkpointEvent.bytesTransferred)}</span>
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-gray-600 dark:text-gray-400">Checkpoint:</span>
@@ -167,7 +162,7 @@
             </div>
             <div class="text-right">
               <div class="text-lg font-bold text-blue-600 dark:text-blue-400">
-                {incrementalAmount.toFixed(4)} Chiral
+                {formatChiral(incrementalAmount)} Chiral
               </div>
               <div class="text-xs text-gray-600 dark:text-gray-400">
                 {checkpointEvent.checkpointMb} MB
@@ -194,7 +189,7 @@
               </div>
             </div>
             <div class="text-right">
-              <div class="text-lg font-bold">~{estimatedRemainingCost.toFixed(4)} Chiral</div>
+              <div class="text-lg font-bold">~{formatChiral(estimatedRemainingCost)} Chiral</div>
               <div class="text-xs text-gray-600 dark:text-gray-400">Estimated</div>
             </div>
           </div>
@@ -206,7 +201,7 @@
         <div class="flex justify-between text-sm">
           <span class="text-yellow-800 dark:text-yellow-200">Available Balance:</span>
           <span class="font-semibold text-yellow-900 dark:text-yellow-100"
-            >{availableBalance.toFixed(4)} Chiral</span
+            >{formatChiral(availableBalance)} Chiral</span
           >
         </div>
         {#if !canAffordIncremental}
@@ -242,7 +237,7 @@
             {#if processing}
               Processing...
             {:else}
-              Pay {incrementalAmount.toFixed(4)} Chiral
+              Pay {formatChiral(incrementalAmount)} Chiral
             {/if}
           </button>
         {:else}
@@ -254,7 +249,7 @@
             {#if processing}
               Processing...
             {:else}
-              Pay ~{estimatedRemainingCost.toFixed(4)} Chiral
+              Pay ~{formatChiral(estimatedRemainingCost)} Chiral
             {/if}
           </button>
         {/if}
