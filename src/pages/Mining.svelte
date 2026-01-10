@@ -20,7 +20,7 @@
   import { showToast } from '$lib/toast';
   import { gethSyncStatus } from '$lib/services/gethService';
   import { dhtService } from '$lib/dht';
-  import { formatChiral } from '$lib/utils';
+  import { formatChiral, formatRelativeTime } from '$lib/utils';
   type TranslateParams = { values?: Record<string, unknown>; default?: string };
   // const tr = (key: string, params?: TranslateParams) => get(t)(key, params);
   const tr = (key: string, params?: TranslateParams): string =>
@@ -1074,15 +1074,6 @@
     }
   }
 
-  function formatTimestamp(timestamp: number): string {
-    const now = Date.now() / 1000;
-    const diff = now - timestamp;
-    
-    if (diff < 60) return `${Math.floor(diff)}s ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  }
 
   // Pool management functions
   function editPool(pool: MiningPool) {
@@ -1567,7 +1558,7 @@
                 </div>
                 <div>
                   <p class="text-muted-foreground">{$t('mining.poolDetails.lastShare')}</p>
-                  <p class="font-semibold">{formatTimestamp(currentPool.stats.last_share_time)}</p>
+                  <p class="font-semibold">{formatRelativeTime(currentPool.stats.last_share_time)}</p>
                 </div>
               </div>
             </div>
@@ -2478,7 +2469,7 @@
                       </div>
                       <div>
                         <p class="text-muted-foreground">{$t('mining.poolDetails.lastBlock')}</p>
-                        <p class="font-medium">{pool.last_block_time > 0 ? formatTimestamp(pool.last_block_time) : $t('mining.poolDetails.never')}</p>
+                        <p class="font-medium">{pool.last_block_time > 0 ? formatRelativeTime(pool.last_block_time) : $t('mining.poolDetails.never')}</p>
                       </div>
                       <div>
                         <p class="text-muted-foreground">{$t('mining.poolDetails.blocks24h')}</p>

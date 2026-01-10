@@ -25,6 +25,7 @@
   } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import { gethStatus, gethSyncStatus } from '$lib/services/gethService';
+  import { formatRelativeTime } from '$lib/utils';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params);
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
