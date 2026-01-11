@@ -25,6 +25,7 @@
   } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import { gethStatus, gethSyncStatus } from '$lib/services/gethService';
+  import { diagnosticLogger } from '$lib/diagnostics/logger';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params);
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
@@ -49,9 +50,15 @@
   let isLoadingBlocks = false;
 
   // Search state
+  type SearchResult =
+    | { type: 'address'; balance: string; transactionCount: number }
+    | { type: 'transaction'; [key: string]: unknown }
+    | { type: 'block'; [key: string]: unknown }
+    | { error: string };
+
   let searchQuery = '';
   let searchType: 'address' | 'transaction' | 'block' = 'address';
-  let searchResult: any = null;
+  let searchResult: SearchResult | null = null;
   let isSearching = false;
 
   // Balance checker
@@ -87,7 +94,6 @@
 
       if (currentBlockNumber === 0) {
         console.log('No blocks mined yet. Is Geth running? Is mining active?');
-        // showToast('No blocks found. Start mining to create blocks.', 'info');
         showToast(tr('toasts.blockchain.noBlocks'), 'info');
         latestBlocks = [];
         return;
@@ -117,17 +123,18 @@
             });
           }
         } catch (err) {
-          console.error(`Failed to fetch block ${i}:`, err);
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          diagnosticLogger.error('BLOCKCHAIN', `Failed to fetch block ${i}`, { error: errorMsg });
         }
       }
 
-      console.log('Fetched blocks:', blocks);
+      diagnosticLogger.debug('BLOCKCHAIN', 'Fetched blocks', { count: blocks.length });
       latestBlocks = blocks;
-    } catch (error: any) {
-      console.error('Failed to fetch blocks:', error);
-      // showToast('Failed to fetch blocks: ' + error, 'error');
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      diagnosticLogger.error('BLOCKCHAIN', 'Failed to fetch blocks', { error: errorMsg });
       showToast(
-        tr('toasts.blockchain.fetchError', { values: { error: String(error) } }),
+        tr('toasts.blockchain.fetchError', { values: { error: errorMsg } }),
         'error'
       );
     } finally {
@@ -152,7 +159,6 @@
   // Search functionality
   async function performSearch() {
     if (!searchQuery.trim()) {
-      // showToast(tr('blockchain.search.emptyQuery') || 'Please enter a search query', 'warning');
       showToast(tr('blockchain.search.emptyQuery'), 'warning');
       return;
     }
@@ -195,19 +201,17 @@
           ...blockDetails
         };
       }
-    } catch (error: any) {
-      console.error('Search error:', error);
-      // showToast(tr('blockchain.search.error') || 'Search failed: ' + error.message, 'error');
+    } catch (error: unknown) {
       const errorMessage =
         error instanceof Error && error.message
           ? error.message
           : tr('blockchain.search.unknownError');
+      diagnosticLogger.error('BLOCKCHAIN', 'Search error', { error: errorMessage });
       const displayMessage = tr('blockchain.search.error', {
         values: { error: errorMessage }
       });
       showToast(displayMessage, 'error');
       searchResult = { error: displayMessage };
-      // searchResult = { error: error.message || 'Search failed' };
     } finally {
       isSearching = false;
     }
@@ -216,7 +220,6 @@
   // Check balance
   async function checkBalance() {
     if (!balanceAddress.trim()) {
-      // showToast(tr('blockchain.balance.emptyAddress') || 'Please enter an address', 'warning');
       showToast(tr('blockchain.balance.emptyAddress'), 'warning');
       return;
     }
@@ -229,13 +232,12 @@
         address: balanceAddress.trim()
       });
       balanceResult = balance;
-    } catch (error: any) {
-      console.error('Balance check error:', error);
-      // showToast(tr('blockchain.balance.error') || 'Failed to check balance', 'error');
+    } catch (error: unknown) {
       const errorMessage =
         error instanceof Error && error.message
           ? error.message
           : tr('blockchain.search.unknownError');
+      diagnosticLogger.error('BLOCKCHAIN', 'Balance check error', { error: errorMessage });
       showToast(
         tr('blockchain.balance.error', { values: { error: errorMessage } }),
         'error'
@@ -261,7 +263,6 @@
   // Copy to clipboard
   function copyToClipboard(text: string) {
     navigator.clipboard.writeText(text);
-    // showToast(tr('blockchain.copied') || 'Copied to clipboard', 'success');
     showToast(tr('blockchain.copied'), 'success');
   }
 
@@ -279,7 +280,6 @@
       fetchLatestBlocks(),
       fetchNetworkStats()
     ]);
-    // showToast(tr('blockchain.refreshed') || 'Data refreshed', 'success');
     showToast(tr('blockchain.refreshed'), 'success');
   }
 
