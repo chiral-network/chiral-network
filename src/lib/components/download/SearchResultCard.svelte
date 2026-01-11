@@ -2,7 +2,7 @@
   import Card from '$lib/components/ui/card.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import { FileIcon, Copy, Download, Server, Globe, Blocks, Star } from 'lucide-svelte';
+  import { FileIcon, Copy, Download, Server, Globe, Star } from 'lucide-svelte';
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
@@ -50,32 +50,17 @@
     const protocols = [];
     
     // Determine what metadata exists
-    const hasCids = !!(metadata.cids && metadata.cids.length > 0);
     const hasInfoHash = !!metadata.infoHash;
     const hasHttpSources = !!(metadata.httpSources && metadata.httpSources.length > 0);
     const hasFtpSources = !!(metadata.ftpSources && metadata.ftpSources.length > 0);
     const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
     const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
-    
-    // WebRTC is only available if file was uploaded via WebRTC (has seeders but NO CIDs or other protocol indicators)
-    // Files uploaded via Bitswap have CIDs and must be downloaded via Bitswap, not WebRTC
-    const isWebRTCUpload = hasSeeders && !hasCids && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
 
-    // Bitswap is available if there are CIDs (content identifiers for IPFS blocks) AND seeders
-    const isBitswapAvailable = hasCids && hasSeeders;
+    // WebRTC is available if file has seeders (for P2P transfers)
+    const isWebRTCAvailable = hasSeeders && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
 
-    // Check for Bitswap (has CIDs and seeders)
-    if (isBitswapAvailable) {
-      protocols.push({
-        id: 'bitswap',
-        name: 'Bitswap',
-        icon: Blocks,
-        colorClass: 'bg-purple-100 text-purple-800'
-      });
-    }
-
-    // Check for WebRTC (uploaded via WebRTC - has seeders but no other protocol indicators)
-    if (isWebRTCUpload) {
+    // Check for WebRTC (P2P file sharing protocol)
+    if (isWebRTCAvailable) {
       protocols.push({
         id: 'webrtc',
         name: 'WebRTC',
@@ -181,9 +166,7 @@
     const allSeeders = [...new Set([...freshSeeders, ...webrtcSeeders])];
     metadata.seeders = allSeeders;
 
-    // Bitswap note: manual seeder selection was for demo purposes to show
-    // peer-selection capability; now switching to intelligent peer selection.
-    // showSeedersSelection = true
+    // Note: manual seeder selection was for demo purposes; now using intelligent peer selection
 
     proceedWithDownload();
 
