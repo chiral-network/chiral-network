@@ -32,9 +32,19 @@
         const { readTextFile } = await import('@tauri-apps/plugin-fs');
         textContent = await readTextFile(filePath);
         isLoading = false;
-      } else if (['image', 'video', 'audio', 'pdf'].includes(previewType)) {
-        // For media files, create a file URL
+      } else if (previewType === 'image') {
+        // For images, read as binary and convert to base64 data URL
+        const { readFile } = await import('@tauri-apps/plugin-fs');
+        const imageData = await readFile(filePath);
+        const base64 = btoa(String.fromCharCode(...imageData));
+        fileUrl = `data:${fileInfo.mimeType};base64,${base64}`;
+        console.log('✅ Image loaded as base64, size:', imageData.length, 'bytes');
+        isLoading = false;
+      } else if (['video', 'audio', 'pdf'].includes(previewType)) {
+        // For video/audio/pdf, use asset protocol
         fileUrl = convertFileSrc(filePath);
+        console.log('🔗 Original path:', filePath);
+        console.log('🔗 Converted URL:', fileUrl);
         isLoading = false;
       } else {
         loadError = 'Preview not supported for this file type';
@@ -154,6 +164,11 @@
               src={fileUrl} 
               alt={fileName}
               class="max-w-full max-h-full object-contain rounded-lg"
+              on:load={() => console.log('✅ Image loaded successfully:', fileUrl)}
+              on:error={(e) => {
+                console.error('❌ Image failed to load:', fileUrl, e);
+                loadError = 'Failed to load image. The file may be corrupted or in an unsupported format.';
+              }}
             />
           </div>
         {:else if previewType === 'video'}
