@@ -109,6 +109,26 @@
     downloadHistoryService.addToHistory(torrentFile);
   }
   onMount(() => {
+    // DEBUG: Expose test function for preview testing in development
+    if (import.meta.env.DEV) {
+      (window as any).addTestFile = (filePath: string) => {
+        const fileName = filePath.split(/[/\\]/).pop() || 'test-file';
+        files.update(f => [...f, {
+          id: `test-${Date.now()}`,
+          name: fileName,
+          hash: 'test-hash',
+          size: 702,
+          status: 'completed',
+          progress: 100,
+          downloadPath: filePath,
+          price: 0,
+          protocol: 'BitTorrent'
+        }]);
+        console.log(`✅ Test file added: ${fileName} at ${filePath}`);
+      };
+      console.log('🛠️ Debug mode: Use addTestFile("path/to/file") to test preview');
+    }
+
     // Initialize payment service to load persisted wallet and transactions
     paymentService.initialize();
 
