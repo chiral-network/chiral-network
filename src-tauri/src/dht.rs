@@ -1614,7 +1614,7 @@ async fn run_dht_node(
                                         shutdown_ack = Some(ack);
                                         break 'outer;
                                     }
-                                    Some(DhtCommand::PublishFile { mut metadata, response_tx }) => {
+                                    Some(DhtCommand::PublishFile { metadata, response_tx }) => {
             let now = unix_timestamp();
             let peer_id_str = peer_id.to_string();
 
