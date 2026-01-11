@@ -51,10 +51,10 @@
 
   // Search state
   type SearchResult =
-    | { type: 'address'; balance: string; transactionCount: number }
-    | { type: 'transaction'; [key: string]: unknown }
-    | { type: 'block'; [key: string]: unknown }
-    | { error: string };
+    | { type: 'address'; address: string; balance: string; transactionCount?: number }
+    | { type: 'transaction'; status?: string; block_number?: number; from_address?: string; to_address?: string; value?: string; [key: string]: unknown }
+    | { type: 'block'; number?: number; hash?: string; timestamp?: number; [key: string]: unknown }
+    | { type: 'error'; error: string };
 
   let searchQuery = '';
   let searchType: 'address' | 'transaction' | 'block' = 'address';
@@ -211,7 +211,7 @@
         values: { error: errorMessage }
       });
       showToast(displayMessage, 'error');
-      searchResult = { error: displayMessage };
+      searchResult = { type: 'error', error: displayMessage };
     } finally {
       isSearching = false;
     }
@@ -590,7 +590,7 @@
           <!-- Search Results -->
           {#if searchResult}
             <div class="mt-4 p-4 bg-gray-50 rounded-lg">
-              {#if searchResult.error}
+              {#if searchResult.type === 'error'}
                 <p class="text-red-600">
                   {tr('blockchain.search.notFound')}: {searchResult.error}
                 </p>
@@ -674,7 +674,7 @@
                       {tr('blockchain.search.timestamp')}:
                     </span>
                     <span class="text-gray-900">
-                      {formatTimestamp(searchResult.timestamp)}
+                      {searchResult.timestamp ? formatTimestamp(searchResult.timestamp) : 'N/A'}
                     </span>
                   </div>
                 </div>

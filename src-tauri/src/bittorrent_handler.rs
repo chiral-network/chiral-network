@@ -545,15 +545,25 @@ pub async fn new_with_state(
         download_directory, listen_port_range, state_manager.is_some()
     );
 
-    // Clean up any stale DHT or session state files that might be locked
+    // Create a separate directory for BitTorrent session state
+    let bt_state_dir = download_directory.join(".bittorrent_state");
+    if let Err(e) = std::fs::create_dir_all(&bt_state_dir) {
+        error!("Failed to create BitTorrent state directory {:?}: {}", bt_state_dir, e);
+        return Err(BitTorrentError::SessionInit {
+            message: format!("Failed to create state directory: {}", e),
+        });
+    }
+
+    // Clean up any stale DHT or session state files that might be corrupted
     let state_files = ["session.json", "dht.json", "dht.db", "session.db", "dht.dat"];
     for file in &state_files {
-        let state_path = download_directory.join(file);
+        let state_path = bt_state_dir.join(file);
         if state_path.exists() {
             if let Err(e) = std::fs::remove_file(&state_path) {
-                warn!("Failed to remove stale state file {:?}: {}", state_path, e);
+                warn!("Failed to remove stale state file {:?}: {}. This may cause DHT issues.", state_path, e);
+                // Don't fail here, just warn - the file might be locked temporarily
             } else {
-                info!("Removed stale state file: {:?}", state_path);
+                info!("Cleaned stale state file: {:?}", state_path);
             }
         }
     }
@@ -565,11 +575,12 @@ pub async fn new_with_state(
         opts.listen_port_range = Some(range);
     }
 
-    // Enable persistence for session and DHT state
-    // This allows torrents to resume after app restart
+    // Enable session persistence for torrents in dedicated directory
+    // but disable DHT persistence as it's causing initialization failures
     opts.persistence = Some(librqbit::SessionPersistenceConfig::Json {
-        folder: Some(download_directory.clone()),
+        folder: Some(bt_state_dir),
     });
+    opts.disable_dht_persistence = true;
 
     let session = Session::new_with_opts(download_directory.clone(), opts).await.map_err(|e| {
         error!("Session initialization failed: {}", e);

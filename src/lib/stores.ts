@@ -55,12 +55,12 @@ export interface FileItem {
   version?: number;
   isDownload?: boolean;
   isSeedingDownload?: boolean;
-  protocol?: "WebRTC" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
+  protocol?: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap"; // Protocol used for upload
   uploaderAddress?: string; // Wallet address of the uploader for payment
 }
 
 export interface ProtocolEntry {
-  protocol: "WebRTC" | "BitTorrent" | "ED2K" | "FTP";
+  protocol: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap";
   hash: string; // Protocol-specific hash (Merkle, magnet, ed2k, etc.)
   fileItem: FileItem; // Reference to the original file item
   technicalInfo: {
