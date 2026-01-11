@@ -5,7 +5,7 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw, Eye } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers, wallet, type FileItem } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
@@ -24,6 +24,8 @@
   import { showToast } from '$lib/toast'
   import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
   import PaymentCheckpointModal from '$lib/components/download/PaymentCheckpointModal.svelte'
+  import FilePreviewModal from '$lib/components/FilePreviewModal.svelte'
+  import { canPreviewFile } from '$lib/utils/fileTypeDetector'
   import { paymentCheckpointService, type PaymentCheckpointEvent } from '$lib/services/paymentCheckpointService'
   // Import transfer events store for centralized transfer state management
   import {
@@ -943,6 +945,12 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   let currentCheckpoint: PaymentCheckpointEvent | null = null
   let currentCheckpointFileName: string = ''
 
+  // File Preview state
+  let showPreviewModal = false
+  let previewFileName = ''
+  let previewFilePath = ''
+  let previewFileSize = 0
+
   // Download History state
   let showHistory = false
   let downloadHistory: DownloadHistoryEntry[] = []
@@ -1379,6 +1387,24 @@ async function loadAndResumeDownloads() {
 
   function handlePaymentClose() {
     showPaymentModal = false
+  }
+
+  // File Preview Functions
+  async function openPreview(file: FileItem) {
+    try {
+      // For completed files, use the download path
+      if (file.status === 'completed' && file.downloadPath) {
+        previewFilePath = file.downloadPath
+        previewFileName = file.name
+        previewFileSize = file.size
+        showPreviewModal = true
+      } else {
+        showToast('File must be completed to preview', 'warning')
+      }
+    } catch (error) {
+      console.error('Failed to open preview:', error)
+      showToast('Failed to open preview', 'error')
+    }
   }
 
   // Function to handle input and only allow positive numbers
@@ -3271,6 +3297,17 @@ async function loadAndResumeDownloads() {
                     {file.status === 'queued' ? $t('download.actions.remove') : $t('download.actions.cancel')}
                   </Button>
                 {:else if file.status === 'completed'}
+                  {#if canPreviewFile(file.name)}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => openPreview(file)}
+                      class="h-7 px-3 text-sm"
+                    >
+                      <Eye class="h-3 w-3 mr-1" />
+                      {$t('download.actions.preview', { default: 'Preview' })}
+                    </Button>
+                  {/if}
                   <Button
                     size="sm"
                     variant="outline"
@@ -3521,3 +3558,11 @@ async function loadAndResumeDownloads() {
     on:close={handlePaymentClose}
   />
 {/if}
+
+<!-- File Preview Modal -->
+<FilePreviewModal
+  bind:isOpen={showPreviewModal}
+  fileName={previewFileName}
+  filePath={previewFilePath}
+  fileSize={previewFileSize}
+/>
