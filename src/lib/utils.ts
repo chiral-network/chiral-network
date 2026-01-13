@@ -89,7 +89,10 @@ export function toHumanReadableSize(bytes: number, fractionDigits = 1): string {
 }
 
 const RELATIVE_LOCALE =
-  typeof navigator !== "undefined" && typeof navigator.language === "string"
+  // In Node.js (tests/SSR) `navigator` may exist and reflect OS locale; prefer deterministic English.
+  typeof window !== "undefined" &&
+  typeof navigator !== "undefined" &&
+  typeof navigator.language === "string"
     ? navigator.language
     : "en";
 
