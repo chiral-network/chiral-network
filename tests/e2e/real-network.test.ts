@@ -395,7 +395,10 @@ class RealE2ETestFramework {
       });
 
       if (!response.ok) {
-        throw new Error(`Search failed: ${response.statusText}`);
+        const body = await response.text().catch(() => "");
+        throw new Error(
+          `Search failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`
+        );
       }
 
       const metadata = await response.json();

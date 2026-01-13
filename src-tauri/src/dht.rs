@@ -6803,6 +6803,14 @@ impl DhtService {
         }
     }
 
+    /// Best-effort check that the internal DHT command loop is still alive.
+    /// This is stronger than `get_connected_peers()` (which reads a shared cache directly)
+    /// because it requires the background task (receiver) to still be running.
+    pub async fn is_command_channel_alive(&self) -> bool {
+        let (tx, _rx) = oneshot::channel();
+        self.cmd_tx.send(DhtCommand::GetPeerCount(tx)).await.is_ok()
+    }
+
     pub async fn get_connected_peers(&self) -> Vec<String> {
         let connected_peers = self.connected_peers.lock().await;
         connected_peers

@@ -340,12 +340,16 @@ async fn api_health(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse 
     let _ = ensure_p2p_services_started(&state.app).await;
 
     let node_id = std::env::var("CHIRAL_NODE_ID").ok();
-    let peer_id = {
+    let (peer_id, dht_cmd_alive) = {
         let app_state = state.app.state::<crate::AppState>();
         let dht = { app_state.dht.lock().await.as_ref().cloned() };
         match dht {
-            Some(d) => Some(d.get_peer_id().await),
-            None => None,
+            Some(d) => {
+                let alive = d.is_command_channel_alive().await;
+                let id = Some(d.get_peer_id().await);
+                (id, alive)
+            }
+            None => (None, false),
         }
     };
     let file_server_url = {
@@ -370,7 +374,7 @@ async fn api_health(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse 
 
     // Readiness: require DHT peer_id and bound HTTP file server URL.
     // If not ready, return 503 so the test harness keeps polling.
-    if peer_id.is_none() || file_server_url.is_none() {
+    if peer_id.is_none() || file_server_url.is_none() || !dht_cmd_alive {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(HealthResponse {

@@ -155,11 +155,17 @@ fn create_router(state: HeadlessE2eState) -> Router {
 
 async fn api_health(State(state): State<Arc<HeadlessE2eState>>) -> impl IntoResponse {
     let peer_id = state.dht.get_peer_id().await;
+    let dht_cmd_alive = state.dht.is_command_channel_alive().await;
     let rpc_endpoint = std::env::var("CHIRAL_RPC_ENDPOINT").ok();
+    let status = if dht_cmd_alive {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (
-        StatusCode::OK,
+        status,
         Json(HealthResponse {
-            ok: true,
+            ok: dht_cmd_alive,
             peer_id,
             http_base_url: state.http_base_url.clone(),
             rpc_endpoint,
