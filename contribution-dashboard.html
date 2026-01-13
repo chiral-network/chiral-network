@@ -1161,7 +1161,7 @@
         return;
       }
 
-      const contributors = postData.contributors.sort((a, b) => b.commits - a.commits);
+      const contributors = postData.contributors.sort((a, b) => (b.score || 0) - (a.score || 0));
 
       container.innerHTML = contributors.map((contributor, index) => `
         <div class="member-card" style="display: block; padding: 1.25rem;">
@@ -1176,6 +1176,7 @@
             <div class="member-stats">
               <span>Commits<strong>${contributor.commits}</strong></span>
               <span>+Lines<strong>${(contributor.additions || 0).toLocaleString()}</strong></span>
+              <span>Score<strong class="score">${contributor.score ? contributor.score.toFixed(1) : '-'}</strong></span>
             </div>
           </div>
           ${contributor.summary ? `
