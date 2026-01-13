@@ -568,6 +568,40 @@
       </div>
     </div>
 
+    <!-- Post-Semester Contributions -->
+    <div class="section" id="post-semester-section">
+      <div class="section-header">
+        <h2 style="background: linear-gradient(135deg, #22c55e, #06b6d4); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Post-Semester Contributions</h2>
+        <span style="color: var(--text-secondary); font-size: 0.9rem;">After December 2025</span>
+      </div>
+
+      <div class="stats-grid" id="post-semester-stats">
+        <div class="stat-card" style="border: 1px solid #22c55e33;">
+          <div class="stat-value" id="post-total-commits" style="color: #22c55e;">-</div>
+          <div class="stat-label">Total Commits</div>
+        </div>
+        <div class="stat-card" style="border: 1px solid #06b6d433;">
+          <div class="stat-value" id="post-total-contributors" style="color: #06b6d4;">-</div>
+          <div class="stat-label">Active Contributors</div>
+        </div>
+        <div class="stat-card" style="border: 1px solid #a855f733;">
+          <div class="stat-value" id="post-total-prs" style="color: #a855f7;">-</div>
+          <div class="stat-label">Pull Requests</div>
+        </div>
+        <div class="stat-card" style="border: 1px solid #f59e0b33;">
+          <div class="stat-value" id="post-date-range" style="color: #f59e0b; font-size: 1.2rem;">-</div>
+          <div class="stat-label">Date Range</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom: 1rem; color: #22c55e;">Post-Semester Contributors</h3>
+        <div id="post-semester-contributors">
+          <p style="color: var(--text-secondary); text-align: center; padding: 2rem;">Loading post-semester data...</p>
+        </div>
+      </div>
+    </div>
+
     <footer>
       <p>Generated at <span id="generated-at">-</span></p>
       <p style="margin-top: 0.5rem;">Chiral Network Class Project Contribution Dashboard</p>
@@ -1087,8 +1121,79 @@
       document.getElementById('team-summary-text').textContent = team.summary || 'No summary available for this team.';
     }
 
+    // Load post-semester data
+    async function loadPostSemesterData() {
+      try {
+        const response = await fetch('contribution-data-post-semester.json');
+        if (!response.ok) {
+          throw new Error('Post-semester data not available');
+        }
+        const postData = await response.json();
+        renderPostSemesterData(postData);
+      } catch (error) {
+        console.log('Post-semester data not yet generated:', error.message);
+        document.getElementById('post-semester-contributors').innerHTML = `
+          <p style="color: var(--text-secondary); text-align: center; padding: 2rem;">
+            Post-semester data not yet generated.<br>
+            <span style="font-size: 0.85rem;">Run <code style="background: var(--bg-card); padding: 0.25rem 0.5rem; border-radius: 4px;">scripts/generate-post-semester-data.sh</code> to generate.</span>
+          </p>
+        `;
+        document.getElementById('post-total-commits').textContent = '-';
+        document.getElementById('post-total-contributors').textContent = '-';
+        document.getElementById('post-total-prs').textContent = '-';
+        document.getElementById('post-date-range').textContent = 'N/A';
+      }
+    }
+
+    function renderPostSemesterData(postData) {
+      // Update stats
+      document.getElementById('post-total-commits').textContent = postData.summary.totalCommits.toLocaleString();
+      document.getElementById('post-total-contributors').textContent = postData.summary.totalContributors;
+      document.getElementById('post-total-prs').textContent = postData.summary.totalPRs || 0;
+      document.getElementById('post-date-range').textContent =
+        `${postData.summary.dateRange.start} - ${postData.summary.dateRange.end}`;
+
+      // Render contributors list
+      const container = document.getElementById('post-semester-contributors');
+
+      if (!postData.contributors || postData.contributors.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No post-semester contributions yet.</p>';
+        return;
+      }
+
+      const contributors = postData.contributors.sort((a, b) => b.commits - a.commits);
+
+      container.innerHTML = contributors.map((contributor, index) => `
+        <div class="member-card" style="display: block; padding: 1.25rem;">
+          <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem;">
+            <span class="rank-badge ${index < 3 ? 'rank-' + (index + 1) : 'rank-other'}">${index + 1}</span>
+            <div style="flex: 1;">
+              <h4 style="margin: 0;">${contributor.name} ${contributor.team ? `<span class="team-badge team-${contributor.team}">${contributor.team}</span>` : ''}</h4>
+              <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.25rem 0 0 0;">
+                ${contributor.lastCommitDate ? `Last active: ${contributor.lastCommitDate}` : ''}
+              </p>
+            </div>
+            <div class="member-stats">
+              <span>Commits<strong>${contributor.commits}</strong></span>
+              <span>+Lines<strong>${(contributor.additions || 0).toLocaleString()}</strong></span>
+            </div>
+          </div>
+          ${contributor.summary ? `
+            <div style="background: var(--bg-primary); border-radius: 6px; padding: 1rem; margin-top: 0.5rem;">
+              <div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.7;">
+                ${contributor.summary.split('\n\n').map(para =>
+                  `<p style="margin: 0 0 0.75rem 0; text-align: justify;">${para}</p>`
+                ).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `).join('');
+    }
+
     // Load data on page load
     loadData();
+    loadPostSemesterData();
   </script>
 </body>
 </html>

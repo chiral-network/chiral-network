@@ -1,0 +1,126 @@
+{
+  "summary": {
+    "totalCommits": 404,
+    "totalContributors": 14,
+    "totalPRs": 75,
+    "dateRange": {
+      "start": "2025-12-16",
+      "end": "2026-01-12"
+    }
+  },
+  "contributors": [
+    {
+      "name": "eagles-gilho-kim",
+      "team": "eagles",
+      "commits": 148,
+      "additions": 10966,
+      "lastCommitDate": "2026-01-09",
+      "summary": "Gilho Kim has been the most prolific post-semester contributor, driving major architectural improvements across the entire application. His most significant contribution is the complete WebRTC file transfer overhaul, where he replaced the legacy Bitswap protocol with a new WebRTC-based chunk transfer system that achieves 10-20x faster download speeds. This involved implementing configurable 32KB data channels, adding terminal and UI progress bars with speed/ETA calculations, and creating a streaming chunk assembly system that writes directly to disk for better performance.\n\nHe also implemented the 'pure-client mode' feature, a comprehensive system allowing users to run Chiral Network as download-only clients without contributing storage or bandwidth. This required changes across the entire stack: CLI flags, Settings UI toggles, DHT backend modifications, light blockchain sync mode, and proper warnings throughout the upload interface. He added full internationalization support for this feature across all 10 supported languages.\n\nAdditionally, Gilho built the Favorites system for the Download page, allowing users to star and save frequently accessed file hashes with localStorage persistence. He contributed extensive internationalization work, adding over 150 translation keys across Arabic, Bengali, Chinese, French, Hindi, Korean, Portuguese, Russian, and Spanish for features like banners, wallet strings, mining UI, and pure-client mode warnings.\n\nOther notable contributions include: deprecating and removing the Bitswap protocol, implementing CSV export for transaction history, fixing storage usage checks for non-existent directories, adding comprehensive test coverage for security, encryption, payments, and pure-client mode, and various UI improvements like reorganizing the Settings page and Network page layouts."
+    },
+    {
+      "name": "eagles-sieun-park",
+      "team": "eagles",
+      "commits": 90,
+      "additions": 14078,
+      "lastCommitDate": "2026-01-09",
+      "summary": "Sieun Park made substantial contributions focused on three major areas: the Interactive Shell system, FTP functionality, and the Diagnostics system.\n\nHer flagship contribution is the comprehensive Interactive Shell implementation spanning 5 phases. Phase 1 introduced a basic REPL (Read-Eval-Print Loop) mode for testing and server deployment. Phase 2 added enhanced features including tab completion, command filtering, and configuration options. Phase 3 brought a full TUI (Terminal User Interface) mode with a live dashboard displaying real-time metrics. Phase 4 implemented advanced features with vim-style command interfaces and hash display improvements. Phase 5 integrated real-time mining data from Geth, replacing mock data with actual node statistics. The shell includes interactive storage management commands, download tracking, hash persistence, and proper box-drawing alignment for a polished terminal experience.\n\nShe also implemented the comprehensive Diagnostics system, which provides 13 health checks across environment, network, storage, security, and system categories. The diagnostics gracefully handle fresh installations, validate storage paths, check DHT connectivity, and produce exportable reports for troubleshooting.\n\nFor FTP support, Sieun added external FTP server upload functionality, a server bookmarks/favorites system for saving FTP configurations, resume capability for interrupted downloads, directory listing with file management operations, and an FTP warning banner. She also implemented the Storage Analytics dashboard showing storage usage, blockstore statistics, and automatic cleanup management.\n\nOther contributions include: transaction hash search with value/gas range filters, block number filtering, Load More pagination, mining pool improvements with real health monitoring and URL validation, connection retry logic with exponential backoff, and extensive i18n translations for command palette actions across all supported languages."
+    },
+    {
+      "name": "Steven Tung",
+      "team": "",
+      "commits": 58,
+      "additions": 0,
+      "lastCommitDate": "2026-01-10",
+      "summary": "Steven Tung served as the primary integration manager for the post-semester period, handling pull request merges and branch coordination across all active development streams. He merged 58 PRs from various contributors and teams including eagles, walrus, totoro, potato, and cactus branches. His merges covered critical features like FTP support, WebRTC improvements, i18n translations, mining integration, suspicious activity analytics, HTTP/ED2K downloads, and end-to-end testing infrastructure. This role was essential for maintaining code quality and ensuring smooth integration of parallel development efforts from multiple contributors."
+    },
+    {
+      "name": "cactus-chiu-choi",
+      "team": "cactus",
+      "commits": 57,
+      "additions": 11606,
+      "lastCommitDate": "2025-12-27",
+      "summary": "Chiu Choi delivered critical infrastructure for testing, file integrity verification, and end-to-end testing capabilities.\n\nHis most significant contribution is the comprehensive E2E (end-to-end) testing framework. He built a real-network test harness that supports 'attach mode' where tests connect to actual running nodes rather than mocked services. This includes headless WebRTC/Bitswap testing for VM deployments, FTP upload/download test coverage, and proper protocol handling in the download API. He wrote detailed documentation including VM/PC attach-mode runbooks covering SSH RPC tunnels and mining funding, plus GCP setup guides for cloud-based testing.\n\nHe implemented the file manifest and hash verification system, extending FileMetadata with a manifest field that stores chunk hashes for integrity verification. This includes manifest parsing utilities, backward compatibility for legacy root block formats (supporting both CidWrapper and binary CID array parsing), and integration of hash verification into WebRTC and ED2K download flows.\n\nFor WebRTC improvements, he optimized chunk transfers by streaming assembly directly to disk and fixing binary frame handling to avoid message size limits. He also made the DHT port configurable via environment variables for flexible deployment scenarios.\n\nOther contributions include: comprehensive HTTP download integration tests, retry logic with increased timeouts for HTTP chunk downloads, fixes for real-network P2P download stability, integration test suites for WebRTC critical paths, payment checkpoints, multi-source downloads, and Bitswap scenarios, plus a 12-word mnemonic recovery option for the FirstRunWizard import screen."
+    },
+    {
+      "name": "khan shalti",
+      "team": "",
+      "commits": 19,
+      "additions": 2353,
+      "lastCommitDate": "2026-01-05",
+      "summary": "Khan Shalti (also appearing as potato-weijie-li in some commits) focused on implementing the ED2K protocol support and security enhancements.\n\nHis primary contribution is the complete ED2K (eDonkey2000) protocol implementation. He built the Ed2kPeerServer from scratch, enabling Chiral Network nodes to serve file chunks to ED2K peers. This involved implementing the ED2K packet format structures, peer protocol communication, and block transfer mechanisms. He added core hash computation following the ED2K specification and file validation logic. The implementation includes proper FileManifest generation with 256KB chunk hashes for uploads, which is the standard ED2K chunk size.\n\nFor security, he implemented comprehensive DoS (Denial of Service) protections for the Ed2kPeerServer, including rate limiting, bandwidth throttling, and upload statistics tracking. He also added security safeguards to manifest generation to prevent malicious inputs.\n\nHe integrated the Ed2kPeerServer with the existing seeding workflow so files shared via Chiral Network are automatically available to ED2K peers. On the frontend, he added HTTP and ED2K download protocol support to the Download page UI, and FTP download support as well.\n\nAdditionally, he implemented real-time suspicious activity detection in the Analytics page, replacing mock data with actual system monitoring. He also fixed WebRTC and P2P payment issues by correctly prioritizing uploaderAddress over seederAddress in payment flows."
+    },
+    {
+      "name": "Michael Tso",
+      "team": "",
+      "commits": 7,
+      "additions": 441,
+      "lastCommitDate": "2026-01-08",
+      "summary": "Michael Tso focused on improving the application exit flow and wallet user experience. He implemented a wizard-style in-app exit prompt that gives users clear options when closing the application. This includes a quit confirmation dialog, a lock-account option that reopens the login wizard for re-authentication, and proper handling to hide the lock option when the onboarding wizard is already active. He also fixed internationalization issues where wallet labels were showing raw translation keys instead of translated strings on the Account page, ensuring a polished multilingual experience."
+    },
+    {
+      "name": "walrus-toni-liang",
+      "team": "walrus",
+      "commits": 6,
+      "additions": 642,
+      "lastCommitDate": "2026-01-07",
+      "summary": "Toni Liang contributed the NetworkQuickActions component and ED2K browser compatibility. He created a new NetworkQuickActions.svelte component with 6 action buttons for common network operations, integrating it into the Network page Overview tab. He added the necessary i18n keys for actions like copyMultiaddr, toggleAutorelay, and startStopDht. He also created ed2kParser.ts to support ED2K link parsing in web browsers (as opposed to native/Tauri context), and updated the ProtocolTestPanel to use this browser-native parser, fixing ED2K functionality for the web build."
+    },
+    {
+      "name": "potato-khannah-shaltiel",
+      "team": "potato",
+      "commits": 6,
+      "additions": 22,
+      "lastCommitDate": "2025-12-27",
+      "summary": "Khannah Shaltiel made targeted fixes to the ED2K client implementation in the Rust backend, updating src-tauri/src/ed2k_client.rs and the ED2K protocol module to resolve issues with the peer communication layer. She also performed repository cleanup by removing PR summary files that were accidentally committed."
+    },
+    {
+      "name": "totoro-ming-lin",
+      "team": "totoro",
+      "commits": 4,
+      "additions": 3258,
+      "lastCommitDate": "2026-01-09",
+      "summary": "Ming Lin focused on DHT reliability and multi-uploader support. He fixed the get_seeders function to correctly handle scenarios where multiple users upload the same file, ensuring the DHT properly tracks all seeders. He added integration tests for FileMetadata to verify heartbeat-based tracking works correctly with multiple uploaders. He also contributed DHT configuration tests and fixed a critical bug where the Analytics page would become unresponsive due to invoking functions on undefined variables."
+    },
+    {
+      "name": "Yvette-Han",
+      "team": "",
+      "commits": 3,
+      "additions": 3005,
+      "lastCommitDate": "2025-12-20",
+      "summary": "Yvette Han implemented the payment checkpoint system for WebRTC file transfers. This feature enables payment verification at defined intervals during large file transfers, ensuring uploaders receive compensation as downloads progress rather than only upon completion. She wrote comprehensive test coverage for the payment checkpoint logic and created integration documentation explaining how the checkpoint system interacts with the existing payment and transfer infrastructure."
+    },
+    {
+      "name": "Gilho Kim",
+      "team": "",
+      "commits": 3,
+      "additions": 0,
+      "lastCommitDate": "2026-01-10",
+      "summary": "Branch synchronization merges from the main chiral-network repository into feature branches (FTP and WebRTC development branches). This is the same contributor as eagles-gilho-kim using a different Git identity for some merge operations."
+    },
+    {
+      "name": "walrus-michael-tso",
+      "team": "walrus",
+      "commits": 1,
+      "additions": 441,
+      "lastCommitDate": "2026-01-08",
+      "summary": "Fixed internationalization issue where wallet strings on the Account page were displaying raw i18n keys instead of translated text. This is the same contributor as Michael Tso using the team-prefixed Git identity."
+    },
+    {
+      "name": "Shuai Mu",
+      "team": "",
+      "commits": 1,
+      "additions": 19029,
+      "lastCommitDate": "2026-01-12",
+      "summary": "Made the contribution dashboard publicly accessible by updating access permissions, enabling the project's contribution statistics to be shared with the broader community."
+    },
+    {
+      "name": "GreenMarioX",
+      "team": "",
+      "commits": 1,
+      "additions": 41,
+      "lastCommitDate": "2025-12-20",
+      "summary": "Contributed build configuration fixes to resolve compilation issues."
+    }
+  ],
+  "generatedAt": "2026-01-12T22:30:00-05:00"
+}
