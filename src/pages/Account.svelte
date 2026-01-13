@@ -63,7 +63,8 @@
   let privateKeyVisible = false
   let showPending = false
   let importPrivateKey = ''
-  let importedSnapshot: WalletExportSnapshot | null = null
+  type ImportedWalletSnapshot = WalletExportSnapshot & { transactions?: Transaction[] };
+  let importedSnapshot: ImportedWalletSnapshot | null = null
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning: boolean;
