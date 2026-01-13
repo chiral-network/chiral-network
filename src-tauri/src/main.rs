@@ -4239,6 +4239,12 @@ async fn upload_file_to_network(
                             return Err("DHT not running".into());
                         }
 
+                        // Include our peer id as a seeder so downloaders know which peer to request blocks from.
+                        let local_peer_id = match &dht_opt {
+                            Some(dht) => dht.get_peer_id().await,
+                            None => String::new(),
+                        };
+
                         // Create minimal metadata (without file_data to avoid DHT size limits)
                         let created_at = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -4294,7 +4300,11 @@ async fn upload_file_to_network(
                             file_name: session.file_name.clone(),
                             file_size: session.file_size,
                             file_data: vec![], // Empty - data is stored in Bitswap blocks
-                            seeders: vec![],
+                            seeders: if local_peer_id.is_empty() {
+                                vec![]
+                            } else {
+                                vec![local_peer_id.clone()]
+                            },
                             created_at,
                             mime_type: None,
                             is_encrypted: false,

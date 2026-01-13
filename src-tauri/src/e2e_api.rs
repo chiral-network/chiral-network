@@ -847,10 +847,26 @@ async fn api_download(
         let protocol_upper_for_task = protocol_upper.clone();
 
         tauri::async_runtime::spawn(async move {
-            let timeout_ms: u64 = std::env::var("E2E_DOWNLOAD_WAIT_TIMEOUT_MS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(600_000); // default 10 minutes for real P2P
+            // Protocol-specific overrides (milliseconds). Fallback order:
+            // 1) E2E_{PROTOCOL}_DOWNLOAD_TIMEOUT_MS
+            // 2) E2E_P2P_DOWNLOAD_TIMEOUT_MS
+            // 3) E2E_DOWNLOAD_WAIT_TIMEOUT_MS (legacy)
+            // 4) 600000 (10 minutes)
+            let timeout_ms: u64 = {
+                let protocol_key = match protocol_upper_for_task.as_str() {
+                    "WEBRTC" => Some("E2E_WEBRTC_DOWNLOAD_TIMEOUT_MS"),
+                    "BITSWAP" => Some("E2E_BITSWAP_DOWNLOAD_TIMEOUT_MS"),
+                    "FTP" => Some("E2E_FTP_DOWNLOAD_TIMEOUT_MS"),
+                    _ => None,
+                };
+
+                let raw = protocol_key
+                    .and_then(|k| std::env::var(k).ok())
+                    .or_else(|| std::env::var("E2E_P2P_DOWNLOAD_TIMEOUT_MS").ok())
+                    .or_else(|| std::env::var("E2E_DOWNLOAD_WAIT_TIMEOUT_MS").ok());
+
+                raw.and_then(|s| s.parse().ok()).unwrap_or(600_000)
+            };
 
             let result: Result<u64, String> = async {
                 if protocol_upper_for_task == "WEBRTC" {
