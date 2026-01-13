@@ -374,9 +374,7 @@ class RealE2ETestFramework {
 
     const start = Date.now();
     const pollIntervalMs = 750;
-    const perAttemptTimeoutMs = Number(
-      process.env.E2E_SEARCH_ATTEMPT_TIMEOUT_MS || "10000"
-    );
+    const perAttemptTimeoutMs = Number(process.env.E2E_SEARCH_ATTEMPT_TIMEOUT_MS || "10000");
 
     // DHT propagation is not instantaneous across real networks.
     // Poll until we get a non-null metadata (or until timeout).
@@ -462,7 +460,7 @@ class RealE2ETestFramework {
     }
 
     console.log(`⏳ Download started (id=${downloadId})`);
-    const waitTimeoutMs = Number(process.env.E2E_P2P_DOWNLOAD_TIMEOUT_MS || "600000"); // 10min
+    const waitTimeoutMs = this.getP2PDownloadTimeoutMs(protocol);
     const start = Date.now();
     while (Date.now() - start < waitTimeoutMs) {
       const st = await fetch(
@@ -485,7 +483,34 @@ class RealE2ETestFramework {
       }
       await new Promise((r) => setTimeout(r, 500));
     }
-    throw new Error(`Timed out waiting for download ${downloadId}`);
+    throw new Error(
+      `Timed out waiting for download ${downloadId} (protocol=${protocol}, timeoutMs=${waitTimeoutMs})`
+    );
+  }
+
+  private getP2PDownloadTimeoutMs(
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP"
+  ): number {
+    // Protocol-specific overrides (milliseconds). Fallback order:
+    // 1) E2E_{PROTOCOL}_DOWNLOAD_TIMEOUT_MS
+    // 2) E2E_P2P_DOWNLOAD_TIMEOUT_MS
+    // 3) 600000 (10 minutes)
+    const byProtocolKey =
+      protocol === "WebRTC"
+        ? "E2E_WEBRTC_DOWNLOAD_TIMEOUT_MS"
+        : protocol === "Bitswap"
+          ? "E2E_BITSWAP_DOWNLOAD_TIMEOUT_MS"
+          : protocol === "FTP"
+            ? "E2E_FTP_DOWNLOAD_TIMEOUT_MS"
+            : null;
+
+    const raw =
+      (byProtocolKey ? process.env[byProtocolKey] : undefined) ??
+      process.env.E2E_P2P_DOWNLOAD_TIMEOUT_MS ??
+      "600000";
+
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 600000;
   }
 
   /**
