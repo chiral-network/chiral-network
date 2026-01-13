@@ -1,5 +1,65 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
 import { paymentCheckpointService } from '../src/lib/services/paymentCheckpointService';
+import type { PaymentCheckpointInfo } from '../src/lib/services/paymentCheckpointService';
+
+// PaymentCheckpointService is a thin Tauri RPC wrapper; in unit tests we emulate the backend
+// state machine in-memory so the suite can run in plain Node.
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
+
+const mockInvoke = vi.mocked(invoke);
+
+const MB = 1024 * 1024;
+const initialCheckpointMb = 10;
+
+type SessionState = 'active' | 'waiting_for_payment' | 'payment_received' | 'payment_failed' | 'completed';
+
+type Session = {
+  sessionId: string;
+  fileHash: string;
+  fileSize: number;
+  bytesTransferred: number;
+  nextCheckpointBytes: number;
+  intervalMb: number;
+  totalPaid: number;
+  seederAddress: string;
+  seederPeerId: string;
+  pricePerMb: number;
+  paymentMode: 'exponential' | 'upfront';
+  state: SessionState;
+  checkpointHistory: PaymentCheckpointInfo['checkpoint_history'];
+};
+
+function toInfo(s: Session): PaymentCheckpointInfo {
+  const stateObj: PaymentCheckpointInfo['state'] =
+    s.state === 'active'
+      ? { Active: null }
+      : s.state === 'waiting_for_payment'
+        ? { WaitingForPayment: { checkpoint_mb: s.nextCheckpointBytes / MB, amount_chiral: 0 } }
+        : s.state === 'payment_received'
+          ? { PaymentReceived: { transaction_hash: '' } }
+          : s.state === 'payment_failed'
+            ? { PaymentFailed: { reason: 'failed' } }
+            : { Completed: null };
+
+  return {
+    session_id: s.sessionId,
+    file_hash: s.fileHash,
+    file_size: s.fileSize,
+    bytes_transferred: s.bytesTransferred,
+    next_checkpoint_bytes: s.nextCheckpointBytes,
+    state: stateObj,
+    last_checkpoint_mb: s.intervalMb,
+    total_paid_chiral: s.totalPaid,
+    seeder_address: s.seederAddress,
+    seeder_peer_id: s.seederPeerId,
+    price_per_mb: s.pricePerMb,
+    payment_mode: s.paymentMode,
+    checkpoint_history: s.checkpointHistory,
+  };
+}
 
 /**
  * Payment Checkpoint Service Tests
@@ -17,6 +77,134 @@ describe('Payment Checkpoint Service', () => {
   const testSeederAddress = '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb';
   const testSeederPeerId = 'QmTestPeer123';
   const pricePerMb = 0.001;
+
+  let sessions: Map<string, Session>;
+
+  beforeEach(() => {
+    sessions = new Map();
+
+    mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
+      switch (cmd) {
+        case 'init_payment_checkpoint': {
+          const {
+            sessionId,
+            fileHash,
+            fileSize,
+            seederAddress,
+            seederPeerId,
+            pricePerMb,
+            paymentMode,
+          } = args as any;
+
+          const mode = (paymentMode ?? 'exponential') as 'exponential' | 'upfront';
+          const nextBytes = mode === 'upfront' ? fileSize : initialCheckpointMb * MB;
+
+          sessions.set(sessionId, {
+            sessionId,
+            fileHash,
+            fileSize,
+            bytesTransferred: 0,
+            nextCheckpointBytes: nextBytes,
+            intervalMb: initialCheckpointMb,
+            totalPaid: 0,
+            seederAddress,
+            seederPeerId,
+            pricePerMb,
+            paymentMode: mode,
+            state: 'active',
+            checkpointHistory: [],
+          });
+          return undefined;
+        }
+
+        case 'update_payment_checkpoint_progress': {
+          const { sessionId, bytesTransferred } = args as any;
+          const s = sessions.get(sessionId);
+          if (!s) throw new Error('Session not found');
+
+          s.bytesTransferred = bytesTransferred;
+
+          if (s.paymentMode === 'upfront') {
+            // Upfront: pause once we reach the full file threshold (tests only inspect next_checkpoint_bytes).
+            if (bytesTransferred >= s.nextCheckpointBytes && s.totalPaid === 0) {
+              s.state = 'waiting_for_payment';
+              return 'waiting_for_payment';
+            }
+            return 'active';
+          }
+
+          if (bytesTransferred >= s.nextCheckpointBytes && s.state === 'active') {
+            s.state = 'waiting_for_payment';
+            return 'waiting_for_payment';
+          }
+          return 'active';
+        }
+
+        case 'check_should_pause_serving': {
+          const { sessionId } = args as any;
+          const s = sessions.get(sessionId);
+          if (!s) throw new Error('Session not found');
+          return s.state === 'waiting_for_payment';
+        }
+
+        case 'record_checkpoint_payment': {
+          const { sessionId, transactionHash, amountPaid } = args as any;
+          const s = sessions.get(sessionId);
+          if (!s) throw new Error('Session not found');
+
+          s.totalPaid += amountPaid;
+          s.checkpointHistory.push({
+            checkpoint_mb: Math.round(s.bytesTransferred / MB),
+            bytes_at_checkpoint: s.bytesTransferred,
+            amount_paid: amountPaid,
+            transaction_hash: transactionHash,
+            timestamp: Date.now(),
+          });
+
+          s.state = 'active';
+
+          // Exponential scaling: 10 -> 20 -> 40 ... applied AFTER payment
+          if (s.paymentMode === 'exponential') {
+            s.intervalMb *= 2;
+            s.nextCheckpointBytes = s.bytesTransferred + s.intervalMb * MB;
+          }
+          return undefined;
+        }
+
+        case 'get_payment_checkpoint_info': {
+          const { sessionId } = args as any;
+          const s = sessions.get(sessionId);
+          if (!s) throw new Error('Session not found');
+          return toInfo(s);
+        }
+
+        case 'mark_checkpoint_payment_failed': {
+          const { sessionId } = args as any;
+          const s = sessions.get(sessionId);
+          if (!s) throw new Error('Session not found');
+          s.state = 'payment_failed';
+          return undefined;
+        }
+
+        case 'mark_checkpoint_completed': {
+          const { sessionId } = args as any;
+          const s = sessions.get(sessionId);
+          if (!s) throw new Error('Session not found');
+          s.state = 'completed';
+          return undefined;
+        }
+
+        case 'remove_payment_checkpoint_session': {
+          const { sessionId } = args as any;
+          sessions.delete(sessionId);
+          return undefined;
+        }
+
+        default:
+          throw new Error(`Unhandled invoke command in test: ${cmd}`);
+      }
+    });
+  });
 
   afterEach(async () => {
     // Cleanup after each test
