@@ -330,81 +330,40 @@ describe("FileService", () => {
   });
 
   describe("downloadFile", () => {
-    beforeEach(() => {
-      // Setup valid settings
-      localStorage.setItem(
-        "chiralSettings",
-        JSON.stringify({ storagePath: "/home/user/downloads" })
-      );
-    });
-
     it("should download file successfully", async () => {
       vi.mocked(invoke)
-        .mockResolvedValueOnce(true) // check_directory_exists
+        .mockResolvedValueOnce("/home/user/downloads") // get_download_directory
+        .mockResolvedValueOnce(undefined) // ensure_directory_exists
         .mockResolvedValueOnce(undefined); // download_file_from_network
 
       const result = await service.downloadFile("QmTest123", "file.txt");
 
       expect(result).toBe("/home/user/downloads/file.txt");
+      expect(invoke).toHaveBeenCalledWith("get_download_directory");
+      expect(invoke).toHaveBeenCalledWith("ensure_directory_exists", {
+        path: "/home/user/downloads",
+      });
       expect(invoke).toHaveBeenCalledWith("download_file_from_network", {
         fileHash: "QmTest123",
         outputPath: "/home/user/downloads/file.txt",
       });
     });
 
-    it("should throw if settings not configured", async () => {
-      localStorage.clear();
-
-      await expect(
-        service.downloadFile("QmTest", "file.txt")
-      ).rejects.toThrow(/configure.*download path/i);
-    });
-
-    it("should throw if storage path is invalid", async () => {
-      localStorage.setItem(
-        "chiralSettings",
-        JSON.stringify({ storagePath: "." })
-      );
-
-      await expect(
-        service.downloadFile("QmTest", "file.txt")
-      ).rejects.toThrow(/set.*valid download path/i);
-    });
-
-    it("should expand ~ to home directory", async () => {
-      localStorage.setItem(
-        "chiralSettings",
-        JSON.stringify({ storagePath: "~/downloads" })
-      );
-
-      // Mock homeDir for this specific test
-      const { homeDir } = await import("@tauri-apps/api/path");
-      vi.mocked(homeDir).mockResolvedValue("/home/user");
-
+    it("should surface directory creation errors", async () => {
       vi.mocked(invoke)
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(undefined);
+        .mockResolvedValueOnce("/home/user/downloads") // get_download_directory
+        .mockRejectedValueOnce(new Error("Permission denied")); // ensure_directory_exists
 
-      await service.downloadFile("QmTest", "file.txt");
-
-      expect(invoke).toHaveBeenCalledWith("download_file_from_network", {
-        fileHash: "QmTest",
-        outputPath: expect.stringContaining("/home/user"),
-      });
-    });
-
-    it("should validate directory exists before download", async () => {
-      vi.mocked(invoke).mockResolvedValue(false); // Directory doesn't exist
-
-      await expect(
-        service.downloadFile("QmTest", "file.txt")
-      ).rejects.toThrow(/does not exist/i);
+      await expect(service.downloadFile("QmTest", "file.txt")).rejects.toThrow(
+        /permission denied/i
+      );
     });
 
     it("should handle download failure", async () => {
       vi.mocked(invoke)
-        .mockResolvedValueOnce(true)
-        .mockRejectedValueOnce(new Error("Download failed"));
+        .mockResolvedValueOnce("/home/user/downloads") // get_download_directory
+        .mockResolvedValueOnce(undefined) // ensure_directory_exists
+        .mockRejectedValueOnce(new Error("Download failed")); // download_file_from_network
 
       await expect(
         service.downloadFile("QmTest", "file.txt")
@@ -413,7 +372,8 @@ describe("FileService", () => {
 
     it("should sanitize file paths", async () => {
       vi.mocked(invoke)
-        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce("/home/user/downloads")
+        .mockResolvedValueOnce(undefined)
         .mockResolvedValueOnce(undefined);
 
       await service.downloadFile("QmTest", "subfolder/file.txt");
@@ -426,7 +386,8 @@ describe("FileService", () => {
 
     it("should handle unicode filenames", async () => {
       vi.mocked(invoke)
-        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce("/home/user/downloads")
+        .mockResolvedValueOnce(undefined)
         .mockResolvedValueOnce(undefined);
 
       await service.downloadFile("QmTest", "测试文件.txt");
@@ -439,7 +400,8 @@ describe("FileService", () => {
 
     it("should reject path traversal attempts", async () => {
       vi.mocked(invoke)
-        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce("/home/user/downloads")
+        .mockResolvedValueOnce(undefined)
         .mockResolvedValueOnce(undefined);
 
       await service.downloadFile("QmTest", "../../../etc/passwd");
@@ -451,7 +413,7 @@ describe("FileService", () => {
       const callArgs = downloadCall![1] as { fileHash: string; outputPath: string };
       
       // Current implementation: path traversal is passed through to backend
-      // The backend (Rust) validates and rejects this in check_directory_exists
+      // The backend (Rust) should validate and reject this path
       // This test documents current behavior - frontend doesn't sanitize paths
       expect(callArgs.outputPath).toContain("../../../etc/passwd");
     });
