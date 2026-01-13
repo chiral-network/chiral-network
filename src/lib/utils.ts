@@ -88,7 +88,12 @@ export function toHumanReadableSize(bytes: number, fractionDigits = 1): string {
   return `${value.toFixed(decimals)} ${SIZE_UNITS[unitIndex]}`;
 }
 
-const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat(undefined, {
+const RELATIVE_LOCALE =
+  typeof navigator !== "undefined" && typeof navigator.language === "string"
+    ? navigator.language
+    : "en";
+
+const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat(RELATIVE_LOCALE, {
   numeric: "auto",
 });
 
