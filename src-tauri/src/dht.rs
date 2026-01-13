@@ -7406,7 +7406,7 @@ impl DhtService {
                     .ok()
                     .and_then(|s| s.parse().ok())
             })
-            .map(|v| v.clamp(1_000, 120_000))
+            .map(|v: u64| v.clamp(1_000u64, 120_000u64))
             .unwrap_or(5_000);
 
         let poll_ms: u64 = 500;
