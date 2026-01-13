@@ -237,8 +237,9 @@ describe('formatRelativeTime', () => {
     });
 
     it('should format future times in years', () => {
-      expect(formatRelativeTime(msFromNow(365 * 24 * 60 * 60000))).toBe('next year');
-      expect(formatRelativeTime(msFromNow(730 * 24 * 60 * 60000))).toBe('in 2 years');
+      // Avoid boundary flakiness: the helper uses Date.now() twice, so exact 365d can slip into "months"
+      expect(formatRelativeTime(msFromNow(366 * 24 * 60 * 60000))).toBe('next year');
+      expect(formatRelativeTime(msFromNow((730 * 24 * 60 * 60000) + 1000))).toBe('in 2 years');
     });
   });
 
