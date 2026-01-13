@@ -5213,7 +5213,7 @@ fn parse_ed2k_link(ed2k_link: String) -> Result<Ed2kSourceInfo, String> {
 #[tauri::command]
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
-    file_metadata: FileMetadata,
+    mut file_metadata: FileMetadata,
     download_path: String,
 ) -> Result<(), String> {
     info!(
@@ -5232,6 +5232,20 @@ async fn download_blocks_from_network(
     };
 
     if let Some(dht) = dht {
+        // If the metadata record doesn't list seeders yet, fall back to provider discovery.
+        // This allows Bitswap to work even when the uploader's DHT record hasn't populated `seeders`.
+        if file_metadata.seeders.is_empty() {
+            let providers = dht.get_seeders_for_file(&file_metadata.merkle_root).await;
+            if !providers.is_empty() {
+                info!(
+                    "🔽 Bitswap metadata had 0 seeders; using {} providers for {}",
+                    providers.len(),
+                    file_metadata.merkle_root
+                );
+                file_metadata.seeders = providers;
+            }
+        }
+
         info!("🔽 DHT node is running, calling dht.download_file");
         dht.download_file(file_metadata, download_path).await
     } else {

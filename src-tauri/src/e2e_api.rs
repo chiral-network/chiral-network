@@ -712,7 +712,20 @@ async fn api_search(
 
     let timeout = req.timeout_ms.unwrap_or(10_000);
     match dht.synchronous_search_metadata(req.file_hash, timeout).await {
-        Ok(m) => (StatusCode::OK, Json(m)).into_response(),
+        Ok(m) => {
+            // In real networks, the DHT record can be visible before the record's `seeders` list is populated.
+            // For Bitswap/WebRTC, download initiation often needs a seeder peer ID; fall back to provider discovery.
+            let mut m = m;
+            if let Some(meta) = m.as_mut() {
+                if meta.seeders.is_empty() {
+                    let providers = dht.get_seeders_for_file(&meta.merkle_root).await;
+                    if !providers.is_empty() {
+                        meta.seeders = providers;
+                    }
+                }
+            }
+            (StatusCode::OK, Json(m)).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response(),
     }
 }
