@@ -123,7 +123,7 @@ This is the public record stored on the network for file discovery. It correspon
   "fileHash": "string (The Merkle Root of the file, used as the unique identifier)",
   "fileName": "string",
   "fileSize": "u64 (Total size of the original file in bytes)",
-  "seeders": ["string (A list of PeerIDs that are hosting the file)"],
+  "seeders": ["string (A list of PeerIDs that are hosting the file); this is populated through get_seeders_for_file function, seeders should not be stored in the record on the DHT network"],
   "createdAt": "u64 (Unix timestamp of creation)",
   "mimeType": "string | null",
   "isEncrypted": "boolean",
