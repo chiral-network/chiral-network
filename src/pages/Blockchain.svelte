@@ -243,7 +243,6 @@
         'error'
       );
       balanceResult = tr('blockchain.balance.errorLabel');
-      balanceResult = 'Error';
     } finally {
       isCheckingBalance = false;
     }

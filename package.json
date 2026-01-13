@@ -11,7 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run",
+    "test": "vitest run --exclude tests/e2e/** --exclude tests/**/*.spec.ts",
     "test:watch": "vitest",
     "test:e2e": "vitest run tests/e2e/ --exclude tests/e2e/real-network.test.ts --reporter=verbose",
     "test:e2e:pretty": "vitest run tests/e2e/ --exclude tests/e2e/real-network.test.ts",

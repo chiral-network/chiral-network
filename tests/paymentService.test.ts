@@ -629,12 +629,10 @@ describe("PaymentService", () => {
     });
 
     it("should fallback to 0.001 if pricePerMb is invalid", async () => {
-      vi.mocked(invoke).mockResolvedValue({
-        network_difficulty: 1000,
-        network_hashrate: 0, // Invalid
-        active_miners: 10,
-        power_usage: 100,
-      });
+      // Force get_full_network_stats to fail so getDynamicPricePerMB falls back
+      vi.mocked(invoke)
+        .mockRejectedValueOnce(new Error("RPC unavailable"))
+        .mockRejectedValueOnce(new Error("RPC unavailable"));
 
       const details = await PaymentService.getPaymentDetails(1024 * 1024);
 

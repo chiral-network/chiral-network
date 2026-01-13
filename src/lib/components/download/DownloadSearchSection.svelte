@@ -938,8 +938,9 @@
     }
 
     // Route download based on selected protocol
-    if (selectedProtocol === 'webrtc' || selectedProtocol === 'bittorrent') {
-      // P2P download flow (WebRTC, BitTorrent)
+    // Note: 'bittorrent' is handled above and returns early, so it cannot reach here.
+    if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap') {
+      // P2P download flow (WebRTC, Bitswap)
       
 
       const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {

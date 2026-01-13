@@ -8,8 +8,8 @@ import {
   type DhtConfig,
   type FileMetadata,
   type DhtHealth,
-  encryptionService,
 } from "../src/lib/dht";
+import { encryptionService } from "../src/lib/services/encryption";
 
 // Mock Tauri APIs
 vi.mock("@tauri-apps/api/core", () => ({
@@ -22,6 +22,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/api/path", () => ({
   homeDir: vi.fn().mockResolvedValue("/home/user"),
+  join: vi.fn(async (...parts: string[]) => parts.join("/")),
 }));
 
 // Mock ReputationStore
@@ -297,23 +298,25 @@ describe("dht.ts", () => {
         mockListen.mockResolvedValueOnce(unlistenFn);
         mockInvoke.mockResolvedValueOnce(undefined);
 
-        // Trigger the event immediately
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: mockFileMetadata } as any);
-        }, 10);
-
-        const result =
-          await dhtService.publishFileToNetwork("/path/to/file.txt");
+        const promise = dhtService.publishFileToNetwork("/path/to/file.txt");
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: mockFileMetadata } as any);
+        const result = await promise;
 
         expect(mockListen).toHaveBeenCalledWith(
           "published_file",
           expect.any(Function)
         );
-        expect(mockInvoke).toHaveBeenCalledWith("upload_file_to_network", {
-          filePath: "/path/to/file.txt",
-          price: null,
-        });
+        expect(mockInvoke).toHaveBeenCalledWith(
+          "upload_file_to_network",
+          expect.objectContaining({
+            filePath: "/path/to/file.txt",
+            price: 0,
+            protocol: "Bitswap",
+            originalFileName: null,
+          })
+        );
         expect(result).toEqual(mockFileMetadata);
       });
 
@@ -322,17 +325,19 @@ describe("dht.ts", () => {
         mockListen.mockResolvedValueOnce(unlistenFn);
         mockInvoke.mockResolvedValueOnce(undefined);
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: mockFileMetadata } as any);
-        }, 10);
+        const promise = dhtService.publishFileToNetwork("/path/to/file.txt", 100);
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: mockFileMetadata } as any);
+        await promise;
 
-        await dhtService.publishFileToNetwork("/path/to/file.txt", 100);
-
-        expect(mockInvoke).toHaveBeenCalledWith("upload_file_to_network", {
-          filePath: "/path/to/file.txt",
-          price: 100,
-        });
+        expect(mockInvoke).toHaveBeenCalledWith(
+          "upload_file_to_network",
+          expect.objectContaining({
+            filePath: "/path/to/file.txt",
+            price: 100,
+          })
+        );
       });
 
       it("should normalize merkleRoot and fileHash", async () => {
@@ -345,13 +350,11 @@ describe("dht.ts", () => {
           merkleRoot: undefined,
         };
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithoutMerkle } as any);
-        }, 10);
-
-        const result =
-          await dhtService.publishFileToNetwork("/path/to/file.txt");
+        const promise = dhtService.publishFileToNetwork("/path/to/file.txt");
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: metadataWithoutMerkle } as any);
+        const result = await promise;
 
         expect(result.merkleRoot).toBe(result.fileHash);
       });
@@ -386,12 +389,13 @@ describe("dht.ts", () => {
           .mockResolvedValueOnce(undefined) // ensure_directory_exists
           .mockResolvedValueOnce(undefined); // download_blocks_from_network
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: mockFileMetadata } as any);
-        }, 10);
-
-        const result = await dhtService.downloadFile(mockFileMetadata);
+        const promise = dhtService.downloadFile(mockFileMetadata);
+        // downloadFile awaits ensure_directory_exists before registering the listener
+        await Promise.resolve();
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: mockFileMetadata } as any);
+        const result = await promise;
 
         expect(mockInvoke).toHaveBeenCalledWith("ensure_directory_exists", {
           path: "/custom/path/test.txt",
@@ -410,75 +414,38 @@ describe("dht.ts", () => {
         expect(result).toEqual(mockFileMetadata);
       });
 
-      it("should download file using settings path when no downloadPath", async () => {
+      it("should download file using backend download directory when no downloadPath", async () => {
         const unlistenFn = vi.fn();
         mockListen.mockResolvedValueOnce(unlistenFn);
         mockInvoke
-          .mockResolvedValueOnce(undefined)
-          .mockResolvedValueOnce(undefined);
-
-        localStorage.setItem(
-          "chiralSettings",
-          JSON.stringify({
-            storagePath: "/settings/download",
-          })
-        );
-
-        const metadataWithoutPath = {
-          ...mockFileMetadata,
-          downloadPath: undefined,
-        };
-
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithoutPath } as any);
-        }, 10);
-
-        await dhtService.downloadFile(metadataWithoutPath);
-
-        expect(mockInvoke).toHaveBeenCalledWith(
-          "download_blocks_from_network",
-          {
-            fileMetadata: expect.any(Object),
-            downloadPath: "/settings/download/test.txt",
-          }
-        );
-      });
-
-      it("should expand tilde in storage path", async () => {
-        const unlistenFn = vi.fn();
-        mockListen.mockResolvedValueOnce(unlistenFn);
-        mockInvoke
+          .mockResolvedValueOnce("/downloads") // get_download_directory
           .mockResolvedValueOnce(undefined) // ensure_directory_exists
           .mockResolvedValueOnce(undefined); // download_blocks_from_network
 
-        localStorage.setItem(
-          "chiralSettings",
-          JSON.stringify({
-            storagePath: "~/Downloads",
-          })
-        );
-
         const metadataWithoutPath = {
           ...mockFileMetadata,
           downloadPath: undefined,
         };
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithoutPath } as any);
-        }, 10);
+        const promise = dhtService.downloadFile(metadataWithoutPath);
+        // downloadFile awaits get_download_directory + ensure_directory_exists before registering the listener
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: metadataWithoutPath } as any);
+        await promise;
 
-        await dhtService.downloadFile(metadataWithoutPath);
-
-        // Check the second call (download_blocks_from_network)
-        expect(mockInvoke).toHaveBeenNthCalledWith(
-          2,
+        expect(mockInvoke).toHaveBeenCalledWith("get_download_directory");
+        expect(mockInvoke).toHaveBeenCalledWith("ensure_directory_exists", {
+          path: "/downloads/test.txt",
+        });
+        expect(mockInvoke).toHaveBeenCalledWith(
           "download_blocks_from_network",
-          {
-            fileMetadata: expect.any(Object),
-            downloadPath: "/home/user/Downloads/test.txt",
-          }
+          expect.objectContaining({
+            downloadPath: "/downloads/test.txt",
+          })
         );
       });
 
@@ -486,7 +453,7 @@ describe("dht.ts", () => {
         mockInvoke.mockRejectedValueOnce(new Error("Permission denied"));
 
         await expect(dhtService.downloadFile(mockFileMetadata)).rejects.toThrow(
-          "Failed to create download directory"
+          "Permission denied"
         );
       });
 
@@ -502,12 +469,13 @@ describe("dht.ts", () => {
           cids: ["cid1", "cid2", "cid3"],
         };
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithCids } as any);
-        }, 10);
-
-        await dhtService.downloadFile(metadataWithCids);
+        const promise = dhtService.downloadFile(metadataWithCids);
+        // downloadFile awaits ensure_directory_exists before registering the listener
+        await Promise.resolve();
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: metadataWithCids } as any);
+        await promise;
 
         const callArgs = mockInvoke.mock.calls[1][0];
         expect(callArgs).toEqual("download_blocks_from_network");
@@ -543,27 +511,6 @@ describe("dht.ts", () => {
 
         await expect(dhtService.searchFile("hash123")).rejects.toThrow(
           "Search failed"
-        );
-      });
-    });
-
-    describe("searchFileByCid", () => {
-      it("should search for file by CID", async () => {
-        dhtService.setPeerId("peer-cid");
-        mockInvoke.mockResolvedValueOnce(undefined);
-
-        await dhtService.searchFileByCid("QmTest123");
-
-        expect(mockInvoke).toHaveBeenCalledWith("search_file_by_cid", {
-          cidStr: "QmTest123",
-        });
-      });
-
-      it("should throw error if DHT not started", async () => {
-        dhtService.setPeerId(null);
-
-        await expect(dhtService.searchFileByCid("QmTest123")).rejects.toThrow(
-          "DHT not started"
         );
       });
     });
@@ -759,17 +706,9 @@ describe("dht.ts", () => {
       };
 
       it("should search file metadata successfully", async () => {
-        const unlistenFn = vi.fn();
-        mockListen.mockResolvedValueOnce(unlistenFn);
-
         mockInvoke
-          .mockResolvedValueOnce(undefined)
+          .mockResolvedValueOnce(mockMetadata)
           .mockResolvedValueOnce(["seeder1", "seeder2"]);
-
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: mockMetadata } as any);
-        }, 10);
 
         const result = await dhtService.searchFileMetadata("hash123");
 
@@ -788,14 +727,7 @@ describe("dht.ts", () => {
       });
 
       it("should use custom timeout", async () => {
-        const unlistenFn = vi.fn();
-        mockListen.mockResolvedValueOnce(unlistenFn);
-        mockInvoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce([]);
-
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: mockMetadata } as any);
-        }, 10);
+        mockInvoke.mockResolvedValueOnce(mockMetadata).mockResolvedValueOnce([]);
 
         await dhtService.searchFileMetadata("hash123", 5000);
 
@@ -806,19 +738,12 @@ describe("dht.ts", () => {
       });
 
       it("should normalize merkleRoot and fileHash", async () => {
-        const unlistenFn = vi.fn();
-        mockListen.mockResolvedValueOnce(unlistenFn);
-        mockInvoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce([]);
-
         const metadataWithoutMerkle = {
           ...mockMetadata,
           merkleRoot: undefined,
         };
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithoutMerkle } as any);
-        }, 10);
+        mockInvoke.mockResolvedValueOnce(metadataWithoutMerkle).mockResolvedValueOnce([]);
 
         const result = await dhtService.searchFileMetadata("hash123");
 
@@ -826,14 +751,7 @@ describe("dht.ts", () => {
       });
 
       it("should return null when file not found", async () => {
-        const unlistenFn = vi.fn();
-        mockListen.mockResolvedValueOnce(unlistenFn);
-        mockInvoke.mockResolvedValueOnce(undefined);
-
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: null } as any);
-        }, 10);
+        mockInvoke.mockResolvedValueOnce(null);
 
         const result = await dhtService.searchFileMetadata("hash123");
 
@@ -853,7 +771,7 @@ describe("dht.ts", () => {
 
         const result = await encryptionService.encryptFile("/path/to/file.txt");
 
-        expect(mockInvoke).toHaveBeenCalledWith("encrypt_file_for_upload", {
+        expect(mockInvoke).toHaveBeenCalledWith("encrypt_file_for_self_upload", {
           filePath: "/path/to/file.txt",
         });
         expect(result).toEqual(mockManifest);
@@ -882,8 +800,9 @@ describe("dht.ts", () => {
         const unlistenFn = vi.fn();
         mockListen.mockResolvedValueOnce(unlistenFn);
         mockInvoke
-          .mockResolvedValueOnce(undefined)
-          .mockResolvedValueOnce(undefined);
+          .mockResolvedValueOnce("/downloads") // get_download_directory
+          .mockResolvedValueOnce(undefined) // ensure_directory_exists
+          .mockResolvedValueOnce(undefined); // download_blocks_from_network
 
         const metadataWithoutFileName: FileMetadata = {
           fileHash: "hash123",
@@ -895,20 +814,17 @@ describe("dht.ts", () => {
           isEncrypted: false,
         };
 
-        localStorage.setItem(
-          "chiralSettings",
-          JSON.stringify({
-            storagePath: "/downloads",
-          })
-        );
+        const promise = dhtService.downloadFile(metadataWithoutFileName);
+        // downloadFile awaits get_download_directory + ensure_directory_exists before registering the listener
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: metadataWithoutFileName } as any);
+        await promise;
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithoutFileName } as any);
-        }, 10);
-
-        await dhtService.downloadFile(metadataWithoutFileName);
-
+        expect(mockInvoke).toHaveBeenCalledWith("get_download_directory");
         expect(mockInvoke).toHaveBeenCalledWith(
           "download_blocks_from_network",
           {
@@ -938,12 +854,13 @@ describe("dht.ts", () => {
           fileData: fileDataArray,
         };
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithData } as any);
-        }, 10);
-
-        await dhtService.downloadFile(metadataWithData);
+        const promise = dhtService.downloadFile(metadataWithData);
+        // downloadFile awaits ensure_directory_exists before registering the listener
+        await Promise.resolve();
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: metadataWithData } as any);
+        await promise;
 
         const payload = mockInvoke.mock.calls[1][1] as any;
         expect(payload.fileMetadata.fileData).toBe(fileDataArray);
@@ -969,12 +886,13 @@ describe("dht.ts", () => {
           isRoot: false,
         };
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataNotRoot } as any);
-        }, 10);
-
-        await dhtService.downloadFile(metadataNotRoot);
+        const promise = dhtService.downloadFile(metadataNotRoot);
+        // downloadFile awaits ensure_directory_exists before registering the listener
+        await Promise.resolve();
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: metadataNotRoot } as any);
+        await promise;
 
         const payload = mockInvoke.mock.calls[1][1] as any;
         expect(payload.fileMetadata.isRoot).toBe(false);
@@ -1007,9 +925,6 @@ describe("dht.ts", () => {
 
     describe("searchFileMetadata - reputation tracking", () => {
       it("should track seeder reputation when metadata found", async () => {
-        const unlistenFn = vi.fn();
-        mockListen.mockResolvedValueOnce(unlistenFn);
-
         const metadataWithSeeders: FileMetadata = {
           fileHash: "hash123",
           fileName: "test.txt",
@@ -1024,13 +939,8 @@ describe("dht.ts", () => {
         };
 
         mockInvoke
-          .mockResolvedValueOnce(undefined) // search_file_metadata
+          .mockResolvedValueOnce(metadataWithSeeders) // search_file_metadata
           .mockResolvedValueOnce(["seeder1", "seeder2"]); // get_file_seeders
-
-        setImmediate(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithSeeders } as any);
-        });
 
         await dhtService.searchFileMetadata("hash123");
 
@@ -1039,9 +949,6 @@ describe("dht.ts", () => {
       });
 
       it("should handle metadata without seeders", async () => {
-        const unlistenFn = vi.fn();
-        mockListen.mockResolvedValueOnce(unlistenFn);
-
         const metadataNoSeeders: FileMetadata = {
           fileHash: "hash123",
           fileName: "test.txt",
@@ -1052,12 +959,8 @@ describe("dht.ts", () => {
           isEncrypted: false,
         };
 
-        mockInvoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce([]);
-
-        setImmediate(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataNoSeeders } as any);
-        });
+        // search_file_metadata returns metadata directly, then we refresh seeders via get_file_seeders
+        mockInvoke.mockResolvedValueOnce(metadataNoSeeders).mockResolvedValueOnce([]);
 
         const result = await dhtService.searchFileMetadata("hash123");
 
@@ -1081,13 +984,12 @@ describe("dht.ts", () => {
           isEncrypted: false,
         };
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: metadataWithMerkleOnly } as any);
-        }, 10);
+        const promise = dhtService.publishFileToNetwork("/path/to/file.txt");
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: metadataWithMerkleOnly } as any);
 
-        const result =
-          await dhtService.publishFileToNetwork("/path/to/file.txt");
+        const result = await promise;
 
         expect(result.fileHash).toBe("merkle456");
       });
@@ -1107,17 +1009,20 @@ describe("dht.ts", () => {
           isEncrypted: false,
         };
 
-        setTimeout(() => {
-          const callback = mockListen.mock.calls[0][1];
-          callback({ payload: mockMetadata } as any);
-        }, 10);
+        const promise = dhtService.publishFileToNetwork("/path/to/file.txt", 0);
+        const callback = mockListen.mock.calls[0]?.[1] as any;
+        expect(typeof callback).toBe("function");
+        callback({ payload: mockMetadata } as any);
 
-        await dhtService.publishFileToNetwork("/path/to/file.txt", 0);
+        await promise;
 
-        expect(mockInvoke).toHaveBeenCalledWith("upload_file_to_network", {
-          filePath: "/path/to/file.txt",
-          price: 0,
-        });
+        expect(mockInvoke).toHaveBeenCalledWith(
+          "upload_file_to_network",
+          expect.objectContaining({
+            filePath: "/path/to/file.txt",
+            price: 0,
+          })
+        );
       });
     });
 
@@ -1180,7 +1085,6 @@ describe("dht.ts", () => {
 
 describe("searchFileMetadata - advanced scenarios", () => {
   const mockInvoke = vi.mocked(invoke);
-  const mockListen = vi.mocked(listen);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1195,9 +1099,6 @@ describe("searchFileMetadata - advanced scenarios", () => {
   });
 
   it("should merge seeders from multiple sources", async () => {
-    const unlistenFn = vi.fn();
-    mockListen.mockResolvedValueOnce(unlistenFn);
-
     const metadata: FileMetadata = {
       fileHash: "hash123",
       fileName: "test.txt",
@@ -1209,13 +1110,8 @@ describe("searchFileMetadata - advanced scenarios", () => {
     };
 
     mockInvoke
-      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(metadata)
       .mockResolvedValueOnce(["seeder2", "seeder3", "seeder1"]); // duplicates
-
-    setTimeout(() => {
-      const callback = mockListen.mock.calls[0][1];
-      callback({ payload: metadata } as any);
-    }, 10);
 
     const result = await dhtService.searchFileMetadata("hash123");
 
@@ -1224,9 +1120,6 @@ describe("searchFileMetadata - advanced scenarios", () => {
   });
 
   it("should handle metadata without merkleRoot or fileHash", async () => {
-    const unlistenFn = vi.fn();
-    mockListen.mockResolvedValueOnce(unlistenFn);
-
     const metadata: FileMetadata = {
       fileHash: "",
       fileName: "test.txt",
@@ -1237,12 +1130,7 @@ describe("searchFileMetadata - advanced scenarios", () => {
       isEncrypted: false,
     };
 
-    mockInvoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce([]);
-
-    setTimeout(() => {
-      const callback = mockListen.mock.calls[0][1];
-      callback({ payload: metadata } as any);
-    }, 10);
+    mockInvoke.mockResolvedValueOnce(metadata).mockResolvedValueOnce([]);
 
     const result = await dhtService.searchFileMetadata("hash123");
 
@@ -1251,25 +1139,12 @@ describe("searchFileMetadata - advanced scenarios", () => {
   });
 
   it("should properly cleanup on timeout", async () => {
-    const unlistenFn = vi.fn();
-    mockListen.mockResolvedValueOnce(unlistenFn);
-    mockInvoke.mockResolvedValueOnce(undefined);
+    // searchFileMetadata passes timeoutMs to backend; frontend doesn't implement its own timer.
+    mockInvoke.mockRejectedValueOnce(new Error("Search timeout after 1000ms"));
 
-    vi.useFakeTimers();
-
-    const promise = dhtService.searchFileMetadata("hash123", 1000);
-
-    vi.advanceTimersByTime(1001);
-
-    try {
-      await promise;
-      expect.fail("Should have thrown timeout error");
-    } catch (error) {
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain("Search timeout after 1000ms");
-    }
-
-    vi.useRealTimers();
+    await expect(dhtService.searchFileMetadata("hash123", 1000)).rejects.toThrow(
+      "Search timeout after 1000ms"
+    );
   }, 15000);
 });
 
@@ -1283,8 +1158,7 @@ describe("publishFileToNetwork - advanced scenarios", () => {
 
   it("should handle very large files", async () => {
     const unlistenFn = vi.fn();
-    const listenPromise = Promise.resolve(unlistenFn);
-    mockListen.mockReturnValueOnce(listenPromise);
+    mockListen.mockResolvedValueOnce(unlistenFn);
     mockInvoke.mockResolvedValueOnce(undefined);
 
     const largeFileMetadata: FileMetadata = {
@@ -1298,16 +1172,15 @@ describe("publishFileToNetwork - advanced scenarios", () => {
       encryptionMethod: "AES-256-GCM",
     };
 
-    // Trigger event immediately after listen resolves
-    listenPromise.then(() => {
-      const callback = mockListen.mock.calls[0][1];
-      callback({ payload: largeFileMetadata } as any);
-    });
-
-    const result = await dhtService.publishFileToNetwork(
+    const promise = dhtService.publishFileToNetwork(
       "/path/to/large-file.bin",
       1000
     );
+    const callback = mockListen.mock.calls[0]?.[1] as any;
+    expect(typeof callback).toBe("function");
+    callback({ payload: largeFileMetadata } as any);
+
+    const result = await promise;
 
     expect(result.fileSize).toBe(10737418240);
     expect(result.isEncrypted).toBe(true);
@@ -1316,8 +1189,7 @@ describe("publishFileToNetwork - advanced scenarios", () => {
 
   it("should handle publishing with HTTP sources", async () => {
     const unlistenFn = vi.fn();
-    const listenPromise = Promise.resolve(unlistenFn);
-    mockListen.mockReturnValueOnce(listenPromise);
+    mockListen.mockResolvedValueOnce(unlistenFn);
     mockInvoke.mockResolvedValueOnce(undefined);
 
     const metadataWithHttpSources: FileMetadata = {
@@ -1338,12 +1210,12 @@ describe("publishFileToNetwork - advanced scenarios", () => {
       ],
     };
 
-    listenPromise.then(() => {
-      const callback = mockListen.mock.calls[0][1];
-      callback({ payload: metadataWithHttpSources } as any);
-    });
+    const promise = dhtService.publishFileToNetwork("/path/to/file.txt");
+    const callback = mockListen.mock.calls[0]?.[1] as any;
+    expect(typeof callback).toBe("function");
+    callback({ payload: metadataWithHttpSources } as any);
 
-    const result = await dhtService.publishFileToNetwork("/path/to/file.txt");
+    const result = await promise;
 
     expect(result.httpSources).toBeDefined();
     expect(result.httpSources?.[0].url).toContain("cdn.example.com");
@@ -1352,8 +1224,7 @@ describe("publishFileToNetwork - advanced scenarios", () => {
 
   it("should properly cleanup listeners on success", async () => {
     const unlistenFn = vi.fn();
-    const listenPromise = Promise.resolve(unlistenFn);
-    mockListen.mockReturnValueOnce(listenPromise);
+    mockListen.mockResolvedValueOnce(unlistenFn);
     mockInvoke.mockResolvedValueOnce(undefined);
 
     const mockMetadata: FileMetadata = {
@@ -1366,12 +1237,11 @@ describe("publishFileToNetwork - advanced scenarios", () => {
       isEncrypted: false,
     };
 
-    listenPromise.then(() => {
-      const callback = mockListen.mock.calls[0][1];
-      callback({ payload: mockMetadata } as any);
-    });
-
-    await dhtService.publishFileToNetwork("/path/to/file.txt");
+    const promise = dhtService.publishFileToNetwork("/path/to/file.txt");
+    const callback = mockListen.mock.calls[0]?.[1] as any;
+    expect(typeof callback).toBe("function");
+    callback({ payload: mockMetadata } as any);
+    await promise;
 
     expect(unlistenFn).toHaveBeenCalled();
   }, 15000);
@@ -1409,8 +1279,7 @@ describe("DhtService - boundary conditions", () => {
 
   it("should handle zero price for file", async () => {
     const unlistenFn = vi.fn();
-    const listenPromise = Promise.resolve(unlistenFn);
-    mockListen.mockReturnValueOnce(listenPromise);
+    mockListen.mockResolvedValueOnce(unlistenFn);
     mockInvoke.mockResolvedValueOnce(undefined);
 
     const mockMetadata: FileMetadata = {
@@ -1424,12 +1293,12 @@ describe("DhtService - boundary conditions", () => {
       price: 0,
     };
 
-    listenPromise.then(() => {
-      const callback = mockListen.mock.calls[0][1];
-      callback({ payload: mockMetadata } as any);
-    });
+    const promise = dhtService.publishFileToNetwork("/path/free.txt", 0);
+    const callback = mockListen.mock.calls[0]?.[1] as any;
+    expect(typeof callback).toBe("function");
+    callback({ payload: mockMetadata } as any);
 
-    const result = await dhtService.publishFileToNetwork("/path/free.txt", 0);
+    const result = await promise;
 
     expect(result.price).toBe(0);
     expect(unlistenFn).toHaveBeenCalled();

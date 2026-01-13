@@ -8,7 +8,7 @@
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { gethStatus } from '$lib/services/gethService'
-  import { walletService } from '$lib/wallet';
+  import { walletService, type WalletExportSnapshot } from '$lib/wallet';
   import { lockAccount } from '$lib/services/accountLock';
   import { transactions, transactionPagination, miningPagination } from '$lib/stores';
   import { derived } from 'svelte/store'
@@ -63,7 +63,8 @@
   let privateKeyVisible = false
   let showPending = false
   let importPrivateKey = ''
-  let importedSnapshot: { transactions: Transaction[] } | null = null
+  type ImportedWalletSnapshot = WalletExportSnapshot & { transactions?: Transaction[] };
+  let importedSnapshot: ImportedWalletSnapshot | null = null
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning: boolean;
@@ -143,7 +144,15 @@
   let blockNumberSearch: string = '';
   let minGasPrice: number = 0;
   let maxGasPrice: number | null = null;
-  let hashSearchResult: Transaction | null = null;
+  type TxHashLookupResult = {
+    hash?: string;
+    from?: string;
+    to?: string | null;
+    value?: string;
+    block_number?: number | null;
+    blockNumber?: number | null;
+  };
+  let hashSearchResult: TxHashLookupResult | null = null;
   let isSearchingHash = false;
   let hashSearchError = '';
 
@@ -642,7 +651,7 @@
     hashSearchResult = null;
 
     try {
-      const result = await invoke('get_transaction_by_hash', { txHash: txHashSearch });
+      const result = await invoke<TxHashLookupResult | null>('get_transaction_by_hash', { txHash: txHashSearch });
       if (result) {
         hashSearchResult = result;
       } else {
@@ -849,11 +858,12 @@
     try {
       const account = await walletService.importAccount(importPrivateKey)
       if (importedSnapshot) {
-        if (typeof importedSnapshot.balance === 'number') {
-          wallet.update(w => ({ ...w, balance: importedSnapshot.balance, actualBalance: importedSnapshot.balance }))
+        const snapshot = importedSnapshot;
+        if (typeof snapshot.balance === 'number') {
+          wallet.update(w => ({ ...w, balance: snapshot.balance, actualBalance: snapshot.balance }))
         }
-        if (Array.isArray(importedSnapshot.transactions)) {
-          const hydrated = importedSnapshot.transactions.map((tx: Transaction) => ({
+        if (Array.isArray(snapshot.transactions)) {
+          const hydrated = snapshot.transactions.map((tx: Transaction) => ({
             ...tx,
             date: tx.date ? new Date(tx.date) : new Date()
           }))
@@ -2424,7 +2434,7 @@
           <p class="text-xs"><span class="font-semibold">From:</span> {hashSearchResult.from || 'N/A'}</p>
           <p class="text-xs"><span class="font-semibold">To:</span> {hashSearchResult.to || 'N/A'}</p>
           <p class="text-xs"><span class="font-semibold">Value:</span> {hashSearchResult.value || 'N/A'} CHR</p>
-          <p class="text-xs"><span class="font-semibold">Block:</span> {hashSearchResult.blockNumber || 'Pending'}</p>
+          <p class="text-xs"><span class="font-semibold">Block:</span> {hashSearchResult.blockNumber ?? hashSearchResult.block_number ?? 'Pending'}</p>
         </div>
       {/if}
     </div>

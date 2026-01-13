@@ -185,7 +185,7 @@
       placeholder={$t('network.quickActions.addPeer.placeholder')}
       class="h-9 text-sm flex-1" 
       bind:value={newPeerAddress}
-      on:keydown={(e) => e.key === 'Enter' && handleAddPeer()}
+      on:keydown={(e) => (e as unknown as KeyboardEvent).key === 'Enter' && handleAddPeer()}
     />
     <Button 
       size="sm" 
