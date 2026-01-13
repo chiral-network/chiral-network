@@ -5284,6 +5284,21 @@ async fn download_file_from_network(
                 .await
             {
                 Ok(Some(metadata)) => {
+                    // WebRTC downloads rely on peer IDs (seeders/providers). If the metadata record
+                    // doesn't include seeders yet, fall back to DHT provider discovery.
+                    let mut metadata = metadata;
+                    if metadata.seeders.is_empty() {
+                        let providers = dht_service.get_seeders_for_file(&metadata.merkle_root).await;
+                        if !providers.is_empty() {
+                            info!(
+                                "Metadata had 0 seeders; using {} providers from DHT for {}",
+                                providers.len(),
+                                metadata.merkle_root
+                            );
+                            metadata.seeders = providers;
+                        }
+                    }
+
                     info!(
                         "Found file metadata in DHT: {} (size: {} bytes)",
                         metadata.file_name, metadata.file_size

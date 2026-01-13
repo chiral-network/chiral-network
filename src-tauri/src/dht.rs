@@ -7396,16 +7396,32 @@ impl DhtService {
             }
         }
 
-        // Wait for connections to establish with polling
-        // Check every 500ms for up to 5 seconds total
-        let max_wait_iterations = 10;
+        // Wait for connections to establish with polling.
+        // Default is conservative (5s) but real networks (relay/NAT) can need longer.
+        let total_wait_ms: u64 = std::env::var("E2E_SEEDER_CONNECT_WAIT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .or_else(|| {
+                std::env::var("CHIRAL_SEEDER_CONNECT_WAIT_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+            })
+            .map(|v| v.clamp(1_000, 120_000))
+            .unwrap_or(5_000);
+
+        let poll_ms: u64 = 500;
+        let max_wait_iterations: u64 = std::cmp::max(1, total_wait_ms / poll_ms);
         for i in 0..max_wait_iterations {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_millis(poll_ms)).await;
 
             let connected_peers = self.connected_peers.lock().await;
             for (seeder_id, peer_id) in &pending_connections {
                 if connected_peers.contains(peer_id) && !available_peers.contains(seeder_id) {
-                    info!("Seeder {} connected after {} ms", seeder_id, (i + 1) * 500);
+                    info!(
+                        "Seeder {} connected after {} ms",
+                        seeder_id,
+                        (i + 1) * poll_ms
+                    );
                     available_peers.push(seeder_id.clone());
                 }
             }

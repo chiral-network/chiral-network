@@ -147,6 +147,10 @@ export E2E_FTP_DOWNLOAD_TIMEOUT_MS=180000
 # - DHT search per-attempt budget (overall search timeout is set by the test)
 export E2E_SEARCH_ATTEMPT_TIMEOUT_MS=15000
 
+# Optional: seeder connection grace period before WebRTC fails as "no reachable seeders"
+# (useful for NAT/relay scenarios; default 5000ms, max 120000ms)
+export E2E_SEEDER_CONNECT_WAIT_MS=30000
+
 npm run test:e2e:real
 ```
 
