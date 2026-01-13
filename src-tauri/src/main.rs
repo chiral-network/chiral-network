@@ -10093,21 +10093,32 @@ async fn create_bt_handler_with_fallback(
     );
     let mut rng = rand::thread_rng();
 
-    loop {
+    // Try up to 50 times to find an available port range
+    for attempt in 0..50 {
         let start = rng.gen_range(30000..60000);
         let fallback = start..(start + 10);
 
-        if let Ok(h) = bittorrent_handler::BitTorrentHandler::new_with_port_range(
+        match bittorrent_handler::BitTorrentHandler::new_with_port_range(
             download_dir.clone(),
             dht_service.clone(),
-            Some(fallback),
+            Some(fallback.clone()),
         )
         .await
         {
-            println!("Using BitTorrent fallback port range: {}-{}", start, start + 10);
-            return h;
+            Ok(h) => {
+                println!("✓ Using BitTorrent fallback port range: {}-{}", start, start + 10);
+                return h;
+            }
+            Err(e) => {
+                if attempt % 10 == 0 {
+                    eprintln!("Attempt {}/50: Failed to bind to port range {}-{}: {}", attempt + 1, start, start + 10, e);
+                }
+            }
         }
     }
+
+    // If all attempts fail, panic with a clear error message
+    panic!("Failed to initialize BitTorrent handler after 50 attempts. Please ensure some ports in the range 30000-60000 are available.");
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -34,7 +34,7 @@
     type Transfer
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
-  import { homeDir, join } from '@tauri-apps/api/path'
+  import { join } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
@@ -1201,15 +1201,14 @@ async function loadAndResumeDownloads() {
 
     // Search for the file in DHT by hash
     try {
-      const metadata = await dhtService.getFile(detail.hash);
-      if (metadata) {
-        await handleSearchDownload(metadata);
-      } else {
-        showToast(tr('toasts.favorites.notFound', { values: { name: detail.name } }), 'warning');
-      }
+      await dhtService.searchFile(detail.hash);
+      
+      // Wait for DHT search results through the event system
+      // The DownloadSearchSection component will receive the results
+      showToast(tr('toasts.favorites.searching', { values: { name: detail.name } }), 'info');
     } catch (error) {
-      console.error('Failed to download favorite:', error);
-      showToast(tr('toasts.favorites.downloadFailed'), 'error');
+      console.error('Failed to search for favorite:', error);
+      showToast(tr('toasts.favorites.searchFailed'), 'error');
     }
   }
 
