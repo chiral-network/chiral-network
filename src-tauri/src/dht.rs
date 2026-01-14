@@ -365,6 +365,7 @@ pub enum DhtCommand {
         blocks: Vec<(Cid, Vec<u8>)>,
         root_cid: Cid,
         metadata: FileMetadata,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     RequestFileAccess {
         seeder: PeerId,
@@ -1614,7 +1615,7 @@ async fn run_dht_node(
 
             let _ = response_tx.send(merged_metadata);
         }
-                                    Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
+                                    Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata, response_tx }) => {
                                         // StoreBlocks is used for publish paths that must guarantee `metadata.cids`
                                         // and the existence of the root CID block in bitswap.
                                         //
@@ -1625,6 +1626,10 @@ async fn run_dht_node(
                                             Ok(v) => v,
                                             Err(e) => {
                                                 error!("Failed to serialize root CID list: {}", e);
+                                                let _ = response_tx.send(Err(format!(
+                                                    "Failed to serialize root CID list: {}",
+                                                    e
+                                                )));
                                                 continue 'outer;
                                             }
                                         };
@@ -1642,6 +1647,10 @@ async fn run_dht_node(
                                                     root_cid, e
                                                 )))
                                                 .await;
+                                            let _ = response_tx.send(Err(format!(
+                                                "Failed to store root block {}: {}",
+                                                root_cid, e
+                                            )));
                                             continue 'outer;
                                         }
 
@@ -1659,7 +1668,11 @@ async fn run_dht_node(
                                                         cid, e
                                                     )))
                                                     .await;
-                                                continue 'outer;
+                                                let _ = response_tx.send(Err(format!(
+                                                    "Failed to store block {}: {}",
+                                                    cid, e
+                                                )));
+                                                continue 'outer; // Abort this publish operation
                                             }
                                         }
 
@@ -1696,11 +1709,16 @@ async fn run_dht_node(
                                                 "seeders": metadata.seeders,
                                             });
 
-                                            let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
+                                            let record_key =
+                                                kad::RecordKey::new(&metadata.merkle_root.as_bytes());
                                             let record_value = match serde_json::to_vec(&dht_metadata) {
                                                 Ok(val) => val,
                                                 Err(e) => {
                                                     warn!("Failed to serialize DHT metadata: {}", e);
+                                                    let _ = response_tx.send(Err(format!(
+                                                        "Failed to serialize DHT metadata: {}",
+                                                        e
+                                                    )));
                                                     continue 'outer;
                                                 }
                                             };
@@ -4250,6 +4268,7 @@ async fn handle_kademlia_event(
                                     })
                                     .unwrap_or_default();
 
+// (dropped during rebase) heartbeat refresh merge logic from old branch; upstream main removed heartbeat.
                                 let metadata = FileMetadata {
                                     merkle_root: file_hash.to_string(),
                                     file_name: file_name.to_string(),
@@ -6521,14 +6540,19 @@ impl DhtService {
                 cache.insert(metadata.merkle_root.clone(), metadata.clone());
             }
 
+            let (response_tx, response_rx) = oneshot::channel();
             self.cmd_tx
                 .send(DhtCommand::StoreBlocks {
                     blocks,
                     root_cid,
                     metadata,
+                    response_tx,
                 })
                 .await
                 .map_err(|e| e.to_string())?;
+
+            // Wait until the DHT task has stored blocks and published the DHT record.
+            response_rx.await.map_err(|e| e.to_string())??;
 
             // Keep provider/heartbeat behaviour consistent with other publish flows.
             self.start_file_heartbeat(&file_hash).await?;
@@ -6679,15 +6703,20 @@ impl DhtService {
         let root_block_data = serde_json::to_vec(&block_cid_strings).map_err(|e| e.to_string())?;
         let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
 
+        let (response_tx, response_rx) = oneshot::channel();
         self.cmd_tx
             .send(DhtCommand::StoreBlocks {
                 blocks,
                 root_cid,
                 metadata,
+                response_tx,
             })
             .await
             .map_err(|e| e.to_string())?;
 
+        response_rx.await.map_err(|e| e.to_string())??;
+
+        self.start_file_heartbeat(&file_hash).await?;
         Ok(())
     }
 
