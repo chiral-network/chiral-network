@@ -677,6 +677,46 @@ async fn api_upload_generate(
             )
                 .into_response();
         }
+
+        // IMPORTANT:
+        // Bitswap downloads require `metadata.cids` (root CID). In real networks the record may become visible
+        // before all fields are populated/preserved. Also, `synchronous_search_metadata` merges local cache,
+        // so we validate against the raw DHT record bytes here (no cache merge).
+        //
+        // Default: wait up to ~60s.
+        let max_attempts: u32 = 240;
+        let mut ready = false;
+        for _ in 0..max_attempts {
+            match state.dht.get_dht_value(merkle_root.clone()).await {
+                Ok(Some(bytes)) => {
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        let cids_ok = json
+                            .get("cids")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| !arr.is_empty())
+                            .unwrap_or(false);
+                        if cids_ok {
+                            ready = true;
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        if !ready {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(http_server::ErrorResponse {
+                    error: format!(
+                        "Upload completed but Bitswap DHT record not ready yet for {} (missing cids in raw record)",
+                        merkle_root
+                    ),
+                }),
+            )
+                .into_response();
+        }
         merkle_root
     } else {
         return (
