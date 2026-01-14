@@ -1520,36 +1520,33 @@ async fn run_dht_node(
                 cache.insert(merged_metadata.merkle_root.clone(), merged_metadata.clone());
             }
 
-            // Serialize CIDs as strings for DHT storage.
-            // (The `FileMetadata` struct has custom serde hooks, but this manual JSON construction bypasses them.)
-            let cids_as_strings: Option<Vec<String>> = merged_metadata
-                .cids
-                .as_ref()
-                .map(|v| v.iter().map(|c| c.to_string()).collect());
-
             // 4. Create the JSON for DHT storage
-            let dht_metadata = serde_json::json!({
-                "file_hash": merged_metadata.merkle_root, // Changed from file_hash
-                "merkle_root": merged_metadata.merkle_root,
-                "file_name": merged_metadata.file_name,
-                "file_size": merged_metadata.file_size,
-                "created_at": merged_metadata.created_at,
-                "mime_type": merged_metadata.mime_type,
-                "is_encrypted": merged_metadata.is_encrypted,
-                "encryption_method": merged_metadata.encryption_method,
-                "key_fingerprint": merged_metadata.key_fingerprint,
-                "parent_hash": merged_metadata.parent_hash,
-                "cids": cids_as_strings,
-                "encrypted_key_bundle": merged_metadata.encrypted_key_bundle,
-                "info_hash": merged_metadata.info_hash,
-                "trackers": merged_metadata.trackers,
-                "seeders": merged_metadata.seeders,
-                "price": merged_metadata.price,
-                "uploader_address": merged_metadata.uploader_address,
-                "httpSources": merged_metadata.http_sources,
-                "ed2kSources": merged_metadata.ed2k_sources,
-                "ftpSources": merged_metadata.ftp_sources,
-            });
+            //
+            // IMPORTANT:
+            // We MUST go through serde for FileMetadata here to ensure:
+            // - field renames (merkleRoot/fileName/...) are correct
+            // - CID custom serialization runs (cids -> Vec<String>)
+            //
+            // Then we add a few legacy/extra fields for backwards compatibility.
+            let mut dht_metadata = serde_json::to_value(&merged_metadata).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(obj) = dht_metadata.as_object_mut() {
+                // Keep legacy fields used by older readers / debug tooling.
+                obj.insert("file_hash".to_string(), serde_json::json!(merged_metadata.merkle_root));
+
+                // Some historical paths used snake_case keys; add them as aliases so mixed networks can interop.
+                obj.insert("merkle_root".to_string(), serde_json::json!(merged_metadata.merkle_root));
+                obj.insert("file_name".to_string(), serde_json::json!(merged_metadata.file_name));
+                obj.insert("file_size".to_string(), serde_json::json!(merged_metadata.file_size));
+                obj.insert("created_at".to_string(), serde_json::json!(merged_metadata.created_at));
+                obj.insert("mime_type".to_string(), serde_json::json!(merged_metadata.mime_type));
+                obj.insert("is_encrypted".to_string(), serde_json::json!(merged_metadata.is_encrypted));
+                obj.insert("encryption_method".to_string(), serde_json::json!(merged_metadata.encryption_method));
+                obj.insert("key_fingerprint".to_string(), serde_json::json!(merged_metadata.key_fingerprint));
+                obj.insert("parent_hash".to_string(), serde_json::json!(merged_metadata.parent_hash));
+                obj.insert("encrypted_key_bundle".to_string(), serde_json::json!(merged_metadata.encrypted_key_bundle));
+                obj.insert("info_hash".to_string(), serde_json::json!(merged_metadata.info_hash));
+                obj.insert("uploader_address".to_string(), serde_json::json!(merged_metadata.uploader_address));
+            }
 
             let record_key = kad::RecordKey::new(&merged_metadata.merkle_root.as_bytes());
 
@@ -1661,9 +1658,7 @@ async fn run_dht_node(
                                             });
 
                                             let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                                            let record_value = match serde_json::to_vec(&dht_metadata)
-                                                .map_err(|e| e.to_string())
-                                            {
+                                            let record_value = match serde_json::to_vec(&dht_metadata) {
                                                 Ok(val) => val,
                                                 Err(e) => {
                                                     warn!("Failed to serialize DHT metadata: {}", e);
@@ -1677,8 +1672,15 @@ async fn run_dht_node(
                                                 expires: None,
                                             };
 
-                                            if let Err(e) = swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
-                                                error!("Failed to put record for encrypted file {}: {}", metadata.merkle_root, e);
+                                            if let Err(e) = swarm
+                                                .behaviour_mut()
+                                                .kademlia
+                                                .put_record(record, kad::Quorum::One)
+                                            {
+                                                error!(
+                                                    "Failed to put record for encrypted file {}: {}",
+                                                    metadata.merkle_root, e
+                                                );
                                             }
 
                                             // 4. Announce self as provider (only if we have dialable addrs)
