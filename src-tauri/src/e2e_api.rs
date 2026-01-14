@@ -651,6 +651,10 @@ async fn api_upload_generate(
         }
 
         // Wait until the metadata is visible on this node's DHT (best-effort, avoids race in tests).
+        //
+        // IMPORTANT:
+        // For Bitswap, downloads require `metadata.cids` (root CID). In real networks, a record may appear
+        // before all fields are populated / preserved by subsequent refreshes, so we wait until cids is present.
         let dht = { app_state.dht.lock().await.as_ref().cloned() };
         let Some(dht) = dht else {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
@@ -659,10 +663,23 @@ async fn api_upload_generate(
             .into_response();
         };
         let mut found = None;
-        for _ in 0..40 {
-            match dht.synchronous_search_metadata(expected_merkle_root.clone(), 1500).await {
-                Ok(m) if m.is_some() => {
-                    found = m;
+        // Default: ~10s total. Bitswap may need longer until `cids` is observable.
+        let max_attempts: u32 = if protocol_upper == "BITSWAP" { 240 } else { 40 }; // 60s vs 10s
+        for _ in 0..max_attempts {
+            match dht
+                .synchronous_search_metadata(expected_merkle_root.clone(), 1_500)
+                .await
+            {
+                Ok(Some(m)) => {
+                    if protocol_upper == "BITSWAP" {
+                        let has_cids = m.cids.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+                        if !has_cids {
+                            // Keep polling: record is visible but not usable for Bitswap download yet.
+                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                            continue;
+                        }
+                    }
+                    found = Some(m);
                     break;
                 }
                 _ => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
@@ -670,7 +687,17 @@ async fn api_upload_generate(
         }
         if found.is_none() {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Upload completed but metadata not visible yet for {}", expected_merkle_root),
+                error: if protocol_upper == "BITSWAP" {
+                    format!(
+                        "Upload completed but Bitswap metadata not ready yet for {} (missing cids)",
+                        expected_merkle_root
+                    )
+                } else {
+                    format!(
+                        "Upload completed but metadata not visible yet for {}",
+                        expected_merkle_root
+                    )
+                },
             }))
             .into_response();
         }
