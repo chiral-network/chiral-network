@@ -994,7 +994,6 @@ $: canShowLockAction = !showFirstRunWizard;
       { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "network", label: $t("nav.network"), icon: Globe },
       { id: "relay", label: $t("nav.relay"), icon: Server },
-      { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
       { id: "reputation", label: $t("nav.reputation"), icon: Star },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
       { id: "upload", label: $t("nav.upload"), icon: Upload },
