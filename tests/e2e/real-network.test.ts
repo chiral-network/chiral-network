@@ -621,7 +621,11 @@ class RealE2ETestFramework {
   createTestFile(name: string, sizeInMB: number): TestFile {
     const size = sizeInMB * 1024 * 1024;
     // Option1: uploader generates deterministic bytes on-node. Avoid allocating large buffers in the test runner.
-    return { name, size, content: Buffer.alloc(0) };
+    // IMPORTANT: make the filename unique per test run so the deterministic uploader bytes produce a new sha256,
+    // avoiding stale DHT records when re-running tests against a real network.
+    const ms = Date.now();
+    const uniqueName = name.replace(/(\.[^.]*)?$/, (ext) => `-${ms}${ext || ""}`);
+    return { name: uniqueName, size, content: Buffer.alloc(0) };
   }
 }
 
