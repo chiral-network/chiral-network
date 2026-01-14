@@ -3757,19 +3757,25 @@ async fn upload_file_to_network(
         .map_err(|e| format!("Failed to get file size: {}", e))?
         .len();
 
-    let dont_need_to_copy_protocols = vec!["BitSwap", "WebRTC"];
+    // Normalize protocol for robust matching (tests/users may send different casing like "Bitswap", "BitSwap", "BITSWAP").
+    let protocol_upper = protocol
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_uppercase();
+    let dont_need_to_copy_protocols = vec!["BITSWAP", "WEBRTC"];
     let mut file_path = file_path.clone();
 
     // Handle protocol-specific uploads
     if let Some(protocol_name) = &protocol {
-        if !dont_need_to_copy_protocols.contains(&protocol_name.as_str()) {
+        if !dont_need_to_copy_protocols.contains(&protocol_upper.as_str()) {
             // handle if error
             file_path = copy_file_to_temp(file_path.clone())
                 .await
                 .map_err(|e| format!("Failed to copy file to temp: {}", e))?;
         }
 
-        match protocol_name.as_str() {
+        match protocol_upper.as_str() {
             "HTTP" => {
                 let permanent_path = state.http_server_state.storage_dir.join(&file_hash);
                 // Move/rename temp file to permanent storage instead of copying
@@ -3791,7 +3797,7 @@ async fn upload_file_to_network(
                     })
                     .await;
             }
-            "BitTorrent" => {
+            "BITTORRENT" => {
                 // Check if file exists before attempting to seed
                 if !std::path::Path::new(&file_path).exists() {
                     error!(
@@ -4119,7 +4125,7 @@ async fn upload_file_to_network(
                 println!("✅ FTP upload complete - file available at: {}", ftp_url);
                 return Ok(());
             }
-            "Bitswap" => {
+            "BITSWAP" => {
                 // Use streaming upload for Bitswap to handle large files
                 println!(
                     "📡 Using streaming Bitswap upload for protocol: {}",
@@ -4324,6 +4330,14 @@ async fn upload_file_to_network(
                             ed2k_sources: None,
                             manifest: Some(manifest_json),
                         };
+
+                        info!(
+                            "📡 Bitswap publish metadata: merkle_root={} root_cid={} cids={:?} seeders={:?}",
+                            merkle_root,
+                            root_cid,
+                            metadata.cids,
+                            metadata.seeders
+                        );
 
                         // Publish merged metadata to DHT
                         if let Some(dht) = dht_opt {
