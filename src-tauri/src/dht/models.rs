@@ -288,24 +288,6 @@ impl Ed2kSourceInfo {
 }
 
 // =========================================================================
-// Heartbeat & Seeding
-// =========================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SeederHeartbeat {
-    pub peer_id: String,
-    pub expires_at: u64,
-    pub last_heartbeat: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct FileHeartbeatCacheEntry {
-    pub heartbeats: Vec<SeederHeartbeat>,
-    pub metadata: serde_json::Value,
-}
-
-// =========================================================================
 // Magnet URI
 // =========================================================================
 
