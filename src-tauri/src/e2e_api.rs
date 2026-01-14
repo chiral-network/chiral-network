@@ -653,8 +653,10 @@ async fn api_upload_generate(
         // Wait until the metadata is visible on this node's DHT (best-effort, avoids race in tests).
         //
         // IMPORTANT:
-        // For Bitswap, downloads require `metadata.cids` (root CID). In real networks, a record may appear
-        // before all fields are populated / preserved by subsequent refreshes, so we wait until cids is present.
+        // For Bitswap, downloads require `metadata.cids` (root CID).
+        //
+        // NOTE: `synchronous_search_metadata` merges local cache, so it can return `cids` even when the actual
+        // DHT record does not contain them yet. For Bitswap, we therefore validate against the raw DHT record bytes.
         let dht = { app_state.dht.lock().await.as_ref().cloned() };
         let Some(dht) = dht else {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
@@ -666,30 +668,46 @@ async fn api_upload_generate(
         // Default: ~10s total. Bitswap may need longer until `cids` is observable.
         let max_attempts: u32 = if protocol_upper == "BITSWAP" { 240 } else { 40 }; // 60s vs 10s
         for _ in 0..max_attempts {
-            match dht
-                .synchronous_search_metadata(expected_merkle_root.clone(), 1_500)
-                .await
-            {
-                Ok(Some(m)) => {
-                    if protocol_upper == "BITSWAP" {
-                        let has_cids = m.cids.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
-                        if !has_cids {
-                            // Keep polling: record is visible but not usable for Bitswap download yet.
-                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                            continue;
+            if protocol_upper == "BITSWAP" {
+                // Raw-record check (no cache merge): ensure the stored JSON contains a non-empty `cids` array.
+                if let Ok(Some(bytes)) = dht.get_dht_value(expected_merkle_root.clone()).await {
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        let cids_ok = json
+                            .get("cids")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| !arr.is_empty())
+                            .unwrap_or(false);
+                        if cids_ok {
+                            // Once the raw record is good, we can return the parsed metadata.
+                            if let Ok(Some(m)) = dht
+                                .synchronous_search_metadata(expected_merkle_root.clone(), 1_500)
+                                .await
+                            {
+                                found = Some(m);
+                                break;
+                            }
                         }
                     }
-                    found = Some(m);
-                    break;
                 }
-                _ => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+            } else {
+                match dht
+                    .synchronous_search_metadata(expected_merkle_root.clone(), 1_500)
+                    .await
+                {
+                    Ok(Some(m)) => {
+                        found = Some(m);
+                        break;
+                    }
+                    _ => {}
+                }
             }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
         if found.is_none() {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
                 error: if protocol_upper == "BITSWAP" {
                     format!(
-                        "Upload completed but Bitswap metadata not ready yet for {} (missing cids)",
+                        "Upload completed but Bitswap DHT record not ready yet for {} (missing cids in raw record)",
                         expected_merkle_root
                     )
                 } else {
