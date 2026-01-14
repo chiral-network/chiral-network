@@ -5232,6 +5232,45 @@ async fn download_blocks_from_network(
     };
 
     if let Some(dht) = dht {
+        // Bitswap downloads require a root CID list in metadata.
+        // In real networks the DHT record can become visible before all fields (like `cids`) are populated.
+        // Best-effort: re-fetch metadata a few times to see if `cids` arrives; otherwise fail fast with a clear error.
+        let has_cids = file_metadata
+            .cids
+            .as_ref()
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+        if !has_cids {
+            for _ in 0..10 {
+                if let Ok(Some(refreshed)) =
+                    dht.synchronous_search_metadata(file_metadata.merkle_root.clone(), 1_500).await
+                {
+                    if refreshed.cids.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
+                        info!(
+                            "🔽 Refreshed metadata now has cids for {}: {:?}",
+                            file_metadata.merkle_root,
+                            refreshed.cids
+                        );
+                        file_metadata.cids = refreshed.cids;
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+
+        let has_cids = file_metadata
+            .cids
+            .as_ref()
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+        if !has_cids {
+            return Err(format!(
+                "Bitswap download requires metadata.cids (root CID). DHT record for '{}' has no cids; re-upload with an updated uploader node or ensure Bitswap publishing writes cids.",
+                file_metadata.merkle_root
+            ));
+        }
+
         // If the metadata record doesn't list seeders yet, fall back to provider discovery.
         // This allows Bitswap to work even when the uploader's DHT record hasn't populated `seeders`.
         if file_metadata.seeders.is_empty() {
