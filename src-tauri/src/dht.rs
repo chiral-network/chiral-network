@@ -1614,18 +1614,57 @@ async fn run_dht_node(
 
             let _ = response_tx.send(merged_metadata);
         }
-                                        Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
-                                            // 1. Store all encrypted data blocks in bitswap
-                                            for (cid, data) in blocks {
-                                                if let Err(e) = swarm.behaviour_mut().bitswap.insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), data) {
-                                                    error!("Failed to store encrypted block {} in bitswap: {}", cid, e);
-                                                    let _ = event_tx.send(DhtEvent::Error(format!("Failed to store block {}: {}", cid, e))).await;
-                                                    continue 'outer; // Abort this publish operation
-                                                }
+                                    Some(DhtCommand::StoreBlocks { blocks, root_cid, mut metadata }) => {
+                                        // StoreBlocks is used for publish paths that must guarantee `metadata.cids`
+                                        // and the existence of the root CID block in bitswap.
+                                        //
+                                        // Root block format: JSON array of per-block CID strings.
+                                        let block_cid_strings: Vec<String> =
+                                            blocks.iter().map(|(cid, _)| cid.to_string()).collect();
+                                        let root_block_data = match serde_json::to_vec(&block_cid_strings) {
+                                            Ok(v) => v,
+                                            Err(e) => {
+                                                error!("Failed to serialize root CID list: {}", e);
+                                                continue 'outer;
                                             }
+                                        };
 
-                                            // 2. Update metadata with the root CID
-                                            metadata.cids = Some(vec![root_cid]);
+                                        // 1) Store the root block itself (downloaders fetch this first).
+                                        if let Err(e) = swarm
+                                            .behaviour_mut()
+                                            .bitswap
+                                            .insert_block::<MAX_MULTIHASH_LENGHT>(root_cid.clone(), root_block_data)
+                                        {
+                                            error!("Failed to store root block {} in bitswap: {}", root_cid, e);
+                                            let _ = event_tx
+                                                .send(DhtEvent::Error(format!(
+                                                    "Failed to store root block {}: {}",
+                                                    root_cid, e
+                                                )))
+                                                .await;
+                                            continue 'outer;
+                                        }
+
+                                        // 2) Store all data blocks in bitswap.
+                                        for (cid, data) in blocks {
+                                            if let Err(e) = swarm
+                                                .behaviour_mut()
+                                                .bitswap
+                                                .insert_block::<MAX_MULTIHASH_LENGHT>(cid.clone(), data)
+                                            {
+                                                error!("Failed to store block {} in bitswap: {}", cid, e);
+                                                let _ = event_tx
+                                                    .send(DhtEvent::Error(format!(
+                                                        "Failed to store block {}: {}",
+                                                        cid, e
+                                                    )))
+                                                    .await;
+                                                continue 'outer;
+                                            }
+                                        }
+
+                                        // 3. Update metadata with the root CID
+                                        metadata.cids = Some(vec![root_cid.clone()]);
 
                                             // Serialize CIDs as strings for DHT storage.
                                             // (This manual JSON construction bypasses FileMetadata's custom serde hooks.)
@@ -1662,7 +1701,7 @@ async fn run_dht_node(
                                                 Ok(val) => val,
                                                 Err(e) => {
                                                     warn!("Failed to serialize DHT metadata: {}", e);
-                                                    continue;
+                                                    continue 'outer;
                                                 }
                                             };
                                             let record = Record {
@@ -1671,7 +1710,6 @@ async fn run_dht_node(
                                                 publisher: Some(peer_id),
                                                 expires: None,
                                             };
-
                                             if let Err(e) = swarm
                                                 .behaviour_mut()
                                                 .kademlia
@@ -6430,6 +6468,71 @@ impl DhtService {
         // Add FTP sources to metadata before publishing
         if let Some(sources) = ftp_sources {
             metadata.ftp_sources = Some(sources.into_iter().map(|s| s.for_dht_storage()).collect());
+        }
+
+        // --- Bitswap publish responsibility (one-shot fix) ---
+        //
+        // In headless E2E, the uploader may call publish_file with `file_data` populated but `cids` unset.
+        // If we just write a DHT record, downloaders have no root CID and Bitswap cannot start.
+        //
+        // We treat "inline file_data present + no cids" as the Bitswap publish path and:
+        // - split file_data into bitswap blocks
+        // - compute the root CID (CID of the JSON list of block CIDs)
+        // - store blocks + root block in bitswap via StoreBlocks command
+        // - publish metadata with `cids=[root_cid]` and WITHOUT inline file_data (avoid DHT size limits)
+        let needs_bitswap_cids = (metadata.cids.as_ref().map(|v| v.is_empty()).unwrap_or(true))
+            && !metadata.file_data.is_empty()
+            && !metadata.is_encrypted
+            && metadata.http_sources.is_none()
+            && metadata.ftp_sources.is_none()
+            && metadata.ed2k_sources.is_none()
+            && metadata.info_hash.is_none();
+
+        if needs_bitswap_cids {
+            let file_hash = metadata.merkle_root.clone();
+
+            // Build blocks from raw file bytes.
+            let chunk_size = self.chunk_size();
+            let blocks_raw = split_into_blocks(&metadata.file_data, chunk_size);
+
+            let mut blocks: Vec<(Cid, Vec<u8>)> = Vec::with_capacity(blocks_raw.len());
+            let mut block_cid_strings: Vec<String> = Vec::with_capacity(blocks_raw.len());
+            for b in blocks_raw.iter() {
+                let cid = b.cid().map_err(|e| e.to_string())?;
+                block_cid_strings.push(cid.to_string());
+                blocks.push((cid, b.data().to_vec()));
+            }
+
+            // Root CID is CID(list_of_block_cids_as_strings).
+            let root_block_data =
+                serde_json::to_vec(&block_cid_strings).map_err(|e| e.to_string())?;
+            let root_cid = Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(&root_block_data));
+
+            // Sanitize metadata: never store inline bytes in DHT records/cache.
+            metadata.file_data.clear();
+            metadata.cids = Some(vec![root_cid.clone()]);
+
+            // Update local cache with the sanitized metadata (so UI/local search sees cids).
+            {
+                let mut cache = self.file_metadata_cache.lock().await;
+                if let Some(existing) = cache.get(&metadata.merkle_root) {
+                    metadata = merge_file_metadata(existing.clone(), metadata);
+                }
+                cache.insert(metadata.merkle_root.clone(), metadata.clone());
+            }
+
+            self.cmd_tx
+                .send(DhtCommand::StoreBlocks {
+                    blocks,
+                    root_cid,
+                    metadata,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // Keep provider/heartbeat behaviour consistent with other publish flows.
+            self.start_file_heartbeat(&file_hash).await?;
+            return Ok(());
         }
 
         // Merge with existing cached metadata to preserve multi-protocol fields
