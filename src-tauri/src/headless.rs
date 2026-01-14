@@ -1,6 +1,7 @@
 // Headless mode for running as a bootstrap node on servers
 use crate::commands::bootstrap::get_bootstrap_nodes;
-use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtService};
+use crate::dht::DhtConfigBuilder;
+use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtConfig, DhtService};
 use crate::download_restart::{DownloadRestartService, StartDownloadRequest};
 use crate::e2e_api_headless::{start_headless_e2e_api_server, HeadlessE2eState};
 use crate::ethereum::GethProcess;
@@ -13,7 +14,6 @@ use clap::Parser;
 use std::{sync::Arc, time::Duration};
 use tokio::signal;
 use tokio::sync::Mutex;
-
 use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
@@ -147,7 +147,29 @@ pub struct CliArgs {
     pub resume_download: Option<String>,
 }
 
-pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub fn create_dht_config_from_args(args: &CliArgs) -> DhtConfig<'static> {
+    DhtConfig::builder()
+        // always present
+        .port(args.dht_port)
+        .bootstrap_nodes(args.bootstrap.clone())
+        .enable_autonat(!args.disable_autonat)
+        .enable_autorelay(!args.disable_autorelay)
+        .enable_relay_server(args.enable_relay)
+        .pure_client_mode(args.pure_client_mode)
+        .force_server_mode(args.force_server_mode)
+        .autonat_servers(args.autonat_server.clone())
+        .preferred_relays(args.relay.clone())
+        // optional fields using maybe_<field_name>
+        .maybe_autonat_probe_interval(if args.autonat_probe_interval == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(args.autonat_probe_interval))
+        })
+        .maybe_proxy_address(args.socks5_proxy.clone().filter(|s| !s.is_empty()))
+        .build()
+}
+
+pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
     let _ = tracing_subscriber::registry()
         .with(fmt::layer())
@@ -174,13 +196,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         bootstrap_nodes.extend(get_bootstrap_nodes());
         info!("Using default bootstrap nodes: {:?}", bootstrap_nodes);
     }
-
+    args.bootstrap = bootstrap_nodes.clone();
     let enable_autonat = !args.disable_autonat;
-    let probe_interval = if enable_autonat {
-        Some(Duration::from_secs(args.autonat_probe_interval))
-    } else {
-        None
-    };
 
     if enable_autonat {
         info!(
@@ -274,37 +291,21 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     } else {
         info!("AutoRelay disabled");
     }
+    args.disable_autorelay = !final_enable_autorelay;
+
+    // Build DHT configuration from CLI arguments
+    let dht_config = create_dht_config_from_args(&args);
 
     // Start DHT node
     let dht_service = DhtService::new(
-        args.dht_port,
-        bootstrap_nodes.clone(),
-        args.secret,
-        args.is_bootstrap,
-        enable_autonat,
-        probe_interval,
-        args.autonat_server.clone(),
-        args.socks5_proxy,
+        dht_config,
         file_transfer_service.clone(),
-        webrtc_service.clone(),
+        webrtc_service,
         chunk_manager.clone(),
-        None, // chunk_size_kb: use default
-        None, // cache_size_mb: use default
-        final_enable_autorelay,
-        args.relay.clone(),
-        args.enable_relay,
-        true,
-        None,
-        None,
-        None,
-        args.pure_client_mode,
-        args.force_server_mode,
     )
     .await?;
     let dht_arc = Arc::new(dht_service);
     let peer_id = dht_arc.get_peer_id().await;
-
-    // DHT is already running in a spawned background task
 
     if let Some(ft) = &file_transfer_service {
         let snapshot = ft.download_metrics_snapshot().await;
@@ -332,9 +333,15 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
     let geth_handle = if args.enable_geth {
         info!("Starting geth node...");
         let mut geth = GethProcess::new();
-        geth.start(&args.geth_data_dir, args.miner_address.as_deref(), args.pure_client_mode)?;
+        geth.start(
+            &args.geth_data_dir,
+            args.miner_address.as_deref(),
+            args.pure_client_mode,
+        )?;
         if args.pure_client_mode {
-            info!("✅ Geth node started in pure-client mode (minimal blockchain sync: ~100 blocks)");
+            info!(
+                "✅ Geth node started in pure-client mode (minimal blockchain sync: ~100 blocks)"
+            );
         } else {
             info!("✅ Geth node started (full blockchain sync: ~10,000 blocks)");
         }
@@ -380,19 +387,28 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         dht_arc.publish_file(example_metadata, None).await?;
         info!("Published bootstrap file metadata");
     } else {
-        info!("Connecting to bootstrap nodes: {:?}", bootstrap_nodes);
+        info!(
+            "Connecting to bootstrap nodes: {:?}",
+            bootstrap_nodes.clone()
+        );
         for bootstrap_addr in &bootstrap_nodes {
             match dht_arc.connect_peer(bootstrap_addr.clone()).await {
                 Ok(_) => {
                     info!("Connected to bootstrap: {}", bootstrap_addr);
-                    
+
                     // Verify the connection by checking if we have any connected peers
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     let connected_peers = dht_arc.get_connected_peers().await;
                     if connected_peers.is_empty() {
-                        warn!("Bootstrap connection to {} succeeded but no peers connected yet", bootstrap_addr);
+                        warn!(
+                            "Bootstrap connection to {} succeeded but no peers connected yet",
+                            bootstrap_addr
+                        );
                     } else {
-                        info!("Verified bootstrap connection: {} peer(s) connected", connected_peers.len());
+                        info!(
+                            "Verified bootstrap connection: {} peer(s) connected",
+                            connected_peers.len()
+                        );
                     }
                 }
                 Err(e) => error!("Failed to connect to {}: {}", bootstrap_addr, e),
@@ -422,10 +438,14 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         match http_server::start_server(http_server_state.clone(), bind_addr, shutdown_rx).await {
             Ok(bound) => {
-                let host = std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
+                let host =
+                    std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
                 http_base_url = Some(format!("http://{}:{}", host, bound.port()));
                 http_shutdown_tx_keepalive = Some(shutdown_tx);
-                info!("HTTP file server listening on http://{} (advertised host={})", bound, host);
+                info!(
+                    "HTTP file server listening on http://{} (advertised host={})",
+                    bound, host
+                );
                 break;
             }
             Err(e) => {
@@ -441,7 +461,8 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
 
     // Load account from CHIRAL_PRIVATE_KEY (headless has no GUI login).
     let (uploader_address, private_key) = match std::env::var("CHIRAL_PRIVATE_KEY") {
-        Ok(pk) if !pk.trim().is_empty() => match crate::ethereum::get_account_from_private_key(&pk) {
+        Ok(pk) if !pk.trim().is_empty() => match crate::ethereum::get_account_from_private_key(&pk)
+        {
             Ok(acct) => (Some(acct.address), Some(acct.private_key)),
             Err(e) => {
                 warn!("Invalid CHIRAL_PRIVATE_KEY: {}", e);
@@ -489,7 +510,10 @@ pub async fn run_headless(args: CliArgs) -> Result<(), Box<dyn std::error::Error
                 warn!("CHIRAL_E2E_API_PORT is set but HTTP file server base URL is unavailable.");
             }
         } else {
-            warn!("CHIRAL_E2E_API_PORT is set but not a valid u16: {}", port_str);
+            warn!(
+                "CHIRAL_E2E_API_PORT is set but not a valid u16: {}",
+                port_str
+            );
         }
     }
 

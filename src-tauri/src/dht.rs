@@ -1,8 +1,8 @@
 pub mod models;
 // pub mod protocol;
 pub use self::models::*;
+use bon::Builder;
 use rand::seq::SliceRandom;
-
 // use self::protocol::*;
 use crate::config::CHAIN_ID;
 use crate::download_source::HttpSourceInfo;
@@ -5751,87 +5751,52 @@ impl Drop for ActiveDownload {
     }
 }
 
+#[derive(Builder)]
+#[builder(derive(Clone, Debug, Into))]
 pub struct DhtConfig<'a> {
+    #[builder(default)]
     pub port: u16,
+    #[builder(default)]
     pub bootstrap_nodes: Vec<String>,
     pub secret: Option<String>,
+    #[builder(default)]
     pub is_bootstrap: bool,
+    #[builder(default)]
     pub enable_autonat: bool,
-    pub autonat_probe_interval: Option<Duration>,
+    #[builder(default = Duration::from_secs(30))]
+    pub autonat_probe_interval: Duration,
+    #[builder(default)]
     pub autonat_servers: Vec<String>,
     pub proxy_address: Option<String>,
     pub chunk_size_kb: Option<usize>,
     pub cache_size_mb: Option<usize>,
+    #[builder(default)]
     pub enable_autorelay: bool,
+    #[builder(default)]
     pub preferred_relays: Vec<String>,
+    #[builder(default)]
     pub enable_relay_server: bool,
+    #[builder(default)]
     pub enable_upnp: bool,
     pub blockstore_db_path: Option<&'a Path>,
+    #[builder(default)]
     pub pure_client_mode: bool,
+    #[builder(default)]
     pub force_server_mode: bool,
     pub last_autorelay_enabled_at: Option<SystemTime>,
     pub last_autorelay_disabled_at: Option<SystemTime>,
+    pub publish_ttl: Option<Duration>,
 }
 
-impl<'a> Default for DhtConfig<'a> {
-    fn default() -> Self {
-        Self {
-            port: 0,
-            bootstrap_nodes: Vec::new(),
-            secret: None,
-            is_bootstrap: false,
-            enable_autonat: false,
-            autonat_probe_interval: None,
-            autonat_servers: Vec::new(),
-            proxy_address: None,
-            chunk_size_kb: Some(256),
-            cache_size_mb: Some(1024),
-            enable_autorelay: false,
-            preferred_relays: Vec::new(),
-            enable_relay_server: false,
-            enable_upnp: false,
-            blockstore_db_path: None,
-            pure_client_mode: false,
-            force_server_mode: true,
-            last_autorelay_enabled_at: None,
-            last_autorelay_disabled_at: None,
-        }
-    }
-}
-
-impl<'a> DhtConfig<'a> {
-    /// Standard client configuration (default)
-    pub fn client() -> Self {
-        Self::default()
-    }
-
-    /// Configuration for a node that just wants to browse (no relaying/server mode)
-    pub fn pure_client() -> Self {
-        Self {
-            pure_client_mode: true,
-            enable_relay_server: false,
-            ..Self::default()
-        }
-    }
-
-    pub fn default_bootstrap_config() -> Self {
-        let mut config = Self::default();
-        config.is_bootstrap = true;
-        config.force_server_mode = true;
-        // Optionally clear bootstrap nodes so it doesn't dial itself
-        config.bootstrap_nodes = Vec::new();
-        config
-    }
-}
 impl DhtService {
     // should maybe be migrated to use DhtConfig at some point...
-    pub async fn new(
+    async fn _new(
         port: u16,
         bootstrap_nodes: Vec<String>,
         secret: Option<String>,
         is_bootstrap: bool,
         enable_autonat: bool,
-        autonat_probe_interval: Option<Duration>,
+        autonat_probe_interval: Duration,
         autonat_servers: Vec<String>,
         proxy_address: Option<String>,
         file_transfer_service: Option<Arc<FileTransferService>>,
@@ -5848,6 +5813,7 @@ impl DhtService {
         last_autorelay_disabled_at: Option<SystemTime>,
         pure_client_mode: bool,
         force_server_mode: bool,
+        publish_ttl: Option<Duration>,
     ) -> Result<Self, Box<dyn Error>> {
         // Respect user-configured AutoRelay preference (allow env to force-disable)
         let mut final_enable_autorelay = enable_autorelay;
@@ -5919,9 +5885,9 @@ impl DhtService {
             kad_cfg.set_periodic_bootstrap_interval(None);
         } else {
             // this is for mostly testing, in real world, should probably be in the hours
-            kad_cfg.set_provider_record_ttl(Some(Duration::from_secs(1)));
-            kad_cfg.set_record_ttl(Some(Duration::from_secs(5)));
-            kad_cfg.set_provider_publication_interval(Some(Duration::from_millis(100)));
+            let republication_interval = publish_ttl.map(|ttl| ttl / 10);
+            kad_cfg.set_provider_record_ttl(publish_ttl);
+            kad_cfg.set_provider_publication_interval(republication_interval);
 
             // Only enable periodic bootstrap if we have bootstrap nodes
             // This prevents "No known peers" warnings when running standalone
@@ -5988,7 +5954,7 @@ impl DhtService {
             std::iter::once((KeyRequestProtocol, rr::ProtocolSupport::Full));
         let key_request = rr::Behaviour::new(key_request_protocols, rr_cfg);
 
-        let probe_interval = autonat_probe_interval.unwrap_or(Duration::from_secs(1));
+        let probe_interval = autonat_probe_interval;
         let autonat_client_behaviour = if enable_autonat {
             info!(
                 "AutoNAT enabled (probe interval: {}s)",
@@ -6398,14 +6364,14 @@ impl DhtService {
         })
     }
 
-    pub async fn new_with_config(
+    pub async fn new(
         config: DhtConfig<'_>,
         file_transfer_service: Option<Arc<FileTransferService>>,
         webrtc_service: Option<Arc<crate::webrtc_service::WebRTCService>>,
         chunk_manager: Option<Arc<ChunkManager>>,
     ) -> Result<Self, Box<dyn Error>> {
         // Call the existing function by destructuring the config
-        Self::new(
+        Self::_new(
             config.port,
             config.bootstrap_nodes,
             config.secret,
@@ -6428,9 +6394,11 @@ impl DhtService {
             config.last_autorelay_disabled_at,
             config.pure_client_mode,
             config.force_server_mode,
+            config.publish_ttl,
         )
         .await
     }
+
     pub fn chunk_size(&self) -> usize {
         // Note: This might need to be adjusted if chunk_manager is the source of truth
         self.chunk_size
@@ -8216,9 +8184,9 @@ mod tests {
     }
 
     async fn spawn_test_node(bootstrap_nodes: Vec<String>) -> DhtService {
-        let config = DhtConfig::client();
+        let config = DhtConfig::builder().build();
 
-        DhtService::new_with_config(config, None, None, None)
+        DhtService::new(config, None, None, None)
             .await
             .expect("Failed to create DhtService")
     }
@@ -8255,11 +8223,12 @@ mod tests {
     async fn test_multi_node_bootstrap_discovery() {
         // 1. Create the Bootstrap Node
         // We force server mode so it answers Kademlia queries immediately.
-        let config = DhtConfig::default_bootstrap_config();
+        let config = DhtConfig::builder()
+            .is_bootstrap(true)
+            .force_server_mode(true)
+            .build();
 
-        let bootstrap_node = DhtService::new_with_config(config, None, None, None)
-            .await
-            .unwrap();
+        let bootstrap_node = DhtService::new(config, None, None, None).await.unwrap();
 
         let bootstrap_addrs = wait_for_address(&bootstrap_node, 10).await;
         let bootstrap_peer_id = bootstrap_node.get_peer_id().await;
@@ -8307,10 +8276,11 @@ mod tests {
     async fn test_file_upload_discovery() {
         init();
         // 1. Setup the Network Backbone (Bootstrap Node)
-        let b_config = DhtConfig::default_bootstrap_config();
-        let bootstrap_node = DhtService::new_with_config(b_config, None, None, None)
-            .await
-            .unwrap();
+        let b_config = DhtConfig::builder()
+            .is_bootstrap(true)
+            .force_server_mode(true)
+            .build();
+        let bootstrap_node = DhtService::new(b_config, None, None, None).await.unwrap();
         let b_addrs = wait_for_address(&bootstrap_node, 10).await;
         let b_addr = b_addrs[0].clone();
 
@@ -8398,10 +8368,11 @@ mod tests {
     async fn test_multi_uploader_and_node_departure() {
         init();
         // 1. Setup Network Backbone
-        let b_config = DhtConfig::default_bootstrap_config();
-        let bootstrap = DhtService::new_with_config(b_config, None, None, None)
-            .await
-            .unwrap();
+        let b_config = DhtConfig::builder()
+            .is_bootstrap(true)
+            .force_server_mode(true)
+            .build();
+        let bootstrap = DhtService::new(b_config, None, None, None).await.unwrap();
         let b_addr = wait_for_address(&bootstrap, 10).await[0].clone();
 
         // 2. Setup two Seeders (A, B) and one Searcher (C)
@@ -8614,44 +8585,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_command_stops_dht_service() {
-        let service = match DhtService::new(
-            0,
-            Vec::new(),
-            None,
-            false,
-            false,
-            None,
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,       // chunk_manager
-            Some(256),  // chunk_size_kb
-            Some(1024), // cache_size_mb
-            false,      // enable_autorelay
-            Vec::new(), // preferred_relays
-            false,      // enable_relay_server
-            false,      // enable_upnp (disabled for testing)
-            None,
-            None,
-            None,  // last_autorelay_disabled_at
-            false, // pure_client_mode
-            false, // force_server_mode
-        )
-        .await
-        {
-            Ok(service) => service,
-            Err(err) => {
-                let message = err.to_string();
-                let lowered = message.to_ascii_lowercase();
-                if lowered.contains("permission denied") || lowered.contains("not permitted") {
-                    // skipping shutdown_command_stops_dht_service (likely sandboxed)
-                    return;
-                }
-                panic!("start service: {message}");
-            }
-        };
-
+        let service = spawn_test_node(vec![]).await;
         service.shutdown().await.expect("shutdown");
 
         // Subsequent calls should gracefully no-op

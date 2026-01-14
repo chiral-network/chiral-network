@@ -113,6 +113,7 @@ axum = { version = "0.7", features = ["macros"] }
 tower = "0.5"
 tower-http = { version = "0.5.2", features = ["cors"] }
 env_logger = "0.11.8"
+bon = "3.8.2"
 
 
 [dev-dependencies]

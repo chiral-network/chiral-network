@@ -25,11 +25,6 @@ fi
 echo "✅ Binary found: src-tauri/target/release/chiral-network"
 echo ""
 
-# Set environment variable to enable AutoNAT (for VM mode)
-export CHIRAL_ENABLE_AUTONAT=1
-echo "🔧 Environment variable set: CHIRAL_ENABLE_AUTONAT=1"
-echo ""
-
 # Optional: Set VM mode flag (alternative way)
 # export CHIRAL_VM_MODE=1
 
@@ -49,6 +44,7 @@ echo ""
 exec src-tauri/target/release/chiral-network \
     --headless \
     --dht-port 4001 \
+    --enable-relay \
     --log-level info \
     --show-multiaddr \
     --show-reachability

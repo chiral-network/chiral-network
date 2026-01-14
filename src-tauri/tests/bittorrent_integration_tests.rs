@@ -1,10 +1,10 @@
 use chiral_network::bittorrent_handler::{BitTorrentHandler, BitTorrentEvent};
-use chiral_network::dht::{DhtService};
+use chiral_network::dht::{DhtConfig, DhtService};
 use chiral_network::protocols::SimpleProtocolHandler;
 use librqbit::{AddTorrentOptions, TorrentStats};
-use std::collections::HashSet; // Still needed for DhtService initialization
+use std::collections::HashSet;
 use tempfile::tempdir;
-use tokio::sync::{mpsc, Mutex}; // Still needed for DhtService initialization
+use tokio::sync::{mpsc, Mutex};
 use std::sync::Arc;
 use tokio::time::{self, Duration};
 use tracing::{info};
@@ -16,32 +16,9 @@ async fn test_start_download_fallback_to_public() {
     let download_path = temp_dir.path().to_path_buf();
 
     let dht_service = Arc::new(
-        DhtService::new(
-            0,                            // Random port
-            vec![],                       // No bootstrap nodes for this test
-            None,                         // No identity secret
-            false,                        // Not bootstrap node
-            false,                        // Disable AutoNAT for test
-            None,                         // No autonat probe interval
-            vec![],                       // No custom AutoNAT servers
-            None,                         // No proxy
-            None,                         // No file transfer service
-            None,                         // No webrtc_service
-            None,                         // No chunk manager
-            Some(256),                    // chunk_size_kb
-            Some(1024),                   // cache_size_mb
-            false,                        // enable_autorelay
-            Vec::new(),                   // preferred_relays
-            false,                        // enable_relay_server
-            false,                        // enable_upnp
-            None,                         // blockstore_db_path
-            None,                         // last_autorelay_enabled_at
-            None,                         // last_autorelay_disabled_at
-            false,                        // pure_client_mode
-            false,                        // force_server_mode
-        )
-        .await
-        .expect("Failed to create DHT service for test"),
+        DhtService::new(DhtConfig::test_config(), None, None, None)
+            .await
+            .expect("Failed to create DHT service for test"),
     );
 
     // Create the BitTorrentHandler.
@@ -73,32 +50,9 @@ async fn test_integration_protocol_handler_download_linux_distro() {
 
     // Create a DHT service for the test
     let dht_service = Arc::new(
-        DhtService::new(
-            0,                            // Random port
-            vec![],                       // No bootstrap nodes for this test
-            None,                         // No identity secret
-            false,                        // Not bootstrap node
-            false,                        // Disable AutoNAT for test
-            None,                         // No autonat probe interval
-            vec![],                       // No custom AutoNAT servers
-            None,                         // No proxy
-            None,                         // No file transfer service
-            None,                         // No webrtc_service
-            None,                         // No chunk manager
-            Some(256),                    // chunk_size_kb
-            Some(1024),                   // cache_size_mb
-            false,                        // enable_autorelay
-            Vec::new(),                   // preferred_relays
-            false,                        // enable_relay_server
-            false,                        // enable_upnp
-            None,                         // blockstore_db_path
-            None,                         // last_autorelay_enabled_at
-            None,                         // last_autorelay_disabled_at
-            false,                        // pure_client_mode
-            false,                        // force_server_mode
-        )
-        .await
-        .expect("Failed to create DHT service for test"),
+        DhtService::new(DhtConfig::test_config(), None, None, None)
+            .await
+            .expect("Failed to create DHT service for test"),
     );
 
     // Use a specific port range to avoid conflicts
@@ -135,32 +89,9 @@ async fn test_integration_seed_file() {
 
     // Create a DHT service for the test
     let dht_service = Arc::new(
-        DhtService::new(
-            0,                            // Random port
-            vec![],                       // No bootstrap nodes for this test
-            None,                         // No identity secret
-            false,                        // Not bootstrap node
-            false,                        // Disable AutoNAT for test
-            None,                         // No autonat probe interval
-            vec![],                       // No custom AutoNAT servers
-            None,                         // No proxy
-            None,                         // No file transfer service
-            None,                         // No webrtc_service
-            None,                         // No chunk manager
-            Some(256),                    // chunk_size_kb
-            Some(1024),                   // cache_size_mb
-            false,                        // enable_autorelay
-            Vec::new(),                   // preferred_relays
-            false,                        // enable_relay_server
-            false,                        // enable_upnp
-            None,                         // blockstore_db_path
-            None,                         // last_autorelay_enabled_at
-            None,                         // last_autorelay_disabled_at
-            false,                        // pure_client_mode
-            false,                        // force_server_mode
-        )
-        .await
-        .expect("Failed to create DHT service for test"),
+        DhtService::new(DhtConfig::test_config(), None, None, None)
+            .await
+            .expect("Failed to create DHT service for test"),
     );
 
     // Use a specific port range to avoid conflicts
