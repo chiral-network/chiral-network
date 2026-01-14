@@ -64,6 +64,7 @@ export interface FileMetadata {
   fileSize: number;
   fileData?: Uint8Array | number[];
   seeders: string[];
+  leechers?: string[];
   createdAt: number;
   merkleRoot?: string;
   downloadPath?: string;

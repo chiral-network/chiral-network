@@ -55,12 +55,12 @@ export interface FileItem {
   version?: number;
   isDownload?: boolean;
   isSeedingDownload?: boolean;
-  protocol?: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol used for upload
+  protocol?: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap"; // Protocol used for upload
   uploaderAddress?: string; // Wallet address of the uploader for payment
 }
 
 export interface ProtocolEntry {
-  protocol: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP";
+  protocol: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap";
   hash: string; // Protocol-specific hash (Merkle, magnet, ed2k, etc.)
   fileItem: FileItem; // Reference to the original file item
   technicalInfo: {
@@ -316,7 +316,7 @@ export const coalescedFiles = derived(files, ($files): CoalescedFileItem[] => {
 
     // Create protocol entries
     const protocols: ProtocolEntry[] = fileItems.map((file) => ({
-      protocol: file.protocol || "Bitswap", // Default to Bitswap if not specified
+      protocol: file.protocol || "WebRTC", // Default to WebRTC if not specified
       hash: file.protocolHash || file.hash, // Use protocol-specific hash if available, otherwise content hash
       fileItem: file,
       technicalInfo: {
@@ -695,7 +695,7 @@ export interface AppSettings {
   maxLogSizeMB: number; // Maximum size of a single log file in MB
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
-  selectedProtocol: "WebRTC" | "Bitswap" | "BitTorrent" | "ED2K" | "FTP"; // Protocol selected for file uploads
+  selectedProtocol: "WebRTC" | "BitTorrent" | "ED2K" | "FTP"; // Protocol selected for file uploads
 }
 
 // Export the settings store
@@ -751,7 +751,7 @@ export const settings = writable<AppSettings>({
   maxLogSizeMB: 10, // 10 MB per log file by default
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
-  selectedProtocol: "Bitswap", // Default to Bitswap
+  selectedProtocol: "WebRTC", // Default to WebRTC
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(

@@ -34,6 +34,34 @@ export interface DiagReport {
 
 class DiagnosticsService {
   /**
+   * Best-effort parent directory extraction that works for both POSIX and Windows paths.
+   * This is used for fallbacks when the configured directory doesn't exist yet.
+   */
+  private getParentPath(inputPath: string): string {
+    if (!inputPath) return "/";
+
+    // Normalize Windows separators to '/' for parsing. Windows APIs accept 'C:/path' as well.
+    let normalized = inputPath.replace(/\\/g, "/");
+
+    // Keep drive root as-is.
+    if (/^[A-Za-z]:\/$/.test(normalized)) {
+      return normalized;
+    }
+
+    // Trim trailing slashes (but not the drive root which we handled above)
+    normalized = normalized.replace(/\/+$/, "");
+
+    const idx = normalized.lastIndexOf("/");
+    if (idx < 0) {
+      return normalized || "/";
+    }
+
+    const parent = normalized.slice(0, idx) || "/";
+    // If parent is a bare drive letter like "C:", return "C:/"
+    return /^[A-Za-z]:$/.test(parent) ? `${parent}/` : parent;
+  }
+
+  /**
    * Check if running in Tauri environment (dynamically at runtime)
    */
   private get isTauri(): boolean {
@@ -788,7 +816,7 @@ class DiagnosticsService {
         if (errorMsg.includes("No such file") || errorMsg.includes("does not exist")) {
           try {
             // Get parent directory (e.g., /Users/spark/Downloads from /Users/spark/Downloads/Chiral-Network-Storage)
-            const parentPath = storagePath.split('/').slice(0, -1).join('/') || '/';
+            const parentPath = this.getParentPath(storagePath);
             const availableBytes = await invoke<number>("get_disk_space", { path: parentPath });
             const availableGB = (availableBytes / (1024 ** 3)).toFixed(2);
 

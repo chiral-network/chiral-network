@@ -1564,12 +1564,14 @@
     "filterCanceled": "Annulés",
     "redownload": "Télécharger à nouveau",
     "remove": "Supprimer",
-    "clearHistory": "Effacer l’historique",
+    "clearHistory": "Effacer l'historique",
     "clearFailed": "Effacer les échecs",
-    "exportHistory": "Exporter l’historique",
-    "importHistory": "Importer l’historique",
-    "confirmClear": "Voulez-vous vraiment effacer tout l’historique des téléchargements ? Cette action est irréversible.",
-    "confirmClearFailed": "Effacer tous les téléchargements échoués de l’historique ?",
+    "clearCanceled": "Effacer les annulés",
+    "exportHistory": "Exporter l'historique",
+    "importHistory": "Importer l'historique",
+    "confirmClear": "Voulez-vous vraiment effacer tout l'historique des téléchargements ? Cette action est irréversible.",
+    "confirmClearFailed": "Effacer tous les téléchargements échoués de l'historique ?",
+    "confirmClearCanceled": "Effacer tous les téléchargements annulés de l'historique ?",
     "stats": {
       "total": "Nombre total de téléchargements",
       "completed": "Terminés",
@@ -1581,10 +1583,11 @@
     "messages": {
       "historyCleared": "Historique des téléchargements effacé",
       "failedCleared": "Téléchargements échoués effacés",
-      "entryRemoved": "Entrée supprimée de l’historique",
+      "canceledCleared": "Téléchargements annulés effacés",
+      "entryRemoved": "Entrée supprimée de l'historique",
       "exportSuccess": "Historique exporté avec succès",
-      "importSuccess": "{count} entrées d’historique importées",
-      "importError": "Échec de l’importation de l’historique : {error}",
+      "importSuccess": "{count} entrées d'historique importées",
+      "importError": "Échec de l'importation de l'historique : {error}",
       "redownloadStarted": "Nouveau téléchargement de {name}..."
     }
   },
@@ -1814,53 +1817,53 @@
     }
   },
   "commandPalette": {
-    "searchPlaceholder": "Search for actions or pages...",
-    "searchLabel": "Command palette search",
-    "noResults": "No results found",
-    "tryDifferentQuery": "Try a different search term",
-    "navigate": "Navigate",
-    "select": "Select",
-    "close": "Close",
+    "searchPlaceholder": "Rechercher des actions ou des pages...",
+    "searchLabel": "Recherche dans la palette de commandes",
+    "noResults": "Aucun résultat trouvé",
+    "tryDifferentQuery": "Essayez un terme de recherche différent",
+    "navigate": "Naviguer",
+    "select": "Sélectionner",
+    "close": "Fermer",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "Aller aux Téléchargements",
+      "goToUpload": "Aller au Partage",
+      "goToNetwork": "Aller au Réseau",
+      "goToMining": "Aller au Minage",
+      "goToRelay": "Aller au Relais",
+      "goToAnalytics": "Aller aux Analyses",
+      "goToReputation": "Aller à la Réputation",
+      "goToBlockchain": "Aller à la Blockchain",
+      "goToAccount": "Aller au Compte",
+      "goToSettings": "Aller aux Paramètres"
     }
   },
   "shortcuts": {
-    "title": "Keyboard Shortcuts",
-    "close": "Close",
-    "tip": "Press ? or F1 anytime to view this help",
+    "title": "Raccourcis clavier",
+    "close": "Fermer",
+    "tip": "Appuyez sur ? ou F1 à tout moment pour afficher cette aide",
     "categories": {
       "navigation": "Navigation",
       "application": "Application",
-      "window": "Window"
+      "window": "Fenêtre"
     },
     "navigation": {
-      "download": "Go to Download page",
-      "upload": "Go to Upload page",
-      "network": "Go to Network page",
-      "mining": "Go to Mining page",
-      "account": "Go to Account page",
-      "settings": "Open Settings"
+      "download": "Aller à la page Téléchargements",
+      "upload": "Aller à la page Partage",
+      "network": "Aller à la page Réseau",
+      "mining": "Aller à la page Minage",
+      "account": "Aller à la page Compte",
+      "settings": "Ouvrir les Paramètres"
     },
     "application": {
-      "commandPalette": "Open Command Palette",
-      "showHelp": "Show keyboard shortcuts",
-      "closeModal": "Close modal/dialog",
-      "refresh": "Refresh current page",
-      "reload": "Reload application"
+      "commandPalette": "Ouvrir la palette de commandes",
+      "showHelp": "Afficher les raccourcis clavier",
+      "closeModal": "Fermer le modal/dialogue",
+      "refresh": "Actualiser la page actuelle",
+      "reload": "Recharger l'application"
     },
     "window": {
-      "fullscreen": "Toggle fullscreen",
-      "quit": "Quit application"
+      "fullscreen": "Basculer en plein écran",
+      "quit": "Quitter l'application"
     }
   },
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",

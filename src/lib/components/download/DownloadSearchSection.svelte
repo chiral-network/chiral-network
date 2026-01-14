@@ -554,20 +554,10 @@
     const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
     const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
     
-    // WebRTC is available if there are seeders (replaces Bitswap for P2P transfers)
-    // This includes both WebRTC-native uploads and legacy Bitswap uploads
+    // WebRTC is available if there are seeders for P2P transfers
     const isWebRTCAvailable = hasSeeders && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
 
-    // Bitswap is deprecated - WebRTC has replaced it for P2P file transfers
-    const isBitswapAvailable = false;
-    
     return [
-      {
-        id: 'bitswap',
-        name: 'Bitswap',
-        description: 'IPFS Bitswap protocol',
-        available: isBitswapAvailable
-      },
       {
         id: 'webrtc',
         name: 'WebRTC',
@@ -686,8 +676,8 @@
       return;
     }
 
-    // For P2P protocols (WebRTC, Bitswap, BitTorrent) - need peer selection
-    if (protocolId === 'webrtc' || protocolId === 'bitswap' || protocolId === 'bittorrent') {
+    // For P2P protocols (WebRTC, BitTorrent) - need peer selection
+    if (protocolId === 'webrtc' || protocolId === 'bittorrent') {
       // Check if there are any seeders
       if (!metadata.seeders || metadata.seeders.length === 0) {
         pushMessage('No seeders available for this file', 'warning');
@@ -948,8 +938,9 @@
     }
 
     // Route download based on selected protocol
-    if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap' || selectedProtocol === 'bittorrent') {
-      // P2P download flow (WebRTC, Bitswap, BitTorrent)
+    // Note: 'bittorrent' is handled above and returns early, so it cannot reach here.
+    if (selectedProtocol === 'webrtc' || selectedProtocol === 'bitswap') {
+      // P2P download flow (WebRTC, Bitswap)
       
 
       const fileWithSelectedPeers: FileMetadata & { peerAllocation?: any[]; selectedProtocol?: string } = {

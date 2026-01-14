@@ -5,13 +5,12 @@
   import Label from '$lib/components/ui/label.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Progress from '$lib/components/ui/progress.svelte'
-  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw } from 'lucide-svelte'
+  import { Search, Pause, Play, X, ChevronUp, ChevronDown, Settings, FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, Archive, Code, FileSpreadsheet, Presentation, History, Download as DownloadIcon, Upload as UploadIcon, Trash2, RefreshCw, Eye } from 'lucide-svelte'
   import { files, downloadQueue, activeTransfers, wallet, type FileItem } from '$lib/stores'
   import { dhtService } from '$lib/dht'
   import { paymentService } from '$lib/services/paymentService'
   import DownloadSearchSection from '$lib/components/download/DownloadSearchSection.svelte'
   import FavoritesPanel from '$lib/components/download/FavoritesPanel.svelte'
-  import ProtocolTestPanel from '$lib/components/ProtocolTestPanel.svelte'
   import type { FileMetadata } from '$lib/dht'
   import { onDestroy, onMount } from 'svelte'
   import { t } from 'svelte-i18n'
@@ -24,8 +23,9 @@
   import { downloadHistoryService, type DownloadHistoryEntry } from '$lib/services/downloadHistoryService'
   import { showToast } from '$lib/toast'
   import { diagnosticLogger, fileLogger, errorLogger } from '$lib/diagnostics/logger'
-  import DownloadRestartControls from '$lib/components/download/DownloadRestartControls.svelte'
   import PaymentCheckpointModal from '$lib/components/download/PaymentCheckpointModal.svelte'
+  import FilePreviewModal from '$lib/components/FilePreviewModal.svelte'
+  import { canPreviewFile } from '$lib/utils/fileTypeDetector'
   import { paymentCheckpointService, type PaymentCheckpointEvent } from '$lib/services/paymentCheckpointService'
   // Import transfer events store for centralized transfer state management
   import {
@@ -36,7 +36,7 @@
     type Transfer
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
-  import { homeDir, join } from '@tauri-apps/api/path'
+  import { join } from '@tauri-apps/api/path'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
@@ -109,6 +109,26 @@
     downloadHistoryService.addToHistory(torrentFile);
   }
   onMount(() => {
+    // DEBUG: Expose test function for preview testing in development
+    if (import.meta.env.DEV) {
+      (window as any).addTestFile = (filePath: string) => {
+        const fileName = filePath.split(/[/\\]/).pop() || 'test-file';
+        files.update(f => [...f, {
+          id: `test-${Date.now()}`,
+          name: fileName,
+          hash: 'test-hash',
+          size: 702,
+          status: 'completed',
+          progress: 100,
+          downloadPath: filePath,
+          price: 0,
+          protocol: 'BitTorrent'
+        }]);
+        console.log(`✅ Test file added: ${fileName} at ${filePath}`);
+      };
+      console.log('🛠️ Debug mode: Use addTestFile("path/to/file") to test preview');
+    }
+
     // Initialize payment service to load persisted wallet and transactions
     paymentService.initialize();
 
@@ -945,6 +965,12 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   let currentCheckpoint: PaymentCheckpointEvent | null = null
   let currentCheckpointFileName: string = ''
 
+  // File Preview state
+  let showPreviewModal = false
+  let previewFileName = ''
+  let previewFilePath = ''
+  let previewFileSize = 0
+
   // Download History state
   let showHistory = false
   let downloadHistory: DownloadHistoryEntry[] = []
@@ -1203,15 +1229,14 @@ async function loadAndResumeDownloads() {
 
     // Search for the file in DHT by hash
     try {
-      const metadata = await dhtService.getFile(detail.hash);
-      if (metadata) {
-        await handleSearchDownload(metadata);
-      } else {
-        showToast(tr('toasts.favorites.notFound', { values: { name: detail.name } }), 'warning');
-      }
+      await dhtService.searchFile(detail.hash);
+      
+      // Wait for DHT search results through the event system
+      // The DownloadSearchSection component will receive the results
+      showToast(tr('toasts.favorites.searching', { values: { name: detail.name } }), 'info');
     } catch (error) {
-      console.error('Failed to download favorite:', error);
-      showToast(tr('toasts.favorites.downloadFailed'), 'error');
+      console.error('Failed to search for favorite:', error);
+      showToast(tr('toasts.favorites.searchFailed'), 'error');
     }
   }
 
@@ -1382,6 +1407,24 @@ async function loadAndResumeDownloads() {
 
   function handlePaymentClose() {
     showPaymentModal = false
+  }
+
+  // File Preview Functions
+  async function openPreview(file: FileItem) {
+    try {
+      // For completed files, use the download path
+      if (file.status === 'completed' && file.downloadPath) {
+        previewFilePath = file.downloadPath
+        previewFileName = file.name
+        previewFileSize = file.size
+        showPreviewModal = true
+      } else {
+        showToast('File must be completed to preview', 'warning')
+      }
+    } catch (error) {
+      console.error('Failed to open preview:', error)
+      showToast('Failed to open preview', 'error')
+    }
   }
 
   // Function to handle input and only allow positive numbers
@@ -2752,37 +2795,6 @@ async function loadAndResumeDownloads() {
   }
 
   const formatFileSize = toHumanReadableSize
-
-  // Restartable HTTP download controls
-  let showRestartSection = false
-  let restartDownloadId = ''
-  let restartSourceUrl = ''
-  let restartDestinationPath = ''
-  let restartSha256 = ''
-
-  async function chooseRestartDestination() {
-    try {
-      const defaultDir = await homeDir()
-      const suggestedPath =
-        restartDestinationPath || `${defaultDir.replace(/\/$/, '')}/Downloads/restart-download.bin`
-      const { save } = await import('@tauri-apps/plugin-dialog')
-      const selection = await save({
-        defaultPath: suggestedPath,
-        filters: [
-          {
-            name: 'All Files',
-            extensions: ['*']
-          }
-        ]
-      })
-      if (selection) {
-        restartDestinationPath = selection
-      }
-    } catch (error) {
-      console.error('Failed to choose destination path', error)
-      showToast('Failed to choose destination path', 'error')
-    }
-  }
 </script>
 
 <div class="space-y-6">
@@ -2790,10 +2802,6 @@ async function loadAndResumeDownloads() {
     <h1 class="text-3xl font-bold">{$t('download.title')}</h1>
     <p class="text-muted-foreground mt-2">{$t('download.subtitle')}</p>
   </div>
-
-  <!-- DEV ONLY: Protocol Test Panel - Remove before production -->
-  <!-- File: src/lib/components/ProtocolTestPanel.svelte -->
-  <ProtocolTestPanel />
 
   <!-- Combined Download Section (Chiral DHT + BitTorrent) -->
   <Card class="">
@@ -3309,6 +3317,17 @@ async function loadAndResumeDownloads() {
                     {file.status === 'queued' ? $t('download.actions.remove') : $t('download.actions.cancel')}
                   </Button>
                 {:else if file.status === 'completed'}
+                  {#if canPreviewFile(file.name)}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      on:click={() => openPreview(file)}
+                      class="h-7 px-3 text-sm"
+                    >
+                      <Eye class="h-3 w-3 mr-1" />
+                      {$t('download.actions.preview', { default: 'Preview' })}
+                    </Button>
+                  {/if}
                   <Button
                     size="sm"
                     variant="outline"
@@ -3361,85 +3380,6 @@ async function loadAndResumeDownloads() {
     <FavoritesPanel
       on:download={(event) => handleFavoriteDownload(event.detail)}
     />
-  </Card>
-
-  <!-- Restartable HTTP Download Section -->
-  <Card class="p-6">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <div class="flex items-center gap-2">
-          <DownloadIcon class="h-5 w-5" />
-          <h2 class="text-lg font-semibold">Restartable HTTP Download (Beta)</h2>
-        </div>
-        <p class="text-sm text-muted-foreground mt-1">
-          Download any HTTP resource with pause/resume support powered by the restartable engine.
-        </p>
-      </div>
-      <Button size="sm" variant="outline" on:click={() => (showRestartSection = !showRestartSection)}>
-        {showRestartSection ? 'Hide Controls' : 'Show Controls'}
-      </Button>
-    </div>
-
-    {#if showRestartSection}
-      <div class="mt-6 space-y-5">
-        <div class="grid gap-4 md:grid-cols-2">
-          <div class="space-y-2">
-            <Label for="restart-url">HTTP Source URL</Label>
-            <Input
-              id="restart-url"
-              type="url"
-              placeholder="https://example.com/file.bin"
-              bind:value={restartSourceUrl}
-            />
-          </div>
-          <div class="space-y-2">
-            <Label for="restart-hash">Expected SHA-256 (optional)</Label>
-            <Input
-              id="restart-hash"
-              placeholder="64-character hex"
-              bind:value={restartSha256}
-            />
-          </div>
-          <div class="space-y-2">
-            <Label for="restart-id">Download ID (optional)</Label>
-            <Input
-              id="restart-id"
-              placeholder="Leave blank to auto-generate"
-              bind:value={restartDownloadId}
-            />
-          </div>
-        </div>
-        <div class="space-y-2">
-          <Label for="restart-dest">Destination Path</Label>
-          <div class="flex flex-col gap-2 md:flex-row">
-            <Input
-              id="restart-dest"
-              placeholder="/home/user/Downloads/file.bin"
-              bind:value={restartDestinationPath}
-              class="flex-1"
-            />
-            <Button type="button" variant="outline" on:click={chooseRestartDestination}>
-              Choose Path
-            </Button>
-          </div>
-        </div>
-
-        <div class="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-          <p>
-            Enter a direct HTTP URL and destination path, then use the controls below to start,
-            pause, or resume the transfer. Metadata is stored next to the destination as
-            <code>.filename.chiral.meta.json</code> so progress survives restarts.
-          </p>
-        </div>
-
-        <DownloadRestartControls
-          bind:downloadId={restartDownloadId}
-          sourceUrl={restartSourceUrl}
-          destinationPath={restartDestinationPath}
-          expectedSha256={restartSha256 ? restartSha256 : null}
-        />
-      </div>
-    {/if}
   </Card>
 
   <!-- Download History Section -->
@@ -3638,3 +3578,11 @@ async function loadAndResumeDownloads() {
     on:close={handlePaymentClose}
   />
 {/if}
+
+<!-- File Preview Modal -->
+<FilePreviewModal
+  bind:isOpen={showPreviewModal}
+  fileName={previewFileName}
+  filePath={previewFilePath}
+  fileSize={previewFileSize}
+/>

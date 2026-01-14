@@ -1567,10 +1567,12 @@
     "remove": "हटाएं",
     "clearHistory": "इतिहास साफ़ करें",
     "clearFailed": "विफल साफ़ करें",
+    "clearCanceled": "रद्द किए गए साफ़ करें",
     "exportHistory": "इतिहास निर्यात करें",
     "importHistory": "इतिहास आयात करें",
     "confirmClear": "क्या आप वाकई सभी डाउनलोड इतिहास को साफ़ करना चाहते हैं? यह पूर्ववत नहीं किया जा सकता।",
     "confirmClearFailed": "इतिहास से सभी विफल डाउनलोड साफ़ करें?",
+    "confirmClearCanceled": "इतिहास से सभी रद्द किए गए डाउनलोड साफ़ करें?",
     "stats": {
       "total": "कुल डाउनलोड",
       "completed": "पूर्ण",
@@ -1582,6 +1584,7 @@
     "messages": {
       "historyCleared": "डाउनलोड इतिहास साफ़ किया गया",
       "failedCleared": "विफल डाउनलोड साफ़ किए गए",
+      "canceledCleared": "रद्द किए गए डाउनलोड साफ़ किए गए",
       "entryRemoved": "इतिहास से प्रविष्टि हटाई गई",
       "exportSuccess": "इतिहास सफलतापूर्वक निर्यात किया गया",
       "importSuccess": "{count} इतिहास प्रविष्टियां आयात की गईं",
@@ -1815,53 +1818,53 @@
     }
   },
   "commandPalette": {
-    "searchPlaceholder": "Search for actions or pages...",
-    "searchLabel": "Command palette search",
-    "noResults": "No results found",
-    "tryDifferentQuery": "Try a different search term",
-    "navigate": "Navigate",
-    "select": "Select",
-    "close": "Close",
+    "searchPlaceholder": "क्रियाओं या पृष्ठों की खोज करें...",
+    "searchLabel": "कमांड पैलेट खोज",
+    "noResults": "कोई परिणाम नहीं मिला",
+    "tryDifferentQuery": "एक अलग खोज शब्द आज़माएं",
+    "navigate": "नेविगेट करें",
+    "select": "चयन करें",
+    "close": "बंद करें",
     "actions": {
-      "goToDownload": "Go to Download",
-      "goToUpload": "Go to Upload",
-      "goToNetwork": "Go to Network",
-      "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
-      "goToAnalytics": "Go to Analytics",
-      "goToReputation": "Go to Reputation",
-      "goToBlockchain": "Go to Blockchain",
-      "goToAccount": "Go to Account",
-      "goToSettings": "Go to Settings"
+      "goToDownload": "डाउनलोड पर जाएं",
+      "goToUpload": "अपलोड पर जाएं",
+      "goToNetwork": "नेटवर्क पर जाएं",
+      "goToMining": "माइनिंग पर जाएं",
+      "goToRelay": "रिले पर जाएं",
+      "goToAnalytics": "विश्लेषण पर जाएं",
+      "goToReputation": "प्रतिष्ठा पर जाएं",
+      "goToBlockchain": "ब्लॉकचेन पर जाएं",
+      "goToAccount": "खाता पर जाएं",
+      "goToSettings": "सेटिंग्स पर जाएं"
     }
   },
   "shortcuts": {
-    "title": "Keyboard Shortcuts",
-    "close": "Close",
-    "tip": "Press ? or F1 anytime to view this help",
+    "title": "कीबोर्ड शॉर्टकट",
+    "close": "बंद करें",
+    "tip": "इस सहायता को देखने के लिए किसी भी समय ? या F1 दबाएं",
     "categories": {
-      "navigation": "Navigation",
-      "application": "Application",
-      "window": "Window"
+      "navigation": "नेविगेशन",
+      "application": "एप्लिकेशन",
+      "window": "विंडो"
     },
     "navigation": {
-      "download": "Go to Download page",
-      "upload": "Go to Upload page",
-      "network": "Go to Network page",
-      "mining": "Go to Mining page",
-      "account": "Go to Account page",
-      "settings": "Open Settings"
+      "download": "डाउनलोड पृष्ठ पर जाएं",
+      "upload": "अपलोड पृष्ठ पर जाएं",
+      "network": "नेटवर्क पृष्ठ पर जाएं",
+      "mining": "माइनिंग पृष्ठ पर जाएं",
+      "account": "खाता पृष्ठ पर जाएं",
+      "settings": "सेटिंग्स खोलें"
     },
     "application": {
-      "commandPalette": "Open Command Palette",
-      "showHelp": "Show keyboard shortcuts",
-      "closeModal": "Close modal/dialog",
-      "refresh": "Refresh current page",
-      "reload": "Reload application"
+      "commandPalette": "कमांड पैलेट खोलें",
+      "showHelp": "कीबोर्ड शॉर्टकट दिखाएं",
+      "closeModal": "मोडल/डायलॉग बंद करें",
+      "refresh": "वर्तमान पृष्ठ रीफ़्रेश करें",
+      "reload": "एप्लिकेशन पुनः लोड करें"
     },
     "window": {
-      "fullscreen": "Toggle fullscreen",
-      "quit": "Quit application"
+      "fullscreen": "पूर्ण स्क्रीन टॉगल करें",
+      "quit": "एप्लिकेशन बंद करें"
     }
   },
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",

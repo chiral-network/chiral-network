@@ -8,7 +8,7 @@
   import DropDown from "$lib/components/ui/dropDown.svelte";
   import { wallet, etcAccount, blacklist } from '$lib/stores'
   import { gethStatus } from '$lib/services/gethService'
-  import { walletService } from '$lib/wallet';
+  import { walletService, type WalletExportSnapshot } from '$lib/wallet';
   import { lockAccount } from '$lib/services/accountLock';
   import { transactions, transactionPagination, miningPagination } from '$lib/stores';
   import { derived } from 'svelte/store'
@@ -21,7 +21,7 @@
   import { t, locale } from 'svelte-i18n'
   import { showToast } from '$lib/toast'
   import { get } from 'svelte/store'
-  import { totalSpent, totalReceived, miningState, accurateTotals, isCalculatingAccurateTotals, accurateTotalsProgress } from '$lib/stores';
+  import { totalSpent, totalReceived, miningState, accurateTotals, isCalculatingAccurateTotals, accurateTotalsProgress, type Transaction } from '$lib/stores';
   import { goto } from '@mateothegreat/svelte5-router';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params)
@@ -63,7 +63,8 @@
   let privateKeyVisible = false
   let showPending = false
   let importPrivateKey = ''
-  let importedSnapshot: any = null
+  type ImportedWalletSnapshot = WalletExportSnapshot & { transactions?: Transaction[] };
+  let importedSnapshot: ImportedWalletSnapshot | null = null
   let isCreatingAccount = false
   let isImportingAccount = false
   let isGethRunning: boolean;
@@ -96,7 +97,7 @@
   let chainId = 98765; // Default, will be fetched from backend
 
   // Transaction receipt modal state
-  let selectedTransaction: any = null;
+  let selectedTransaction: Transaction | null = null;
   let showTransactionReceipt = false;
   
   // 2FA State
@@ -143,7 +144,15 @@
   let blockNumberSearch: string = '';
   let minGasPrice: number = 0;
   let maxGasPrice: number | null = null;
-  let hashSearchResult: any = null;
+  type TxHashLookupResult = {
+    hash?: string;
+    from?: string;
+    to?: string | null;
+    value?: string;
+    block_number?: number | null;
+    blockNumber?: number | null;
+  };
+  let hashSearchResult: TxHashLookupResult | null = null;
   let isSearchingHash = false;
   let hashSearchError = '';
 
@@ -434,9 +443,6 @@
   function copyAddress() {
     const addressToCopy = $etcAccount ? $etcAccount.address : $wallet.address;
     navigator.clipboard.writeText(addressToCopy);
-    
-    
-    // showToast('Address copied to clipboard!', 'success')
     showToast(tr('toasts.account.addressCopied'), 'success')
   }
 
@@ -450,7 +456,6 @@
           privateKeyToCopy = await invoke<string>('get_active_account_private_key');
         } catch (error) {
           console.error('Failed to get private key from backend:', error);
-          // showToast('Failed to retrieve private key', 'error');
           showToast(tr('toasts.account.privateKey.fetchError'), 'error');
           return;
         }
@@ -458,11 +463,9 @@
       
       if (privateKeyToCopy) {
         navigator.clipboard.writeText(privateKeyToCopy);
-        // showToast('Private key copied to clipboard!', 'success');
         showToast(tr('toasts.account.privateKey.copied'), 'success');
       }
       else {
-        // showToast('No private key available', 'error');
         showToast(tr('toasts.account.privateKey.missing'), 'error');
       }
     });
@@ -510,12 +513,12 @@
             await writable.close();
 
             exportMessage = tr('wallet.exportSuccess');
-          } catch (error: any) {
-            if (error.name !== 'AbortError') {
-              throw error;
+          } catch (error: unknown) {
+            if (error instanceof Error && error.name === 'AbortError') {
+              // User cancelled, don't show error message
+              return;
             }
-            // User cancelled, don't show error message
-            return;
+            throw error;
           }
         } else {
           // Fallback for browsers that don't support File System Access API
@@ -575,7 +578,6 @@
     isConfirming = false
     countdown = 0
     // User intentionally cancelled during countdown
-    // showToast('Transaction cancelled', 'warning')
     showToast(tr('toasts.account.transaction.cancelled'), 'warning')
   }
 
@@ -589,8 +591,7 @@
       recipientAddress = ''
       sendAmount = 0
       rawAmountInput = ''
-      
-      // showToast('Transaction submitted!', 'success')
+
       showToast(tr('toasts.account.transaction.submitted'), 'success')
       
       // Refresh balance after a delay to allow transaction to be mined
@@ -606,7 +607,6 @@
       
     } catch (error) {
       console.error('Transaction failed:', error)
-      // showToast('Transaction failed: ' + String(error), 'error')
       showToast(
         tr('toasts.account.transaction.error', { values: { error: String(error) } }),
         'error'
@@ -622,7 +622,7 @@
     return new Intl.DateTimeFormat(typeof loc === 'string' ? loc : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
   }
 
-  function handleTransactionClick(tx: any) {
+  function handleTransactionClick(tx: Transaction) {
     selectedTransaction = tx;
     showTransactionReceipt = true;
   }
@@ -651,7 +651,7 @@
     hashSearchResult = null;
 
     try {
-      const result = await invoke('get_transaction_by_hash', { txHash: txHashSearch });
+      const result = await invoke<TxHashLookupResult | null>('get_transaction_by_hash', { txHash: txHashSearch });
       if (result) {
         hashSearchResult = result;
       } else {
@@ -760,7 +760,6 @@
     transactions.set([])
     blacklist.set([])   
 
-    // showToast('Account Created Successfully!', 'success')
     showToast(tr('toasts.account.created'), 'success')
     
     if (isGethRunning) {
@@ -768,7 +767,6 @@
     }
   } catch (error) {
     console.error('Failed to create Chiral account:', error)
-    // showToast('Failed to create account: ' + String(error), 'error')
     showToast(
       tr('toasts.account.createError', { values: { error: String(error) } }),
       'error'
@@ -812,7 +810,7 @@
     await tick();
 
     // 3. This function runs when a QR code is successfully scanned
-    function onScanSuccess(decodedText: string, _decodedResult: any) {
+    function onScanSuccess(decodedText: string, _decodedResult: unknown) {
       // Handle the scanned code
       // Paste the address into the input field
       recipientAddress = decodedText;
@@ -852,7 +850,6 @@
     // Validate private key format before attempting import
     const validation = validatePrivateKeyFormat(importPrivateKey)
     if (!validation.isValid) {
-      // showToast(validation.error || 'Invalid private key format', 'error')
       showToast(validation.error || tr('toasts.account.import.invalidFormat'), 'error')
       return
     }
@@ -861,11 +858,12 @@
     try {
       const account = await walletService.importAccount(importPrivateKey)
       if (importedSnapshot) {
-        if (typeof importedSnapshot.balance === 'number') {
-          wallet.update(w => ({ ...w, balance: importedSnapshot.balance, actualBalance: importedSnapshot.balance }))
+        const snapshot = importedSnapshot;
+        if (typeof snapshot.balance === 'number') {
+          wallet.update(w => ({ ...w, balance: snapshot.balance, actualBalance: snapshot.balance }))
         }
-        if (Array.isArray(importedSnapshot.transactions)) {
-          const hydrated = importedSnapshot.transactions.map((tx: any) => ({
+        if (Array.isArray(snapshot.transactions)) {
+          const hydrated = snapshot.transactions.map((tx: Transaction) => ({
             ...tx,
             date: tx.date ? new Date(tx.date) : new Date()
           }))
@@ -882,7 +880,6 @@
       importedSnapshot = null
 
 
-      // showToast('Account imported successfully!', 'success')
       showToast(tr('toasts.account.import.success'), 'success')
 
       // Match keystore load behavior: hydrate transactions and balance right away
@@ -895,7 +892,6 @@
       console.error('Failed to import Chiral account:', error)
 
 
-      // showToast('Failed to import account: ' + String(error), 'error')
       showToast(
         tr('toasts.account.import.error', { values: { error: String(error) } }),
         'error'
@@ -944,7 +940,7 @@
             wallet.update(w => ({ ...w, balance: accountData.balance, actualBalance: accountData.balance }));
           }
           if (Array.isArray(accountData.transactions)) {
-            const hydrated = accountData.transactions.map((tx: any) => ({
+            const hydrated = accountData.transactions.map((tx: Transaction) => ({
               ...tx,
               date: tx.date ? new Date(tx.date) : new Date()
             }));
@@ -955,7 +951,6 @@
           
         } catch (error) {
           console.error('Error reading file:', error);
-          // showToast('Error reading file: ' + String(error), 'error');
           showToast(
             msg('toasts.account.import.fileReadError', `Error reading wallet file: ${String(error) }`),
             'error'
@@ -974,7 +969,6 @@
         const val = $t(key);
         return val === key ? fallback : val;
       };
-      // showToast('Error loading file: ' + String(error), 'error');
       showToast(
         msg('toasts.account.import.fileLoadError', `Error loading wallet file: ${String(error) }`),
         'error'
@@ -1184,7 +1178,6 @@
   // This would be called by the "Enable 2FA" button
   async function setup2FA() {
     if (!isTauri) {
-      // showToast('2FA is only available in the desktop app.', 'warning');
       showToast(tr('toasts.account.2fa.desktopOnly'), 'warning');
       return;
     }
@@ -1199,7 +1192,6 @@
       twoFaErrorMessage = '';
     } catch (err) {
       console.error('Failed to setup 2FA:', err);
-      // showToast('Failed to start 2FA setup: ' + String(err), 'error');
       showToast(
         tr('toasts.account.2fa.setupError', { values: { error: String(err) } }),
         'error'
@@ -1223,7 +1215,6 @@
       if (success) {
         is2faEnabled = true; 
         show2faSetupModal = false;
-        // showToast('Two-Factor Authentication has been enabled!', 'success');
         showToast(tr('toasts.account.2fa.enabled'), 'success');
       } else {
         // Don't clear password, but clear code
@@ -1284,11 +1275,9 @@
       try { // The password is provided in the with2FA prompt
         await walletService.disableTwoFactor(twoFaPassword);
         is2faEnabled = false;
-        // showToast('Two-Factor Authentication has been disabled.', 'warning');
         showToast(tr('toasts.account.2fa.disabled'), 'warning');
       } catch (error) {
         console.error('Failed to disable 2FA:', error);
-        // showToast('Failed to disable 2FA: ' + String(error), 'error');
         showToast(
           tr('toasts.account.2fa.disableError', { values: { error: String(error) } }),
           'error'
@@ -2445,7 +2434,7 @@
           <p class="text-xs"><span class="font-semibold">From:</span> {hashSearchResult.from || 'N/A'}</p>
           <p class="text-xs"><span class="font-semibold">To:</span> {hashSearchResult.to || 'N/A'}</p>
           <p class="text-xs"><span class="font-semibold">Value:</span> {hashSearchResult.value || 'N/A'} CHR</p>
-          <p class="text-xs"><span class="font-semibold">Block:</span> {hashSearchResult.blockNumber || 'Pending'}</p>
+          <p class="text-xs"><span class="font-semibold">Block:</span> {hashSearchResult.blockNumber ?? hashSearchResult.block_number ?? 'Pending'}</p>
         </div>
       {/if}
     </div>
