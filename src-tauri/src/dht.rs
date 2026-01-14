@@ -1520,6 +1520,13 @@ async fn run_dht_node(
                 cache.insert(merged_metadata.merkle_root.clone(), merged_metadata.clone());
             }
 
+            // Serialize CIDs as strings for DHT storage.
+            // (The `FileMetadata` struct has custom serde hooks, but this manual JSON construction bypasses them.)
+            let cids_as_strings: Option<Vec<String>> = merged_metadata
+                .cids
+                .as_ref()
+                .map(|v| v.iter().map(|c| c.to_string()).collect());
+
             // 4. Create the JSON for DHT storage
             let dht_metadata = serde_json::json!({
                 "file_hash": merged_metadata.merkle_root, // Changed from file_hash
@@ -1532,7 +1539,7 @@ async fn run_dht_node(
                 "encryption_method": merged_metadata.encryption_method,
                 "key_fingerprint": merged_metadata.key_fingerprint,
                 "parent_hash": merged_metadata.parent_hash,
-                "cids": merged_metadata.cids,
+                "cids": cids_as_strings,
                 "encrypted_key_bundle": merged_metadata.encrypted_key_bundle,
                 "info_hash": merged_metadata.info_hash,
                 "trackers": merged_metadata.trackers,
@@ -1623,6 +1630,13 @@ async fn run_dht_node(
                                             // 2. Update metadata with the root CID
                                             metadata.cids = Some(vec![root_cid]);
 
+                                            // Serialize CIDs as strings for DHT storage.
+                                            // (This manual JSON construction bypasses FileMetadata's custom serde hooks.)
+                                            let cids_as_strings: Option<Vec<String>> = metadata
+                                                .cids
+                                                .as_ref()
+                                                .map(|v| v.iter().map(|c| c.to_string()).collect());
+
                                             // 3. Create and publish the DHT record pointing to the file (use camelCase keys)
                                             let dht_metadata = serde_json::json!({
                                                 "merkleRoot": metadata.merkle_root,
@@ -1633,7 +1647,7 @@ async fn run_dht_node(
                                                 "isEncrypted": metadata.is_encrypted,
                                                 "encryptionMethod": metadata.encryption_method,
                                                 "keyFingerprint": metadata.key_fingerprint,
-                                                "cids": metadata.cids,
+                                                "cids": cids_as_strings,
                                                 "encryptedKeyBundle": metadata.encrypted_key_bundle,
                                                 "ftpSources": metadata.ftp_sources,
                                                 "ed2kSources": metadata.ed2k_sources,
@@ -1647,7 +1661,9 @@ async fn run_dht_node(
                                             });
 
                                             let record_key = kad::RecordKey::new(&metadata.merkle_root.as_bytes());
-                                            let record_value = match serde_json::to_vec(&dht_metadata).map_err(|e| e.to_string()) {
+                                            let record_value = match serde_json::to_vec(&dht_metadata)
+                                                .map_err(|e| e.to_string())
+                                            {
                                                 Ok(val) => val,
                                                 Err(e) => {
                                                     warn!("Failed to serialize DHT metadata: {}", e);
