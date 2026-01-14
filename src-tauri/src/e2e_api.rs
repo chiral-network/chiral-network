@@ -972,9 +972,19 @@ async fn api_download(
                 let start = std::time::Instant::now();
                 // FTP-specific: fail fast when the download is "stuck running" (no progress),
                 // and avoid treating pre-allocated file length as completion.
+                // FTP-specific: stall (no progress) timeout.
+                //
+                // Prefer an explicit stall timeout if provided, otherwise fall back to the overall
+                // FTP download timeout so that callers who only set E2E_FTP_DOWNLOAD_TIMEOUT_MS
+                // don't unexpectedly fail at the default 60s stall threshold.
                 let ftp_stall_timeout_ms: u64 = std::env::var("E2E_FTP_STALL_TIMEOUT_MS")
                     .ok()
                     .and_then(|s| s.parse().ok())
+                    .or_else(|| {
+                        std::env::var("E2E_FTP_DOWNLOAD_TIMEOUT_MS")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                    })
                     .unwrap_or(60_000);
                 let ftp_finalize_grace_ms: u64 = std::env::var("E2E_FTP_FINALIZE_GRACE_MS")
                     .ok()
