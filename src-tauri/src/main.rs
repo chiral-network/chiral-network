@@ -3757,19 +3757,25 @@ async fn upload_file_to_network(
         .map_err(|e| format!("Failed to get file size: {}", e))?
         .len();
 
-    let dont_need_to_copy_protocols = vec!["BitSwap", "WebRTC"];
+    // Normalize protocol for robust matching (tests/users may send different casing like "Bitswap", "BitSwap", "BITSWAP").
+    let protocol_upper = protocol
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_uppercase();
+    let dont_need_to_copy_protocols = vec!["BITSWAP", "WEBRTC"];
     let mut file_path = file_path.clone();
 
     // Handle protocol-specific uploads
     if let Some(protocol_name) = &protocol {
-        if !dont_need_to_copy_protocols.contains(&protocol_name.as_str()) {
+        if !dont_need_to_copy_protocols.contains(&protocol_upper.as_str()) {
             // handle if error
             file_path = copy_file_to_temp(file_path.clone())
                 .await
                 .map_err(|e| format!("Failed to copy file to temp: {}", e))?;
         }
 
-        match protocol_name.as_str() {
+        match protocol_upper.as_str() {
             "HTTP" => {
                 let permanent_path = state.http_server_state.storage_dir.join(&file_hash);
                 // Move/rename temp file to permanent storage instead of copying
@@ -3791,7 +3797,7 @@ async fn upload_file_to_network(
                     })
                     .await;
             }
-            "BitTorrent" => {
+            "BITTORRENT" => {
                 // Check if file exists before attempting to seed
                 if !std::path::Path::new(&file_path).exists() {
                     error!(
@@ -4119,7 +4125,7 @@ async fn upload_file_to_network(
                 println!("✅ FTP upload complete - file available at: {}", ftp_url);
                 return Ok(());
             }
-            "Bitswap" => {
+            "BITSWAP" => {
                 // Use streaming upload for Bitswap to handle large files
                 println!(
                     "📡 Using streaming Bitswap upload for protocol: {}",
@@ -4239,6 +4245,12 @@ async fn upload_file_to_network(
                             return Err("DHT not running".into());
                         }
 
+                        // Include our peer id as a seeder so downloaders know which peer to request blocks from.
+                        let local_peer_id = match &dht_opt {
+                            Some(dht) => dht.get_peer_id().await,
+                            None => String::new(),
+                        };
+
                         // Create minimal metadata (without file_data to avoid DHT size limits)
                         let created_at = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -4294,7 +4306,11 @@ async fn upload_file_to_network(
                             file_name: session.file_name.clone(),
                             file_size: session.file_size,
                             file_data: vec![], // Empty - data is stored in Bitswap blocks
-                            seeders: vec![],
+                            seeders: if local_peer_id.is_empty() {
+                                vec![]
+                            } else {
+                                vec![local_peer_id.clone()]
+                            },
                             created_at,
                             mime_type: None,
                             is_encrypted: false,
@@ -4314,6 +4330,14 @@ async fn upload_file_to_network(
                             ed2k_sources: None,
                             manifest: Some(manifest_json),
                         };
+
+                        info!(
+                            "📡 Bitswap publish metadata: merkle_root={} root_cid={} cids={:?} seeders={:?}",
+                            merkle_root,
+                            root_cid,
+                            metadata.cids,
+                            metadata.seeders
+                        );
 
                         // Publish merged metadata to DHT
                         if let Some(dht) = dht_opt {
@@ -5203,7 +5227,7 @@ fn parse_ed2k_link(ed2k_link: String) -> Result<Ed2kSourceInfo, String> {
 #[tauri::command]
 async fn download_blocks_from_network(
     state: State<'_, AppState>,
-    file_metadata: FileMetadata,
+    mut file_metadata: FileMetadata,
     download_path: String,
 ) -> Result<(), String> {
     info!(
@@ -5222,6 +5246,59 @@ async fn download_blocks_from_network(
     };
 
     if let Some(dht) = dht {
+        // Bitswap downloads require a root CID list in metadata.
+        // In real networks the DHT record can become visible before all fields (like `cids`) are populated.
+        // Best-effort: re-fetch metadata a few times to see if `cids` arrives; otherwise fail fast with a clear error.
+        let has_cids = file_metadata
+            .cids
+            .as_ref()
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+        if !has_cids {
+            for _ in 0..10 {
+                if let Ok(Some(refreshed)) =
+                    dht.synchronous_search_metadata(file_metadata.merkle_root.clone(), 1_500).await
+                {
+                    if refreshed.cids.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
+                        info!(
+                            "🔽 Refreshed metadata now has cids for {}: {:?}",
+                            file_metadata.merkle_root,
+                            refreshed.cids
+                        );
+                        file_metadata.cids = refreshed.cids;
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+
+        let has_cids = file_metadata
+            .cids
+            .as_ref()
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+        if !has_cids {
+            return Err(format!(
+                "Bitswap download requires metadata.cids (root CID). DHT record for '{}' has no cids; re-upload with an updated uploader node or ensure Bitswap publishing writes cids.",
+                file_metadata.merkle_root
+            ));
+        }
+
+        // If the metadata record doesn't list seeders yet, fall back to provider discovery.
+        // This allows Bitswap to work even when the uploader's DHT record hasn't populated `seeders`.
+        if file_metadata.seeders.is_empty() {
+            let providers = dht.get_seeders_for_file(&file_metadata.merkle_root).await;
+            if !providers.is_empty() {
+                info!(
+                    "🔽 Bitswap metadata had 0 seeders; using {} providers for {}",
+                    providers.len(),
+                    file_metadata.merkle_root
+                );
+                file_metadata.seeders = providers;
+            }
+        }
+
         info!("🔽 DHT node is running, calling dht.download_file");
         dht.download_file(file_metadata, download_path).await
     } else {
@@ -5284,6 +5361,21 @@ async fn download_file_from_network(
                 .await
             {
                 Ok(Some(metadata)) => {
+                    // WebRTC downloads rely on peer IDs (seeders/providers). If the metadata record
+                    // doesn't include seeders yet, fall back to DHT provider discovery.
+                    let mut metadata = metadata;
+                    if metadata.seeders.is_empty() {
+                        let providers = dht_service.get_seeders_for_file(&metadata.merkle_root).await;
+                        if !providers.is_empty() {
+                            info!(
+                                "Metadata had 0 seeders; using {} providers from DHT for {}",
+                                providers.len(),
+                                metadata.merkle_root
+                            );
+                            metadata.seeders = providers;
+                        }
+                    }
+
                     info!(
                         "Found file metadata in DHT: {} (size: {} bytes)",
                         metadata.file_name, metadata.file_size

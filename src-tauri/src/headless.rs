@@ -1,6 +1,5 @@
 // Headless mode for running as a bootstrap node on servers
 use crate::commands::bootstrap::get_bootstrap_nodes;
-use crate::dht::DhtConfigBuilder;
 use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtConfig, DhtService};
 use crate::download_restart::{DownloadRestartService, StartDownloadRequest};
 use crate::e2e_api_headless::{start_headless_e2e_api_server, HeadlessE2eState};
@@ -350,16 +349,20 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
         None
     };
 
-    // Add some example bootstrap data if this is a primary bootstrap node
+    // Add some example bootstrap data if this is a primary bootstrap node.
+    //
+    // IMPORTANT:
+    // Do not fail the entire headless process if this best-effort publish fails.
+    // Also avoid inline `file_data` here because it can trigger Bitswap block publishing
+    // even when P2P/Bitswap is not enabled for this headless run.
     if !provided_bootstrap {
         info!("Running as primary bootstrap node (no peers specified)");
 
-        // Publish some example metadata to seed the network
         let example_metadata = FileMetadata {
             merkle_root: "QmBootstrap123Example".to_string(),
             file_name: "welcome.txt".to_string(),
             file_size: 1024,
-            file_data: b"Hello, world!".to_vec(),
+            file_data: Vec::new(),
             seeders: vec![peer_id.clone()],
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -384,8 +387,11 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
             manifest: None,
         };
 
-        dht_arc.publish_file(example_metadata, None).await?;
-        info!("Published bootstrap file metadata");
+        if let Err(e) = dht_arc.publish_file(example_metadata, None).await {
+            warn!("Best-effort bootstrap publish failed (continuing): {}", e);
+        } else {
+            info!("Published bootstrap file metadata");
+        }
     } else {
         info!(
             "Connecting to bootstrap nodes: {:?}",
