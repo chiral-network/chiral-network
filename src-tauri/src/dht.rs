@@ -1728,16 +1728,21 @@ async fn run_dht_node(
                                                 publisher: Some(peer_id),
                                                 expires: None,
                                             };
-                                            if let Err(e) = swarm
-                                                .behaviour_mut()
-                                                .kademlia
-                                                .put_record(record, kad::Quorum::One)
-                                            {
-                                                error!(
-                                                    "Failed to put record for encrypted file {}: {}",
-                                                    metadata.merkle_root, e
-                                                );
-                                            }
+                                        if let Err(e) = swarm
+                                            .behaviour_mut()
+                                            .kademlia
+                                            .put_record(record, kad::Quorum::One)
+                                        {
+                                            error!(
+                                                "Failed to put record for file {}: {}",
+                                                metadata.merkle_root, e
+                                            );
+                                            let _ = response_tx.send(Err(format!(
+                                                "Failed to publish DHT record for {}: {}",
+                                                metadata.merkle_root, e
+                                            )));
+                                            continue 'outer;
+                                        }
 
                                             // 4. Announce self as provider (only if we have dialable addrs)
                                             if !swarm_has_dialable_addr(&swarm) {
@@ -1774,6 +1779,8 @@ async fn run_dht_node(
 
                                             info!("Successfully published and started providing encrypted file: {}", metadata.merkle_root);
                                             let _ = event_tx.send(DhtEvent::PublishedFile(metadata)).await;
+                                            // Acknowledge completion so publish_file() can return only after DHT record is written.
+                                            let _ = response_tx.send(Ok(()));
                                         }
                                     Some(DhtCommand::DownloadFile(mut file_metadata, download_path)) =>{
                                         info!("🎬 DownloadFile command received for: {} to: {}", file_metadata.file_name, download_path);
