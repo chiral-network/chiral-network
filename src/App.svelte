@@ -987,16 +987,20 @@ $: canShowLockAction = !showFirstRunWizard;
   let menuItems: MenuItem[] = [];
   $: if (!loading) {
     menuItems = [
-      { id: "download", label: $t("nav.download"), icon: Download },
-      { id: "upload", label: $t("nav.upload"), icon: Upload },
-      { id: "network", label: $t("nav.network"), icon: Globe },
-      { id: "mining", label: $t("nav.mining"), icon: Cpu },
-      { id: "relay", label: $t("nav.relay"), icon: Server },
-      { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
-      { id: "reputation", label: $t("nav.reputation"), icon: Star },
-      { id: "blockchain", label: $t("nav.blockchain"), icon: Database },
       { id: "account", label: $t("nav.account"), icon: Wallet },
+      { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
+      { id: "blockchain", label: $t("nav.blockchain"), icon: Database },
+      { id: "download", label: $t("nav.download"), icon: Download },
+      { id: "mining", label: $t("nav.mining"), icon: Cpu },
+      { id: "network", label: $t("nav.network"), icon: Globe },
+      { id: "relay", label: $t("nav.relay"), icon: Server },
+      { id: "reputation", label: $t("nav.reputation"), icon: Star },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
+      { id: "upload", label: $t("nav.upload"), icon: Upload },
+      // { id: 'proxy', label: $t('nav.proxy'), icon: Shield }, // DISABLED
+
+      // DISABLED: Proxy self-test page
+      // ...(import.meta.env.DEV ? [{ id: 'proxy-self-test', label: 'Proxy Self-Test', icon: Shield }] : [])
     ];
   }
 
