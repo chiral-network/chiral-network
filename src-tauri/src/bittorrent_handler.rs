@@ -22,6 +22,37 @@ use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
 use tracing::{error, info, instrument, warn};
 
+fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let oct = v4.octets();
+            matches!(oct[0], 10 | 127)
+                || (oct[0] == 192 && oct[1] == 168)
+                || (oct[0] == 172 && (16..=31).contains(&oct[1]))
+        }
+        // For E2E we prefer IPv4 anyway; treat IPv6 as non-private here.
+        std::net::IpAddr::V6(_) => false,
+    }
+}
+
+fn get_e2e_bittorrent_seeder_port() -> u16 {
+    std::env::var("E2E_BITTORRENT_SEED_PORT")
+        .or_else(|_| std::env::var("CHIRAL_BITTORRENT_SEED_PORT"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .unwrap_or(30000)
+}
+
+fn append_magnet_x_pe(identifier: &str, ip: std::net::IpAddr, port: u16) -> String {
+    // Common magnet extension used by some clients: x.pe=IP:PORT
+    // We only add it if it's not already present.
+    if identifier.contains("x.pe=") {
+        return identifier.to_string();
+    }
+    let sep = if identifier.contains('?') { "&" } else { "?" };
+    format!("{}{}x.pe={}:{}", identifier, sep, ip, port)
+}
+
 /// Progress information for a torrent
 #[derive(Debug, Clone)]
 pub struct TorrentProgress {
@@ -1134,13 +1165,70 @@ impl BitTorrentHandler {
             add_opts.paused = true;
         }
 
-        let add_torrent = if identifier.starts_with("magnet:") {
+        // In E2E, we can optionally force a direct peer hint using Chiral DHT provider addresses.
+        // This avoids reliance on public BitTorrent trackers / BT-DHT in restricted environments.
+        let mut identifier_for_add = identifier.to_string();
+
+        if identifier.starts_with("magnet:") {
+            if std::env::var("CHIRAL_E2E_API_PORT").ok().is_some()
+                || std::env::var("E2E_ATTACH").ok().as_deref() == Some("true")
+            {
+                match self
+                    .dht_service
+                    .search_peers_by_infohash(info_hash_hex.clone())
+                    .await
+                {
+                    Ok(peer_ids) if !peer_ids.is_empty() => {
+                        // Resolve multiaddrs -> pick a public IP if possible.
+                        if let Ok(addr_map) = self.dht_service.get_peer_addresses(peer_ids.clone()).await {
+                            let mut selected_ip: Option<std::net::IpAddr> = None;
+                            'outer: for (_pid, addrs) in addr_map {
+                                for a in addrs {
+                                    if let Ok(ma) = a.parse::<Multiaddr>() {
+                                        if let Ok(sock) = multiaddr_to_socket_addr(&ma) {
+                                            let ip = sock.ip();
+                                            if !is_private_ip(&ip) {
+                                                selected_ip = Some(ip);
+                                                break 'outer;
+                                            }
+                                            // Keep a private IP as a fallback if nothing else exists.
+                                            if selected_ip.is_none() {
+                                                selected_ip = Some(ip);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(ip) = selected_ip {
+                                let port = get_e2e_bittorrent_seeder_port();
+                                let with_hint = append_magnet_x_pe(&identifier_for_add, ip, port);
+                                if with_hint != identifier_for_add {
+                                    info!(
+                                        "E2E: injecting magnet peer hint x.pe={}:{} for torrent {}",
+                                        ip, port, info_hash_hex
+                                    );
+                                }
+                                identifier_for_add = with_hint;
+                            } else {
+                                info!(
+                                    "E2E: no usable IP found in peer addresses for torrent {} (will rely on tracker/BT-DHT)",
+                                    info_hash_hex
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let add_torrent = if identifier_for_add.starts_with("magnet:") {
             Self::validate_magnet_link(identifier).map_err(|e| {
                 //
                 error!("Magnet link validation failed: {}", e);
                 e
             })?;
-            AddTorrent::from_url(identifier)
+            AddTorrent::from_url(&identifier_for_add)
         } else {
             Self::validate_torrent_file(identifier).map_err(|e| {
                 error!("Torrent file validation failed: {}", e);
@@ -1153,28 +1241,7 @@ impl BitTorrentHandler {
             })?
         };
 
-        // The original add_opts is overwritten later, so we can just use the default here.
-        // If you need to preserve passed-in options, you'd merge them.
-        let add_opts = AddTorrentOptions::default();
-
-        // Check for Chiral peers but don't require exclusive mode
-        if let Some(hash) = Some(&info_hash_hex) {
-            match self
-                .dht_service
-                .search_peers_by_infohash(hash.clone())
-                .await
-            {
-                Ok(chiral_peer_ids) if !chiral_peer_ids.is_empty() => {
-                    info!(
-                        "Found {} Chiral peers for {}. They will be discovered via DHT.",
-                        chiral_peer_ids.len(),
-                        hash
-                    );
-                }
-                Ok(_) => info!("No Chiral peers found for {}.", hash),
-                Err(e) => warn!("Chiral peer search failed: {}", e),
-            }
-        }
+        // Keep caller-provided add_opts (paused/output_folder/etc).
 
         // Add the torrent to the session
         let add_torrent_response = self
@@ -1191,7 +1258,7 @@ impl BitTorrentHandler {
             .ok_or(BitTorrentError::HandleUnavailable)?;
 
         // Register with Chiral extension if available
-        if let Some(info_hash) = Self::extract_info_hash(identifier) {
+        if let Some(info_hash) = Self::extract_info_hash(&identifier_for_add) {
             if let Err(e) = self
                 .register_torrent_with_chiral_extension(&info_hash)
                 .await
