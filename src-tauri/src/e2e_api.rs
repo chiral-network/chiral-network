@@ -24,6 +24,89 @@ use crate::transaction_services;
 use crate::file_transfer::FileTransferService;
 use crate::webrtc_service::{set_webrtc_service, WebRTCService};
 
+fn extract_btih_info_hash(identifier: &str) -> Option<String> {
+    if let Some(start) = identifier.find("urn:btih:") {
+        let start = start + 9;
+        let end = identifier[start..]
+            .find('&')
+            .map(|i| start + i)
+            .unwrap_or(identifier.len());
+        return Some(identifier[start..end].to_lowercase());
+    }
+    None
+}
+
+fn build_magnet_link(
+    info_hash: &str,
+    display_name: Option<&str>,
+    trackers: Option<&Vec<String>>,
+) -> String {
+    let mut s = format!("magnet:?xt=urn:btih:{}", info_hash);
+    if let Some(name) = display_name {
+        if !name.trim().is_empty() {
+            s.push_str("&dn=");
+            s.push_str(&urlencoding::encode(name));
+        }
+    }
+    if let Some(trs) = trackers {
+        for tr in trs {
+            if tr.trim().is_empty() {
+                continue;
+            }
+            s.push_str("&tr=");
+            s.push_str(&urlencoding::encode(tr));
+        }
+    }
+    s
+}
+
+async fn find_file_recursive(
+    root: &std::path::Path,
+    expected_name: &str,
+    expected_size: u64,
+) -> Result<std::path::PathBuf, String> {
+    let mut queue: std::collections::VecDeque<std::path::PathBuf> =
+        std::collections::VecDeque::new();
+    queue.push_back(root.to_path_buf());
+
+    while let Some(dir) = queue.pop_front() {
+        let mut rd = match tokio::fs::read_dir(&dir).await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        while let Some(ent) = rd
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to iterate dir {:?}: {}", dir, e))?
+        {
+            let path = ent.path();
+            let md = ent
+                .metadata()
+                .await
+                .map_err(|e| format!("Failed to stat {:?}: {}", path, e))?;
+            if md.is_dir() {
+                queue.push_back(path);
+                continue;
+            }
+            if md.is_file() {
+                let name_ok = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s == expected_name)
+                    .unwrap_or(false);
+                if name_ok && md.len() == expected_size {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Downloaded BitTorrent file not found under {:?} (name={}, size={})",
+        root, expected_name, expected_size
+    ))
+}
+
 #[derive(Clone)]
 pub struct E2eApiState {
     pub app: tauri::AppHandle,
@@ -456,6 +539,7 @@ async fn api_upload_generate(
     // Protocol-specific handling:
     // - HTTP: move into HTTP file server storage and publish metadata with http_sources
     // - WebRTC/Bitswap/FTP: invoke the app's upload command so protocol services publish correct metadata
+    // - BitTorrent: seed via ProtocolManager to obtain a magnet/info_hash, then publish DHT metadata keyed by info_hash
     let published_key: String = if protocol_upper == "HTTP" {
         // Move into provider storage dir and register with HTTP file server state.
         let permanent_path = app_state.http_server_state.storage_dir.join(&file_hash);
@@ -528,6 +612,131 @@ async fn api_upload_generate(
             .into_response();
         }
         file_hash.clone()
+    } else if protocol_upper == "BITTORRENT" {
+        // Seed the file via the protocol manager to obtain a magnet link (contains info_hash).
+        let seeding = match app_state
+            .protocol_manager
+            .seed(
+                "bittorrent",
+                std::path::PathBuf::from(&tmp_path),
+                crate::protocols::traits::SeedOptions::default(),
+            )
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(crate::http_server::ErrorResponse {
+                        error: format!("Failed to seed BitTorrent: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        let info_hash = match extract_btih_info_hash(&seeding.identifier) {
+            Some(h) => h,
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(crate::http_server::ErrorResponse {
+                        error: format!(
+                            "BitTorrent seeding returned an unsupported identifier (no btih): {}",
+                            seeding.identifier
+                        ),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        // Publish metadata to DHT keyed by info_hash so downloader can search by that key.
+        let dht = { app_state.dht.lock().await.as_ref().cloned() };
+        let Some(dht) = dht else {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: "DHT is not running".to_string(),
+                }),
+            )
+                .into_response();
+        };
+
+        // Include local peer id as a seeder so consumers can optionally correlate to libp2p identity.
+        let local_peer_id = Some(dht.get_peer_id().await);
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let meta = crate::dht::models::FileMetadata {
+            // For BitTorrent, use info_hash as the DHT key so search/download can use a stable identifier.
+            merkle_root: info_hash.clone(),
+            file_name: file_name.clone(),
+            file_size,
+            file_data: vec![],
+            seeders: local_peer_id.map_or(vec![], |id| vec![id]),
+            created_at,
+            mime_type: None,
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
+            parent_hash: None,
+            cids: None,
+            encrypted_key_bundle: None,
+            ftp_sources: None,
+            ed2k_sources: None,
+            http_sources: None,
+            is_root: true,
+            download_path: None,
+            price,
+            uploader_address: uploader_address.clone(),
+            info_hash: Some(info_hash.clone()),
+            // Keep consistent with the app-side BitTorrent publish default.
+            trackers: Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]),
+            manifest: None,
+        };
+
+        if let Err(e) = dht.publish_file(meta, None).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!("Failed to publish BitTorrent metadata to DHT: {}", e),
+                }),
+            )
+                .into_response();
+        }
+
+        // Wait until the metadata is visible on this node's DHT (best-effort).
+        let mut found = None;
+        for _ in 0..80 {
+            match dht
+                .synchronous_search_metadata(info_hash.clone(), 1_500)
+                .await
+            {
+                Ok(Some(m)) => {
+                    found = Some(m);
+                    break;
+                }
+                _ => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        if found.is_none() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!(
+                        "Upload completed but metadata not visible yet for {}",
+                        info_hash
+                    ),
+                }),
+            )
+                .into_response();
+        }
+
+        info_hash
     } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" || protocol_upper == "FTP" {
         // Pre-compute the DHT key for the published metadata so we can wait until it's discoverable.
         // WebRTC uses a manifest Merkle root; Bitswap uses a sha256-like content root (matching the file hash).
@@ -658,7 +867,7 @@ async fn api_upload_generate(
         expected_merkle_root
     } else {
         return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, or FTP.", protocol_norm),
+            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, FTP, or BitTorrent.", protocol_norm),
         }))
         .into_response();
     };
@@ -795,7 +1004,11 @@ async fn api_download(
         {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
         }
-    } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" || protocol_upper == "FTP" {
+    } else if protocol_upper == "WEBRTC"
+        || protocol_upper == "BITSWAP"
+        || protocol_upper == "FTP"
+        || protocol_upper == "BITTORRENT"
+    {
         // Auto-start P2P services for E2E spawn mode (no frontend bootstrapping).
         if let Err(e) = ensure_p2p_services_started(&state.app).await {
             return (
@@ -850,6 +1063,7 @@ async fn api_download(
                     "WEBRTC" => Some("E2E_WEBRTC_DOWNLOAD_TIMEOUT_MS"),
                     "BITSWAP" => Some("E2E_BITSWAP_DOWNLOAD_TIMEOUT_MS"),
                     "FTP" => Some("E2E_FTP_DOWNLOAD_TIMEOUT_MS"),
+                    "BITTORRENT" => Some("E2E_BITTORRENT_DOWNLOAD_TIMEOUT_MS"),
                     _ => None,
                 };
 
@@ -906,6 +1120,70 @@ async fn api_download(
                         .download(&ftp_url, opts)
                         .await
                         .map_err(|e| format!("FTP download failed: {}", e))?;
+                    } else if protocol_upper_for_task == "BITTORRENT" {
+                        // BitTorrent: download via bittorrent handler (magnet), then copy the completed file into
+                        // the E2E output path so verification/polling is consistent across protocols.
+                        let bt = app_handle_for_task
+                            .state::<crate::AppState>()
+                            .bittorrent_handler
+                            .clone();
+
+                        let expected_info_hash = meta_for_task
+                            .info_hash
+                            .clone()
+                            .unwrap_or_else(|| meta_for_task.merkle_root.clone())
+                            .to_lowercase();
+
+                        let magnet = build_magnet_link(
+                            &expected_info_hash,
+                            Some(&meta_for_task.file_name),
+                            meta_for_task.trackers.as_ref(),
+                        );
+
+                        let managed = bt
+                            .start_download(&magnet)
+                            .await
+                            .map_err(|e| format!("BitTorrent download failed to start: {}", e))?;
+
+                        let actual_info_hash = hex::encode(managed.info_hash().0);
+                        let download_dir = bt
+                            .get_torrent_folder(&actual_info_hash)
+                            .await
+                            .map_err(|e| format!("BitTorrent download folder unavailable: {}", e))?;
+
+                        // Wait until the torrent is finished.
+                        let bt_start = std::time::Instant::now();
+                        loop {
+                            match bt.get_torrent_progress(&actual_info_hash).await {
+                                Ok(p) => {
+                                    if p.is_finished {
+                                        break;
+                                    }
+                                }
+                                Err(_) => {}
+                            }
+                            if bt_start.elapsed().as_millis() as u64 >= timeout_ms {
+                                return Err(format!(
+                                    "BitTorrent download did not complete within {}ms (info_hash={})",
+                                    timeout_ms, actual_info_hash
+                                ));
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+
+                        // Find the downloaded file and copy it into the expected E2E output path.
+                        let downloaded_path = find_file_recursive(
+                            &download_dir,
+                            &meta_for_task.file_name,
+                            meta_for_task.file_size,
+                        )
+                        .await?;
+                        if let Some(parent) = std::path::Path::new(&out_path_for_task).parent() {
+                            let _ = tokio::fs::create_dir_all(parent).await;
+                        }
+                        tokio::fs::copy(&downloaded_path, &out_path_for_task)
+                            .await
+                            .map_err(|e| format!("BitTorrent failed to copy output file: {}", e))?;
                 } else {
                     return Err(format!(
                         "Unsupported protocol '{}' for async download task",
@@ -1025,7 +1303,7 @@ async fn api_download(
             .into_response();
     } else {
         return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, or FTP.", protocol_upper),
+            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, FTP, or BitTorrent.", protocol_upper),
         }))
         .into_response();
     }

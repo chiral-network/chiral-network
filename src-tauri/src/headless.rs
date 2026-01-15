@@ -4,6 +4,7 @@ use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtConfig, Dh
 use crate::download_restart::{DownloadRestartService, StartDownloadRequest};
 use crate::e2e_api_headless::{start_headless_e2e_api_server, HeadlessE2eState};
 use crate::ethereum::GethProcess;
+use crate::bittorrent_handler;
 use crate::file_transfer::FileTransferService;
 use crate::http_server;
 use crate::keystore::Keystore;
@@ -483,6 +484,24 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
     if let Ok(port_str) = std::env::var("CHIRAL_E2E_API_PORT") {
         if let Ok(port) = port_str.trim().parse::<u16>() {
             if let Some(ref http_base_url) = http_base_url {
+                // Initialize BitTorrent handler for headless E2E (BitTorrent upload/download).
+                // Use an isolated directory under the storage root so runs don't collide.
+                let bt_download_dir = storage_dir.join("bittorrent");
+                let _ = std::fs::create_dir_all(&bt_download_dir);
+                let bt_handler = match bittorrent_handler::BitTorrentHandler::new_with_port_range(
+                    bt_download_dir,
+                    dht_arc.clone(),
+                    Some(30000..30010),
+                )
+                .await
+                {
+                    Ok(h) => Some(Arc::new(h)),
+                    Err(e) => {
+                        warn!("Failed to initialize BitTorrent handler in headless mode: {}", e);
+                        None
+                    }
+                };
+
                 let state = HeadlessE2eState {
                     dht: dht_arc.clone(),
                     http_server_state: http_server_state.clone(),
@@ -504,6 +523,7 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
                             port,
                         )))
                     },
+                    bittorrent_handler: bt_handler,
                 };
                 match start_headless_e2e_api_server(state, port).await {
                     Ok((bound, shutdown_tx)) => {
