@@ -325,7 +325,7 @@ class RealE2ETestFramework {
    */
   async uploadFile(
     file: TestFile,
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
   ): Promise<string> {
     if (!this.uploaderConfig) throw new Error("Config not initialized");
 
@@ -423,7 +423,7 @@ class RealE2ETestFramework {
   async downloadFile(
     fileHash: string,
     fileName: string,
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
   ): Promise<string> {
     if (!this.downloaderConfig) throw new Error("Config not initialized");
 
@@ -824,6 +824,64 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       // Bitswap downloads are async (202 + downloadId) so always go through the framework helper.
       const downloadPath = await framework.downloadFile(fileHash, testFile.name, "Bitswap");
 
+      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
+      expect(verified).toBe(true);
+
+      // Final payment + receipt
+      const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+      const payRes = await fetch(`${downloaderApi}/api/pay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploaderAddress, price }),
+      });
+      if (!payRes.ok) {
+        const body = await payRes.text().catch(() => "");
+        throw new Error(
+          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+        );
+      }
+      const payJson = await payRes.json();
+      const txHash: string = payJson.txHash;
+      expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+
+      const start = Date.now();
+      const timeoutMs = 120_000;
+      while (Date.now() - start < timeoutMs) {
+        const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ txHash }),
+        });
+        if (!r.ok) {
+          const body = await r.text().catch(() => "");
+          throw new Error(
+            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+          );
+        }
+        const receipt = await r.json();
+        if (receipt.status === "success") break;
+        if (receipt.status === "failed") throw new Error("Transaction failed");
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+    }, 600000);
+  });
+
+  describe("BitTorrent Real Communication (Attach)", () => {
+    it("should upload, search, download (BitTorrent), and pay (tx receipt success)", async () => {
+      const testFile = framework.createTestFile("real-test-bittorrent.bin", 5);
+
+      const fileHash = await framework.uploadFile(testFile, "BitTorrent");
+      expect(fileHash).toBeTruthy();
+
+      // BitTorrent publish key is the info_hash; allow a bit more time for propagation.
+      const metadata = await framework.searchFile(fileHash, 90_000);
+      expect(metadata).toBeTruthy();
+
+      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
+      const price = metadata.price ?? 0.001;
+      expect(typeof uploaderAddress).toBe("string");
+
+      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "BitTorrent");
       const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
       expect(verified).toBe(true);
 
