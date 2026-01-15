@@ -12,7 +12,7 @@
 /// - Private peer ↔ Private peer via relay (circuit relay)
 /// - Private peer ↔ Private peer direct (DCUtR hole-punching)
 /// - Relay failure → fallback behavior
-use chiral_network::dht::{DhtService, FileMetadata};
+use chiral_network::dht::{DhtConfig, DhtService, FileMetadata};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -46,28 +46,12 @@ async fn test_autonat_detection() {
 
     // Create DHT service with AutoNAT enabled
     let service = DhtService::new(
-        0,                            // Random port
-        vec![],                       // No bootstrap nodes for this test
-        None,                         // No identity secret
-        false,                        // Not bootstrap node
-        true,                         // Enable AutoNAT
-        Some(Duration::from_secs(5)), // Short probe interval for testing
-        vec![],                       // No custom AutoNAT servers
-        None,                         // No proxy
-        None,                         // No file transfer service
-        None,                         // No webrtc_service
-        None,                         // No chunk manager
-        Some(256),                    // chunk_size_kb
-        Some(1024),                   // cache_size_mb
-        false,                        // enable_autorelay
-        Vec::new(),                   // preferred_relays
-        false,                        // enable_relay_server
-        false,                        // enable_upnp
-        None,                         // blockstore_db_path
-        None,                         // last_autorelay_enabled_at
-        None,                         // last_autorelay_disabled_at
-        false,                        // pure_client_mode
-        false,                        // force_server_mode
+        DhtConfig::builder()
+            .autonat_probe_interval(Duration::from_secs(5))
+            .build(),
+        None,
+        None,
+        None,
     )
     .await;
 
@@ -98,30 +82,12 @@ async fn test_autonat_detection() {
 async fn test_dht_peer_discovery() {
     println!("🧪 Testing DHT peer discovery...");
 
-    // Create two DHT services
+    // Create service1
     let service1 = DhtService::new(
-        14101,
-        vec![],
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder().port(14101).build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service1");
@@ -146,28 +112,13 @@ async fn test_dht_peer_discovery() {
     println!("✅ Bootstrap addr for service2: {:?}", bootstrap_addr);
 
     let service2 = DhtService::new(
-        14102,
-        bootstrap_addr,
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder()
+            .port(14102)
+            .bootstrap_nodes(bootstrap_addr)
+            .build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service2");
@@ -202,30 +153,12 @@ async fn test_dht_peer_discovery() {
 async fn test_file_publish_and_search() {
     println!("🧪 Testing file publish and search across peers...");
 
-    // Create two services
+    // Create service1
     let service1 = DhtService::new(
-        14103,
-        vec![],
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder().port(14103).build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service1");
@@ -242,28 +175,13 @@ async fn test_file_publish_and_search() {
     };
 
     let service2 = DhtService::new(
-        14104,
-        bootstrap_addr,
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder()
+            .port(14104)
+            .bootstrap_nodes(bootstrap_addr)
+            .build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service2");
@@ -305,32 +223,9 @@ async fn test_dcutr_enabled() {
     println!("🧪 Testing DCUtR (hole-punching) is enabled...");
 
     // Create service with AutoNAT enabled (DCUtR requires AutoNAT)
-    let service = DhtService::new(
-        0,
-        vec![],
-        None,
-        false,
-        true, // Enable AutoNAT (which enables DCUtR)
-        Some(Duration::from_secs(30)),
-        vec![],
-        None,
-        None,
-        None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
-    )
-    .await
-    .expect("Failed to create service");
+    let service = DhtService::new(DhtConfig::test_config(), None, None, None)
+        .await
+        .expect("Failed to create service");
 
     sleep(Duration::from_secs(1)).await;
 
@@ -365,28 +260,12 @@ async fn test_multiple_autonat_servers() {
     ];
 
     let service = DhtService::new(
-        0,
-        vec![],
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        autonat_servers.clone(),
+        DhtConfig::builder()
+            .autonat_servers(autonat_servers.clone())
+            .build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service");
@@ -407,28 +286,12 @@ async fn test_reachability_history_tracking() {
     println!("🧪 Testing reachability history tracking...");
 
     let service = DhtService::new(
-        0,
-        vec![],
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(5)), // Short interval
-        vec![],
+        DhtConfig::builder()
+            .autonat_probe_interval(Duration::from_secs(5))
+            .build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service");
@@ -456,30 +319,12 @@ async fn test_reachability_history_tracking() {
 async fn test_connection_metrics_tracking() {
     println!("🧪 Testing connection metrics tracking...");
 
-    // Create two services
+    // Create service1
     let service1 = DhtService::new(
-        14105,
-        vec![],
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder().port(14105).build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service1");
@@ -496,28 +341,13 @@ async fn test_connection_metrics_tracking() {
     };
 
     let service2 = DhtService::new(
-        14106,
-        bootstrap_addr,
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder()
+            .port(14106)
+            .bootstrap_nodes(bootstrap_addr)
+            .build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create service2");
@@ -552,30 +382,12 @@ async fn test_connection_metrics_tracking() {
 async fn test_nat_resilience_private_to_public() {
     println!("🧪 Testing NAT resilience: Private ↔ Public connection...");
 
-    // Create "public" peer (simulated - in reality both will likely be private in test env)
+    // Create "public" peer
     let public_peer = DhtService::new(
-        14201,
-        vec![],
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder().port(14201).build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create public peer");
@@ -601,28 +413,13 @@ async fn test_nat_resilience_private_to_public() {
     };
 
     let private_peer = DhtService::new(
-        14202,
-        bootstrap_addr,
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder()
+            .port(14202)
+            .bootstrap_nodes(bootstrap_addr)
+            .build(),
         None,
         None,
         None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await
     .expect("Failed to create private peer");
@@ -670,28 +467,11 @@ async fn test_nat_resilience_connection_fallback() {
         vec!["/ip4/192.0.2.1/tcp/99999/p2p/12D3KooWInvalidPeerIdThatDoesNotExist".to_string()];
 
     let service = DhtService::new(
-        0,
-        invalid_bootstrap.clone(),
-        None,
-        false,
-        true,
-        Some(Duration::from_secs(30)),
-        vec![],
+        DhtConfig::builder()
+            .bootstrap_nodes(invalid_bootstrap)
+            .build(),
         None,
         None,
-        None,
-        None,
-        Some(256),
-        Some(1024),
-        false,      // enable_autorelay
-        Vec::new(), // preferred_relays
-        false,      // enable_relay_server
-        false,      // enable_upnp
-        None,       // blockstore_db_path
-        None,
-        None,
-        false,      // pure_client_mode
-        false,      // force_server_mode
     )
     .await;
 

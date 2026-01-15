@@ -8,10 +8,7 @@ use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 
 // Custom serializer for CIDs to convert them to strings for frontend compatibility
-fn serialize_cids_as_strings<S>(
-    cids: &Option<Vec<Cid>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+fn serialize_cids_as_strings<S>(cids: &Option<Vec<Cid>>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -25,9 +22,7 @@ where
 }
 
 // Custom deserializer for CIDs to convert from strings back to CID objects
-fn deserialize_cids_from_strings<'de, D>(
-    deserializer: D,
-) -> Result<Option<Vec<Cid>>, D::Error>
+fn deserialize_cids_from_strings<'de, D>(deserializer: D) -> Result<Option<Vec<Cid>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -108,14 +103,26 @@ pub struct FileMetadata {
     pub is_encrypted: bool,
 
     /// The encryption method used (e.g., "AES-256-GCM")
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "encryptionMethod")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "encryptionMethod"
+    )]
     pub encryption_method: Option<String>,
 
     /// Fingerprint of the encryption key for identification.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "keyFingerprint")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "keyFingerprint"
+    )]
     pub key_fingerprint: Option<String>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "parentHash")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "parentHash"
+    )]
     pub parent_hash: Option<String>,
 
     /// The root CID(s) for retrieving the file from Bitswap. Usually one.
@@ -125,18 +132,34 @@ pub struct FileMetadata {
     pub cids: Option<Vec<Cid>>,
 
     /// For encrypted files, this contains the encrypted AES key and other info.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "encryptedKeyBundle")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "encryptedKeyBundle"
+    )]
     pub encrypted_key_bundle: Option<EncryptedAesKeyBundle>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ftpSources")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "ftpSources"
+    )]
     pub ftp_sources: Option<Vec<FtpSourceInfo>>,
 
     // ed2k sources for downloading the file
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ed2kSources")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "ed2kSources"
+    )]
     pub ed2k_sources: Option<Vec<Ed2kSourceInfo>>,
 
     /// HTTP sources for downloading the file (HTTP Range request endpoints)
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "httpSources")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "httpSources"
+    )]
     pub http_sources: Option<Vec<HttpSourceInfo>>,
 
     #[serde(default)]
@@ -150,7 +173,11 @@ pub struct FileMetadata {
     pub price: f64,
 
     /// Ethereum address of the uploader (for payment)
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "uploaderAddress")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "uploaderAddress"
+    )]
     pub uploader_address: Option<String>,
 
     /// The SHA-1 info hash for BitTorrent compatibility.
@@ -288,28 +315,10 @@ impl Ed2kSourceInfo {
 }
 
 // =========================================================================
-// Heartbeat & Seeding
-// =========================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SeederHeartbeat {
-    pub peer_id: String,
-    pub expires_at: u64,
-    pub last_heartbeat: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct FileHeartbeatCacheEntry {
-    pub heartbeats: Vec<SeederHeartbeat>,
-    pub metadata: serde_json::Value,
-}
-
-// =========================================================================
 // Magnet URI
 // =========================================================================
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MagnetData {
     pub info_hash: String,
     pub display_name: Option<String>,

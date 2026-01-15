@@ -33,10 +33,6 @@ Write-Host ""
 Write-Host "✅ Binary found: $binary" -ForegroundColor Green
 Write-Host ""
 
-# Set environment variable to enable AutoNAT (for VM mode)
-$env:CHIRAL_ENABLE_AUTONAT = "1"
-Write-Host "🔧 Environment variable set: CHIRAL_ENABLE_AUTONAT=1" -ForegroundColor Cyan
-Write-Host ""
 
 # Optional: Set VM mode flag (alternative way)
 # $env:CHIRAL_VM_MODE = "1"
