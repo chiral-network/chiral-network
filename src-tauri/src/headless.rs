@@ -488,10 +488,22 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
                 // Use an isolated directory under the storage root so runs don't collide.
                 let bt_download_dir = storage_dir.join("bittorrent");
                 let _ = std::fs::create_dir_all(&bt_download_dir);
+                let bt_port: u16 = std::env::var("E2E_BITTORRENT_SEED_PORT")
+                    .or_else(|_| std::env::var("CHIRAL_BITTORRENT_SEED_PORT"))
+                    .ok()
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(30000);
+                // For real-network E2E (VM seeder), use a fixed listen port so the downloader can
+                // deterministically connect (avoid "picked some other port in a range").
+                let bt_port_end = bt_port.saturating_add(1);
+                info!(
+                    "Headless E2E BitTorrent listen port range: {}..{} (end-exclusive)",
+                    bt_port, bt_port_end
+                );
                 let bt_handler = match bittorrent_handler::BitTorrentHandler::new_with_port_range(
                     bt_download_dir,
                     dht_arc.clone(),
-                    Some(30000..30010),
+                    Some(bt_port..bt_port_end),
                 )
                 .await
                 {

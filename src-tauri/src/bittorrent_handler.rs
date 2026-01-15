@@ -1183,6 +1183,25 @@ impl BitTorrentHandler {
             if std::env::var("CHIRAL_E2E_API_PORT").ok().is_some()
                 || std::env::var("E2E_ATTACH").ok().as_deref() == Some("true")
             {
+                // Prefer an explicit public-IP hint if provided (VM uploader public IP).
+                // This avoids cases where libp2p peer addresses only contain private RFC1918 IPs.
+                let port = get_e2e_bittorrent_seeder_port();
+                if let Ok(ip_str) = std::env::var("CHIRAL_PUBLIC_IP")
+                    .or_else(|_| std::env::var("E2E_UPLOADER_PUBLIC_IP"))
+                {
+                    if let Ok(ip) = ip_str.trim().parse::<std::net::IpAddr>() {
+                        if !is_private_ip(&ip) {
+                            ensure_initial_peer(&mut add_opts, ip, port);
+                            info!(
+                                "E2E: injecting initial_peers {}:{} (from env) for torrent {}",
+                                ip, port, info_hash_hex
+                            );
+                            let with_hint = append_magnet_x_pe(&identifier_for_add, ip, port);
+                            identifier_for_add = with_hint;
+                        }
+                    }
+                }
+
                 match self
                     .dht_service
                     .search_peers_by_infohash(info_hash_hex.clone())
@@ -1210,8 +1229,11 @@ impl BitTorrentHandler {
                                 }
                             }
                             if let Some(ip) = selected_ip {
-                                let port = get_e2e_bittorrent_seeder_port();
                                 ensure_initial_peer(&mut add_opts, ip, port);
+                                info!(
+                                    "E2E: injecting initial_peers {}:{} (from DHT peer addresses) for torrent {}",
+                                    ip, port, info_hash_hex
+                                );
                                 let with_hint = append_magnet_x_pe(&identifier_for_add, ip, port);
                                 if with_hint != identifier_for_add {
                                     info!(
