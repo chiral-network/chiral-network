@@ -13,6 +13,7 @@ use librqbit::{
     ManagedTorrent, Session, SessionOptions,
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -51,6 +52,15 @@ fn append_magnet_x_pe(identifier: &str, ip: std::net::IpAddr, port: u16) -> Stri
     }
     let sep = if identifier.contains('?') { "&" } else { "?" };
     format!("{}{}x.pe={}:{}", identifier, sep, ip, port)
+}
+
+fn ensure_initial_peer(add_opts: &mut AddTorrentOptions, ip: std::net::IpAddr, port: u16) {
+    // librqbit supports deterministic peer injection via AddTorrentOptions.initial_peers.
+    // This is more reliable than relying on magnet extensions like x.pe.
+    if add_opts.initial_peers.as_ref().is_some_and(|v| !v.is_empty()) {
+        return;
+    }
+    add_opts.initial_peers = Some(vec![SocketAddr::new(ip, port)]);
 }
 
 /// Progress information for a torrent
@@ -1201,6 +1211,7 @@ impl BitTorrentHandler {
                             }
                             if let Some(ip) = selected_ip {
                                 let port = get_e2e_bittorrent_seeder_port();
+                                ensure_initial_peer(&mut add_opts, ip, port);
                                 let with_hint = append_magnet_x_pe(&identifier_for_add, ip, port);
                                 if with_hint != identifier_for_add {
                                     info!(
