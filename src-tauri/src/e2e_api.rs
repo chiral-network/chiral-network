@@ -19,6 +19,7 @@ use crate::download_source::HttpSourceInfo;
 use crate::http_download::HttpDownloadClient;
 use crate::http_server;
 use crate::manager::ChunkManager;
+use crate::protocols::ProtocolHandler;
 use crate::transaction_services;
 use crate::file_transfer::FileTransferService;
 use crate::webrtc_service::{set_webrtc_service, WebRTCService};
@@ -201,76 +202,10 @@ async fn ensure_p2p_services_started(app: &tauri::AppHandle) -> Result<(), Strin
     Ok(())
 }
 
-async fn ensure_multi_source_services_started(app: &tauri::AppHandle) -> Result<(), String> {
-    // MultiSourceDownloadService is needed for FTP downloads (ftp_sources + manifest-based verification).
-    let state = app.state::<crate::AppState>();
-
-    // Fast path: already running.
-    {
-        let guard = state.multi_source_download.lock().await;
-        if guard.is_some() {
-            return Ok(());
-        }
-    }
-
-    // Ensure WebRTC/FileTransfer exist (MultiSource depends on WebRTC service).
-    ensure_p2p_services_started(app).await?;
-
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    }
-    .ok_or_else(|| "DHT is not running".to_string())?;
-
-    let webrtc = {
-        let webrtc_guard = state.webrtc.lock().await;
-        webrtc_guard.as_ref().cloned()
-    }
-    .ok_or_else(|| "WebRTC service is not running".to_string())?;
-
-    let chunk_manager = {
-        let chunk_guard = state.chunk_manager.lock().await;
-        chunk_guard.as_ref().cloned()
-    }
-    .ok_or_else(|| "Chunk manager not initialized".to_string())?;
-
-    let transfer_event_bus = Arc::new(crate::TransferEventBus::new(app.clone()));
-    let ms = crate::multi_source_download::MultiSourceDownloadService::new(
-        dht,
-        webrtc,
-        state.bittorrent_handler.clone(),
-        transfer_event_bus,
-        state.analytics.clone(),
-        chunk_manager,
-    );
-    let ms_arc = Arc::new(ms);
-
-    {
-        let mut guard = state.multi_source_download.lock().await;
-        *guard = Some(ms_arc.clone());
-    }
-
-    // Start multi-source event pump once.
-    {
-        let mut pump_guard = state.multi_source_pump.lock().await;
-        if pump_guard.is_none() {
-            let app_handle = app.clone();
-            let ms_clone = ms_arc.clone();
-            let handle = tokio::spawn(async move {
-                crate::pump_multi_source_events(app_handle, ms_clone).await;
-            });
-            *pump_guard = Some(handle);
-        }
-    }
-
-    // Start the service background task.
-    let ms_clone = ms_arc.clone();
-    tokio::spawn(async move {
-        ms_clone.run().await;
-    });
-
-    Ok(())
-}
+// NOTE:
+// `ensure_multi_source_services_started` was previously used for FTP E2E downloads.
+// We now route FTP E2E downloads through the dedicated FTP protocol handler instead,
+// because MultiSource deprioritizes FTP behind P2P sources and can get stuck on chunk/range behavior.
 
 pub async fn start_e2e_api_server(app: tauri::AppHandle, port: u16) -> Result<SocketAddr, String> {
     let state = E2eApiState {
@@ -949,87 +884,42 @@ async fn api_download(
                     {
                         return Err(e);
                     }
-                } else {
-                    // FTP: use MultiSourceDownloadService so we consume ftp_sources and verify chunk hashes if manifest exists.
-                    ensure_multi_source_services_started(&app_handle_for_task).await?;
-                    let ms = {
-                        let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
-                        let guard = app_state_for_task.multi_source_download.lock().await;
-                        guard.as_ref().cloned()
-                    }
-                    .ok_or_else(|| "MultiSourceDownloadService is not running".to_string())?;
+                } else if protocol_upper_for_task == "FTP" {
+                    // FTP: use the dedicated protocol handler (single-source) so FTP isn't deprioritized
+                    // behind P2P sources and we avoid chunked-range edge cases.
+                    let ftp_url = meta_for_task
+                        .ftp_sources
+                        .as_ref()
+                        .and_then(|v| v.first())
+                        .map(|s| s.url.clone())
+                        .ok_or_else(|| "No ftpSources in metadata".to_string())?;
 
-                    ms.start_download(
-                        meta_for_task.merkle_root.clone(),
-                        out_path_for_task.clone(),
-                        None,
-                        None,
-                    )
-                    .await
-                    .map_err(|e| format!("FTP multi-source download start failed: {}", e))?;
+                    let handler = crate::protocols::ftp::FtpProtocolHandler::new();
+                    let opts = crate::protocols::traits::DownloadOptions {
+                        output_path: std::path::PathBuf::from(&out_path_for_task),
+                        max_peers: None,
+                        chunk_size: None,
+                        encryption: false,
+                        bandwidth_limit: None,
+                    };
+                    handler
+                        .download(&ftp_url, opts)
+                        .await
+                        .map_err(|e| format!("FTP download failed: {}", e))?;
+                } else {
+                    return Err(format!(
+                        "Unsupported protocol '{}' for async download task",
+                        protocol_upper_for_task
+                    ));
                 }
 
                 let start = std::time::Instant::now();
-                // FTP-specific: fail fast when the download is "stuck running" (no progress),
-                // and avoid treating pre-allocated file length as completion.
-                // FTP-specific: stall (no progress) timeout.
-                //
-                // Prefer an explicit stall timeout if provided, otherwise fall back to the overall
-                // FTP download timeout so that callers who only set E2E_FTP_DOWNLOAD_TIMEOUT_MS
-                // don't unexpectedly fail at the default 60s stall threshold.
-                let ftp_stall_timeout_ms: u64 = std::env::var("E2E_FTP_STALL_TIMEOUT_MS")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .or_else(|| {
-                        std::env::var("E2E_FTP_DOWNLOAD_TIMEOUT_MS")
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                    })
-                    .unwrap_or(60_000);
                 let ftp_finalize_grace_ms: u64 = std::env::var("E2E_FTP_FINALIZE_GRACE_MS")
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(30_000);
-                let mut last_progress_bytes: u64 = 0;
-                let mut last_progress_at = std::time::Instant::now();
                 let mut first_seen_incomplete_full_len_at: Option<std::time::Instant> = None;
                 loop {
-                    if protocol_upper_for_task == "FTP" {
-                        // Observe MultiSource progress to detect stalls earlier than the outer 10min timeout.
-                        let ms_opt = {
-                            let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
-                            let guard = app_state_for_task.multi_source_download.lock().await;
-                            guard.as_ref().cloned()
-                        };
-                        if let Some(ms) = ms_opt {
-                            if let Some(p) = ms.get_download_progress(&meta_for_task.merkle_root).await {
-                                if p.downloaded_size > last_progress_bytes {
-                                    last_progress_bytes = p.downloaded_size;
-                                    last_progress_at = std::time::Instant::now();
-                                } else if last_progress_at.elapsed().as_millis() as u64 >= ftp_stall_timeout_ms {
-                                    let mut sources_summary = String::new();
-                                    for s in p.source_assignments.iter().take(6) {
-                                        sources_summary.push_str(&format!(
-                                            "[{} {:?}] ",
-                                            s.source_id(),
-                                            s.status
-                                        ));
-                                    }
-                                    return Err(format!(
-                                        "FTP download stalled for {}ms (no progress). downloaded={}/{} bytes, completed_chunks={}/{}, active_sources={}, sources={}",
-                                        ftp_stall_timeout_ms,
-                                        p.downloaded_size,
-                                        p.total_size,
-                                        p.completed_chunks,
-                                        p.total_chunks,
-                                        p.active_sources,
-                                        sources_summary.trim()
-                                    ));
-                                }
-                            }
-                        }
-                    }
-
                     match tokio::fs::metadata(&out_path_for_task).await {
                         Ok(m) => {
                             let len = m.len();
