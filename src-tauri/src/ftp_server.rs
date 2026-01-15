@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, error};
 use std::net::Ipv4Addr;
+use libunftp::options::ActivePassiveMode;
 
 /// FTP Server state
 pub struct FtpServer {
@@ -123,6 +124,21 @@ impl FtpServer {
                     builder = builder.passive_host(host.as_str());
                 }
             }
+
+            // Be explicit about Active/Passive support. This avoids relying on library defaults and
+            // ensures Passive mode is enabled for real-network transfers.
+            builder = builder.active_passive_mode(ActivePassiveMode::ActiveAndPassive);
+
+            info!(
+                "FTP passive config: host={} ports={}..{} (end-exclusive)",
+                std::env::var("CHIRAL_FTP_HOST")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .or_else(|| std::env::var("CHIRAL_PUBLIC_IP").ok().filter(|v| !v.trim().is_empty()))
+                    .unwrap_or_else(|| "<auto>".to_string()),
+                passive_start,
+                passive_end
+            );
 
             let server = builder.build().unwrap();
 
