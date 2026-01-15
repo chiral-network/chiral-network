@@ -1151,13 +1151,36 @@ async fn api_download(
                             .await
                             .map_err(|e| format!("BitTorrent download folder unavailable: {}", e))?;
 
-                        // Wait until the torrent is finished.
+                        // Wait until the torrent is finished (fail-fast on explicit error / no-progress).
                         let bt_start = std::time::Instant::now();
+                        let no_progress_grace_ms: u64 = std::env::var("E2E_BITTORRENT_NO_PROGRESS_FAIL_MS")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(120_000);
+                        let mut last_progress_bytes: u64 = 0;
+                        let mut last_progress_at = std::time::Instant::now();
                         loop {
                             match bt.get_torrent_progress(&actual_info_hash).await {
                                 Ok(p) => {
+                                    if p.state == "error" {
+                                        return Err(format!(
+                                            "BitTorrent download entered error state (info_hash={}): downloaded={} total={} speed={}",
+                                            actual_info_hash, p.downloaded_bytes, p.total_bytes, p.download_speed
+                                        ));
+                                    }
                                     if p.is_finished {
                                         break;
+                                    }
+                                    if p.downloaded_bytes > last_progress_bytes {
+                                        last_progress_bytes = p.downloaded_bytes;
+                                        last_progress_at = std::time::Instant::now();
+                                    } else if last_progress_bytes == 0
+                                        && last_progress_at.elapsed().as_millis() as u64 >= no_progress_grace_ms
+                                    {
+                                        return Err(format!(
+                                            "BitTorrent made no download progress for {}ms (info_hash={}). Seeder may not be discoverable; check tracker/BT-DHT or ensure peer hint injection works.",
+                                            no_progress_grace_ms, actual_info_hash
+                                        ));
                                     }
                                 }
                                 Err(_) => {}
