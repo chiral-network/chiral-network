@@ -1630,7 +1630,7 @@ async fn run_dht_node(
                                                     "Failed to serialize root CID list: {}",
                                                     e
                                                 )));
-                                                continue 'outer;
+                                                continue 'outer; // Abort this publish operation
                                             }
                                         };
 
@@ -6554,8 +6554,7 @@ impl DhtService {
             // Wait until the DHT task has stored blocks and published the DHT record.
             response_rx.await.map_err(|e| e.to_string())??;
 
-            // Keep provider/heartbeat behaviour consistent with other publish flows.
-            self.start_file_heartbeat(&file_hash).await?;
+            // Upstream main removed heartbeat-based refreshing; publishing already registers providers in the DHT task.
             return Ok(());
         }
 
@@ -6716,7 +6715,7 @@ impl DhtService {
 
         response_rx.await.map_err(|e| e.to_string())??;
 
-        self.start_file_heartbeat(&file_hash).await?;
+        // Upstream main removed heartbeat-based refreshing; publishing already registers providers in the DHT task.
         Ok(())
     }
 
