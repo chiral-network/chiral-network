@@ -1140,10 +1140,24 @@ async fn api_download(
                             meta_for_task.trackers.as_ref(),
                         );
 
-                        let managed = bt
-                            .start_download(&magnet)
-                            .await
-                            .map_err(|e| format!("BitTorrent download failed to start: {}", e))?;
+                        // NOTE: bt.start_download can block while resolving the magnet / peers.
+                        // Put an explicit cap so the test doesn't hit the global vitest 10min timeout.
+                        let start_timeout_ms: u64 = std::env::var("E2E_BITTORRENT_START_TIMEOUT_MS")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(60_000);
+                        let managed = tokio::time::timeout(
+                            std::time::Duration::from_millis(start_timeout_ms),
+                            bt.start_download(&magnet),
+                        )
+                        .await
+                        .map_err(|_| {
+                            format!(
+                                "BitTorrent start_download timed out after {}ms (magnet resolve/peer connect).",
+                                start_timeout_ms
+                            )
+                        })?
+                        .map_err(|e| format!("BitTorrent download failed to start: {}", e))?;
 
                         let actual_info_hash = hex::encode(managed.info_hash().0);
                         let download_dir = bt

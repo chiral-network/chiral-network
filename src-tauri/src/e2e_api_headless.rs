@@ -1124,13 +1124,36 @@ async fn api_download(
             meta.trackers.as_ref(),
         );
 
-        let managed = match bt.start_download(&magnet).await {
-            Ok(m) => m,
-            Err(e) => {
+        // bt.start_download can block while resolving the magnet / peers.
+        // Cap it so callers get a real error instead of hanging until test timeout.
+        let start_timeout_ms: u64 = std::env::var("E2E_BITTORRENT_START_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60_000);
+        let managed = match tokio::time::timeout(
+            std::time::Duration::from_millis(start_timeout_ms),
+            bt.start_download(&magnet),
+        )
+        .await
+        {
+            Ok(Ok(m)) => m,
+            Ok(Err(e)) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(http_server::ErrorResponse {
                         error: format!("BitTorrent download failed to start: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(http_server::ErrorResponse {
+                        error: format!(
+                            "BitTorrent start_download timed out after {}ms (magnet resolve/peer connect).",
+                            start_timeout_ms
+                        ),
                     }),
                 )
                     .into_response();
