@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use sha2::Digest;
@@ -1194,6 +1195,30 @@ async fn api_download(
                                 .and_then(|s| s.parse::<std::net::IpAddr>().ok())
                                 .zip(bt_seeder_port_for_task)
                                 .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+                            // Preflight: attempt a direct TCP connect to the initial peer so we can
+                            // distinguish "network/ACL blocked" vs "rqbit dialed too fast to observe".
+                            if let Some(addr) = peer {
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(2),
+                                    TcpStream::connect(addr),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(_)) => {}
+                                    Ok(Err(e)) => {
+                                        return Err(format!(
+                                            "BitTorrent preflight TCP connect failed to {}: {}",
+                                            addr, e
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        return Err(format!(
+                                            "BitTorrent preflight TCP connect timed out to {}",
+                                            addr
+                                        ));
+                                    }
+                                }
+                            }
                             if let Some(p) = peer {
                                 tokio::time::timeout(
                                     std::time::Duration::from_millis(start_timeout_ms),
@@ -1257,6 +1282,7 @@ async fn api_download(
                             .unwrap_or(120_000);
                         let mut last_progress_bytes: u64 = 0;
                         let mut last_progress_at = std::time::Instant::now();
+                        let mut peak = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
                         loop {
                             // Read stats directly from the managed torrent so we can access
                             // librqbit's aggregate peer state counters (queued/connecting/live/etc).
@@ -1270,6 +1296,17 @@ async fn api_download(
                             }
                             if s.finished {
                                 break;
+                            }
+
+                            // Track peak peer counters so we don't miss short-lived dial attempts.
+                            if let Some(l) = s.live.as_ref() {
+                                let ps = &l.snapshot.peer_stats;
+                                peak.0 = peak.0.max(ps.queued);
+                                peak.1 = peak.1.max(ps.connecting);
+                                peak.2 = peak.2.max(ps.live);
+                                peak.3 = peak.3.max(ps.seen);
+                                peak.4 = peak.4.max(ps.dead);
+                                peak.5 = peak.5.max(ps.not_needed);
                             }
 
                             if s.progress_bytes > last_progress_bytes {
@@ -1289,9 +1326,13 @@ async fn api_download(
                                         )
                                     })
                                     .unwrap_or_else(|| "peer_stats=<none>".to_string());
+                                let peak_diag = format!(
+                                    "peer_peak={{queued={},connecting={},live={},seen={},dead={},not_needed={}}}",
+                                    peak.0, peak.1, peak.2, peak.3, peak.4, peak.5
+                                );
                                 return Err(format!(
-                                    "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}, {}).",
-                                    no_progress_grace_ms, actual_info_hash, state_str, s.finished, s.total_bytes, peer_diag
+                                    "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}, {}, {}).",
+                                    no_progress_grace_ms, actual_info_hash, state_str, s.finished, s.total_bytes, peer_diag, peak_diag
                                 ));
                             }
                             if bt_start.elapsed().as_millis() as u64 >= timeout_ms {
@@ -1300,7 +1341,7 @@ async fn api_download(
                                     timeout_ms, actual_info_hash
                                 ));
                             }
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
 
                         // Find the downloaded file and copy it into the expected E2E output path.
