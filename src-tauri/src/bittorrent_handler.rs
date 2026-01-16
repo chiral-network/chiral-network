@@ -2207,7 +2207,8 @@ impl SimpleProtocolHandler for BitTorrentHandler {
         let seed_ready_wait_ms: u64 = std::env::var("E2E_BITTORRENT_SEED_READY_WAIT_MS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(10_000);
+            // Real networks can be slower to finish the initial hashcheck; default higher to avoid "0 pieces" windows.
+            .unwrap_or(30_000);
         let start = std::time::Instant::now();
         loop {
             let stats = handle.stats();
