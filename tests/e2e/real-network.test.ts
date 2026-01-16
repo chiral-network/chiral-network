@@ -527,7 +527,25 @@ class RealE2ETestFramework {
     const raw =
       (byProtocolKey ? process.env[byProtocolKey] : undefined) ??
       process.env.E2E_P2P_DOWNLOAD_TIMEOUT_MS ??
-      "600000";
+      // BitTorrent can hang in "metadata ok but no progress" states; keep defaults shorter.
+      (protocol === "BitTorrent" ? "300000" : "600000");
+
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 600000;
+  }
+
+  private getTestTimeoutMs(
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+  ): number {
+    // Priority:
+    // 1) E2E_{PROTOCOL}_TEST_TIMEOUT_MS
+    // 2) E2E_TEST_TIMEOUT_MS
+    // 3) protocol default (BitTorrent shorter to avoid long hangs during debugging)
+    const key = `E2E_${protocol.toUpperCase()}_TEST_TIMEOUT_MS`;
+    const raw =
+      process.env[key] ??
+      process.env.E2E_TEST_TIMEOUT_MS ??
+      (protocol === "BitTorrent" ? "300000" : "600000");
 
     const n = Number(raw);
     return Number.isFinite(n) && n > 0 ? n : 600000;
@@ -823,7 +841,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         throw new Error("Timed out waiting for tx receipt");
       })();
       expect(receipt.status).toBe("success");
-    }, 600000);
+    }, framework["getTestTimeoutMs"]("WebRTC"));
   });
 
   describe("Bitswap Real Communication (Attach)", () => {
@@ -883,7 +901,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         if (receipt.status === "failed") throw new Error("Transaction failed");
         await new Promise((res) => setTimeout(res, 1000));
       }
-    }, 600000);
+    }, framework["getTestTimeoutMs"]("Bitswap"));
   });
 
   describe("BitTorrent Real Communication (Attach)", () => {
@@ -941,7 +959,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         if (receipt.status === "failed") throw new Error("Transaction failed");
         await new Promise((res) => setTimeout(res, 1000));
       }
-    }, 600000);
+    }, framework["getTestTimeoutMs"]("BitTorrent"));
   });
 
   describe("FTP Real Communication (Attach)", () => {
@@ -1002,7 +1020,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         if (receipt.status === "failed") throw new Error("Transaction failed");
         await new Promise((res) => setTimeout(res, 1000));
       }
-    }, 600000);
+    }, framework["getTestTimeoutMs"]("FTP"));
   });
 
   // Payment checkpoint automation is currently UI-driven and not wired into the real-network harness yet.

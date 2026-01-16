@@ -1192,7 +1192,7 @@ async fn api_download(
                         let start_timeout_ms: u64 = std::env::var("E2E_BITTORRENT_START_TIMEOUT_MS")
                             .ok()
                             .and_then(|s| s.parse().ok())
-                            .unwrap_or(60_000);
+                            .unwrap_or(30_000);
 
                         // Prefer .torrent bytes in real-network E2E to avoid magnet metadata exchange hangs.
                         let managed = if let Some(tb64) = torrent_base64_for_task.as_ref() {
@@ -1349,7 +1349,7 @@ async fn api_download(
                         let no_progress_grace_ms: u64 = std::env::var("E2E_BITTORRENT_NO_PROGRESS_FAIL_MS")
                             .ok()
                             .and_then(|s| s.parse().ok())
-                            .unwrap_or(120_000);
+                            .unwrap_or(60_000);
                         let mut last_progress_bytes: u64 = 0;
                         let mut last_progress_at = std::time::Instant::now();
                         let mut peak = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
