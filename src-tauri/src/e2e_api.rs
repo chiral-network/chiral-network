@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
+use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 
 use sha2::Digest;
@@ -37,6 +38,25 @@ fn extract_btih_info_hash(identifier: &str) -> Option<String> {
         return Some(identifier[start..end].to_lowercase());
     }
     None
+}
+
+fn bt_handshake_bytes(info_hash_hex: &str) -> Result<[u8; 68], String> {
+    let ih = hex::decode(info_hash_hex)
+        .map_err(|e| format!("Invalid info_hash hex for BT handshake: {}", e))?;
+    if ih.len() != 20 {
+        return Err(format!(
+            "Invalid info_hash length for BT handshake: expected 20 bytes, got {}",
+            ih.len()
+        ));
+    }
+    let mut out = [0u8; 68];
+    out[0] = 19;
+    out[1..20].copy_from_slice(b"BitTorrent protocol");
+    // reserved [20..28] left as 0
+    out[28..48].copy_from_slice(&ih);
+    // 20-byte peer id (dummy, deterministic)
+    out[48..68].copy_from_slice(b"-CHIRAL-E2E-0000000");
+    Ok(out)
 }
 
 fn build_magnet_link(
@@ -1198,13 +1218,13 @@ async fn api_download(
                             // Preflight: attempt a direct TCP connect to the initial peer so we can
                             // distinguish "network/ACL blocked" vs "rqbit dialed too fast to observe".
                             if let Some(addr) = peer {
-                                match tokio::time::timeout(
+                                let mut stream = match tokio::time::timeout(
                                     std::time::Duration::from_secs(2),
                                     TcpStream::connect(addr),
                                 )
                                 .await
                                 {
-                                    Ok(Ok(_)) => {}
+                                    Ok(Ok(s)) => s,
                                     Ok(Err(e)) => {
                                         return Err(format!(
                                             "BitTorrent preflight TCP connect failed to {}: {}",
@@ -1214,6 +1234,56 @@ async fn api_download(
                                     Err(_) => {
                                         return Err(format!(
                                             "BitTorrent preflight TCP connect timed out to {}",
+                                            addr
+                                        ));
+                                    }
+                                };
+
+                                // Also preflight a BitTorrent handshake to ensure the listener on
+                                // the remote port is actually a BT peer for this info_hash.
+                                let hs = bt_handshake_bytes(&expected_info_hash)?;
+                                if let Err(e) = tokio::time::timeout(
+                                    std::time::Duration::from_secs(2),
+                                    stream.write_all(&hs),
+                                )
+                                .await
+                                {
+                                    return Err(format!(
+                                        "BitTorrent preflight handshake write timed out to {}: {}",
+                                        addr, e
+                                    ));
+                                }
+                                let mut resp = [0u8; 68];
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(2),
+                                    stream.read_exact(&mut resp),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(_)) => {
+                                        if resp[0] != 19 || &resp[1..20] != b"BitTorrent protocol" {
+                                            return Err(format!(
+                                                "BitTorrent preflight handshake invalid response from {} (not a BT peer?)",
+                                                addr
+                                            ));
+                                        }
+                                        if resp[28..48] != hs[28..48] {
+                                            let got = hex::encode(&resp[28..48]);
+                                            return Err(format!(
+                                                "BitTorrent preflight handshake info_hash mismatch from {}: expected={} got={}",
+                                                addr, expected_info_hash, got
+                                            ));
+                                        }
+                                    }
+                                    Ok(Err(e)) => {
+                                        return Err(format!(
+                                            "BitTorrent preflight handshake read failed from {}: {}",
+                                            addr, e
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        return Err(format!(
+                                            "BitTorrent preflight handshake timed out (no response) from {}",
                                             addr
                                         ));
                                     }
