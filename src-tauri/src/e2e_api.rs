@@ -1258,30 +1258,41 @@ async fn api_download(
                         let mut last_progress_bytes: u64 = 0;
                         let mut last_progress_at = std::time::Instant::now();
                         loop {
-                            match bt.get_torrent_progress(&actual_info_hash).await {
-                                Ok(p) => {
-                                    if p.state == "error" {
-                                        return Err(format!(
-                                            "BitTorrent download entered error state (info_hash={}): downloaded={} total={} speed={}",
-                                            actual_info_hash, p.downloaded_bytes, p.total_bytes, p.download_speed
-                                        ));
-                                    }
-                                    if p.is_finished {
-                                        break;
-                                    }
-                                    if p.downloaded_bytes > last_progress_bytes {
-                                        last_progress_bytes = p.downloaded_bytes;
-                                        last_progress_at = std::time::Instant::now();
-                                    } else if last_progress_bytes == 0
-                                        && last_progress_at.elapsed().as_millis() as u64 >= no_progress_grace_ms
-                                    {
-                                        return Err(format!(
-                                            "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}). Seeder may not be discoverable or seeder may have 0 pieces.",
-                                            no_progress_grace_ms, actual_info_hash, p.state, p.is_finished, p.total_bytes
-                                        ));
-                                    }
-                                }
-                                Err(_) => {}
+                            // Read stats directly from the managed torrent so we can access
+                            // librqbit's aggregate peer state counters (queued/connecting/live/etc).
+                            let s = managed.stats();
+                            let state_str = s.state.to_string();
+                            if state_str == "error" {
+                                return Err(format!(
+                                    "BitTorrent torrent entered error state (info_hash={}): error={:?}",
+                                    actual_info_hash, s.error
+                                ));
+                            }
+                            if s.finished {
+                                break;
+                            }
+
+                            if s.progress_bytes > last_progress_bytes {
+                                last_progress_bytes = s.progress_bytes;
+                                last_progress_at = std::time::Instant::now();
+                            } else if last_progress_bytes == 0
+                                && last_progress_at.elapsed().as_millis() as u64 >= no_progress_grace_ms
+                            {
+                                let peer_diag = s
+                                    .live
+                                    .as_ref()
+                                    .map(|l| {
+                                        let ps = &l.snapshot.peer_stats;
+                                        format!(
+                                            "peer_stats={{queued={},connecting={},live={},seen={},dead={},not_needed={}}}",
+                                            ps.queued, ps.connecting, ps.live, ps.seen, ps.dead, ps.not_needed
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "peer_stats=<none>".to_string());
+                                return Err(format!(
+                                    "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}, {}).",
+                                    no_progress_grace_ms, actual_info_hash, state_str, s.finished, s.total_bytes, peer_diag
+                                ));
                             }
                             if bt_start.elapsed().as_millis() as u64 >= timeout_ms {
                                 return Err(format!(
