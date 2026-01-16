@@ -50,6 +50,38 @@ function getTestTimeoutMs(
   return Number.isFinite(n) && n > 0 ? n : 600000;
 }
 
+function getSearchTimeoutMs(
+  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+): number {
+  // Priority:
+  // 1) E2E_{PROTOCOL}_SEARCH_TIMEOUT_MS
+  // 2) E2E_SEARCH_TIMEOUT_MS
+  // 3) protocol default (BT shorter so it doesn't eat the whole test budget)
+  const key = `E2E_${protocol.toUpperCase()}_SEARCH_TIMEOUT_MS`;
+  const raw =
+    process.env[key] ??
+    process.env.E2E_SEARCH_TIMEOUT_MS ??
+    (protocol === "BitTorrent" ? "45000" : "90000");
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 90000;
+}
+
+function getReceiptTimeoutMs(
+  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+): number {
+  // Priority:
+  // 1) E2E_{PROTOCOL}_RECEIPT_TIMEOUT_MS
+  // 2) E2E_RECEIPT_TIMEOUT_MS
+  // 3) protocol default (BT shorter for faster fail)
+  const key = `E2E_${protocol.toUpperCase()}_RECEIPT_TIMEOUT_MS`;
+  const raw =
+    process.env[key] ??
+    process.env.E2E_RECEIPT_TIMEOUT_MS ??
+    (protocol === "BitTorrent" ? "60000" : "120000");
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 120000;
+}
+
 interface NodeConfig {
   nodeId: string;
   apiBaseUrl: string;
@@ -786,7 +818,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       const fileHash = await framework.uploadFile(testFile, "WebRTC");
       expect(fileHash).toBeTruthy();
 
-      const metadata = await framework.searchFile(fileHash, 60_000);
+      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("WebRTC"));
       expect(metadata).toBeTruthy();
 
       const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
@@ -822,7 +854,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
         const start = Date.now();
-        const timeoutMs = 120_000;
+      const timeoutMs = getReceiptTimeoutMs("WebRTC");
         while (Date.now() - start < timeoutMs) {
           const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
             method: "POST",
@@ -854,7 +886,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       expect(fileHash).toBeTruthy();
 
       // Bitswap metadata propagation can be slower than WebRTC/HTTP on real networks.
-      const metadata = await framework.searchFile(fileHash, 90_000);
+      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("Bitswap"));
       expect(metadata).toBeTruthy();
 
       const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
@@ -885,7 +917,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
       const start = Date.now();
-      const timeoutMs = 120_000;
+      const timeoutMs = getReceiptTimeoutMs("Bitswap");
       while (Date.now() - start < timeoutMs) {
         const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
           method: "POST",
@@ -914,7 +946,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       expect(fileHash).toBeTruthy();
 
       // BitTorrent publish key is the info_hash; allow a bit more time for propagation.
-      const metadata = await framework.searchFile(fileHash, 90_000);
+      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("BitTorrent"));
       expect(metadata).toBeTruthy();
 
       const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
@@ -943,7 +975,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
       const start = Date.now();
-      const timeoutMs = 120_000;
+      const timeoutMs = getReceiptTimeoutMs("BitTorrent");
       while (Date.now() - start < timeoutMs) {
         const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
           method: "POST",
@@ -1004,7 +1036,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
       const start = Date.now();
-      const timeoutMs = 120_000;
+      const timeoutMs = getReceiptTimeoutMs("FTP");
       while (Date.now() - start < timeoutMs) {
         const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
           method: "POST",
