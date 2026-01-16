@@ -162,6 +162,7 @@ struct UploadResponse {
     seeder_url: String,
     uploader_address: Option<String>,
     torrent_base64: Option<String>,
+    bittorrent_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +180,8 @@ struct DownloadRequest {
     file_name: Option<String>,
     protocol: Option<String>,
     torrent_base64: Option<String>,
+    bittorrent_seeder_ip: Option<String>,
+    bittorrent_seeder_port: Option<u16>,
 }
 
 #[derive(Debug, Serialize)]
@@ -938,6 +941,14 @@ async fn api_upload_generate(
     } else {
         None
     };
+    let bittorrent_port = if protocol_upper == "BITTORRENT" {
+        state
+            .bittorrent_handler
+            .as_ref()
+            .and_then(|bt| bt.rqbit_session().tcp_listen_port())
+    } else {
+        None
+    };
 
     (
         StatusCode::OK,
@@ -948,6 +959,7 @@ async fn api_upload_generate(
             seeder_url,
             uploader_address: state.uploader_address.clone(),
             torrent_base64,
+            bittorrent_port,
         }),
     )
         .into_response()
@@ -1155,12 +1167,26 @@ async fn api_download(
                         .into_response();
                 }
             };
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(start_timeout_ms),
-                bt.start_download_from_bytes(bytes),
-            )
-            .await
-            {
+            let peer = req
+                .bittorrent_seeder_ip
+                .as_deref()
+                .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+                .zip(req.bittorrent_seeder_port)
+                .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+            let res = if let Some(p) = peer {
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(start_timeout_ms),
+                    bt.start_download_from_bytes_with_initial_peer(bytes, p),
+                )
+                .await
+            } else {
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(start_timeout_ms),
+                    bt.start_download_from_bytes(bytes),
+                )
+                .await
+            };
+            match res {
                 Ok(Ok(m)) => m,
                 Ok(Err(e)) => {
                     return (

@@ -161,6 +161,8 @@ struct UploadResponse {
     uploader_address: Option<String>,
     /// For BitTorrent E2E: base64-encoded .torrent bytes so downloaders can start without magnet metadata exchange.
     torrent_base64: Option<String>,
+    /// For BitTorrent E2E: actual TCP listen port of the uploader's BitTorrent session.
+    bittorrent_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +184,10 @@ struct DownloadRequest {
     protocol: Option<String>,
     /// For BitTorrent E2E: base64-encoded .torrent bytes (optional).
     torrent_base64: Option<String>,
+    /// For BitTorrent E2E: uploader public IP to use as initial peer.
+    bittorrent_seeder_ip: Option<String>,
+    /// For BitTorrent E2E: uploader BitTorrent TCP listen port to use as initial peer.
+    bittorrent_seeder_port: Option<u16>,
 }
 
 #[derive(Debug, Serialize)]
@@ -896,6 +902,15 @@ async fn api_upload_generate(
             } else {
                 None
             },
+            bittorrent_port: if protocol_upper == "BITTORRENT" {
+                let app_state = state.app.state::<crate::AppState>();
+                app_state
+                    .bittorrent_handler
+                    .rqbit_session()
+                    .tcp_listen_port()
+            } else {
+                None
+            },
         }),
     )
         .into_response()
@@ -1067,6 +1082,8 @@ async fn api_download(
         let meta_for_task = meta.clone();
         let protocol_upper_for_task = protocol_upper.clone();
         let torrent_base64_for_task = req.torrent_base64.clone();
+        let bt_seeder_ip_for_task = req.bittorrent_seeder_ip.clone();
+        let bt_seeder_port_for_task = req.bittorrent_seeder_port;
 
         tauri::async_runtime::spawn(async move {
             // Protocol-specific overrides (milliseconds). Fallback order:
@@ -1160,18 +1177,38 @@ async fn api_download(
                             let bytes = general_purpose::STANDARD
                                 .decode(tb64)
                                 .map_err(|e| format!("Invalid torrentBase64: {}", e))?;
-                            tokio::time::timeout(
-                                std::time::Duration::from_millis(start_timeout_ms),
-                                bt.start_download_from_bytes(bytes),
-                            )
-                            .await
-                            .map_err(|_| {
-                                format!(
-                                    "BitTorrent start_download_from_bytes timed out after {}ms.",
-                                    start_timeout_ms
+                            let peer = bt_seeder_ip_for_task
+                                .as_deref()
+                                .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+                                .zip(bt_seeder_port_for_task)
+                                .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+                            if let Some(p) = peer {
+                                tokio::time::timeout(
+                                    std::time::Duration::from_millis(start_timeout_ms),
+                                    bt.start_download_from_bytes_with_initial_peer(bytes, p),
                                 )
-                            })?
-                            .map_err(|e| format!("BitTorrent download failed to start: {}", e))?
+                                .await
+                                .map_err(|_| {
+                                    format!(
+                                        "BitTorrent start_download_from_bytes timed out after {}ms.",
+                                        start_timeout_ms
+                                    )
+                                })?
+                                .map_err(|e| format!("BitTorrent download failed to start: {}", e))?
+                            } else {
+                                tokio::time::timeout(
+                                    std::time::Duration::from_millis(start_timeout_ms),
+                                    bt.start_download_from_bytes(bytes),
+                                )
+                                .await
+                                .map_err(|_| {
+                                    format!(
+                                        "BitTorrent start_download_from_bytes timed out after {}ms.",
+                                        start_timeout_ms
+                                    )
+                                })?
+                                .map_err(|e| format!("BitTorrent download failed to start: {}", e))?
+                            }
                         } else {
                             let magnet = build_magnet_link(
                                 &expected_info_hash,

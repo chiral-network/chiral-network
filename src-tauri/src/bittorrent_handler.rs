@@ -586,6 +586,74 @@ impl BitTorrentHandler {
         &self.rqbit_session
     }
 
+    pub async fn start_download_from_bytes_with_initial_peer(
+        &self,
+        bytes: Vec<u8>,
+        peer: SocketAddr,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
+        let mut add_opts = AddTorrentOptions::default();
+        add_opts.initial_peers = Some(vec![peer]);
+        // Delegate to the standard bytes path (will also inject E2E peer hints as needed).
+        // We keep the explicit peer as the highest priority.
+        self.start_download_from_bytes_with_options(bytes, add_opts).await
+    }
+
+    pub async fn start_download_from_bytes_with_options(
+        &self,
+        bytes: Vec<u8>,
+        mut add_opts: AddTorrentOptions,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
+        // Best-effort: parse info_hash first so we can inject initial peers in E2E before adding.
+        let parsed_info_hash_hex = torrent_from_bytes::<Vec<u8>>(&bytes)
+            .ok()
+            .map(|t| hex::encode(t.info_hash.0));
+
+        // In E2E, inject a deterministic initial peer if the caller didn't specify one.
+        if add_opts
+            .initial_peers
+            .as_ref()
+            .map(|v| v.is_empty())
+            .unwrap_or(true)
+        {
+            if let Some(info_hash_hex) = parsed_info_hash_hex.as_deref() {
+                maybe_inject_e2e_initial_peer(&self.dht_service, info_hash_hex, &mut add_opts).await;
+            }
+        }
+
+        info!(
+            "Starting BitTorrent download from torrent bytes with initial_peers={:?}",
+            add_opts.initial_peers
+        );
+
+        let add_torrent = AddTorrent::from_bytes(bytes);
+        let add_torrent_response = self
+            .rqbit_session
+            .add_torrent(add_torrent, Some(add_opts))
+            .await
+            .map_err(|e| {
+                error!("Failed to add torrent from bytes: {}", e);
+                Self::map_generic_error(e)
+            })?;
+
+        let handle = add_torrent_response
+            .into_handle()
+            .ok_or(BitTorrentError::HandleUnavailable)?;
+
+        let torrent_info_hash = handle.info_hash();
+        let hash_hex = hex::encode(torrent_info_hash.0);
+        info!(
+            "Torrent from bytes added successfully, info_hash: {}",
+            hash_hex
+        );
+
+        {
+            let mut torrents = self.active_torrents.lock().await;
+            torrents.insert(hash_hex.clone(), handle.clone());
+        }
+
+        Ok(handle)
+    }
+
     pub async fn get_seeded_torrent_bytes(&self, info_hash_hex: &str) -> Option<Vec<u8>> {
         self.seeded_torrent_bytes
             .lock()
@@ -1099,70 +1167,9 @@ impl BitTorrentHandler {
         &self,
         bytes: Vec<u8>,
     ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
-        info!(
-            "Starting BitTorrent download from torrent file bytes ({} bytes)",
-            bytes.len()
-        );
-
-        // Best-effort: parse info_hash first so we can inject initial peers in E2E before adding.
-        let parsed_info_hash_hex = torrent_from_bytes::<Vec<u8>>(&bytes)
-            .ok()
-            .map(|t| hex::encode(t.info_hash.0));
-
-        // Create AddTorrent from the bytes
-        let add_torrent = AddTorrent::from_bytes(bytes);
-
-        // Use default options for downloads, but in E2E attach mode inject the seeder as an initial peer.
-        let mut add_opts = AddTorrentOptions::default();
-        if let Some(info_hash_hex) = parsed_info_hash_hex.as_deref() {
-            maybe_inject_e2e_initial_peer(&self.dht_service, info_hash_hex, &mut add_opts).await;
-        }
-
-        // Add the torrent to the session
-        let add_torrent_response = self
-            .rqbit_session
-            .add_torrent(add_torrent, Some(add_opts))
+        // Keep backward-compat: bytes download with default options.
+        self.start_download_from_bytes_with_options(bytes, AddTorrentOptions::default())
             .await
-            .map_err(|e| {
-                error!("Failed to add torrent from bytes: {}", e);
-                Self::map_generic_error(e)
-            })?;
-
-        let handle = add_torrent_response
-            .into_handle()
-            .ok_or(BitTorrentError::HandleUnavailable)?;
-
-        // Get the info_hash from the handle
-        let torrent_info_hash = handle.info_hash();
-        let hash_hex = hex::encode(torrent_info_hash.0);
-        info!(
-            "Torrent from bytes added successfully, info_hash: {}",
-            hash_hex
-        );
-
-        // Store the torrent handle for tracking
-        {
-            let mut torrents = self.active_torrents.lock().await;
-            torrents.insert(hash_hex.clone(), handle.clone());
-        }
-
-        // Emit torrent_event Added event to notify the frontend
-        if let Some(app) = &*self.app_handle.lock().await {
-            // Use a placeholder name initially - the actual name will be updated once metadata is fetched
-            let torrent_name = format!("Torrent {}", &hash_hex[..8]);
-
-            let added_event = serde_json::json!({
-                "Added": {
-                    "info_hash": hash_hex.clone(),
-                    "name": torrent_name
-                }
-            });
-            if let Err(e) = app.emit("torrent_event", added_event) {
-                error!("Failed to emit torrent_event Added: {}", e);
-            }
-        }
-
-        Ok(handle)
     }
     /// Re-evaluates the download queue, pausing or resuming torrents based on priority
     /// and the MAX_ACTIVE_DOWNLOADS limit.

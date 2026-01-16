@@ -54,6 +54,7 @@ class RealE2ETestFramework {
   private crossMachine: boolean = false;
   private requirePayment: boolean = false;
   private torrentBase64ByHash: Map<string, string> = new Map();
+  private torrentSeederPortByHash: Map<string, number> = new Map();
 
   constructor(crossMachine: boolean = false) {
     this.crossMachine = crossMachine;
@@ -363,6 +364,9 @@ class RealE2ETestFramework {
     if (result?.torrentBase64 && typeof result.torrentBase64 === "string") {
       this.torrentBase64ByHash.set(result.fileHash, result.torrentBase64);
     }
+    if (typeof result?.bittorrentPort === "number") {
+      this.torrentSeederPortByHash.set(result.fileHash, result.bittorrentPort);
+    }
     console.log(`✅ File uploaded. Hash: ${result.fileHash}`);
 
     return result.fileHash;
@@ -442,6 +446,14 @@ class RealE2ETestFramework {
         protocol,
         torrentBase64:
           protocol === "BitTorrent" ? this.torrentBase64ByHash.get(fileHash) : undefined,
+        bittorrentSeederIp:
+          protocol === "BitTorrent"
+            ? new URL(this.uploaderConfig!.apiBaseUrl).hostname
+            : undefined,
+        bittorrentSeederPort:
+          protocol === "BitTorrent"
+            ? this.torrentSeederPortByHash.get(fileHash)
+            : undefined,
       }),
     });
 
