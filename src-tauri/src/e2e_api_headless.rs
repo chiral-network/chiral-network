@@ -10,6 +10,7 @@ use rs_merkle::MerkleTree;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use base64::{Engine as _, engine::general_purpose};
+use librqbit::torrent_from_bytes;
 use std::cmp::min;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -1167,6 +1168,22 @@ async fn api_download(
                         .into_response();
                 }
             };
+            // Sanity: torrent bytes must match the expected info_hash from metadata.
+            if let Ok(ti) = torrent_from_bytes::<Vec<u8>>(&bytes) {
+                let parsed = hex::encode(ti.info_hash.0).to_lowercase();
+                if parsed != expected_info_hash {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(http_server::ErrorResponse {
+                            error: format!(
+                                "torrentBase64 info_hash mismatch: expected={} parsed={}",
+                                expected_info_hash, parsed
+                            ),
+                        }),
+                    )
+                        .into_response();
+                }
+            }
             let peer = req
                 .bittorrent_seeder_ip
                 .as_deref()

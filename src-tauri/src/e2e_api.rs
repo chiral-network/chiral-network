@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use sha2::Digest;
 use tauri::Manager;
 use base64::{Engine as _, engine::general_purpose};
+use librqbit::torrent_from_bytes;
 
 use crate::download_source::HttpSourceInfo;
 use crate::http_download::HttpDownloadClient;
@@ -1177,6 +1178,17 @@ async fn api_download(
                             let bytes = general_purpose::STANDARD
                                 .decode(tb64)
                                 .map_err(|e| format!("Invalid torrentBase64: {}", e))?;
+                            // Sanity: torrent bytes must match the expected info_hash from metadata.
+                            // If not, the peer will immediately reject the handshake and we'll see 0 progress forever.
+                            if let Ok(ti) = torrent_from_bytes::<Vec<u8>>(&bytes) {
+                                let parsed = hex::encode(ti.info_hash.0).to_lowercase();
+                                if parsed != expected_info_hash {
+                                    return Err(format!(
+                                        "torrentBase64 info_hash mismatch: expected={} parsed={}",
+                                        expected_info_hash, parsed
+                                    ));
+                                }
+                            }
                             let peer = bt_seeder_ip_for_task
                                 .as_deref()
                                 .and_then(|s| s.parse::<std::net::IpAddr>().ok())
