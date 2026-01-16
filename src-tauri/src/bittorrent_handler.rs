@@ -2153,20 +2153,18 @@ impl SimpleProtocolHandler for BitTorrentHandler {
 
         // Diagnostics: verify the on-disk file layout matches what the torrent expects.
         // If this is wrong, the seeder can end up with 0 pieces and downloads will make no progress.
-        // We always log this (not gated by env) to avoid ambiguity in real-network debugging.
-        if let Ok(_ti) = torrent_from_bytes::<Vec<u8>>(&torrent_bytes) {
-            let output_folder_dbg = path.parent().unwrap_or_else(|| Path::new("."));
-            // Best-effort: single-file torrents are the common case for Chiral seeding.
-            let expected = output_folder_dbg.join(path.file_name().unwrap_or_default());
-            let (exists_ok, size) = match std::fs::metadata(&expected) {
-                Ok(m) if m.is_file() => (true, m.len()),
-                _ => (false, 0),
-            };
-            info!(
-                "BitTorrent seed file check: output_folder={:?} expected_path={:?} exists_ok={} size={}",
-                output_folder_dbg, expected, exists_ok, size
-            );
-        }
+        // Always log this (no env gating, no torrent parsing gating).
+        let output_folder_dbg = path.parent().unwrap_or_else(|| Path::new("."));
+        // Best-effort: single-file torrents are the common case for Chiral seeding.
+        let expected = output_folder_dbg.join(path.file_name().unwrap_or_default());
+        let (exists_ok, size) = match std::fs::metadata(&expected) {
+            Ok(m) if m.is_file() => (true, m.len()),
+            _ => (false, 0),
+        };
+        info!(
+            "BitTorrent seed file check: output_folder={:?} expected_path={:?} exists_ok={} size={}",
+            output_folder_dbg, expected, exists_ok, size
+        );
 
         let add_torrent = AddTorrent::from_bytes(torrent_bytes.clone());
 
