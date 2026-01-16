@@ -1227,8 +1227,8 @@ async fn api_download(
                                         && last_progress_at.elapsed().as_millis() as u64 >= no_progress_grace_ms
                                     {
                                         return Err(format!(
-                                            "BitTorrent made no download progress for {}ms (info_hash={}). Seeder may not be discoverable; check tracker/BT-DHT or ensure peer hint injection works.",
-                                            no_progress_grace_ms, actual_info_hash
+                                            "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}). Seeder may not be discoverable or seeder may have 0 pieces.",
+                                            no_progress_grace_ms, actual_info_hash, p.state, p.is_finished, p.total_bytes
                                         ));
                                     }
                                 }

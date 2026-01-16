@@ -2151,6 +2151,25 @@ impl SimpleProtocolHandler for BitTorrentHandler {
                 message: format!("Failed to serialize torrent for {}: {}", file_path, e),
             })?;
 
+        // E2E diagnostics: verify the on-disk file layout matches what the torrent expects.
+        // If this is wrong, the seeder will have 0 pieces and downloads will make no progress.
+        if std::env::var("CHIRAL_E2E_API_PORT").ok().is_some() || std::env::var("E2E_ATTACH").ok().as_deref() == Some("true") {
+            if let Ok(ti) = torrent_from_bytes::<Vec<u8>>(&torrent_bytes) {
+                let output_folder_dbg = path.parent().unwrap_or_else(|| Path::new("."));
+                // Best-effort: single-file torrents are the common E2E case.
+                // If this is a multi-file torrent, we still log the base folder for debugging.
+                let expected = output_folder_dbg.join(path.file_name().unwrap_or_default());
+                let ok = std::fs::metadata(&expected)
+                    .ok()
+                    .map(|m| m.is_file() && m.len() > 0)
+                    .unwrap_or(false);
+                info!(
+                    "E2E: seed file check: output_folder={:?} expected_path={:?} exists_ok={}",
+                    output_folder_dbg, expected, ok
+                );
+            }
+        }
+
         let add_torrent = AddTorrent::from_bytes(torrent_bytes.clone());
 
         // IMPORTANT:
