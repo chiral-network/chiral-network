@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, error};
+use std::net::Ipv4Addr;
+use libunftp::options::ActivePassiveMode;
 
 /// FTP Server state
 pub struct FtpServer {
@@ -73,13 +75,72 @@ impl FtpServer {
             info!("Starting FTP server on port {} serving {}", port, root_dir.display());
 
             // Create the FTP server with filesystem backend
-            let server = libunftp::ServerBuilder::new(Box::new(move || {
+            let mut builder = libunftp::ServerBuilder::new(Box::new(move || {
                 unftp_sbe_fs::Filesystem::new(root_dir.clone())
             }))
             .greeting("Welcome to Chiral Network FTP Server")
-            .passive_ports(50000..50100)
-            .build()
-            .unwrap();
+            ;
+
+            // Passive mode configuration (critical for VM/NAT deployments).
+            // - Clients connect to the control port (e.g. 2121), but data transfers use a passive port range.
+            // - The server must also advertise a reachable external IP/hostname in response to PASV.
+            //
+            // Defaults:
+            // - passive ports: 50000..50100 (end-exclusive; i.e. 50000-50099)
+            // - passive host: CHIRAL_FTP_HOST or CHIRAL_PUBLIC_IP if set; otherwise libunftp default (often FromConnection)
+            let passive_start: u16 = std::env::var("CHIRAL_FTP_PASSIVE_PORT_START")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(50000);
+            let passive_end: u16 = std::env::var("CHIRAL_FTP_PASSIVE_PORT_END")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(50100);
+            let (passive_start, passive_end) = if passive_start <= passive_end {
+                (passive_start, passive_end)
+            } else {
+                (passive_end, passive_start)
+            };
+            // libunftp expects an end-exclusive range.
+            let passive_range = passive_start..passive_end;
+            builder = builder.passive_ports(passive_range);
+
+            // If we're behind NAT (e.g. GCP VM), FromConnection will usually advertise the private IP.
+            // Prefer an explicitly configured public host/IP for PASV responses.
+            let passive_host = std::env::var("CHIRAL_FTP_HOST")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("CHIRAL_PUBLIC_IP")
+                        .ok()
+                        .filter(|v| !v.trim().is_empty())
+                });
+            if let Some(host) = passive_host {
+                let host = host.trim().to_string();
+                // If host is an IPv4 literal, pass as Ip for clarity; otherwise pass as DNS name.
+                if let Ok(ip) = host.parse::<Ipv4Addr>() {
+                    builder = builder.passive_host(libunftp::options::PassiveHost::Ip(ip));
+                } else {
+                    builder = builder.passive_host(host.as_str());
+                }
+            }
+
+            // Be explicit about Active/Passive support. This avoids relying on library defaults and
+            // ensures Passive mode is enabled for real-network transfers.
+            builder = builder.active_passive_mode(ActivePassiveMode::ActiveAndPassive);
+
+            info!(
+                "FTP passive config: host={} ports={}..{} (end-exclusive)",
+                std::env::var("CHIRAL_FTP_HOST")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .or_else(|| std::env::var("CHIRAL_PUBLIC_IP").ok().filter(|v| !v.trim().is_empty()))
+                    .unwrap_or_else(|| "<auto>".to_string()),
+                passive_start,
+                passive_end
+            );
+
+            let server = builder.build().unwrap();
 
             // Mark as running
             *running.lock().await = true;

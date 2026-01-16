@@ -1,10 +1,10 @@
 // Headless mode for running as a bootstrap node on servers
 use crate::commands::bootstrap::get_bootstrap_nodes;
-use crate::dht::DhtConfigBuilder;
 use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtConfig, DhtService};
 use crate::download_restart::{DownloadRestartService, StartDownloadRequest};
 use crate::e2e_api_headless::{start_headless_e2e_api_server, HeadlessE2eState};
 use crate::ethereum::GethProcess;
+use crate::bittorrent_handler;
 use crate::file_transfer::FileTransferService;
 use crate::http_server;
 use crate::keystore::Keystore;
@@ -350,16 +350,20 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
         None
     };
 
-    // Add some example bootstrap data if this is a primary bootstrap node
+    // Add some example bootstrap data if this is a primary bootstrap node.
+    //
+    // IMPORTANT:
+    // Do not fail the entire headless process if this best-effort publish fails.
+    // Also avoid inline `file_data` here because it can trigger Bitswap block publishing
+    // even when P2P/Bitswap is not enabled for this headless run.
     if !provided_bootstrap {
         info!("Running as primary bootstrap node (no peers specified)");
 
-        // Publish some example metadata to seed the network
         let example_metadata = FileMetadata {
             merkle_root: "QmBootstrap123Example".to_string(),
             file_name: "welcome.txt".to_string(),
             file_size: 1024,
-            file_data: b"Hello, world!".to_vec(),
+            file_data: Vec::new(),
             seeders: vec![peer_id.clone()],
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -384,8 +388,11 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
             manifest: None,
         };
 
-        dht_arc.publish_file(example_metadata, None).await?;
-        info!("Published bootstrap file metadata");
+        if let Err(e) = dht_arc.publish_file(example_metadata, None).await {
+            warn!("Best-effort bootstrap publish failed (continuing): {}", e);
+        } else {
+            info!("Published bootstrap file metadata");
+        }
     } else {
         info!(
             "Connecting to bootstrap nodes: {:?}",
@@ -477,6 +484,36 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
     if let Ok(port_str) = std::env::var("CHIRAL_E2E_API_PORT") {
         if let Ok(port) = port_str.trim().parse::<u16>() {
             if let Some(ref http_base_url) = http_base_url {
+                // Initialize BitTorrent handler for headless E2E (BitTorrent upload/download).
+                // Use an isolated directory under the storage root so runs don't collide.
+                let bt_download_dir = storage_dir.join("bittorrent");
+                let _ = std::fs::create_dir_all(&bt_download_dir);
+                let bt_port: u16 = std::env::var("E2E_BITTORRENT_SEED_PORT")
+                    .or_else(|_| std::env::var("CHIRAL_BITTORRENT_SEED_PORT"))
+                    .ok()
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(30000);
+                // For real-network E2E (VM seeder), use a fixed listen port so the downloader can
+                // deterministically connect (avoid "picked some other port in a range").
+                let bt_port_end = bt_port.saturating_add(1);
+                info!(
+                    "Headless E2E BitTorrent listen port range: {}..{} (end-exclusive)",
+                    bt_port, bt_port_end
+                );
+                let bt_handler = match bittorrent_handler::BitTorrentHandler::new_with_port_range(
+                    bt_download_dir,
+                    dht_arc.clone(),
+                    Some(bt_port..bt_port_end),
+                )
+                .await
+                {
+                    Ok(h) => Some(Arc::new(h)),
+                    Err(e) => {
+                        warn!("Failed to initialize BitTorrent handler in headless mode: {}", e);
+                        None
+                    }
+                };
+
                 let state = HeadlessE2eState {
                     dht: dht_arc.clone(),
                     http_server_state: http_server_state.clone(),
@@ -498,6 +535,7 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
                             port,
                         )))
                     },
+                    bittorrent_handler: bt_handler,
                 };
                 match start_headless_e2e_api_server(state, port).await {
                     Ok((bound, shutdown_tx)) => {

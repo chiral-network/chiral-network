@@ -10,18 +10,125 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 
 use sha2::Digest;
 use tauri::Manager;
+use base64::{Engine as _, engine::general_purpose};
+use librqbit::torrent_from_bytes;
 
 use crate::download_source::HttpSourceInfo;
 use crate::http_download::HttpDownloadClient;
 use crate::http_server;
 use crate::manager::ChunkManager;
+use crate::protocols::ProtocolHandler;
 use crate::transaction_services;
 use crate::file_transfer::FileTransferService;
 use crate::webrtc_service::{set_webrtc_service, WebRTCService};
+
+fn extract_btih_info_hash(identifier: &str) -> Option<String> {
+    if let Some(start) = identifier.find("urn:btih:") {
+        let start = start + 9;
+        let end = identifier[start..]
+            .find('&')
+            .map(|i| start + i)
+            .unwrap_or(identifier.len());
+        return Some(identifier[start..end].to_lowercase());
+    }
+    None
+}
+
+fn bt_handshake_bytes(info_hash_hex: &str) -> Result<[u8; 68], String> {
+    let ih = hex::decode(info_hash_hex)
+        .map_err(|e| format!("Invalid info_hash hex for BT handshake: {}", e))?;
+    if ih.len() != 20 {
+        return Err(format!(
+            "Invalid info_hash length for BT handshake: expected 20 bytes, got {}",
+            ih.len()
+        ));
+    }
+    let mut out = [0u8; 68];
+    out[0] = 19;
+    out[1..20].copy_from_slice(b"BitTorrent protocol");
+    // reserved [20..28] left as 0
+    out[28..48].copy_from_slice(&ih);
+    // 20-byte peer id (dummy, deterministic)
+    out[48..68].copy_from_slice(b"-CHIRAL-E2E-0000000");
+    Ok(out)
+}
+
+fn build_magnet_link(
+    info_hash: &str,
+    display_name: Option<&str>,
+    trackers: Option<&Vec<String>>,
+) -> String {
+    let mut s = format!("magnet:?xt=urn:btih:{}", info_hash);
+    if let Some(name) = display_name {
+        if !name.trim().is_empty() {
+            s.push_str("&dn=");
+            s.push_str(&urlencoding::encode(name));
+        }
+    }
+    if let Some(trs) = trackers {
+        for tr in trs {
+            if tr.trim().is_empty() {
+                continue;
+            }
+            s.push_str("&tr=");
+            s.push_str(&urlencoding::encode(tr));
+        }
+    }
+    s
+}
+
+async fn find_file_recursive(
+    root: &std::path::Path,
+    expected_name: &str,
+    expected_size: u64,
+) -> Result<std::path::PathBuf, String> {
+    let mut queue: std::collections::VecDeque<std::path::PathBuf> =
+        std::collections::VecDeque::new();
+    queue.push_back(root.to_path_buf());
+
+    while let Some(dir) = queue.pop_front() {
+        let mut rd = match tokio::fs::read_dir(&dir).await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        while let Some(ent) = rd
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to iterate dir {:?}: {}", dir, e))?
+        {
+            let path = ent.path();
+            let md = ent
+                .metadata()
+                .await
+                .map_err(|e| format!("Failed to stat {:?}: {}", path, e))?;
+            if md.is_dir() {
+                queue.push_back(path);
+                continue;
+            }
+            if md.is_file() {
+                let name_ok = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s == expected_name)
+                    .unwrap_or(false);
+                if name_ok && md.len() == expected_size {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Downloaded BitTorrent file not found under {:?} (name={}, size={})",
+        root, expected_name, expected_size
+    ))
+}
 
 #[derive(Clone)]
 pub struct E2eApiState {
@@ -74,6 +181,10 @@ struct UploadResponse {
     file_size: u64,
     seeder_url: String,
     uploader_address: Option<String>,
+    /// For BitTorrent E2E: base64-encoded .torrent bytes so downloaders can start without magnet metadata exchange.
+    torrent_base64: Option<String>,
+    /// For BitTorrent E2E: actual TCP listen port of the uploader's BitTorrent session.
+    bittorrent_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +204,12 @@ struct DownloadRequest {
     file_name: Option<String>,
     /// Optional protocol override. supported: HTTP, WebRTC, Bitswap, FTP
     protocol: Option<String>,
+    /// For BitTorrent E2E: base64-encoded .torrent bytes (optional).
+    torrent_base64: Option<String>,
+    /// For BitTorrent E2E: uploader public IP to use as initial peer.
+    bittorrent_seeder_ip: Option<String>,
+    /// For BitTorrent E2E: uploader BitTorrent TCP listen port to use as initial peer.
+    bittorrent_seeder_port: Option<u16>,
 }
 
 #[derive(Debug, Serialize)]
@@ -201,76 +318,10 @@ async fn ensure_p2p_services_started(app: &tauri::AppHandle) -> Result<(), Strin
     Ok(())
 }
 
-async fn ensure_multi_source_services_started(app: &tauri::AppHandle) -> Result<(), String> {
-    // MultiSourceDownloadService is needed for FTP downloads (ftp_sources + manifest-based verification).
-    let state = app.state::<crate::AppState>();
-
-    // Fast path: already running.
-    {
-        let guard = state.multi_source_download.lock().await;
-        if guard.is_some() {
-            return Ok(());
-        }
-    }
-
-    // Ensure WebRTC/FileTransfer exist (MultiSource depends on WebRTC service).
-    ensure_p2p_services_started(app).await?;
-
-    let dht = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    }
-    .ok_or_else(|| "DHT is not running".to_string())?;
-
-    let webrtc = {
-        let webrtc_guard = state.webrtc.lock().await;
-        webrtc_guard.as_ref().cloned()
-    }
-    .ok_or_else(|| "WebRTC service is not running".to_string())?;
-
-    let chunk_manager = {
-        let chunk_guard = state.chunk_manager.lock().await;
-        chunk_guard.as_ref().cloned()
-    }
-    .ok_or_else(|| "Chunk manager not initialized".to_string())?;
-
-    let transfer_event_bus = Arc::new(crate::TransferEventBus::new(app.clone()));
-    let ms = crate::multi_source_download::MultiSourceDownloadService::new(
-        dht,
-        webrtc,
-        state.bittorrent_handler.clone(),
-        transfer_event_bus,
-        state.analytics.clone(),
-        chunk_manager,
-    );
-    let ms_arc = Arc::new(ms);
-
-    {
-        let mut guard = state.multi_source_download.lock().await;
-        *guard = Some(ms_arc.clone());
-    }
-
-    // Start multi-source event pump once.
-    {
-        let mut pump_guard = state.multi_source_pump.lock().await;
-        if pump_guard.is_none() {
-            let app_handle = app.clone();
-            let ms_clone = ms_arc.clone();
-            let handle = tokio::spawn(async move {
-                crate::pump_multi_source_events(app_handle, ms_clone).await;
-            });
-            *pump_guard = Some(handle);
-        }
-    }
-
-    // Start the service background task.
-    let ms_clone = ms_arc.clone();
-    tokio::spawn(async move {
-        ms_clone.run().await;
-    });
-
-    Ok(())
-}
+// NOTE:
+// `ensure_multi_source_services_started` was previously used for FTP E2E downloads.
+// We now route FTP E2E downloads through the dedicated FTP protocol handler instead,
+// because MultiSource deprioritizes FTP behind P2P sources and can get stuck on chunk/range behavior.
 
 pub async fn start_e2e_api_server(app: tauri::AppHandle, port: u16) -> Result<SocketAddr, String> {
     let state = E2eApiState {
@@ -340,12 +391,16 @@ async fn api_health(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse 
     let _ = ensure_p2p_services_started(&state.app).await;
 
     let node_id = std::env::var("CHIRAL_NODE_ID").ok();
-    let peer_id = {
+    let (peer_id, dht_cmd_alive) = {
         let app_state = state.app.state::<crate::AppState>();
         let dht = { app_state.dht.lock().await.as_ref().cloned() };
         match dht {
-            Some(d) => Some(d.get_peer_id().await),
-            None => None,
+            Some(d) => {
+                let alive = d.is_command_channel_alive().await;
+                let id = Some(d.get_peer_id().await);
+                (id, alive)
+            }
+            None => (None, false),
         }
     };
     let file_server_url = {
@@ -370,7 +425,7 @@ async fn api_health(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse 
 
     // Readiness: require DHT peer_id and bound HTTP file server URL.
     // If not ready, return 503 so the test harness keeps polling.
-    if peer_id.is_none() || file_server_url.is_none() {
+    if peer_id.is_none() || file_server_url.is_none() || !dht_cmd_alive {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(HealthResponse {
@@ -517,6 +572,7 @@ async fn api_upload_generate(
     // Protocol-specific handling:
     // - HTTP: move into HTTP file server storage and publish metadata with http_sources
     // - WebRTC/Bitswap/FTP: invoke the app's upload command so protocol services publish correct metadata
+    // - BitTorrent: seed via ProtocolManager to obtain a magnet/info_hash, then publish DHT metadata keyed by info_hash
     let published_key: String = if protocol_upper == "HTTP" {
         // Move into provider storage dir and register with HTTP file server state.
         let permanent_path = app_state.http_server_state.storage_dir.join(&file_hash);
@@ -589,6 +645,131 @@ async fn api_upload_generate(
             .into_response();
         }
         file_hash.clone()
+    } else if protocol_upper == "BITTORRENT" {
+        // Seed the file via the protocol manager to obtain a magnet link (contains info_hash).
+        let seeding = match app_state
+            .protocol_manager
+            .seed(
+                "bittorrent",
+                std::path::PathBuf::from(&tmp_path),
+                crate::protocols::traits::SeedOptions::default(),
+            )
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(crate::http_server::ErrorResponse {
+                        error: format!("Failed to seed BitTorrent: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        let info_hash = match extract_btih_info_hash(&seeding.identifier) {
+            Some(h) => h,
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(crate::http_server::ErrorResponse {
+                        error: format!(
+                            "BitTorrent seeding returned an unsupported identifier (no btih): {}",
+                            seeding.identifier
+                        ),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        // Publish metadata to DHT keyed by info_hash so downloader can search by that key.
+        let dht = { app_state.dht.lock().await.as_ref().cloned() };
+        let Some(dht) = dht else {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: "DHT is not running".to_string(),
+                }),
+            )
+                .into_response();
+        };
+
+        // Include local peer id as a seeder so consumers can optionally correlate to libp2p identity.
+        let local_peer_id = Some(dht.get_peer_id().await);
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let meta = crate::dht::models::FileMetadata {
+            // For BitTorrent, use info_hash as the DHT key so search/download can use a stable identifier.
+            merkle_root: info_hash.clone(),
+            file_name: file_name.clone(),
+            file_size,
+            file_data: vec![],
+            seeders: local_peer_id.map_or(vec![], |id| vec![id]),
+            created_at,
+            mime_type: None,
+            is_encrypted: false,
+            encryption_method: None,
+            key_fingerprint: None,
+            parent_hash: None,
+            cids: None,
+            encrypted_key_bundle: None,
+            ftp_sources: None,
+            ed2k_sources: None,
+            http_sources: None,
+            is_root: true,
+            download_path: None,
+            price,
+            uploader_address: uploader_address.clone(),
+            info_hash: Some(info_hash.clone()),
+            // Keep consistent with the app-side BitTorrent publish default.
+            trackers: Some(vec!["udp://tracker.openbittorrent.com:80".to_string()]),
+            manifest: None,
+        };
+
+        if let Err(e) = dht.publish_file(meta, None).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!("Failed to publish BitTorrent metadata to DHT: {}", e),
+                }),
+            )
+                .into_response();
+        }
+
+        // Wait until the metadata is visible on this node's DHT (best-effort).
+        let mut found = None;
+        for _ in 0..80 {
+            match dht
+                .synchronous_search_metadata(info_hash.clone(), 1_500)
+                .await
+            {
+                Ok(Some(m)) => {
+                    found = Some(m);
+                    break;
+                }
+                _ => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        if found.is_none() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!(
+                        "Upload completed but metadata not visible yet for {}",
+                        info_hash
+                    ),
+                }),
+            )
+                .into_response();
+        }
+
+        info_hash
     } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" || protocol_upper == "FTP" {
         // Pre-compute the DHT key for the published metadata so we can wait until it's discoverable.
         // WebRTC uses a manifest Merkle root; Bitswap uses a sha256-like content root (matching the file hash).
@@ -647,6 +828,12 @@ async fn api_upload_generate(
         }
 
         // Wait until the metadata is visible on this node's DHT (best-effort, avoids race in tests).
+        //
+        // IMPORTANT:
+        // For Bitswap, downloads require `metadata.cids` (root CID).
+        //
+        // NOTE: `synchronous_search_metadata` merges local cache, so it can return `cids` even when the actual
+        // DHT record does not contain them yet. For Bitswap, we therefore validate against the raw DHT record bytes.
         let dht = { app_state.dht.lock().await.as_ref().cloned() };
         let Some(dht) = dht else {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
@@ -655,18 +842,57 @@ async fn api_upload_generate(
             .into_response();
         };
         let mut found = None;
-        for _ in 0..40 {
-            match dht.synchronous_search_metadata(expected_merkle_root.clone(), 1500).await {
-                Ok(m) if m.is_some() => {
-                    found = m;
-                    break;
+        // Default: ~10s total. Bitswap may need longer until `cids` is observable.
+        let max_attempts: u32 = if protocol_upper == "BITSWAP" { 240 } else { 40 }; // 60s vs 10s
+        for _ in 0..max_attempts {
+            if protocol_upper == "BITSWAP" {
+                // Raw-record check (no cache merge): ensure the stored JSON contains a non-empty `cids` array.
+                if let Ok(Some(bytes)) = dht.get_dht_value(expected_merkle_root.clone()).await {
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        let cids_ok = json
+                            .get("cids")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| !arr.is_empty())
+                            .unwrap_or(false);
+                        if cids_ok {
+                            // Once the raw record is good, we can return the parsed metadata.
+                            if let Ok(Some(m)) = dht
+                                .synchronous_search_metadata(expected_merkle_root.clone(), 1_500)
+                                .await
+                            {
+                                found = Some(m);
+                                break;
+                            }
+                        }
+                    }
                 }
-                _ => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+            } else {
+                match dht
+                    .synchronous_search_metadata(expected_merkle_root.clone(), 1_500)
+                    .await
+                {
+                    Ok(Some(m)) => {
+                        found = Some(m);
+                        break;
+                    }
+                    _ => {}
+                }
             }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
         if found.is_none() {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Upload completed but metadata not visible yet for {}", expected_merkle_root),
+                error: if protocol_upper == "BITSWAP" {
+                    format!(
+                        "Upload completed but Bitswap DHT record not ready yet for {} (missing cids in raw record)",
+                        expected_merkle_root
+                    )
+                } else {
+                    format!(
+                        "Upload completed but metadata not visible yet for {}",
+                        expected_merkle_root
+                    )
+                },
             }))
             .into_response();
         }
@@ -674,7 +900,7 @@ async fn api_upload_generate(
         expected_merkle_root
     } else {
         return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, or FTP.", protocol_norm),
+            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, FTP, or BitTorrent.", protocol_norm),
         }))
         .into_response();
     };
@@ -683,11 +909,30 @@ async fn api_upload_generate(
         StatusCode::OK,
         Json(UploadResponse {
             // For all protocols, return the DHT lookup key as fileHash (merkle_root / content root).
-            file_hash: published_key,
+            file_hash: published_key.clone(),
             file_name,
             file_size,
             seeder_url,
             uploader_address,
+            torrent_base64: if protocol_upper == "BITTORRENT" {
+                let app_state = state.app.state::<crate::AppState>();
+                app_state
+                    .bittorrent_handler
+                    .get_seeded_torrent_bytes(&published_key)
+                    .await
+                    .map(|bytes| general_purpose::STANDARD.encode(bytes))
+            } else {
+                None
+            },
+            bittorrent_port: if protocol_upper == "BITTORRENT" {
+                let app_state = state.app.state::<crate::AppState>();
+                app_state
+                    .bittorrent_handler
+                    .rqbit_session()
+                    .tcp_listen_port()
+            } else {
+                None
+            },
         }),
     )
         .into_response()
@@ -708,7 +953,20 @@ async fn api_search(
 
     let timeout = req.timeout_ms.unwrap_or(10_000);
     match dht.synchronous_search_metadata(req.file_hash, timeout).await {
-        Ok(m) => (StatusCode::OK, Json(m)).into_response(),
+        Ok(m) => {
+            // In real networks, the DHT record can be visible before the record's `seeders` list is populated.
+            // For Bitswap/WebRTC, download initiation often needs a seeder peer ID; fall back to provider discovery.
+            let mut m = m;
+            if let Some(meta) = m.as_mut() {
+                if meta.seeders.is_empty() {
+                    let providers = dht.get_seeders_for_file(&meta.merkle_root).await;
+                    if !providers.is_empty() {
+                        meta.seeders = providers;
+                    }
+                }
+            }
+            (StatusCode::OK, Json(m)).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response(),
     }
 }
@@ -798,7 +1056,11 @@ async fn api_download(
         {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
         }
-    } else if protocol_upper == "WEBRTC" || protocol_upper == "BITSWAP" || protocol_upper == "FTP" {
+    } else if protocol_upper == "WEBRTC"
+        || protocol_upper == "BITSWAP"
+        || protocol_upper == "FTP"
+        || protocol_upper == "BITTORRENT"
+    {
         // Auto-start P2P services for E2E spawn mode (no frontend bootstrapping).
         if let Err(e) = ensure_p2p_services_started(&state.app).await {
             return (
@@ -841,12 +1103,32 @@ async fn api_download(
         let app_handle_for_task = state.app.clone();
         let meta_for_task = meta.clone();
         let protocol_upper_for_task = protocol_upper.clone();
+        let torrent_base64_for_task = req.torrent_base64.clone();
+        let bt_seeder_ip_for_task = req.bittorrent_seeder_ip.clone();
+        let bt_seeder_port_for_task = req.bittorrent_seeder_port;
 
         tauri::async_runtime::spawn(async move {
-            let timeout_ms: u64 = std::env::var("E2E_DOWNLOAD_WAIT_TIMEOUT_MS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(600_000); // default 10 minutes for real P2P
+            // Protocol-specific overrides (milliseconds). Fallback order:
+            // 1) E2E_{PROTOCOL}_DOWNLOAD_TIMEOUT_MS
+            // 2) E2E_P2P_DOWNLOAD_TIMEOUT_MS
+            // 3) E2E_DOWNLOAD_WAIT_TIMEOUT_MS (legacy)
+            // 4) 600000 (10 minutes)
+            let timeout_ms: u64 = {
+                let protocol_key = match protocol_upper_for_task.as_str() {
+                    "WEBRTC" => Some("E2E_WEBRTC_DOWNLOAD_TIMEOUT_MS"),
+                    "BITSWAP" => Some("E2E_BITSWAP_DOWNLOAD_TIMEOUT_MS"),
+                    "FTP" => Some("E2E_FTP_DOWNLOAD_TIMEOUT_MS"),
+                    "BITTORRENT" => Some("E2E_BITTORRENT_DOWNLOAD_TIMEOUT_MS"),
+                    _ => None,
+                };
+
+                let raw = protocol_key
+                    .and_then(|k| std::env::var(k).ok())
+                    .or_else(|| std::env::var("E2E_P2P_DOWNLOAD_TIMEOUT_MS").ok())
+                    .or_else(|| std::env::var("E2E_DOWNLOAD_WAIT_TIMEOUT_MS").ok());
+
+                raw.and_then(|s| s.parse().ok()).unwrap_or(600_000)
+            };
 
             let result: Result<u64, String> = async {
                 if protocol_upper_for_task == "WEBRTC" {
@@ -871,77 +1153,294 @@ async fn api_download(
                     {
                         return Err(e);
                     }
-                } else {
-                    // FTP: use MultiSourceDownloadService so we consume ftp_sources and verify chunk hashes if manifest exists.
-                    ensure_multi_source_services_started(&app_handle_for_task).await?;
-                    let ms = {
-                        let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
-                        let guard = app_state_for_task.multi_source_download.lock().await;
-                        guard.as_ref().cloned()
-                    }
-                    .ok_or_else(|| "MultiSourceDownloadService is not running".to_string())?;
+                } else if protocol_upper_for_task == "FTP" {
+                    // FTP: use the dedicated protocol handler (single-source) so FTP isn't deprioritized
+                    // behind P2P sources and we avoid chunked-range edge cases.
+                    let ftp_url = meta_for_task
+                        .ftp_sources
+                        .as_ref()
+                        .and_then(|v| v.first())
+                        .map(|s| s.url.clone())
+                        .ok_or_else(|| "No ftpSources in metadata".to_string())?;
 
-                    ms.start_download(
-                        meta_for_task.merkle_root.clone(),
-                        out_path_for_task.clone(),
-                        None,
-                        None,
-                    )
-                    .await
-                    .map_err(|e| format!("FTP multi-source download start failed: {}", e))?;
+                    let handler = crate::protocols::ftp::FtpProtocolHandler::new();
+                    let opts = crate::protocols::traits::DownloadOptions {
+                        output_path: std::path::PathBuf::from(&out_path_for_task),
+                        max_peers: None,
+                        chunk_size: None,
+                        encryption: false,
+                        bandwidth_limit: None,
+                    };
+                    handler
+                        .download(&ftp_url, opts)
+                        .await
+                        .map_err(|e| format!("FTP download failed: {}", e))?;
+                    } else if protocol_upper_for_task == "BITTORRENT" {
+                        // BitTorrent: download via bittorrent handler (magnet), then copy the completed file into
+                        // the E2E output path so verification/polling is consistent across protocols.
+                        let bt = app_handle_for_task
+                            .state::<crate::AppState>()
+                            .bittorrent_handler
+                            .clone();
+
+                        let expected_info_hash = meta_for_task
+                            .info_hash
+                            .clone()
+                            .unwrap_or_else(|| meta_for_task.merkle_root.clone())
+                            .to_lowercase();
+
+                        let start_timeout_ms: u64 = std::env::var("E2E_BITTORRENT_START_TIMEOUT_MS")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(30_000);
+
+                        // Prefer .torrent bytes in real-network E2E to avoid magnet metadata exchange hangs.
+                        let managed = if let Some(tb64) = torrent_base64_for_task.as_ref() {
+                            let bytes = general_purpose::STANDARD
+                                .decode(tb64)
+                                .map_err(|e| format!("Invalid torrentBase64: {}", e))?;
+                            // Sanity: torrent bytes must match the expected info_hash from metadata.
+                            // If not, the peer will immediately reject the handshake and we'll see 0 progress forever.
+                            if let Ok(ti) = torrent_from_bytes::<Vec<u8>>(&bytes) {
+                                let parsed = hex::encode(ti.info_hash.0).to_lowercase();
+                                if parsed != expected_info_hash {
+                                    return Err(format!(
+                                        "torrentBase64 info_hash mismatch: expected={} parsed={}",
+                                        expected_info_hash, parsed
+                                    ));
+                                }
+                            }
+                            let peer = bt_seeder_ip_for_task
+                                .as_deref()
+                                .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+                                .zip(bt_seeder_port_for_task)
+                                .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+                            // Preflight: attempt a direct TCP connect to the initial peer so we can
+                            // distinguish "network/ACL blocked" vs "rqbit dialed too fast to observe".
+                            if let Some(addr) = peer {
+                                let mut stream = match tokio::time::timeout(
+                                    std::time::Duration::from_secs(2),
+                                    TcpStream::connect(addr),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(s)) => s,
+                                    Ok(Err(e)) => {
+                                        return Err(format!(
+                                            "BitTorrent preflight TCP connect failed to {}: {}",
+                                            addr, e
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        return Err(format!(
+                                            "BitTorrent preflight TCP connect timed out to {}",
+                                            addr
+                                        ));
+                                    }
+                                };
+
+                                // Also preflight a BitTorrent handshake to ensure the listener on
+                                // the remote port is actually a BT peer for this info_hash.
+                                let hs = bt_handshake_bytes(&expected_info_hash)?;
+                                if let Err(e) = tokio::time::timeout(
+                                    std::time::Duration::from_secs(2),
+                                    stream.write_all(&hs),
+                                )
+                                .await
+                                {
+                                    return Err(format!(
+                                        "BitTorrent preflight handshake write timed out to {}: {}",
+                                        addr, e
+                                    ));
+                                }
+                                let mut resp = [0u8; 68];
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(2),
+                                    stream.read_exact(&mut resp),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(_)) => {
+                                        if resp[0] != 19 || &resp[1..20] != b"BitTorrent protocol" {
+                                            return Err(format!(
+                                                "BitTorrent preflight handshake invalid response from {} (not a BT peer?)",
+                                                addr
+                                            ));
+                                        }
+                                        if resp[28..48] != hs[28..48] {
+                                            let got = hex::encode(&resp[28..48]);
+                                            return Err(format!(
+                                                "BitTorrent preflight handshake info_hash mismatch from {}: expected={} got={}",
+                                                addr, expected_info_hash, got
+                                            ));
+                                        }
+                                    }
+                                    Ok(Err(e)) => {
+                                        return Err(format!(
+                                            "BitTorrent preflight handshake read failed from {}: {}",
+                                            addr, e
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        return Err(format!(
+                                            "BitTorrent preflight handshake timed out (no response) from {}",
+                                            addr
+                                        ));
+                                    }
+                                }
+                            }
+                            if let Some(p) = peer {
+                                tokio::time::timeout(
+                                    std::time::Duration::from_millis(start_timeout_ms),
+                                    bt.start_download_from_bytes_with_initial_peer(bytes, p),
+                                )
+                                .await
+                                .map_err(|_| {
+                                    format!(
+                                        "BitTorrent start_download_from_bytes timed out after {}ms.",
+                                        start_timeout_ms
+                                    )
+                                })?
+                                .map_err(|e| format!("BitTorrent download failed to start: {}", e))?
+                            } else {
+                                tokio::time::timeout(
+                                    std::time::Duration::from_millis(start_timeout_ms),
+                                    bt.start_download_from_bytes(bytes),
+                                )
+                                .await
+                                .map_err(|_| {
+                                    format!(
+                                        "BitTorrent start_download_from_bytes timed out after {}ms.",
+                                        start_timeout_ms
+                                    )
+                                })?
+                                .map_err(|e| format!("BitTorrent download failed to start: {}", e))?
+                            }
+                        } else {
+                            let magnet = build_magnet_link(
+                                &expected_info_hash,
+                                Some(&meta_for_task.file_name),
+                                meta_for_task.trackers.as_ref(),
+                            );
+                            // NOTE: bt.start_download can block while resolving the magnet / peers.
+                            // Put an explicit cap so the test doesn't hit the global vitest 10min timeout.
+                            tokio::time::timeout(
+                                std::time::Duration::from_millis(start_timeout_ms),
+                                bt.start_download(&magnet),
+                            )
+                            .await
+                            .map_err(|_| {
+                                format!(
+                                    "BitTorrent start_download timed out after {}ms (magnet resolve/peer connect).",
+                                    start_timeout_ms
+                                )
+                            })?
+                            .map_err(|e| format!("BitTorrent download failed to start: {}", e))?
+                        };
+
+                        let actual_info_hash = hex::encode(managed.info_hash().0);
+                        let download_dir = bt
+                            .get_torrent_folder(&actual_info_hash)
+                            .await
+                            .map_err(|e| format!("BitTorrent download folder unavailable: {}", e))?;
+
+                        // Wait until the torrent is finished (fail-fast on explicit error / no-progress).
+                        let bt_start = std::time::Instant::now();
+                        let no_progress_grace_ms: u64 = std::env::var("E2E_BITTORRENT_NO_PROGRESS_FAIL_MS")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(60_000);
+                        let mut last_progress_bytes: u64 = 0;
+                        let mut last_progress_at = std::time::Instant::now();
+                        let mut peak = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+                        loop {
+                            // Read stats directly from the managed torrent so we can access
+                            // librqbit's aggregate peer state counters (queued/connecting/live/etc).
+                            let s = managed.stats();
+                            let state_str = s.state.to_string();
+                            if state_str == "error" {
+                                return Err(format!(
+                                    "BitTorrent torrent entered error state (info_hash={}): error={:?}",
+                                    actual_info_hash, s.error
+                                ));
+                            }
+                            if s.finished {
+                                break;
+                            }
+
+                            // Track peak peer counters so we don't miss short-lived dial attempts.
+                            if let Some(l) = s.live.as_ref() {
+                                let ps = &l.snapshot.peer_stats;
+                                peak.0 = peak.0.max(ps.queued);
+                                peak.1 = peak.1.max(ps.connecting);
+                                peak.2 = peak.2.max(ps.live);
+                                peak.3 = peak.3.max(ps.seen);
+                                peak.4 = peak.4.max(ps.dead);
+                                peak.5 = peak.5.max(ps.not_needed);
+                            }
+
+                            if s.progress_bytes > last_progress_bytes {
+                                last_progress_bytes = s.progress_bytes;
+                                last_progress_at = std::time::Instant::now();
+                            } else if last_progress_bytes == 0
+                                && last_progress_at.elapsed().as_millis() as u64 >= no_progress_grace_ms
+                            {
+                                let peer_diag = s
+                                    .live
+                                    .as_ref()
+                                    .map(|l| {
+                                        let ps = &l.snapshot.peer_stats;
+                                        format!(
+                                            "peer_stats={{queued={},connecting={},live={},seen={},dead={},not_needed={}}}",
+                                            ps.queued, ps.connecting, ps.live, ps.seen, ps.dead, ps.not_needed
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "peer_stats=<none>".to_string());
+                                let peak_diag = format!(
+                                    "peer_peak={{queued={},connecting={},live={},seen={},dead={},not_needed={}}}",
+                                    peak.0, peak.1, peak.2, peak.3, peak.4, peak.5
+                                );
+                                return Err(format!(
+                                    "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}, {}, {}).",
+                                    no_progress_grace_ms, actual_info_hash, state_str, s.finished, s.total_bytes, peer_diag, peak_diag
+                                ));
+                            }
+                            if bt_start.elapsed().as_millis() as u64 >= timeout_ms {
+                                return Err(format!(
+                                    "BitTorrent download did not complete within {}ms (info_hash={})",
+                                    timeout_ms, actual_info_hash
+                                ));
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+
+                        // Find the downloaded file and copy it into the expected E2E output path.
+                        let downloaded_path = find_file_recursive(
+                            &download_dir,
+                            &meta_for_task.file_name,
+                            meta_for_task.file_size,
+                        )
+                        .await?;
+                        if let Some(parent) = std::path::Path::new(&out_path_for_task).parent() {
+                            let _ = tokio::fs::create_dir_all(parent).await;
+                        }
+                        tokio::fs::copy(&downloaded_path, &out_path_for_task)
+                            .await
+                            .map_err(|e| format!("BitTorrent failed to copy output file: {}", e))?;
+                } else {
+                    return Err(format!(
+                        "Unsupported protocol '{}' for async download task",
+                        protocol_upper_for_task
+                    ));
                 }
 
                 let start = std::time::Instant::now();
-                // FTP-specific: fail fast when the download is "stuck running" (no progress),
-                // and avoid treating pre-allocated file length as completion.
-                let ftp_stall_timeout_ms: u64 = std::env::var("E2E_FTP_STALL_TIMEOUT_MS")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(60_000);
                 let ftp_finalize_grace_ms: u64 = std::env::var("E2E_FTP_FINALIZE_GRACE_MS")
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(30_000);
-                let mut last_progress_bytes: u64 = 0;
-                let mut last_progress_at = std::time::Instant::now();
                 let mut first_seen_incomplete_full_len_at: Option<std::time::Instant> = None;
                 loop {
-                    if protocol_upper_for_task == "FTP" {
-                        // Observe MultiSource progress to detect stalls earlier than the outer 10min timeout.
-                        let ms_opt = {
-                            let app_state_for_task = app_handle_for_task.state::<crate::AppState>();
-                            let guard = app_state_for_task.multi_source_download.lock().await;
-                            guard.as_ref().cloned()
-                        };
-                        if let Some(ms) = ms_opt {
-                            if let Some(p) = ms.get_download_progress(&meta_for_task.merkle_root).await {
-                                if p.downloaded_size > last_progress_bytes {
-                                    last_progress_bytes = p.downloaded_size;
-                                    last_progress_at = std::time::Instant::now();
-                                } else if last_progress_at.elapsed().as_millis() as u64 >= ftp_stall_timeout_ms {
-                                    let mut sources_summary = String::new();
-                                    for s in p.source_assignments.iter().take(6) {
-                                        sources_summary.push_str(&format!(
-                                            "[{} {:?}] ",
-                                            s.source_id(),
-                                            s.status
-                                        ));
-                                    }
-                                    return Err(format!(
-                                        "FTP download stalled for {}ms (no progress). downloaded={}/{} bytes, completed_chunks={}/{}, active_sources={}, sources={}",
-                                        ftp_stall_timeout_ms,
-                                        p.downloaded_size,
-                                        p.total_size,
-                                        p.completed_chunks,
-                                        p.total_chunks,
-                                        p.active_sources,
-                                        sources_summary.trim()
-                                    ));
-                                }
-                            }
-                        }
-                    }
-
                     match tokio::fs::metadata(&out_path_for_task).await {
                         Ok(m) => {
                             let len = m.len();
@@ -1047,7 +1546,7 @@ async fn api_download(
             .into_response();
     } else {
         return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, or FTP.", protocol_upper),
+            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, FTP, or BitTorrent.", protocol_upper),
         }))
         .into_response();
     }
