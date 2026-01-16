@@ -497,6 +497,7 @@ class RealE2ETestFramework {
     console.log(`⏳ Download started (id=${downloadId})`);
     const waitTimeoutMs = this.getP2PDownloadTimeoutMs(protocol);
     const start = Date.now();
+    let lastJob: any = null;
     while (Date.now() - start < waitTimeoutMs) {
       const st = await fetch(
         `${this.downloaderConfig.apiBaseUrl}/api/download/status/${downloadId}`
@@ -508,6 +509,7 @@ class RealE2ETestFramework {
         );
       }
       const job = await st.json();
+      lastJob = job;
       if (job.status === "success") {
         if (!job.verified) throw new Error("Downloaded file failed verification on node");
         console.log(`✅ File downloaded to: ${job.downloadPath}`);
@@ -519,7 +521,7 @@ class RealE2ETestFramework {
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error(
-      `Timed out waiting for download ${downloadId} (protocol=${protocol}, timeoutMs=${waitTimeoutMs})`
+      `Timed out waiting for download ${downloadId} (protocol=${protocol}, timeoutMs=${waitTimeoutMs}, lastStatus=${lastJob?.status ?? "unknown"}, lastError=${lastJob?.error ?? "none"})`
     );
   }
 
@@ -545,7 +547,7 @@ class RealE2ETestFramework {
       (byProtocolKey ? process.env[byProtocolKey] : undefined) ??
       process.env.E2E_P2P_DOWNLOAD_TIMEOUT_MS ??
       // BitTorrent can hang in "metadata ok but no progress" states; keep defaults shorter.
-      (protocol === "BitTorrent" ? "300000" : "600000");
+      (protocol === "BitTorrent" ? "240000" : "600000");
 
     const n = Number(raw);
     return Number.isFinite(n) && n > 0 ? n : 600000;
