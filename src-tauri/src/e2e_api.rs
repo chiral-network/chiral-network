@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 
 use sha2::Digest;
 use tauri::Manager;
+use base64::{Engine as _, engine::general_purpose};
 
 use crate::download_source::HttpSourceInfo;
 use crate::http_download::HttpDownloadClient;
@@ -158,6 +159,8 @@ struct UploadResponse {
     file_size: u64,
     seeder_url: String,
     uploader_address: Option<String>,
+    /// For BitTorrent E2E: base64-encoded .torrent bytes so downloaders can start without magnet metadata exchange.
+    torrent_base64: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,6 +180,8 @@ struct DownloadRequest {
     file_name: Option<String>,
     /// Optional protocol override. supported: HTTP, WebRTC, Bitswap, FTP
     protocol: Option<String>,
+    /// For BitTorrent E2E: base64-encoded .torrent bytes (optional).
+    torrent_base64: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -876,11 +881,21 @@ async fn api_upload_generate(
         StatusCode::OK,
         Json(UploadResponse {
             // For all protocols, return the DHT lookup key as fileHash (merkle_root / content root).
-            file_hash: published_key,
+            file_hash: published_key.clone(),
             file_name,
             file_size,
             seeder_url,
             uploader_address,
+            torrent_base64: if protocol_upper == "BITTORRENT" {
+                let app_state = state.app.state::<crate::AppState>();
+                app_state
+                    .bittorrent_handler
+                    .get_seeded_torrent_bytes(&published_key)
+                    .await
+                    .map(|bytes| general_purpose::STANDARD.encode(bytes))
+            } else {
+                None
+            },
         }),
     )
         .into_response()
@@ -1051,6 +1066,7 @@ async fn api_download(
         let app_handle_for_task = state.app.clone();
         let meta_for_task = meta.clone();
         let protocol_upper_for_task = protocol_upper.clone();
+        let torrent_base64_for_task = req.torrent_base64.clone();
 
         tauri::async_runtime::spawn(async move {
             // Protocol-specific overrides (milliseconds). Fallback order:
@@ -1134,30 +1150,49 @@ async fn api_download(
                             .unwrap_or_else(|| meta_for_task.merkle_root.clone())
                             .to_lowercase();
 
-                        let magnet = build_magnet_link(
-                            &expected_info_hash,
-                            Some(&meta_for_task.file_name),
-                            meta_for_task.trackers.as_ref(),
-                        );
-
-                        // NOTE: bt.start_download can block while resolving the magnet / peers.
-                        // Put an explicit cap so the test doesn't hit the global vitest 10min timeout.
                         let start_timeout_ms: u64 = std::env::var("E2E_BITTORRENT_START_TIMEOUT_MS")
                             .ok()
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(60_000);
-                        let managed = tokio::time::timeout(
-                            std::time::Duration::from_millis(start_timeout_ms),
-                            bt.start_download(&magnet),
-                        )
-                        .await
-                        .map_err(|_| {
-                            format!(
-                                "BitTorrent start_download timed out after {}ms (magnet resolve/peer connect).",
-                                start_timeout_ms
+
+                        // Prefer .torrent bytes in real-network E2E to avoid magnet metadata exchange hangs.
+                        let managed = if let Some(tb64) = torrent_base64_for_task.as_ref() {
+                            let bytes = general_purpose::STANDARD
+                                .decode(tb64)
+                                .map_err(|e| format!("Invalid torrentBase64: {}", e))?;
+                            tokio::time::timeout(
+                                std::time::Duration::from_millis(start_timeout_ms),
+                                bt.start_download_from_bytes(bytes),
                             )
-                        })?
-                        .map_err(|e| format!("BitTorrent download failed to start: {}", e))?;
+                            .await
+                            .map_err(|_| {
+                                format!(
+                                    "BitTorrent start_download_from_bytes timed out after {}ms.",
+                                    start_timeout_ms
+                                )
+                            })?
+                            .map_err(|e| format!("BitTorrent download failed to start: {}", e))?
+                        } else {
+                            let magnet = build_magnet_link(
+                                &expected_info_hash,
+                                Some(&meta_for_task.file_name),
+                                meta_for_task.trackers.as_ref(),
+                            );
+                            // NOTE: bt.start_download can block while resolving the magnet / peers.
+                            // Put an explicit cap so the test doesn't hit the global vitest 10min timeout.
+                            tokio::time::timeout(
+                                std::time::Duration::from_millis(start_timeout_ms),
+                                bt.start_download(&magnet),
+                            )
+                            .await
+                            .map_err(|_| {
+                                format!(
+                                    "BitTorrent start_download timed out after {}ms (magnet resolve/peer connect).",
+                                    start_timeout_ms
+                                )
+                            })?
+                            .map_err(|e| format!("BitTorrent download failed to start: {}", e))?
+                        };
 
                         let actual_info_hash = hex::encode(managed.info_hash().0);
                         let download_dir = bt

@@ -63,6 +63,70 @@ fn ensure_initial_peer(add_opts: &mut AddTorrentOptions, ip: std::net::IpAddr, p
     add_opts.initial_peers = Some(vec![SocketAddr::new(ip, port)]);
 }
 
+async fn maybe_inject_e2e_initial_peer(
+    dht_service: &DhtService,
+    info_hash_hex: &str,
+    add_opts: &mut AddTorrentOptions,
+) {
+    // Only in E2E attach/headless contexts.
+    if !(std::env::var("CHIRAL_E2E_API_PORT").ok().is_some()
+        || std::env::var("E2E_ATTACH").ok().as_deref() == Some("true"))
+    {
+        return;
+    }
+
+    let port = get_e2e_bittorrent_seeder_port();
+
+    // 1) Prefer explicit public IP hint from env (VM uploader public IP).
+    if let Ok(ip_str) =
+        std::env::var("CHIRAL_PUBLIC_IP").or_else(|_| std::env::var("E2E_UPLOADER_PUBLIC_IP"))
+    {
+        if let Ok(ip) = ip_str.trim().parse::<std::net::IpAddr>() {
+            if !is_private_ip(&ip) {
+                ensure_initial_peer(add_opts, ip, port);
+                info!(
+                    "E2E: injecting initial_peers {}:{} (from env) for torrent {}",
+                    ip, port, info_hash_hex
+                );
+                return;
+            }
+        }
+    }
+
+    // 2) Fallback: derive a usable IP from Chiral DHT peer multiaddrs.
+    if let Ok(peer_ids) = dht_service.search_peers_by_infohash(info_hash_hex.to_string()).await {
+        if peer_ids.is_empty() {
+            return;
+        }
+        if let Ok(addr_map) = dht_service.get_peer_addresses(peer_ids).await {
+            let mut selected_ip: Option<std::net::IpAddr> = None;
+            'outer: for (_pid, addrs) in addr_map {
+                for a in addrs {
+                    if let Ok(ma) = a.parse::<Multiaddr>() {
+                        if let Ok(sock) = multiaddr_to_socket_addr(&ma) {
+                            let ip = sock.ip();
+                            if !is_private_ip(&ip) {
+                                selected_ip = Some(ip);
+                                break 'outer;
+                            }
+                            if selected_ip.is_none() {
+                                selected_ip = Some(ip);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(ip) = selected_ip {
+                ensure_initial_peer(add_opts, ip, port);
+                info!(
+                    "E2E: injecting initial_peers {}:{} (from DHT peer addresses) for torrent {}",
+                    ip, port, info_hash_hex
+                );
+            }
+        }
+    }
+}
+
 /// Progress information for a torrent
 #[derive(Debug, Clone)]
 pub struct TorrentProgress {
@@ -494,6 +558,9 @@ pub struct BitTorrentHandler {
     // NEW: Manage active torrents and their stats.
     chiral_extension: Option<Arc<ChiralBitTorrentExtension>>,
     active_torrents: Arc<tokio::sync::Mutex<HashMap<String, Arc<ManagedTorrent>>>>,
+    // Cache the .torrent bytes for seeded torrents so real-network E2E can download deterministically
+    // without relying on magnet metadata exchange (which can hang in restricted environments).
+    seeded_torrent_bytes: Arc<tokio::sync::Mutex<HashMap<String, Vec<u8>>>>,
     peer_states: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, PeerTransferState>>>>,
     app_handle: Arc<tokio::sync::Mutex<Option<AppHandle>>>,
     event_bus: Arc<tokio::sync::Mutex<Option<Arc<TransferEventBus>>>>,
@@ -517,6 +584,14 @@ impl BitTorrentHandler {
     /// This is useful for accessing torrent metadata.
     pub fn rqbit_session(&self) -> &Arc<Session> {
         &self.rqbit_session
+    }
+
+    pub async fn get_seeded_torrent_bytes(&self, info_hash_hex: &str) -> Option<Vec<u8>> {
+        self.seeded_torrent_bytes
+            .lock()
+            .await
+            .get(info_hash_hex)
+            .cloned()
     }
 
     /// Creates a new BitTorrentHandler with the specified download directory.
@@ -718,6 +793,12 @@ impl BitTorrentHandler {
                 }
             })?;
 
+        if let Some(p) = session.tcp_listen_port() {
+            info!("BitTorrent session TCP listen port: {}", p);
+        } else {
+            warn!("BitTorrent session TCP listen port is not set (unexpected)");
+        }
+
         // Create TransferEventBus if app_handle is provided
         let event_bus = app_handle
             .as_ref()
@@ -732,6 +813,7 @@ impl BitTorrentHandler {
             download_directory: download_directory.clone(),
             active_torrents: Default::default(),
             chiral_extension: None,
+            seeded_torrent_bytes: Default::default(),
             peer_states: Default::default(),
             app_handle: Arc::new(tokio::sync::Mutex::new(app_handle)),
             event_bus: Arc::new(tokio::sync::Mutex::new(event_bus)),
@@ -1022,11 +1104,19 @@ impl BitTorrentHandler {
             bytes.len()
         );
 
+        // Best-effort: parse info_hash first so we can inject initial peers in E2E before adding.
+        let parsed_info_hash_hex = torrent_from_bytes::<Vec<u8>>(&bytes)
+            .ok()
+            .map(|t| hex::encode(t.info_hash.0));
+
         // Create AddTorrent from the bytes
         let add_torrent = AddTorrent::from_bytes(bytes);
 
-        // Use default options for downloads
-        let add_opts = AddTorrentOptions::default();
+        // Use default options for downloads, but in E2E attach mode inject the seeder as an initial peer.
+        let mut add_opts = AddTorrentOptions::default();
+        if let Some(info_hash_hex) = parsed_info_hash_hex.as_deref() {
+            maybe_inject_e2e_initial_peer(&self.dht_service, info_hash_hex, &mut add_opts).await;
+        }
 
         // Add the torrent to the session
         let add_torrent_response = self
@@ -1180,77 +1270,21 @@ impl BitTorrentHandler {
         let mut identifier_for_add = identifier.to_string();
 
         if identifier.starts_with("magnet:") {
-            if std::env::var("CHIRAL_E2E_API_PORT").ok().is_some()
-                || std::env::var("E2E_ATTACH").ok().as_deref() == Some("true")
-            {
-                // Prefer an explicit public-IP hint if provided (VM uploader public IP).
-                // This avoids cases where libp2p peer addresses only contain private RFC1918 IPs.
-                let port = get_e2e_bittorrent_seeder_port();
-                if let Ok(ip_str) = std::env::var("CHIRAL_PUBLIC_IP")
-                    .or_else(|_| std::env::var("E2E_UPLOADER_PUBLIC_IP"))
-                {
-                    if let Ok(ip) = ip_str.trim().parse::<std::net::IpAddr>() {
-                        if !is_private_ip(&ip) {
-                            ensure_initial_peer(&mut add_opts, ip, port);
-                            info!(
-                                "E2E: injecting initial_peers {}:{} (from env) for torrent {}",
-                                ip, port, info_hash_hex
-                            );
-                            let with_hint = append_magnet_x_pe(&identifier_for_add, ip, port);
-                            identifier_for_add = with_hint;
-                        }
-                    }
-                }
+            maybe_inject_e2e_initial_peer(&self.dht_service, &info_hash_hex, &mut add_opts).await;
 
-                match self
-                    .dht_service
-                    .search_peers_by_infohash(info_hash_hex.clone())
-                    .await
-                {
-                    Ok(peer_ids) if !peer_ids.is_empty() => {
-                        // Resolve multiaddrs -> pick a public IP if possible.
-                        if let Ok(addr_map) = self.dht_service.get_peer_addresses(peer_ids.clone()).await {
-                            let mut selected_ip: Option<std::net::IpAddr> = None;
-                            'outer: for (_pid, addrs) in addr_map {
-                                for a in addrs {
-                                    if let Ok(ma) = a.parse::<Multiaddr>() {
-                                        if let Ok(sock) = multiaddr_to_socket_addr(&ma) {
-                                            let ip = sock.ip();
-                                            if !is_private_ip(&ip) {
-                                                selected_ip = Some(ip);
-                                                break 'outer;
-                                            }
-                                            // Keep a private IP as a fallback if nothing else exists.
-                                            if selected_ip.is_none() {
-                                                selected_ip = Some(ip);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if let Some(ip) = selected_ip {
-                                ensure_initial_peer(&mut add_opts, ip, port);
-                                info!(
-                                    "E2E: injecting initial_peers {}:{} (from DHT peer addresses) for torrent {}",
-                                    ip, port, info_hash_hex
-                                );
-                                let with_hint = append_magnet_x_pe(&identifier_for_add, ip, port);
-                                if with_hint != identifier_for_add {
-                                    info!(
-                                        "E2E: injecting magnet peer hint x.pe={}:{} for torrent {}",
-                                        ip, port, info_hash_hex
-                                    );
-                                }
-                                identifier_for_add = with_hint;
-                            } else {
-                                info!(
-                                    "E2E: no usable IP found in peer addresses for torrent {} (will rely on tracker/BT-DHT)",
-                                    info_hash_hex
-                                );
-                            }
-                        }
+            // Best-effort: also append x.pe for clients that support it (rqbit may ignore).
+            if let Some(peers) = add_opts.initial_peers.as_ref() {
+                if let Some(p) = peers.first() {
+                    let with_hint = append_magnet_x_pe(&identifier_for_add, p.ip(), p.port());
+                    if with_hint != identifier_for_add {
+                        info!(
+                            "E2E: injecting magnet peer hint x.pe={}:{} for torrent {}",
+                            p.ip(),
+                            p.port(),
+                            info_hash_hex
+                        );
                     }
-                    _ => {}
+                    identifier_for_add = with_hint;
                 }
             }
         }
@@ -2141,6 +2175,14 @@ impl SimpleProtocolHandler for BitTorrentHandler {
                 .lock()
                 .await
                 .insert(info_hash_str.clone(), handle);
+        }
+
+        // Cache the .torrent bytes for E2E attach-mode downloaders (so they can skip magnet metadata exchange).
+        {
+            self.seeded_torrent_bytes
+                .lock()
+                .await
+                .insert(info_hash_str.clone(), torrent_bytes.to_vec());
         }
 
         // Construct the persistent state for the seeded torrent.

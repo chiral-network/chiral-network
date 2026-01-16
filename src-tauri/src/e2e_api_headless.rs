@@ -9,6 +9,7 @@ use rs_merkle::Hasher;
 use rs_merkle::MerkleTree;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use base64::{Engine as _, engine::general_purpose};
 use std::cmp::min;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -160,6 +161,7 @@ struct UploadResponse {
     file_size: u64,
     seeder_url: String,
     uploader_address: Option<String>,
+    torrent_base64: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +178,7 @@ struct DownloadRequest {
     seeder_url: Option<String>,
     file_name: Option<String>,
     protocol: Option<String>,
+    torrent_base64: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -924,6 +927,18 @@ async fn api_upload_generate(
             .into_response();
     };
 
+    let torrent_base64 = if protocol_upper == "BITTORRENT" {
+        match state.bittorrent_handler.as_ref() {
+            Some(bt) => bt
+                .get_seeded_torrent_bytes(&published_key)
+                .await
+                .map(|bytes| general_purpose::STANDARD.encode(bytes)),
+            None => None,
+        }
+    } else {
+        None
+    };
+
     (
         StatusCode::OK,
         Json(UploadResponse {
@@ -932,6 +947,7 @@ async fn api_upload_generate(
             file_size,
             seeder_url,
             uploader_address: state.uploader_address.clone(),
+            torrent_base64,
         }),
     )
         .into_response()
@@ -1118,11 +1134,6 @@ async fn api_download(
             .clone()
             .unwrap_or_else(|| meta.merkle_root.clone())
             .to_lowercase();
-        let magnet = build_magnet_link(
-            &expected_info_hash,
-            Some(&meta.file_name),
-            meta.trackers.as_ref(),
-        );
 
         // bt.start_download can block while resolving the magnet / peers.
         // Cap it so callers get a real error instead of hanging until test timeout.
@@ -1130,33 +1141,83 @@ async fn api_download(
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(60_000);
-        let managed = match tokio::time::timeout(
-            std::time::Duration::from_millis(start_timeout_ms),
-            bt.start_download(&magnet),
-        )
-        .await
-        {
-            Ok(Ok(m)) => m,
-            Ok(Err(e)) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(http_server::ErrorResponse {
-                        error: format!("BitTorrent download failed to start: {}", e),
-                    }),
-                )
-                    .into_response();
+        // Prefer .torrent bytes in real-network E2E to avoid magnet metadata exchange hangs.
+        let managed = if let Some(tb64) = req.torrent_base64.as_ref() {
+            let bytes = match general_purpose::STANDARD.decode(tb64) {
+                Ok(b) => b,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(http_server::ErrorResponse {
+                            error: format!("Invalid torrentBase64: {}", e),
+                        }),
+                    )
+                        .into_response();
+                }
+            };
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(start_timeout_ms),
+                bt.start_download_from_bytes(bytes),
+            )
+            .await
+            {
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(http_server::ErrorResponse {
+                            error: format!("BitTorrent download failed to start: {}", e),
+                        }),
+                    )
+                        .into_response();
+                }
+                Err(_) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(http_server::ErrorResponse {
+                            error: format!(
+                                "BitTorrent start_download_from_bytes timed out after {}ms.",
+                                start_timeout_ms
+                            ),
+                        }),
+                    )
+                        .into_response();
+                }
             }
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(http_server::ErrorResponse {
-                        error: format!(
-                            "BitTorrent start_download timed out after {}ms (magnet resolve/peer connect).",
-                            start_timeout_ms
-                        ),
-                    }),
-                )
-                    .into_response();
+        } else {
+            let magnet = build_magnet_link(
+                &expected_info_hash,
+                Some(&meta.file_name),
+                meta.trackers.as_ref(),
+            );
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(start_timeout_ms),
+                bt.start_download(&magnet),
+            )
+            .await
+            {
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(http_server::ErrorResponse {
+                            error: format!("BitTorrent download failed to start: {}", e),
+                        }),
+                    )
+                        .into_response();
+                }
+                Err(_) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(http_server::ErrorResponse {
+                            error: format!(
+                                "BitTorrent start_download timed out after {}ms (magnet resolve/peer connect).",
+                                start_timeout_ms
+                            ),
+                        }),
+                    )
+                        .into_response();
+                }
             }
         };
         let actual_info_hash = hex::encode(managed.info_hash().0);

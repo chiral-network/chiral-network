@@ -53,6 +53,7 @@ class RealE2ETestFramework {
   private testDir: string = "";
   private crossMachine: boolean = false;
   private requirePayment: boolean = false;
+  private torrentBase64ByHash: Map<string, string> = new Map();
 
   constructor(crossMachine: boolean = false) {
     this.crossMachine = crossMachine;
@@ -359,6 +360,9 @@ class RealE2ETestFramework {
     }
 
     const result = await response.json();
+    if (result?.torrentBase64 && typeof result.torrentBase64 === "string") {
+      this.torrentBase64ByHash.set(result.fileHash, result.torrentBase64);
+    }
     console.log(`✅ File uploaded. Hash: ${result.fileHash}`);
 
     return result.fileHash;
@@ -436,6 +440,8 @@ class RealE2ETestFramework {
         fileHash,
         fileName,
         protocol,
+        torrentBase64:
+          protocol === "BitTorrent" ? this.torrentBase64ByHash.get(fileHash) : undefined,
       }),
     });
 
@@ -489,7 +495,7 @@ class RealE2ETestFramework {
   }
 
   private getP2PDownloadTimeoutMs(
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
   ): number {
     // Protocol-specific overrides (milliseconds). Fallback order:
     // 1) E2E_{PROTOCOL}_DOWNLOAD_TIMEOUT_MS
@@ -502,6 +508,8 @@ class RealE2ETestFramework {
           ? "E2E_BITSWAP_DOWNLOAD_TIMEOUT_MS"
           : protocol === "FTP"
             ? "E2E_FTP_DOWNLOAD_TIMEOUT_MS"
+            : protocol === "BitTorrent"
+              ? "E2E_BITTORRENT_DOWNLOAD_TIMEOUT_MS"
             : null;
 
     const raw =
