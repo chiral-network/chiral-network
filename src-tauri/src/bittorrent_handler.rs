@@ -2153,8 +2153,18 @@ impl SimpleProtocolHandler for BitTorrentHandler {
 
         let add_torrent = AddTorrent::from_bytes(torrent_bytes.clone());
 
+        // IMPORTANT:
+        // For seeding, rqbit must know where the underlying file already exists.
+        // Otherwise it may create storage under the session's default folder and have 0 pieces,
+        // leading to "connected but no download progress" on clients.
+        let output_folder = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_string_lossy()
+            .into_owned();
         let options = AddTorrentOptions {
             overwrite: true,
+            output_folder: Some(output_folder.clone()),
             ..Default::default()
         };
 
@@ -2169,6 +2179,37 @@ impl SimpleProtocolHandler for BitTorrentHandler {
             .ok_or(BitTorrentError::HandleUnavailable)?;
 
         let magnet_link = format!("magnet:?xt=urn:btih:{}", info_hash_str);
+
+        // Best-effort: wait a short time for initial hashcheck to complete so the torrent becomes seedable.
+        // Without this, a downloader can connect immediately but observe 0 available pieces for a bit.
+        let seed_ready_wait_ms: u64 = std::env::var("E2E_BITTORRENT_SEED_READY_WAIT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10_000);
+        let start = std::time::Instant::now();
+        loop {
+            let stats = handle.stats();
+            if stats.finished {
+                info!(
+                    "BitTorrent seed ready: info_hash={} output_folder={} state={} finished={}",
+                    info_hash_str,
+                    output_folder,
+                    stats.state.to_string(),
+                    stats.finished
+                );
+                break;
+            }
+            if start.elapsed().as_millis() as u64 >= seed_ready_wait_ms {
+                warn!(
+                    "BitTorrent seed not marked finished after {}ms (info_hash={}, state={}). Proceeding anyway.",
+                    seed_ready_wait_ms,
+                    info_hash_str,
+                    stats.state.to_string()
+                );
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
 
         {
             self.active_torrents
