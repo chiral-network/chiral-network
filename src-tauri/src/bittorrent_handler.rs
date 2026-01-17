@@ -1150,6 +1150,18 @@ impl BitTorrentHandler {
             .await
     }
 
+    /// Starts a download with an explicit initial peer hint.
+    /// Useful for real-network E2E where magnet metadata exchange / DHT discovery can be flaky.
+    pub async fn start_download_with_initial_peer(
+        &self,
+        identifier: &str,
+        peer: SocketAddr,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
+        let mut opts = AddTorrentOptions::default();
+        opts.initial_peers = Some(vec![peer]);
+        self.start_download_with_options(identifier, opts).await
+    }
+
     /// Start a download with a custom output folder.
     pub async fn start_download_to(
         &self,

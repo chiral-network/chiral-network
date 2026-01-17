@@ -61,6 +61,74 @@ fn bt_handshake_bytes(info_hash_hex: &str) -> Result<[u8; 68], String> {
     Ok(out)
 }
 
+async fn bt_handshake_diag_on_fail(
+    addr: Option<std::net::SocketAddr>,
+    expected_info_hash: &str,
+) -> String {
+    let Some(addr) = addr else {
+        return "bt_fail_diag=<no-initial-peer>".to_string();
+    };
+
+    let hs = match bt_handshake_bytes(expected_info_hash) {
+        Ok(h) => h,
+        Err(e) => return format!("bt_fail_diag=<handshake-bytes-error:{}>", e),
+    };
+
+    let connect = tokio::time::timeout(std::time::Duration::from_secs(2), TcpStream::connect(addr))
+        .await;
+    let mut stream = match connect {
+        Err(_) => return format!("bt_fail_diag=connect_timeout addr={}", addr),
+        Ok(Err(e)) => return format!("bt_fail_diag=connect_error addr={} err={}", addr, e),
+        Ok(Ok(s)) => s,
+    };
+
+    if tokio::time::timeout(std::time::Duration::from_secs(2), stream.write_all(&hs))
+        .await
+        .is_err()
+    {
+        return format!("bt_fail_diag=handshake_write_timeout addr={}", addr);
+    }
+
+    let mut resp = [0u8; 68];
+    match tokio::time::timeout(std::time::Duration::from_secs(2), stream.read_exact(&mut resp)).await {
+        Err(_) => format!("bt_fail_diag=handshake_read_timeout addr={}", addr),
+        Ok(Err(e)) => format!("bt_fail_diag=handshake_read_error addr={} err={}", addr, e),
+        Ok(Ok(_)) => {
+            // Very lightweight validation: pstrlen + protocol string + info_hash match.
+            if resp[0] != 19 || &resp[1..20] != b"BitTorrent protocol" {
+                return format!(
+                    "bt_fail_diag=handshake_invalid_prefix addr={} pstrlen={} proto={:?}",
+                    addr,
+                    resp[0],
+                    truncate_diag(String::from_utf8_lossy(&resp[1..20]).to_string(), 64)
+                );
+            }
+            let ih = match hex::decode(expected_info_hash) {
+                Ok(v) => v,
+                Err(_) => vec![],
+            };
+            if ih.len() == 20 && resp[28..48] != ih[..] {
+                return format!(
+                    "bt_fail_diag=handshake_info_hash_mismatch addr={} expected={} got={}",
+                    addr,
+                    expected_info_hash,
+                    hex::encode(&resp[28..48])
+                );
+            }
+            format!("bt_fail_diag=handshake_ok addr={}", addr)
+        }
+    }
+}
+
+fn truncate_diag(mut s: String, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s;
+    }
+    s.truncate(max_len);
+    s.push_str("…<truncated>");
+    s
+}
+
 fn build_magnet_link(
     info_hash: &str,
     display_name: Option<&str>,
@@ -1204,6 +1272,11 @@ async fn api_download(
                         let initial_peer_dbg = initial_peer
                             .map(|p| p.to_string())
                             .unwrap_or_else(|| "<none>".to_string());
+                        let bt_source = if torrent_base64_for_task.is_some() {
+                            "torrent_bytes"
+                        } else {
+                            "magnet"
+                        };
 
                         // Prefer .torrent bytes in real-network E2E to avoid magnet metadata exchange hangs.
                         let managed = if let Some(tb64) = torrent_base64_for_task.as_ref() {
@@ -1329,9 +1402,17 @@ async fn api_download(
                             );
                             // NOTE: bt.start_download can block while resolving the magnet / peers.
                             // Put an explicit cap so the test doesn't hit the global vitest 10min timeout.
+                            let bt2 = bt.clone();
+                            let fut = async move {
+                                if let Some(p) = initial_peer {
+                                    bt2.start_download_with_initial_peer(&magnet, p).await
+                                } else {
+                                    bt2.start_download(&magnet).await
+                                }
+                            };
                             tokio::time::timeout(
                                 std::time::Duration::from_millis(start_timeout_ms),
-                                bt.start_download(&magnet),
+                                fut,
                             )
                             .await
                             .map_err(|_| {
@@ -1416,9 +1497,22 @@ async fn api_download(
                                     "peer_peak={{queued={},connecting={},live={},seen={},dead={},not_needed={}}}",
                                     peak.0, peak.1, peak.2, peak.3, peak.4, peak.5
                                 );
+                                let live_snapshot_diag = s
+                                    .live
+                                    .as_ref()
+                                    .map(|l| {
+                                        format!(
+                                            "live_snapshot={}",
+                                            truncate_diag(format!("{:?}", l.snapshot), 2000)
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "live_snapshot=<none>".to_string());
+                                let bt_fail_diag =
+                                    bt_handshake_diag_on_fail(initial_peer, &expected_info_hash)
+                                        .await;
                                 return Err(format!(
-                                    "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}, initial_peer={}, {}, {}).",
-                                    no_progress_grace_ms, actual_info_hash, state_str, s.finished, s.total_bytes, initial_peer_dbg, peer_diag, peak_diag
+                                    "BitTorrent made no download progress for {}ms (info_hash={}, source={}, state={}, finished={}, total_bytes={}, initial_peer={}, {}, {}, {}, {}).",
+                                    no_progress_grace_ms, actual_info_hash, bt_source, state_str, s.finished, s.total_bytes, initial_peer_dbg, peer_diag, peak_diag, live_snapshot_diag, bt_fail_diag
                                 ));
                             }
                             if bt_start.elapsed().as_millis() as u64 >= timeout_ms {
