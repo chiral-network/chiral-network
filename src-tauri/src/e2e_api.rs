@@ -1196,6 +1196,15 @@ async fn api_download(
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(30_000);
 
+                        let initial_peer = bt_seeder_ip_for_task
+                            .as_deref()
+                            .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+                            .zip(bt_seeder_port_for_task)
+                            .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+                        let initial_peer_dbg = initial_peer
+                            .map(|p| p.to_string())
+                            .unwrap_or_else(|| "<none>".to_string());
+
                         // Prefer .torrent bytes in real-network E2E to avoid magnet metadata exchange hangs.
                         let managed = if let Some(tb64) = torrent_base64_for_task.as_ref() {
                             let bytes = general_purpose::STANDARD
@@ -1212,11 +1221,7 @@ async fn api_download(
                                     ));
                                 }
                             }
-                            let peer = bt_seeder_ip_for_task
-                                .as_deref()
-                                .and_then(|s| s.parse::<std::net::IpAddr>().ok())
-                                .zip(bt_seeder_port_for_task)
-                                .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+                            let peer = initial_peer;
                             // Optional preflight (OFF by default):
                             // Real-world seeders can behave defensively (close/ratelimit) when they see
                             // unexpected preflight traffic. Keep it opt-in to avoid increasing flakiness.
@@ -1412,8 +1417,8 @@ async fn api_download(
                                     peak.0, peak.1, peak.2, peak.3, peak.4, peak.5
                                 );
                                 return Err(format!(
-                                    "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}, {}, {}).",
-                                    no_progress_grace_ms, actual_info_hash, state_str, s.finished, s.total_bytes, peer_diag, peak_diag
+                                    "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}, initial_peer={}, {}, {}).",
+                                    no_progress_grace_ms, actual_info_hash, state_str, s.finished, s.total_bytes, initial_peer_dbg, peer_diag, peak_diag
                                 ));
                             }
                             if bt_start.elapsed().as_millis() as u64 >= timeout_ms {
