@@ -1150,6 +1150,18 @@ impl BitTorrentHandler {
             .await
     }
 
+    /// Starts a download with an explicit initial peer hint.
+    /// Useful for real-network E2E where magnet metadata exchange / DHT discovery can be flaky.
+    pub async fn start_download_with_initial_peer(
+        &self,
+        identifier: &str,
+        peer: SocketAddr,
+    ) -> Result<Arc<ManagedTorrent>, BitTorrentError> {
+        let mut opts = AddTorrentOptions::default();
+        opts.initial_peers = Some(vec![peer]);
+        self.start_download_with_options(identifier, opts).await
+    }
+
     /// Start a download with a custom output folder.
     pub async fn start_download_to(
         &self,
@@ -2207,7 +2219,8 @@ impl SimpleProtocolHandler for BitTorrentHandler {
         let seed_ready_wait_ms: u64 = std::env::var("E2E_BITTORRENT_SEED_READY_WAIT_MS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(10_000);
+            // Real networks can be slower to finish the initial hashcheck; default higher to avoid "0 pieces" windows.
+            .unwrap_or(30_000);
         let start = std::time::Instant::now();
         loop {
             let stats = handle.stats();

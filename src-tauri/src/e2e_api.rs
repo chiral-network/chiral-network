@@ -55,8 +55,78 @@ fn bt_handshake_bytes(info_hash_hex: &str) -> Result<[u8; 68], String> {
     // reserved [20..28] left as 0
     out[28..48].copy_from_slice(&ih);
     // 20-byte peer id (dummy, deterministic)
-    out[48..68].copy_from_slice(b"-CHIRAL-E2E-0000000");
+    // MUST be exactly 20 bytes; otherwise this panics at runtime.
+    const PEER_ID: [u8; 20] = *b"-CHIRAL-E2E-00000000";
+    out[48..68].copy_from_slice(&PEER_ID);
     Ok(out)
+}
+
+async fn bt_handshake_diag_on_fail(
+    addr: Option<std::net::SocketAddr>,
+    expected_info_hash: &str,
+) -> String {
+    let Some(addr) = addr else {
+        return "bt_fail_diag=<no-initial-peer>".to_string();
+    };
+
+    let hs = match bt_handshake_bytes(expected_info_hash) {
+        Ok(h) => h,
+        Err(e) => return format!("bt_fail_diag=<handshake-bytes-error:{}>", e),
+    };
+
+    let connect = tokio::time::timeout(std::time::Duration::from_secs(2), TcpStream::connect(addr))
+        .await;
+    let mut stream = match connect {
+        Err(_) => return format!("bt_fail_diag=connect_timeout addr={}", addr),
+        Ok(Err(e)) => return format!("bt_fail_diag=connect_error addr={} err={}", addr, e),
+        Ok(Ok(s)) => s,
+    };
+
+    if tokio::time::timeout(std::time::Duration::from_secs(2), stream.write_all(&hs))
+        .await
+        .is_err()
+    {
+        return format!("bt_fail_diag=handshake_write_timeout addr={}", addr);
+    }
+
+    let mut resp = [0u8; 68];
+    match tokio::time::timeout(std::time::Duration::from_secs(2), stream.read_exact(&mut resp)).await {
+        Err(_) => format!("bt_fail_diag=handshake_read_timeout addr={}", addr),
+        Ok(Err(e)) => format!("bt_fail_diag=handshake_read_error addr={} err={}", addr, e),
+        Ok(Ok(_)) => {
+            // Very lightweight validation: pstrlen + protocol string + info_hash match.
+            if resp[0] != 19 || &resp[1..20] != b"BitTorrent protocol" {
+                return format!(
+                    "bt_fail_diag=handshake_invalid_prefix addr={} pstrlen={} proto={:?}",
+                    addr,
+                    resp[0],
+                    truncate_diag(String::from_utf8_lossy(&resp[1..20]).to_string(), 64)
+                );
+            }
+            let ih = match hex::decode(expected_info_hash) {
+                Ok(v) => v,
+                Err(_) => vec![],
+            };
+            if ih.len() == 20 && resp[28..48] != ih[..] {
+                return format!(
+                    "bt_fail_diag=handshake_info_hash_mismatch addr={} expected={} got={}",
+                    addr,
+                    expected_info_hash,
+                    hex::encode(&resp[28..48])
+                );
+            }
+            format!("bt_fail_diag=handshake_ok addr={}", addr)
+        }
+    }
+}
+
+fn truncate_diag(mut s: String, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s;
+    }
+    s.truncate(max_len);
+    s.push_str("…<truncated>");
+    s
 }
 
 fn build_magnet_link(
@@ -1194,6 +1264,20 @@ async fn api_download(
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(30_000);
 
+                        let initial_peer = bt_seeder_ip_for_task
+                            .as_deref()
+                            .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+                            .zip(bt_seeder_port_for_task)
+                            .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+                        let initial_peer_dbg = initial_peer
+                            .map(|p| p.to_string())
+                            .unwrap_or_else(|| "<none>".to_string());
+                        let bt_source = if torrent_base64_for_task.is_some() {
+                            "torrent_bytes"
+                        } else {
+                            "magnet"
+                        };
+
                         // Prefer .torrent bytes in real-network E2E to avoid magnet metadata exchange hangs.
                         let managed = if let Some(tb64) = torrent_base64_for_task.as_ref() {
                             let bytes = general_purpose::STANDARD
@@ -1210,82 +1294,76 @@ async fn api_download(
                                     ));
                                 }
                             }
-                            let peer = bt_seeder_ip_for_task
-                                .as_deref()
-                                .and_then(|s| s.parse::<std::net::IpAddr>().ok())
-                                .zip(bt_seeder_port_for_task)
-                                .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
-                            // Preflight: attempt a direct TCP connect to the initial peer so we can
-                            // distinguish "network/ACL blocked" vs "rqbit dialed too fast to observe".
-                            if let Some(addr) = peer {
-                                let mut stream = match tokio::time::timeout(
-                                    std::time::Duration::from_secs(2),
-                                    TcpStream::connect(addr),
-                                )
-                                .await
-                                {
-                                    Ok(Ok(s)) => s,
-                                    Ok(Err(e)) => {
-                                        return Err(format!(
-                                            "BitTorrent preflight TCP connect failed to {}: {}",
-                                            addr, e
-                                        ));
-                                    }
-                                    Err(_) => {
-                                        return Err(format!(
-                                            "BitTorrent preflight TCP connect timed out to {}",
-                                            addr
-                                        ));
-                                    }
-                                };
+                            let peer = initial_peer;
+                            // Optional preflight (OFF by default):
+                            // Real-world seeders can behave defensively (close/ratelimit) when they see
+                            // unexpected preflight traffic. Keep it opt-in to avoid increasing flakiness.
+                            let do_tcp_preflight = std::env::var("E2E_BITTORRENT_PREFLIGHT_TCP")
+                                .ok()
+                                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                                .unwrap_or(false);
+                            let do_handshake_preflight = std::env::var("E2E_BITTORRENT_PREFLIGHT_HANDSHAKE")
+                                .ok()
+                                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                                .unwrap_or(false);
 
-                                // Also preflight a BitTorrent handshake to ensure the listener on
-                                // the remote port is actually a BT peer for this info_hash.
-                                let hs = bt_handshake_bytes(&expected_info_hash)?;
-                                if let Err(e) = tokio::time::timeout(
-                                    std::time::Duration::from_secs(2),
-                                    stream.write_all(&hs),
-                                )
-                                .await
-                                {
-                                    return Err(format!(
-                                        "BitTorrent preflight handshake write timed out to {}: {}",
-                                        addr, e
-                                    ));
-                                }
-                                let mut resp = [0u8; 68];
-                                match tokio::time::timeout(
-                                    std::time::Duration::from_secs(2),
-                                    stream.read_exact(&mut resp),
-                                )
-                                .await
-                                {
-                                    Ok(Ok(_)) => {
-                                        if resp[0] != 19 || &resp[1..20] != b"BitTorrent protocol" {
-                                            return Err(format!(
-                                                "BitTorrent preflight handshake invalid response from {} (not a BT peer?)",
+                            if do_tcp_preflight {
+                                if let Some(addr) = peer {
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(2),
+                                        TcpStream::connect(addr),
+                                    )
+                                    .await
+                                    {
+                                        Err(_) => {
+                                            tracing::warn!(
+                                                "BitTorrent preflight TCP connect timed out to {} (continuing anyway)",
                                                 addr
-                                            ));
+                                            );
                                         }
-                                        if resp[28..48] != hs[28..48] {
-                                            let got = hex::encode(&resp[28..48]);
-                                            return Err(format!(
-                                                "BitTorrent preflight handshake info_hash mismatch from {}: expected={} got={}",
-                                                addr, expected_info_hash, got
-                                            ));
+                                        Ok(Err(e)) => {
+                                            tracing::warn!(
+                                                "BitTorrent preflight TCP connect failed to {}: {} (continuing anyway)",
+                                                addr,
+                                                e
+                                            );
                                         }
-                                    }
-                                    Ok(Err(e)) => {
-                                        return Err(format!(
-                                            "BitTorrent preflight handshake read failed from {}: {}",
-                                            addr, e
-                                        ));
-                                    }
-                                    Err(_) => {
-                                        return Err(format!(
-                                            "BitTorrent preflight handshake timed out (no response) from {}",
-                                            addr
-                                        ));
+                                        Ok(Ok(mut stream)) => {
+                                            if do_handshake_preflight {
+                                                let hs = bt_handshake_bytes(&expected_info_hash)?;
+                                                if tokio::time::timeout(
+                                                    std::time::Duration::from_secs(2),
+                                                    stream.write_all(&hs),
+                                                )
+                                                .await
+                                                .is_err()
+                                                {
+                                                    tracing::warn!(
+                                                        "BitTorrent preflight handshake write timed out to {} (continuing anyway)",
+                                                        addr
+                                                    );
+                                                } else {
+                                                    let mut resp = [0u8; 68];
+                                                    match tokio::time::timeout(
+                                                        std::time::Duration::from_secs(2),
+                                                        stream.read_exact(&mut resp),
+                                                    )
+                                                    .await
+                                                    {
+                                                        Err(_) => tracing::warn!(
+                                                            "BitTorrent preflight handshake read timed out from {} (continuing anyway)",
+                                                            addr
+                                                        ),
+                                                        Ok(Err(e)) => tracing::warn!(
+                                                            "BitTorrent preflight handshake read failed from {}: {} (continuing anyway)",
+                                                            addr,
+                                                            e
+                                                        ),
+                                                        Ok(Ok(_)) => {}
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1324,9 +1402,17 @@ async fn api_download(
                             );
                             // NOTE: bt.start_download can block while resolving the magnet / peers.
                             // Put an explicit cap so the test doesn't hit the global vitest 10min timeout.
+                            let bt2 = bt.clone();
+                            let fut = async move {
+                                if let Some(p) = initial_peer {
+                                    bt2.start_download_with_initial_peer(&magnet, p).await
+                                } else {
+                                    bt2.start_download(&magnet).await
+                                }
+                            };
                             tokio::time::timeout(
                                 std::time::Duration::from_millis(start_timeout_ms),
-                                bt.start_download(&magnet),
+                                fut,
                             )
                             .await
                             .map_err(|_| {
@@ -1346,10 +1432,21 @@ async fn api_download(
 
                         // Wait until the torrent is finished (fail-fast on explicit error / no-progress).
                         let bt_start = std::time::Instant::now();
-                        let no_progress_grace_ms: u64 = std::env::var("E2E_BITTORRENT_NO_PROGRESS_FAIL_MS")
+                        // Avoid overly-aggressive "no progress" timers causing false negatives on real networks.
+                        // If you really want < 60s, set E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS=1.
+                        let no_progress_grace_ms_raw: u64 = std::env::var("E2E_BITTORRENT_NO_PROGRESS_FAIL_MS")
                             .ok()
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(60_000);
+                        let allow_short = std::env::var("E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS")
+                            .ok()
+                            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                            .unwrap_or(false);
+                        let no_progress_grace_ms: u64 = if allow_short {
+                            no_progress_grace_ms_raw
+                        } else {
+                            no_progress_grace_ms_raw.max(60_000)
+                        };
                         let mut last_progress_bytes: u64 = 0;
                         let mut last_progress_at = std::time::Instant::now();
                         let mut peak = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
@@ -1400,9 +1497,22 @@ async fn api_download(
                                     "peer_peak={{queued={},connecting={},live={},seen={},dead={},not_needed={}}}",
                                     peak.0, peak.1, peak.2, peak.3, peak.4, peak.5
                                 );
+                                let live_snapshot_diag = s
+                                    .live
+                                    .as_ref()
+                                    .map(|l| {
+                                        format!(
+                                            "live_snapshot={}",
+                                            truncate_diag(format!("{:?}", l.snapshot), 2000)
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "live_snapshot=<none>".to_string());
+                                let bt_fail_diag =
+                                    bt_handshake_diag_on_fail(initial_peer, &expected_info_hash)
+                                        .await;
                                 return Err(format!(
-                                    "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}, {}, {}).",
-                                    no_progress_grace_ms, actual_info_hash, state_str, s.finished, s.total_bytes, peer_diag, peak_diag
+                                    "BitTorrent made no download progress for {}ms (info_hash={}, source={}, state={}, finished={}, total_bytes={}, initial_peer={}, {}, {}, {}, {}).",
+                                    no_progress_grace_ms, actual_info_hash, bt_source, state_str, s.finished, s.total_bytes, initial_peer_dbg, peer_diag, peak_diag, live_snapshot_diag, bt_fail_diag
                                 ));
                             }
                             if bt_start.elapsed().as_millis() as u64 >= timeout_ms {

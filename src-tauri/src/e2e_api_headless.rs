@@ -15,7 +15,9 @@ use std::cmp::min;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
 use chiral_network::ftp_server;
@@ -81,6 +83,93 @@ fn build_magnet_link(
         }
     }
     s
+}
+
+fn bt_handshake_bytes(info_hash_hex: &str) -> Result<[u8; 68], String> {
+    let ih = hex::decode(info_hash_hex)
+        .map_err(|e| format!("Invalid info_hash hex for BT handshake: {}", e))?;
+    if ih.len() != 20 {
+        return Err(format!(
+            "Invalid info_hash length for BT handshake: expected 20 bytes, got {}",
+            ih.len()
+        ));
+    }
+    let mut out = [0u8; 68];
+    out[0] = 19;
+    out[1..20].copy_from_slice(b"BitTorrent protocol");
+    // reserved [20..28] left as 0
+    out[28..48].copy_from_slice(&ih);
+    // 20-byte peer id (dummy, deterministic)
+    const PEER_ID: [u8; 20] = *b"-CHIRAL-E2E-00000000";
+    out[48..68].copy_from_slice(&PEER_ID);
+    Ok(out)
+}
+
+fn truncate_diag(mut s: String, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s;
+    }
+    s.truncate(max_len);
+    s.push_str("…<truncated>");
+    s
+}
+
+async fn bt_handshake_diag_on_fail(
+    addr: Option<std::net::SocketAddr>,
+    expected_info_hash: &str,
+) -> String {
+    let Some(addr) = addr else {
+        return "bt_fail_diag=<no-initial-peer>".to_string();
+    };
+
+    let hs = match bt_handshake_bytes(expected_info_hash) {
+        Ok(h) => h,
+        Err(e) => return format!("bt_fail_diag=<handshake-bytes-error:{}>", e),
+    };
+
+    let connect = tokio::time::timeout(std::time::Duration::from_secs(2), TcpStream::connect(addr))
+        .await;
+    let mut stream = match connect {
+        Err(_) => return format!("bt_fail_diag=connect_timeout addr={}", addr),
+        Ok(Err(e)) => return format!("bt_fail_diag=connect_error addr={} err={}", addr, e),
+        Ok(Ok(s)) => s,
+    };
+
+    if tokio::time::timeout(std::time::Duration::from_secs(2), stream.write_all(&hs))
+        .await
+        .is_err()
+    {
+        return format!("bt_fail_diag=handshake_write_timeout addr={}", addr);
+    }
+
+    let mut resp = [0u8; 68];
+    match tokio::time::timeout(std::time::Duration::from_secs(2), stream.read_exact(&mut resp)).await {
+        Err(_) => format!("bt_fail_diag=handshake_read_timeout addr={}", addr),
+        Ok(Err(e)) => format!("bt_fail_diag=handshake_read_error addr={} err={}", addr, e),
+        Ok(Ok(_)) => {
+            if resp[0] != 19 || &resp[1..20] != b"BitTorrent protocol" {
+                return format!(
+                    "bt_fail_diag=handshake_invalid_prefix addr={} pstrlen={} proto={:?}",
+                    addr,
+                    resp[0],
+                    truncate_diag(String::from_utf8_lossy(&resp[1..20]).to_string(), 64)
+                );
+            }
+            let ih = match hex::decode(expected_info_hash) {
+                Ok(v) => v,
+                Err(_) => vec![],
+            };
+            if ih.len() == 20 && resp[28..48] != ih[..] {
+                return format!(
+                    "bt_fail_diag=handshake_info_hash_mismatch addr={} expected={} got={}",
+                    addr,
+                    expected_info_hash,
+                    hex::encode(&resp[28..48])
+                );
+            }
+            format!("bt_fail_diag=handshake_ok addr={}", addr)
+        }
+    }
 }
 
 async fn find_file_recursive(
@@ -1155,6 +1244,11 @@ async fn api_download(
             .and_then(|s| s.parse().ok())
             .unwrap_or(30_000);
         // Prefer .torrent bytes in real-network E2E to avoid magnet metadata exchange hangs.
+        let bt_source = if req.torrent_base64.is_some() {
+            "torrent_bytes"
+        } else {
+            "magnet"
+        };
         let managed = if let Some(tb64) = req.torrent_base64.as_ref() {
             let bytes = match general_purpose::STANDARD.decode(tb64) {
                 Ok(b) => b,
@@ -1233,9 +1327,23 @@ async fn api_download(
                 Some(&meta.file_name),
                 meta.trackers.as_ref(),
             );
+            let peer = req
+                .bittorrent_seeder_ip
+                .as_deref()
+                .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+                .zip(req.bittorrent_seeder_port)
+                .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+            let bt2 = bt.clone();
+            let fut = async move {
+                if let Some(p) = peer {
+                    bt2.start_download_with_initial_peer(&magnet, p).await
+                } else {
+                    bt2.start_download(&magnet).await
+                }
+            };
             match tokio::time::timeout(
                 std::time::Duration::from_millis(start_timeout_ms),
-                bt.start_download(&magnet),
+                fut,
             )
             .await
             {
@@ -1283,46 +1391,101 @@ async fn api_download(
             .and_then(|s| s.parse().ok())
             .unwrap_or(300_000);
         let bt_start = std::time::Instant::now();
-        let no_progress_grace_ms: u64 = std::env::var("E2E_BITTORRENT_NO_PROGRESS_FAIL_MS")
+        // Avoid overly-aggressive "no progress" timers causing false negatives on real networks.
+        // If you really want < 60s, set E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS=1.
+        let no_progress_grace_ms_raw: u64 = std::env::var("E2E_BITTORRENT_NO_PROGRESS_FAIL_MS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(60_000);
+        let allow_short = std::env::var("E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let no_progress_grace_ms: u64 = if allow_short {
+            no_progress_grace_ms_raw
+        } else {
+            no_progress_grace_ms_raw.max(60_000)
+        };
         let mut last_progress_bytes: u64 = 0;
         let mut last_progress_at = std::time::Instant::now();
+        let mut peak = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
         loop {
-            if let Ok(p) = bt.get_torrent_progress(&actual_info_hash).await {
-                if p.state == "error" {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(http_server::ErrorResponse {
-                            error: format!(
-                                "BitTorrent download entered error state (info_hash={}): downloaded={} total={} speed={}",
-                                actual_info_hash, p.downloaded_bytes, p.total_bytes, p.download_speed
-                            ),
-                        }),
-                    )
-                        .into_response();
-                }
-                if p.is_finished {
-                    break;
-                }
-                if p.downloaded_bytes > last_progress_bytes {
-                    last_progress_bytes = p.downloaded_bytes;
-                    last_progress_at = std::time::Instant::now();
-                } else if last_progress_bytes == 0
-                    && last_progress_at.elapsed().as_millis() as u64 >= no_progress_grace_ms
-                {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(http_server::ErrorResponse {
-                            error: format!(
-                                "BitTorrent made no download progress for {}ms (info_hash={}, state={}, finished={}, total_bytes={}). Seeder may not be discoverable or seeder may have 0 pieces.",
-                                no_progress_grace_ms, actual_info_hash, p.state, p.is_finished, p.total_bytes
-                            ),
-                        }),
-                    )
-                        .into_response();
-                }
+            // Read stats directly from the managed torrent so we can access librqbit's
+            // aggregate peer state counters (queued/connecting/live/etc).
+            let s = managed.stats();
+            let state_str = s.state.to_string();
+            if state_str == "error" {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(http_server::ErrorResponse {
+                        error: format!(
+                            "BitTorrent torrent entered error state (info_hash={}): error={:?}",
+                            actual_info_hash, s.error
+                        ),
+                    }),
+                )
+                    .into_response();
+            }
+            if s.finished {
+                break;
+            }
+            if s.progress_bytes > last_progress_bytes {
+                last_progress_bytes = s.progress_bytes;
+                last_progress_at = std::time::Instant::now();
+            } else if last_progress_bytes == 0
+                && last_progress_at.elapsed().as_millis() as u64 >= no_progress_grace_ms
+            {
+                let peer_diag = s
+                    .live
+                    .as_ref()
+                    .map(|l| {
+                        let ps = &l.snapshot.peer_stats;
+                        let t = (
+                            ps.queued, ps.connecting, ps.live, ps.seen, ps.dead, ps.not_needed,
+                        );
+                        peak.0 = peak.0.max(t.0);
+                        peak.1 = peak.1.max(t.1);
+                        peak.2 = peak.2.max(t.2);
+                        peak.3 = peak.3.max(t.3);
+                        peak.4 = peak.4.max(t.4);
+                        peak.5 = peak.5.max(t.5);
+                        format!(
+                            "peer_stats={{queued={},connecting={},live={},seen={},dead={},not_needed={}}}",
+                            t.0, t.1, t.2, t.3, t.4, t.5
+                        )
+                    })
+                    .unwrap_or_else(|| "peer_stats=<none>".to_string());
+                let peak_diag = format!(
+                    "peer_peak={{queued={},connecting={},live={},seen={},dead={},not_needed={}}}",
+                    peak.0, peak.1, peak.2, peak.3, peak.4, peak.5
+                );
+                    let live_snapshot_diag = s
+                        .live
+                        .as_ref()
+                        .map(|l| {
+                            format!(
+                                "live_snapshot={}",
+                                truncate_diag(format!("{:?}", l.snapshot), 2000)
+                            )
+                        })
+                        .unwrap_or_else(|| "live_snapshot=<none>".to_string());
+                    let peer = req
+                        .bittorrent_seeder_ip
+                        .as_deref()
+                        .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+                        .zip(req.bittorrent_seeder_port)
+                        .map(|(ip, port)| std::net::SocketAddr::new(ip, port));
+                    let bt_fail_diag = bt_handshake_diag_on_fail(peer, &expected_info_hash).await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(http_server::ErrorResponse {
+                        error: format!(
+                                "BitTorrent made no download progress for {}ms (info_hash={}, source={}, state={}, finished={}, total_bytes={}, {}, {}, {}, {}).",
+                                no_progress_grace_ms, actual_info_hash, bt_source, state_str, s.finished, s.total_bytes, peer_diag, peak_diag, live_snapshot_diag, bt_fail_diag
+                        ),
+                    }),
+                )
+                    .into_response();
             }
             if bt_start.elapsed().as_millis() as u64 >= timeout_ms {
                 return (

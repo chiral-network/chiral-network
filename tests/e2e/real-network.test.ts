@@ -469,7 +469,7 @@ class RealE2ETestFramework {
 
     throw new Error(
       `Search timed out after ${timeout}ms (metadata not found). ` +
-        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and ${this.uploaderConfig.apiBaseUrl}/api/dht/peers. ` +
+        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and ${(this.uploaderConfig?.apiBaseUrl ?? "<uploader-api-unknown>")}/api/dht/peers. ` +
         `Also confirm the uploader's libp2p port (default tcp/4001) is reachable (firewall/NAT/relay).`
     );
   }
@@ -486,6 +486,15 @@ class RealE2ETestFramework {
 
     console.log(`📥 Downloading file via ${protocol}: ${fileName}`);
 
+    // In real-network attach/cross-machine scenarios, the uploader's E2E API host is not always
+    // the BitTorrent seeder public IP (it can be localhost/private). Allow an explicit override.
+    const uploaderApiBaseUrl =
+      this.uploaderConfig?.apiBaseUrl ?? this.downloaderConfig.apiBaseUrl;
+    const bittorrentSeederIp =
+      protocol === "BitTorrent"
+        ? (process.env.E2E_UPLOADER_PUBLIC_IP ?? new URL(uploaderApiBaseUrl).hostname)
+        : undefined;
+
     const response = await fetch(`${this.downloaderConfig.apiBaseUrl}/api/download`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -496,9 +505,7 @@ class RealE2ETestFramework {
         torrentBase64:
           protocol === "BitTorrent" ? this.torrentBase64ByHash.get(fileHash) : undefined,
         bittorrentSeederIp:
-          protocol === "BitTorrent"
-            ? new URL(this.uploaderConfig!.apiBaseUrl).hostname
-            : undefined,
+          bittorrentSeederIp,
         bittorrentSeederPort:
           protocol === "BitTorrent"
             ? this.torrentSeederPortByHash.get(fileHash)
@@ -582,7 +589,28 @@ class RealE2ETestFramework {
       (protocol === "BitTorrent" ? "240000" : "600000");
 
     const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : 600000;
+    let timeoutMs = Number.isFinite(n) && n > 0 ? n : 600000;
+
+    // Align test-runner timeout with server-side BitTorrent "no-progress" timeout:
+    // if the test times out earlier, we only see lastStatus=running and lose the real error context.
+    if (protocol === "BitTorrent") {
+      const allowShort =
+        (process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? "").toLowerCase() === "1" ||
+        (process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? "").toLowerCase() === "true";
+
+      const noProgressRaw = Number(process.env.E2E_BITTORRENT_NO_PROGRESS_FAIL_MS ?? "60000");
+      const noProgressMs =
+        Number.isFinite(noProgressRaw) && noProgressRaw > 0
+          ? allowShort
+            ? noProgressRaw
+            : Math.max(noProgressRaw, 60_000)
+          : 60_000;
+
+      // Give the node time to either make progress or fail with peer diagnostics.
+      timeoutMs = Math.max(timeoutMs, noProgressMs + 15_000);
+    }
+
+    return timeoutMs;
   }
 
   /**
