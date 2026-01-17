@@ -582,7 +582,28 @@ class RealE2ETestFramework {
       (protocol === "BitTorrent" ? "240000" : "600000");
 
     const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : 600000;
+    let timeoutMs = Number.isFinite(n) && n > 0 ? n : 600000;
+
+    // Align test-runner timeout with server-side BitTorrent "no-progress" timeout:
+    // if the test times out earlier, we only see lastStatus=running and lose the real error context.
+    if (protocol === "BitTorrent") {
+      const allowShort =
+        (process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? "").toLowerCase() === "1" ||
+        (process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? "").toLowerCase() === "true";
+
+      const noProgressRaw = Number(process.env.E2E_BITTORRENT_NO_PROGRESS_FAIL_MS ?? "60000");
+      const noProgressMs =
+        Number.isFinite(noProgressRaw) && noProgressRaw > 0
+          ? allowShort
+            ? noProgressRaw
+            : Math.max(noProgressRaw, 60_000)
+          : 60_000;
+
+      // Give the node time to either make progress or fail with peer diagnostics.
+      timeoutMs = Math.max(timeoutMs, noProgressMs + 15_000);
+    }
+
+    return timeoutMs;
   }
 
   /**
