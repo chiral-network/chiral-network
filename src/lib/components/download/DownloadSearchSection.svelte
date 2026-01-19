@@ -16,6 +16,7 @@
   import PeerSelectionModal, { type PeerInfo } from './PeerSelectionModal.svelte';
   import PeerSelectionService from '$lib/services/peerSelectionService';
   import { extractInfoHashFromTorrentBytes } from '$lib/utils/torrentInfoHash';
+  import { extractInfoHashFromMagnet } from '$lib/utils/magnetInfoHash';
 
   type ToastType = 'success' | 'error' | 'info' | 'warning';
   type ToastPayload = { message: string; type?: ToastType; duration?: number; };
@@ -168,8 +169,7 @@
 
         // For magnet links, extract info_hash and search DHT directly
         console.log('🔍 Parsing magnet link:', identifier)
-        const urlParams = new URLSearchParams(identifier.split('?')[1])
-        const infoHash = urlParams.get('xt')?.replace('urn:btih:', '').toLowerCase()
+        const infoHash = extractInfoHashFromMagnet(identifier)
         console.log('🔍 Extracted info_hash (normalized to lowercase):', infoHash)
         if (infoHash) {
           try {
