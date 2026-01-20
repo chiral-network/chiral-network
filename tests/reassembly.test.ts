@@ -129,11 +129,10 @@ describe('ReassemblyManager', () => {
     expect(s.writeInFlight).toBe(1);
     expect(s.writeQueueLength).toBe(2);
 
-    // First chunk should have been marked REQUESTED (before write completes)
-    expect(s.chunkStates[0]).toBe(ChunkState.REQUESTED);
-    // Other chunks should also be REQUESTED (they're enqueued)
-    expect(s.chunkStates[1]).toBe(ChunkState.REQUESTED);
-    expect(s.chunkStates[2]).toBe(ChunkState.REQUESTED);
+    // With new semantics, chunks are marked RECEIVED immediately after checksum validation
+    expect(s.chunkStates[0]).toBe(ChunkState.RECEIVED);
+    expect(s.chunkStates[1]).toBe(ChunkState.RECEIVED);
+    expect(s.chunkStates[2]).toBe(ChunkState.RECEIVED);
 
     // Fulfill first write
     resolves[0](true);
