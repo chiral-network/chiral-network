@@ -8,17 +8,20 @@ use super::traits::{
     ProtocolCapabilities, ProtocolError, ProtocolHandler, SeedOptions, SeedingInfo,
 };
 use crate::ftp_downloader::{FtpDownloader, FtpCredentials, FtpDownloadConfig};
+use crate::ftp_client::{download_from_ftp_with_progress_controlled, TransferControl};
 use crate::transfer_events::{
     current_timestamp_ms, ChunkCompletedEvent, DisconnectReason, ErrorCategory,
     SourceConnectedEvent, SourceDisconnectedEvent, SourceInfo, SourceSummary,
     SourceType, TransferCanceledEvent, TransferCompletedEvent, TransferEventBus,
-    TransferFailedEvent, TransferPausedEvent, TransferStartedEvent, PauseReason,
+    TransferFailedEvent, TransferPausedEvent, TransferResumedEvent, TransferStartedEvent, PauseReason,
 };
 use async_trait::async_trait;
+use crate::download_source::FtpSourceInfo;
 use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use suppaftp::{FtpError, FtpStream};
 use tauri::AppHandle;
@@ -62,6 +65,7 @@ struct FtpDownloadState {
     status: DownloadStatus,
     credentials: Option<FtpCredentials>,
     is_paused: bool,
+    control: TransferControl,
     /// File name for event reporting
     file_name: String,
     /// File size (if known)
@@ -345,6 +349,7 @@ impl ProtocolHandler for FtpProtocolHandler {
 
         // Track the download
         {
+            let control: TransferControl = Arc::new(AtomicU8::new(0));
             let mut downloads = self.active_downloads.lock().await;
             downloads.insert(download_id.clone(), FtpDownloadState {
                 url: url.clone(),
@@ -353,75 +358,46 @@ impl ProtocolHandler for FtpProtocolHandler {
                 status: DownloadStatus::Downloading,
                 credentials: credentials.clone(),
                 is_paused: false,
+                control,
                 file_name: file_name.clone(),
                 file_size: 0,
             });
         }
 
         // Clone necessary values for the spawned task
-        let downloader = self.downloader.clone();
         let progress = self.download_progress.clone();
         let active_downloads = self.active_downloads.clone();
         let id = download_id.clone();
         let output_path = options.output_path.clone();
-        let creds = credentials.clone();
         let event_bus = self.get_event_bus();
         let task_source_id = source_id.clone();
         let task_file_name = file_name.clone();
+        let url_for_task = url.clone();
+        let control = {
+            let downloads = self.active_downloads.lock().await;
+            downloads
+                .get(&id)
+                .map(|s| s.control.clone())
+                .unwrap_or_else(|| Arc::new(AtomicU8::new(0)))
+        };
 
         // Spawn download task
         tokio::spawn(async move {
             let start_time = Instant::now();
 
-            // Connect to FTP server
-            let mut stream = match downloader.connect_and_login(&parsed_url, creds).await {
-                Ok(s) => s,
-                Err(e) => {
-                    let mut prog = progress.lock().await;
-                    if let Some(p) = prog.get_mut(&id) {
-                        p.status = DownloadStatus::Failed;
-                    }
-                    // Emit failed event
-                    if let Some(ref bus) = event_bus {
-                        bus.emit_failed(TransferFailedEvent {
-                            transfer_id: id.clone(),
-                            file_hash: id.clone(),
-                            failed_at: current_timestamp_ms(),
-                            error: format!("FTP connection failed: {}", e),
-                            error_category: ErrorCategory::Network,
-                            downloaded_bytes: 0,
-                            total_bytes: 0,
-                            retry_possible: true,
-                        });
-                    }
-                    tracing::error!("FTP connection failed: {}", e);
-                    return;
-                }
+            // Build FtpSourceInfo for the shared FTP client implementation (supports resume)
+            let use_ftps = parsed_url.scheme() == "ftps";
+            let ftp_source_info = FtpSourceInfo {
+                url: url_for_task.clone(),
+                username: None,
+                encrypted_password: None,
+                passive_mode: true,
+                use_ftps,
+                timeout_secs: None,
             };
 
-            // Get remote path
-            let remote_path = parsed_url.path();
-
-            // Get file size
-            let file_size = match downloader.get_file_size(&mut stream, remote_path).await {
-                Ok(size) => {
-                    let mut prog = progress.lock().await;
-                    if let Some(p) = prog.get_mut(&id) {
-                        p.total_bytes = size;
-                        p.status = DownloadStatus::Downloading;
-                    }
-                    // Update state with file size
-                    let mut downloads = active_downloads.lock().await;
-                    if let Some(state) = downloads.get_mut(&id) {
-                        state.file_size = size;
-                    }
-                    size
-                }
-                Err(e) => {
-                    tracing::warn!("Could not get file size: {}", e);
-                    0
-                }
-            };
+            // Best-effort file size for events (FTP client will also query SIZE internally)
+            let file_size = 0u64;
 
             // Create source info for events
             let source_info = SourceInfo {
@@ -460,45 +436,70 @@ impl ProtocolHandler for FtpProtocolHandler {
             }
 
             // Download the file with progress updates
-            let download_result = Self::download_with_progress(
-                &downloader,
-                &mut stream,
-                remote_path,
-                file_size,
-                &event_bus,
-                &id,
-                start_time,
-            ).await;
+            let progress_for_cb = progress.clone();
+            let event_bus_for_cb = event_bus.clone();
+            let transfer_id_for_cb = id.clone();
+            let started_at = start_time;
+
+            let download_result = download_from_ftp_with_progress_controlled(
+                &ftp_source_info,
+                &output_path,
+                Box::new(move |downloaded, total| {
+                    // Update internal progress snapshot
+                    {
+                        let mut prog = progress_for_cb.blocking_lock();
+                        if let Some(p) = prog.get_mut(&transfer_id_for_cb) {
+                            p.downloaded_bytes = downloaded;
+                            p.total_bytes = total;
+                            p.status = DownloadStatus::Downloading;
+                        }
+                    }
+
+                    if let Some(ref bus) = event_bus_for_cb {
+                        let elapsed = started_at.elapsed().as_secs_f64().max(0.001);
+                        let speed = downloaded as f64 / elapsed;
+                        let progress_pct = if total > 0 {
+                            (downloaded as f64 / total as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        let eta_seconds = if speed > 0.0 && total > downloaded {
+                            Some(((total - downloaded) as f64 / speed) as u32)
+                        } else {
+                            None
+                        };
+
+                        let _ = bus.emit_progress(crate::transfer_events::TransferProgressEvent {
+                            transfer_id: transfer_id_for_cb.clone(),
+                            downloaded_bytes: downloaded,
+                            total_bytes: total,
+                            completed_chunks: 0,
+                            total_chunks: 1,
+                            progress_percentage: progress_pct,
+                            download_speed_bps: speed,
+                            upload_speed_bps: 0.0,
+                            eta_seconds,
+                            active_sources: 1,
+                            timestamp: current_timestamp_ms(),
+                        });
+                    }
+                }),
+                control.clone(),
+            )
+            .await;
 
             match download_result {
-                Ok((data, download_duration_secs, download_speed)) => {
-
-                    // Write to file
-                    if let Err(e) = tokio::fs::write(&output_path, &data).await {
-                        let mut prog = progress.lock().await;
-                        if let Some(p) = prog.get_mut(&id) {
-                            p.status = DownloadStatus::Failed;
-                        }
-                        // Emit failed event
-                        if let Some(ref bus) = event_bus {
-                            bus.emit_failed(TransferFailedEvent {
-                                transfer_id: id.clone(),
-                                file_hash: id.clone(),
-                                failed_at: current_timestamp_ms(),
-                                error: format!("Failed to write file: {}", e),
-                                error_category: ErrorCategory::Filesystem,
-                                downloaded_bytes: data.len() as u64,
-                                total_bytes: file_size,
-                                retry_possible: false,
-                            });
-                        }
-                        tracing::error!("Failed to write file: {}", e);
-                        return;
-                    }
+                Ok(downloaded_bytes) => {
+                    let download_duration_secs = start_time.elapsed().as_secs();
+                    let download_speed = if download_duration_secs > 0 {
+                        downloaded_bytes as f64 / download_duration_secs as f64
+                    } else {
+                        downloaded_bytes as f64
+                    };
 
                     let mut prog = progress.lock().await;
                     if let Some(p) = prog.get_mut(&id) {
-                        p.downloaded_bytes = data.len() as u64;
+                        p.downloaded_bytes = downloaded_bytes;
                         p.download_speed = download_speed;
                         p.status = DownloadStatus::Completed;
                     }
@@ -509,7 +510,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                         bus.emit_chunk_completed(ChunkCompletedEvent {
                             transfer_id: id.clone(),
                             chunk_id: 0,
-                            chunk_size: data.len(),
+                            chunk_size: downloaded_bytes as usize,
                             source_id: task_source_id.clone(),
                             source_type: SourceType::Ftp,
                             completed_at: current_timestamp_ms(),
@@ -533,7 +534,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                             transfer_id: id.clone(),
                             file_hash: id.clone(),
                             file_name: task_file_name.clone(),
-                            file_size: data.len() as u64,
+                            file_size: downloaded_bytes,
                             output_path: output_path.to_string_lossy().to_string(),
                             completed_at: current_timestamp_ms(),
                             duration_seconds: download_duration_secs,
@@ -543,16 +544,78 @@ impl ProtocolHandler for FtpProtocolHandler {
                                 source_id: task_source_id.clone(),
                                 source_type: SourceType::Ftp,
                                 chunks_provided: 1,
-                                bytes_provided: data.len() as u64,
+                                bytes_provided: downloaded_bytes,
                                 average_speed_bps: download_speed,
                                 connection_duration_seconds: download_duration_secs,
                             }],
                         });
                     }
 
-                    tracing::info!("FTP download completed: {} bytes in {} seconds", data.len(), download_duration_secs);
+                    tracing::info!(
+                        "FTP download completed: {} bytes in {} seconds",
+                        downloaded_bytes,
+                        download_duration_secs
+                    );
                 }
                 Err(e) => {
+                    let ctl = control.load(Ordering::Relaxed);
+                    if ctl == 1 {
+                        // Pause requested
+                        let downloaded_bytes = std::fs::metadata(&output_path)
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        {
+                            let mut prog = progress.lock().await;
+                            if let Some(p) = prog.get_mut(&id) {
+                                p.status = DownloadStatus::Paused;
+                                p.downloaded_bytes = downloaded_bytes;
+                            }
+                        }
+                        {
+                            let mut downloads = active_downloads.lock().await;
+                            if let Some(state) = downloads.get_mut(&id) {
+                                state.is_paused = true;
+                                state.status = DownloadStatus::Paused;
+                            }
+                        }
+                        if let Some(ref bus) = event_bus {
+                            bus.emit_paused(TransferPausedEvent {
+                                transfer_id: id.clone(),
+                                paused_at: current_timestamp_ms(),
+                                reason: PauseReason::UserRequested,
+                                can_resume: true,
+                                downloaded_bytes,
+                                total_bytes: 0,
+                            });
+                        }
+                        tracing::info!("FTP download paused ({} bytes)", downloaded_bytes);
+                        return;
+                    }
+                    if ctl == 2 {
+                        // Cancel requested
+                        let downloaded_bytes = std::fs::metadata(&output_path)
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        {
+                            let mut prog = progress.lock().await;
+                            if let Some(p) = prog.get_mut(&id) {
+                                p.status = DownloadStatus::Cancelled;
+                                p.downloaded_bytes = downloaded_bytes;
+                            }
+                        }
+                        if let Some(ref bus) = event_bus {
+                            bus.emit_canceled(TransferCanceledEvent {
+                                transfer_id: id.clone(),
+                                canceled_at: current_timestamp_ms(),
+                                downloaded_bytes,
+                                total_bytes: 0,
+                                keep_partial: true,
+                            });
+                        }
+                        tracing::info!("FTP download canceled ({} bytes)", downloaded_bytes);
+                        return;
+                    }
+
                     let mut prog = progress.lock().await;
                     if let Some(p) = prog.get_mut(&id) {
                         p.status = DownloadStatus::Failed;
@@ -583,9 +646,6 @@ impl ProtocolHandler for FtpProtocolHandler {
                     tracing::error!("FTP download failed: {}", e);
                 }
             }
-
-            // Disconnect
-            let _ = downloader.disconnect(&mut stream).await;
         });
 
         Ok(DownloadHandle {
@@ -665,6 +725,7 @@ impl ProtocolHandler for FtpProtocolHandler {
         if let Some(state) = downloads.get_mut(identifier) {
             state.is_paused = true;
             state.status = DownloadStatus::Paused;
+            state.control.store(1, Ordering::Relaxed);
 
             let downloaded_bytes = {
                 let mut prog = self.download_progress.lock().await;
@@ -682,15 +743,12 @@ impl ProtocolHandler for FtpProtocolHandler {
                     transfer_id: identifier.to_string(),
                     paused_at: Self::now_ms(),
                     reason: PauseReason::UserRequested,
-                    can_resume: false,  // Resume not implemented
+                    can_resume: true,
                     downloaded_bytes,
                     total_bytes: state.file_size,
                 });
             }
 
-            // FTP supports REST command for resume, so pause is viable
-            // The actual pause would need to close the connection and track position
-            warn!("FTP: pause requires reconnection to resume with REST command");
             Ok(())
         } else {
             Err(ProtocolError::DownloadNotFound(identifier.to_string()))
@@ -700,28 +758,186 @@ impl ProtocolHandler for FtpProtocolHandler {
     async fn resume_download(&self, identifier: &str) -> Result<(), ProtocolError> {
         info!("FTP: Resuming download {}", identifier);
 
-        let downloads = self.active_downloads.lock().await;
-        if let Some(state) = downloads.get(identifier) {
-            if !state.is_paused {
-                return Err(ProtocolError::ProtocolSpecific(
-                    "Download is not paused".to_string()
-                ));
+        // Snapshot state required to restart using the shared FTP client (auto-resumes from partial file).
+        let (url, output_path, file_name, control) = {
+            let mut downloads = self.active_downloads.lock().await;
+            let state = downloads
+                .get_mut(identifier)
+                .ok_or_else(|| ProtocolError::DownloadNotFound(identifier.to_string()))?;
+
+            if !state.is_paused || state.status != DownloadStatus::Paused {
+                return Err(ProtocolError::ProtocolSpecific("Download is not paused".to_string()));
             }
 
-            // Would need to reconnect and use REST command to resume
-            // This requires tracking the bytes already downloaded
-            warn!("FTP: resume_download would use REST command - not fully implemented");
-            Err(ProtocolError::NotSupported)
-        } else {
-            Err(ProtocolError::DownloadNotFound(identifier.to_string()))
+            state.is_paused = false;
+            state.status = DownloadStatus::Downloading;
+
+            // Replace control so any old in-flight work cannot continue.
+            let new_control: TransferControl = Arc::new(AtomicU8::new(0));
+            state.control = new_control.clone();
+
+            (state.url.clone(), state.output_path.clone(), state.file_name.clone(), new_control)
+        };
+
+        // Emit resumed event
+        if let Some(ref bus) = self.get_event_bus() {
+            let downloaded_bytes = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+            bus.emit_resumed(TransferResumedEvent {
+                transfer_id: identifier.to_string(),
+                resumed_at: current_timestamp_ms(),
+                downloaded_bytes,
+                remaining_bytes: 0,
+                active_sources: 1,
+            });
         }
+
+        // Spawn a new download task (will resume automatically based on partial file)
+        let progress = self.download_progress.clone();
+        let active_downloads = self.active_downloads.clone();
+        let id = identifier.to_string();
+        let event_bus = self.get_event_bus();
+        let task_source_id = Url::parse(&url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| format!("ftp-{}", h)))
+            .unwrap_or_else(|| "ftp-unknown".to_string());
+        let task_file_name = file_name;
+
+        let parsed_url = Url::parse(&url).map_err(|e| ProtocolError::InvalidIdentifier(e.to_string()))?;
+        let use_ftps = parsed_url.scheme() == "ftps";
+        let ftp_source_info = FtpSourceInfo {
+            url: url.clone(),
+            username: None,
+            encrypted_password: None,
+            passive_mode: true,
+            use_ftps,
+            timeout_secs: None,
+        };
+
+        tokio::spawn(async move {
+            let start_time = Instant::now();
+
+            let progress_for_cb = progress.clone();
+            let event_bus_for_cb = event_bus.clone();
+            let transfer_id_for_cb = id.clone();
+            let started_at = start_time;
+
+            let result = download_from_ftp_with_progress_controlled(
+                &ftp_source_info,
+                &output_path,
+                Box::new(move |downloaded, total| {
+                    {
+                        let mut prog = progress_for_cb.blocking_lock();
+                        if let Some(p) = prog.get_mut(&transfer_id_for_cb) {
+                            p.downloaded_bytes = downloaded;
+                            p.total_bytes = total;
+                            p.status = DownloadStatus::Downloading;
+                        }
+                    }
+
+                    if let Some(ref bus) = event_bus_for_cb {
+                        let elapsed = started_at.elapsed().as_secs_f64().max(0.001);
+                        let speed = downloaded as f64 / elapsed;
+                        let progress_pct = if total > 0 {
+                            (downloaded as f64 / total as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        let eta_seconds = if speed > 0.0 && total > downloaded {
+                            Some(((total - downloaded) as f64 / speed) as u32)
+                        } else {
+                            None
+                        };
+
+                        let _ = bus.emit_progress(crate::transfer_events::TransferProgressEvent {
+                            transfer_id: transfer_id_for_cb.clone(),
+                            downloaded_bytes: downloaded,
+                            total_bytes: total,
+                            completed_chunks: 0,
+                            total_chunks: 1,
+                            progress_percentage: progress_pct,
+                            download_speed_bps: speed,
+                            upload_speed_bps: 0.0,
+                            eta_seconds,
+                            active_sources: 1,
+                            timestamp: current_timestamp_ms(),
+                        });
+                    }
+                }),
+                control.clone(),
+            )
+            .await;
+
+            match result {
+                Ok(downloaded_bytes) => {
+                    let secs = start_time.elapsed().as_secs();
+                    let speed = if secs > 0 { downloaded_bytes as f64 / secs as f64 } else { downloaded_bytes as f64 };
+                    let mut prog = progress.lock().await;
+                    if let Some(p) = prog.get_mut(&id) {
+                        p.downloaded_bytes = downloaded_bytes;
+                        p.download_speed = speed;
+                        p.status = DownloadStatus::Completed;
+                    }
+
+                    if let Some(ref bus) = event_bus {
+                        bus.emit_completed(TransferCompletedEvent {
+                            transfer_id: id.clone(),
+                            file_hash: id.clone(),
+                            file_name: task_file_name.clone(),
+                            file_size: downloaded_bytes,
+                            output_path: output_path.to_string_lossy().to_string(),
+                            completed_at: current_timestamp_ms(),
+                            duration_seconds: secs,
+                            average_speed_bps: speed,
+                            total_chunks: 1,
+                            sources_used: vec![SourceSummary {
+                                source_id: task_source_id.clone(),
+                                source_type: SourceType::Ftp,
+                                chunks_provided: 1,
+                                bytes_provided: downloaded_bytes,
+                                average_speed_bps: speed,
+                                connection_duration_seconds: secs,
+                            }],
+                        });
+                    }
+                }
+                Err(e) => {
+                    let mut prog = progress.lock().await;
+                    if let Some(p) = prog.get_mut(&id) {
+                        p.status = DownloadStatus::Failed;
+                    }
+                    if let Some(ref bus) = event_bus {
+                        bus.emit_failed(TransferFailedEvent {
+                            transfer_id: id.clone(),
+                            file_hash: id.clone(),
+                            failed_at: current_timestamp_ms(),
+                            error: format!("FTP resume failed: {}", e),
+                            error_category: ErrorCategory::Network,
+                            downloaded_bytes: 0,
+                            total_bytes: 0,
+                            retry_possible: true,
+                        });
+                    }
+                }
+            }
+
+            let mut downloads = active_downloads.lock().await;
+            if let Some(st) = downloads.get(&id) {
+                if st.status == DownloadStatus::Completed || st.status == DownloadStatus::Cancelled {
+                    downloads.remove(&id);
+                }
+            }
+        });
+
+        Ok(())
     }
 
     async fn cancel_download(&self, identifier: &str) -> Result<(), ProtocolError> {
         info!("FTP: Cancelling download {}", identifier);
 
         let mut downloads = self.active_downloads.lock().await;
-        if let Some(state) = downloads.remove(identifier) {
+        if let Some(state) = downloads.get_mut(identifier) {
+            state.control.store(2, Ordering::Relaxed);
+            state.status = DownloadStatus::Cancelled;
             let downloaded_bytes = {
                 let mut prog = self.download_progress.lock().await;
                 if let Some(p) = prog.get_mut(identifier) {
@@ -739,7 +955,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                     canceled_at: Self::now_ms(),
                     downloaded_bytes,
                     total_bytes: state.file_size,
-                    keep_partial: false,
+                    keep_partial: true,
                 });
             }
 
@@ -768,7 +984,7 @@ impl ProtocolHandler for FtpProtocolHandler {
     fn capabilities(&self) -> ProtocolCapabilities {
         ProtocolCapabilities {
             supports_seeding: self.ftp_server.is_some(),  // Seeding supported when FTP server is available
-            supports_pause_resume: false,  // Pause works, but resume not fully implemented
+            supports_pause_resume: true,
             supports_multi_source: false,
             supports_encryption: true,  // FTPS
             supports_dht: false,

@@ -6,15 +6,18 @@
 // and encrypted password handling.
 
 use crate::download_source::FtpSourceInfo;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::net::ToSocketAddrs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use suppaftp::types::FileType;
 use suppaftp::{FtpStream, NativeTlsConnector, NativeTlsFtpStream};
 use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
 use serde::{Serialize, Deserialize};
+use url::Url;
 
 /// FTP file entry information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +40,10 @@ const DEFAULT_FTP_TIMEOUT_SECS: u64 = 30;
 
 /// FTP download progress callback
 pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send>;
+
+/// Control flag for an in-flight FTP transfer (checked from the blocking download loop)
+/// 0 = running, 1 = pause, 2 = cancel
+pub type TransferControl = Arc<AtomicU8>;
 
 /// FTP client for handling file downloads
 pub struct FtpClient {
@@ -236,37 +243,17 @@ impl FtpClient {
 
     /// Parse FTP URL to extract host, port, and path
     fn parse_ftp_url(url: &str) -> Result<(String, u16, String)> {
-        // Remove ftp:// or ftps:// prefix
-        let url_without_protocol = url
-            .strip_prefix("ftp://")
-            .or_else(|| url.strip_prefix("ftps://"))
-            .context("Invalid FTP URL: missing protocol")?;
-
-        // Split into host[:port]/path
-        let parts: Vec<&str> = url_without_protocol.splitn(2, '/').collect();
-
-        if parts.is_empty() {
-            anyhow::bail!("Invalid FTP URL: no host specified");
+        let parsed = Url::parse(url).context("Invalid FTP URL")?;
+        let scheme = parsed.scheme();
+        if scheme != "ftp" && scheme != "ftps" {
+            anyhow::bail!("Invalid FTP URL scheme: {}", scheme);
         }
 
-        let host_and_port = parts[0];
-        let remote_path = if parts.len() > 1 {
-            format!("/{}", parts[1])
-        } else {
-            "/".to_string()
-        };
-
-        // Parse host and port
-        let (host, port) = if host_and_port.contains(':') {
-            let host_port: Vec<&str> = host_and_port.splitn(2, ':').collect();
-            let port_num = host_port
-                .get(1)
-                .and_then(|p| p.parse::<u16>().ok())
-                .context("Invalid port number")?;
-            (host_port[0].to_string(), port_num)
-        } else {
-            // Default FTP port
-            (host_and_port.to_string(), 21)
+        let host = parsed.host_str().context("Invalid FTP URL: missing host")?.to_string();
+        let port = parsed.port().unwrap_or_else(|| if scheme == "ftps" { 990 } else { 21 });
+        let remote_path = {
+            let p = parsed.path();
+            if p.is_empty() { "/".to_string() } else { p.to_string() }
         };
 
         Ok((host, port, remote_path))
@@ -281,6 +268,16 @@ impl FtpClient {
         source_info: &FtpSourceInfo,
         decryption_key: Option<&[u8; 32]>,
     ) -> Result<(String, String)> {
+        // Prefer credentials embedded in the URL (ftp://user:pass@host/path)
+        if let Ok(parsed) = Url::parse(&source_info.url) {
+            if !parsed.username().is_empty() {
+                return Ok((
+                    parsed.username().to_string(),
+                    parsed.password().unwrap_or("").to_string(),
+                ));
+            }
+        }
+
         let username = source_info
             .username
             .clone()
@@ -337,8 +334,23 @@ pub async fn download_from_ftp_with_progress(
     output_path: &Path,
     progress_callback: ProgressCallback,
 ) -> Result<u64> {
+    let control = Arc::new(AtomicU8::new(0));
+    download_from_ftp_with_progress_controlled(source_info, output_path, progress_callback, control).await
+}
+
+/// Download a file from FTP server with progress callback and pause/cancel control.
+///
+/// The core resume logic is unchanged: if a partial output file exists and the server supports
+/// REST, the transfer resumes automatically from the existing file size.
+pub async fn download_from_ftp_with_progress_controlled(
+    source_info: &FtpSourceInfo,
+    output_path: &Path,
+    progress_callback: ProgressCallback,
+    control: TransferControl,
+) -> Result<u64> {
     let source_clone = source_info.clone();
     let output_clone = output_path.to_path_buf();
+    let control_clone = control.clone();
 
     spawn_blocking(move || {
         // Connect to FTP server
@@ -423,6 +435,13 @@ pub async fn download_from_ftp_with_progress(
 
         loop {
             use std::io::Read;
+
+            match control_clone.load(Ordering::Relaxed) {
+                1 => return Err(anyhow!("paused")),
+                2 => return Err(anyhow!("canceled")),
+                _ => {}
+            }
+
             match reader.read(&mut buffer) {
                 Ok(0) => break, // EOF
                 Ok(n) => {
@@ -431,13 +450,15 @@ pub async fn download_from_ftp_with_progress(
                     total_downloaded += n as u64;
                     progress_callback(total_downloaded, file_size);
                 }
-                Err(e) => return Err(anyhow::anyhow!("Failed to read from FTP stream: {}", e)),
+                Err(e) => return Err(anyhow!("Failed to read from FTP stream: {}", e)),
             }
         }
 
         // Finalize the transfer
-        ftp_stream.finalize_retr_stream(reader)
-            .context("Failed to finalize retrieval")?;
+        // Best-effort finalize; some servers may error after an interrupted transfer.
+        if let Err(e) = ftp_stream.finalize_retr_stream(reader) {
+            warn!("Failed to finalize FTP retrieval stream: {}", e);
+        }
 
         // Quit connection
         ftp_stream.quit().context("Failed to quit FTP session")?;
