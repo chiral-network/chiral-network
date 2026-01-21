@@ -207,28 +207,29 @@ Local functionality inside the desktop app is exposed through Tauri commands and
 - **Returns**: `Array<{ hash: string; timestamp: number; number: number; reward?: number; difficulty?: string; nonce?: string }>`
 - **Description**: Retrieves recent mined block metadata (including optional difficulty/nonce info) for history UIs.
 
-## Mining Pools _(Mock Data)_
+## Mining Pools _(Local + Persisted)_
 
-These commands currently operate on in-memory mock data to support “progressive decentralization.” They do **not** contact live pool infrastructure.
+These commands manage pool metadata locally and persist user-created pools to disk. Connectivity checks use TCP dial attempts against the pool’s `stratum+tcp://` endpoint. Pool stats are still simulated (shares, payout estimates) based on time connected.
 
 ### `discover_mining_pools`
 
 - **Parameters**: _(none)_
 - **Returns**: `MiningPool[]`
-- **Description**: Combines predefined and user-created mock pools after a simulated discovery delay.
+- **Description**: Combines predefined pools and user-created pools loaded from `user_pools.json` in the app data directory.
 
 ### `create_mining_pool`
 
 - **Parameters**
   - `address: string`
   - `name: string`
+  - `url: string` _(stratum+tcp://host:port)_
   - `description: string`
   - `fee_percentage: number`
   - `min_payout: number`
   - `payment_method: string`
   - `region: string`
 - **Returns**: `MiningPool`
-- **Description**: Registers a mock pool owned by the caller and stores it in the in-memory directory.
+- **Description**: Registers a user pool owned by the caller and persists it to `user_pools.json`. URL format is validated.
 
 ### `join_mining_pool`
 
@@ -236,7 +237,7 @@ These commands currently operate on in-memory mock data to support “progressiv
   - `pool_id: string`
   - `address: string`
 - **Returns**: `JoinedPoolInfo`
-- **Description**: Simulates joining a pool and produces placeholder stats. Errors if a pool is already “connected.”
+- **Description**: Validates the pool URL and performs TCP connectivity checks (with retry). Returns simulated stats and errors if already connected.
 
 ### `leave_mining_pool`
 
