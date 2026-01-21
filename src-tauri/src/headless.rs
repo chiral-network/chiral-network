@@ -1,6 +1,5 @@
 // Headless mode for running as a bootstrap node on servers
 use crate::commands::bootstrap::get_bootstrap_nodes;
-use crate::dht::DhtConfigBuilder;
 use crate::dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtConfig, DhtService};
 use crate::download_restart::{DownloadRestartService, StartDownloadRequest};
 use crate::e2e_api_headless::{start_headless_e2e_api_server, HeadlessE2eState};
