@@ -178,8 +178,8 @@ async fn load_user_pools(app_handle: &AppHandle) -> Result<Vec<MiningPool>, Stri
     let content = std::fs::read_to_string(&pools_path)
         .map_err(|e| format!("Failed to read user pools: {}", e))?;
 
-    let pools: Vec<MiningPool> = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse user pools: {}", e))?;
+    let pools: Vec<MiningPool> =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse user pools: {}", e))?;
 
     info!("Loaded {} user-created pools from storage", pools.len());
     Ok(pools)
@@ -214,7 +214,10 @@ fn validate_pool_url(url: &str) -> Result<(String, u16), String> {
 
     let parts: Vec<&str> = url_without_protocol.split(':').collect();
     if parts.len() != 2 {
-        return Err("Pool URL must include host:port (e.g., stratum+tcp://pool.example.com:3333)".to_string());
+        return Err(
+            "Pool URL must include host:port (e.g., stratum+tcp://pool.example.com:3333)"
+                .to_string(),
+        );
     }
 
     let host = parts[0].to_string();
