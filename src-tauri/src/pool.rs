@@ -594,6 +594,8 @@ pub async fn update_pool_discovery() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::ErrorKind;
+    use tokio::net::TcpListener;
 
     #[test]
     fn validate_pool_url_ok() {
@@ -606,5 +608,27 @@ mod tests {
     fn validate_pool_url_err() {
         assert!(validate_pool_url("http://localhost:3333").is_err());
         assert!(validate_pool_url("stratum+tcp://localhost").is_err());
+    }
+
+    #[tokio::test]
+    async fn pool_connectivity_ok() {
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!("skipping pool connectivity test: {}", err);
+                return;
+            }
+            Err(err) => panic!("failed to bind test listener: {}", err),
+        };
+        let addr = listener.local_addr().unwrap();
+
+        let accept_task = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+
+        let ok = check_pool_connectivity("127.0.0.1", addr.port()).await;
+        assert!(ok);
+
+        let _ = accept_task.await;
     }
 }
