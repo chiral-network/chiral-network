@@ -321,16 +321,14 @@ pub async fn create_mining_pool(
     app_handle: AppHandle,
     address: String,
     name: String,
+    url: String,
     description: String,
     fee_percentage: f64,
     min_payout: f64,
     payment_method: String,
     region: String,
 ) -> Result<MiningPool, String> {
-    info!(
-        "Creating new mining pool: {} by {}",
-        name, address
-    );
+    info!("Creating new mining pool: {} by {}", name, address);
 
     // Validate pool name
     if name.trim().is_empty() {
@@ -339,6 +337,12 @@ pub async fn create_mining_pool(
     if name.len() > 100 {
         return Err("Pool name must be 100 characters or less".to_string());
     }
+
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("Pool URL is required".to_string());
+    }
+    validate_pool_url(&url)?;
 
     // Validate fee percentage
     if fee_percentage < 0.0 || fee_percentage > 10.0 {
@@ -363,7 +367,7 @@ pub async fn create_mining_pool(
     let new_pool = MiningPool {
         id: pool_id.clone(),
         name: name.clone(),
-        url: format!("stratum+tcp://{}:3333", pool_id),
+        url,
         description,
         fee_percentage,
         miners_count: 1,

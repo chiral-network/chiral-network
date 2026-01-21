@@ -993,6 +993,10 @@
       poolError = 'Pool name is required.';
       return;
     }
+    if (!newPool.url.trim()) {
+      poolError = 'Pool URL is required.';
+      return;
+    }
     
     poolError = '';
     
@@ -1003,6 +1007,7 @@
       const createdPool = await invoke('create_mining_pool', {
         address: accountAddress,
         name: newPool.name,
+        url: newPool.url,
         description: newPool.description,
         feePercentage: newPool.fee_percentage,
         minPayout: newPool.min_payout,
@@ -2561,6 +2566,16 @@
           />
         </div>
 
+        <div>
+          <Label for="pool-url">{$t('mining.poolDetails.url')} *</Label>
+          <Input
+            id="pool-url"
+            bind:value={newPool.url}
+            placeholder="stratum://pool.example.com:3333"
+            class="mt-2"
+          />
+        </div>
+
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <Label for="pool-fee">{$t('mining.poolDetails.feePercentage')}</Label>
@@ -2614,5 +2629,3 @@
     </Card>
   </div>
 {/if}
-
-
