@@ -590,3 +590,21 @@ pub async fn update_pool_discovery() -> Result<(), String> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_pool_url_ok() {
+        let (host, port) = validate_pool_url("stratum+tcp://localhost:3333").unwrap();
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 3333);
+    }
+
+    #[test]
+    fn validate_pool_url_err() {
+        assert!(validate_pool_url("http://localhost:3333").is_err());
+        assert!(validate_pool_url("stratum+tcp://localhost").is_err());
+    }
+}
