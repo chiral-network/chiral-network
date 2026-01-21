@@ -259,11 +259,18 @@ async fn check_pool_connectivity(host: &str, port: u16) -> bool {
 }
 
 /// Check pool connectivity with retry logic
-async fn check_pool_connectivity_with_retry(host: &str, port: u16, max_retries: u32) -> Result<(), String> {
+async fn check_pool_connectivity_with_retry(
+    host: &str,
+    port: u16,
+    max_retries: u32,
+) -> Result<(), String> {
     use tokio::time::{sleep, Duration};
 
     for attempt in 1..=max_retries {
-        info!("Connection attempt {}/{} to {}:{}", attempt, max_retries, host, port);
+        info!(
+            "Connection attempt {}/{} to {}:{}",
+            attempt, max_retries, host, port
+        );
 
         if check_pool_connectivity(host, port).await {
             return Ok(());
@@ -277,7 +284,10 @@ async fn check_pool_connectivity_with_retry(host: &str, port: u16, max_retries: 
         }
     }
 
-    Err(format!("Failed to connect to {}:{} after {} attempts", host, port, max_retries))
+    Err(format!(
+        "Failed to connect to {}:{} after {} attempts",
+        host, port, max_retries
+    ))
 }
 
 #[command]
@@ -451,7 +461,8 @@ pub async fn leave_mining_pool() -> Result<(), String> {
         return Err("Not currently connected to any pool".to_string());
     }
 
-    let pool_name = current_pool.as_ref()
+    let pool_name = current_pool
+        .as_ref()
         .map(|p| p.pool.name.clone())
         .unwrap_or_else(|| "Unknown Pool".to_string());
 
@@ -503,7 +514,8 @@ pub async fn get_pool_stats() -> Result<Option<PoolStats>, String> {
                 // Estimate 24h payout based on share percentage and pool blocks
                 let daily_blocks = pool_info.pool.blocks_found_24h as f64;
                 let block_reward = 2.0; // Chiral block reward
-                let expected_reward = (pool_info.stats.your_share_percentage / 100.0) * daily_blocks * block_reward;
+                let expected_reward =
+                    (pool_info.stats.your_share_percentage / 100.0) * daily_blocks * block_reward;
                 pool_info.stats.estimated_payout_24h = expected_reward;
             }
         }
