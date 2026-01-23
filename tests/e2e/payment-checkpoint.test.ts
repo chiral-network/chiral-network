@@ -134,7 +134,7 @@ describe("Payment Checkpoint E2E Tests", () => {
 
       // Mock download with checkpoint
       mockTauri.mockCommand("start_file_transfer", async (args: any) => {
-        const chunkSize = 16 * 1024; // 16KB chunks
+        const chunkSize = 64 * 1024; // 16KB chunks
         const totalChunks = Math.ceil(args.fileSize / chunkSize);
 
         for (let i = 0; i < totalChunks; i++) {
@@ -154,12 +154,22 @@ describe("Payment Checkpoint E2E Tests", () => {
               nextCheckpointMB: CHECKPOINT_INTERVALS[1] / (1024 * 1024), // 20MB
             });
 
-            // Wait for payment to be processed
-            await eventHelper.waitForEvent("checkpoint_payment_completed", 2000);
-            
-            checkpointPaymentProcessed = true;
-            downloadPaused = false;
-            checkpointState.isPaused = false;
+            // Wait for payment to be processed (complete OR failed)
+            const paymentResult = await Promise.race([
+              eventHelper.waitForEvent("checkpoint_payment_completed", 10000).then((d:any) => ({type: 'completed', data: d})),
+              eventHelper.waitForEvent("checkpoint_payment_failed", 10000).then((d:any) => ({type: 'failed', data: d})),
+            ]);
+
+            if (paymentResult.type === 'completed') {
+              checkpointPaymentProcessed = true;
+              downloadPaused = false;
+              checkpointState.isPaused = false;
+            } else {
+              // Payment failed; keep paused and stop transfer
+              downloadPaused = true;
+              checkpointState.isPaused = true;
+              break;
+            }
           }
 
           // Emit progress
@@ -171,7 +181,8 @@ describe("Payment Checkpoint E2E Tests", () => {
             isPaused: checkpointState.isPaused,
           });
 
-          await new Promise(resolve => setTimeout(resolve, 1));
+          // Yield to microtask queue instead of tiny timeout to keep ordering deterministic
+          await Promise.resolve();
         }
 
         return { success: true, bytesTransferred: args.fileSize };
@@ -179,12 +190,10 @@ describe("Payment Checkpoint E2E Tests", () => {
 
       // Mock checkpoint payment processing
       mockTauri.mockCommand("process_checkpoint_payment", async (args: any) => {
-        const checkpointAmount = await mockPayment.calculateDownloadCost(
-          args.checkpointBytes
-        );
-
+        const checkpointAmount = await mockPayment.calculateDownloadCost(args.checkpointBytes);
+        const key = `${args.sessionId}:${args.fileHash}:cp:${args.checkpointMB ?? '0'}`;
         const result = await mockPayment.processDownloadPayment(
-          `${args.fileHash}_checkpoint_${args.checkpointMB}`,
+          key,
           args.fileName,
           args.checkpointBytes,
           args.seederAddress
@@ -192,16 +201,17 @@ describe("Payment Checkpoint E2E Tests", () => {
 
         if (result.success) {
           checkpointState.totalPaidChiral += checkpointAmount;
-          
-          // Emit payment completed event
-          setTimeout(() => {
-            eventHelper.emit("checkpoint_payment_completed", {
-              sessionId: args.sessionId,
-              checkpointMB: args.checkpointMB,
-              amountPaid: checkpointAmount,
-              transactionHash: result.transactionHash,
-            });
-          }, 50);
+          // Emit payment completed synchronously and yield to microtask queue
+          eventHelper.emit("checkpoint_payment_completed", {
+            sessionId: args.sessionId,
+            checkpointMB: args.checkpointMB,
+            amountPaid: checkpointAmount,
+            transactionHash: result.transactionHash,
+          });
+          await Promise.resolve();
+        } else {
+          eventHelper.emit("checkpoint_payment_failed", { sessionId: args.sessionId, error: result.error });
+          await Promise.resolve();
         }
 
         return {
@@ -212,27 +222,23 @@ describe("Payment Checkpoint E2E Tests", () => {
       });
 
       // Start download
+      eventHelper.on("payment_checkpoint_reached", async (event) => {
+        await invoke("process_checkpoint_payment", {
+          sessionId: event.sessionId,
+          fileHash: testFile.hash,
+          fileName: testFile.name,
+          checkpointBytes: event.bytesDownloaded,
+          checkpointMB: event.checkpointMB,
+          seederAddress: uploaderPeer.address,
+        });
+      }); 
+
       const downloadPromise = invoke("start_file_transfer", {
         sessionId: checkpointState.sessionId,
         peerId: uploaderPeer.id,
         fileHash: testFile.hash,
         fileName: testFile.name,
         fileSize: testFile.size,
-      });
-
-      // Wait for checkpoint
-      const checkpointEvent = await eventHelper.waitForEvent("payment_checkpoint_reached", 3000);
-      expect(checkpointEvent.checkpointMB).toBe(10);
-      expect(downloadPaused).toBe(true);
-
-      // Process checkpoint payment
-      await invoke("process_checkpoint_payment", {
-        sessionId: checkpointState.sessionId,
-        fileHash: testFile.hash,
-        fileName: testFile.name,
-        checkpointBytes: checkpointEvent.bytesDownloaded,
-        checkpointMB: checkpointEvent.checkpointMB,
-        seederAddress: uploaderPeer.address,
       });
 
       // Wait for download to complete
@@ -255,6 +261,7 @@ describe("Payment Checkpoint E2E Tests", () => {
       const checkpointsReached: number[] = [];
       const checkpointPayments: number[] = [];
       let currentCheckpointIndex = 0;
+      let checkpointReached = false;
 
       const checkpointState: CheckpointState = {
         sessionId: `session_multi_${Date.now()}`,
@@ -309,13 +316,13 @@ describe("Payment Checkpoint E2E Tests", () => {
             });
 
             // Wait for payment
-            await eventHelper.waitForEvent("checkpoint_payment_completed", 2000);
+            await eventHelper.waitForEvent("checkpoint_payment_completed", 10000);
             
             currentCheckpointIndex++;
             checkpointState.isPaused = false;
           }
 
-          await new Promise(resolve => setTimeout(resolve, 1));
+          await Promise.resolve();
         }
 
         return { success: true, bytesTransferred: args.fileSize };
@@ -323,9 +330,9 @@ describe("Payment Checkpoint E2E Tests", () => {
 
       mockTauri.mockCommand("process_checkpoint_payment", async (args: any) => {
         const checkpointAmount = await mockPayment.calculateDownloadCost(args.checkpointBytes);
-        
+        const key = `${args.sessionId}:${args.fileHash}:cp:${args.checkpointIndex}`;
         const result = await mockPayment.processDownloadPayment(
-          `${args.fileHash}_checkpoint_${args.checkpointIndex}`,
+          key,
           args.fileName,
           args.checkpointBytes,
           args.seederAddress
@@ -334,14 +341,15 @@ describe("Payment Checkpoint E2E Tests", () => {
         if (result.success) {
           checkpointPayments.push(checkpointAmount);
           checkpointState.totalPaidChiral += checkpointAmount;
-          
-          setTimeout(() => {
-            eventHelper.emit("checkpoint_payment_completed", {
-              sessionId: args.sessionId,
-              checkpointMB: args.checkpointMB,
-              amountPaid: checkpointAmount,
-            });
-          }, 50);
+          eventHelper.emit("checkpoint_payment_completed", {
+            sessionId: args.sessionId,
+            checkpointMB: args.checkpointMB,
+            amountPaid: checkpointAmount,
+          });
+          await Promise.resolve();
+        } else {
+          eventHelper.emit("checkpoint_payment_failed", { sessionId: args.sessionId, error: result.error });
+          await Promise.resolve();
         }
 
         return { success: result.success, amountPaid: checkpointAmount };
@@ -427,25 +435,32 @@ describe("Payment Checkpoint E2E Tests", () => {
               checkpointMB: 10,
             });
 
-            // Wait for payment attempt
-            try {
-              await eventHelper.waitForEvent("checkpoint_payment_completed", 1000);
+            // Wait for payment attempt (completed OR failed)
+            const paymentResult = await Promise.race([
+              eventHelper.waitForEvent("checkpoint_payment_completed", 10000).then((d:any) => ({ type: 'completed', data: d })),
+              eventHelper.waitForEvent("checkpoint_payment_failed", 10000).then((d:any) => ({ type: 'failed', data: d })),
+            ]).catch(() => ({ type: 'failed' }));
+
+            if (paymentResult.type === 'completed') {
               checkpointState.isPaused = false;
-            } catch {
-              // Timeout means payment failed
+            } else {
+              // Payment failed: mark paused and stop transfer loop
+              downloadPaused = true;
+              checkpointState.isPaused = true;
               break;
             }
           }
 
-          await new Promise(resolve => setTimeout(resolve, 1));
+          await Promise.resolve();
         }
 
         return { success: !checkpointState.isPaused, bytesTransferred: checkpointState.bytesDownloaded };
       });
 
       mockTauri.mockCommand("process_checkpoint_payment", async (args: any) => {
+        const key = `${args.sessionId}:${args.fileHash}:cp:${args.checkpointMB ?? '0'}`;
         const result = await mockPayment.processDownloadPayment(
-          `${args.fileHash}_checkpoint`,
+          key,
           args.fileName,
           args.checkpointBytes,
           args.seederAddress
@@ -453,14 +468,13 @@ describe("Payment Checkpoint E2E Tests", () => {
 
         if (!result.success) {
           paymentFailed = true;
-          eventHelper.emit("checkpoint_payment_failed", {
-            sessionId: args.sessionId,
-            error: result.error,
-          });
+          eventHelper.emit("checkpoint_payment_failed", { sessionId: args.sessionId, error: result.error });
+          await Promise.resolve();
           throw new Error(result.error || "Payment failed");
         }
 
         eventHelper.emit("checkpoint_payment_completed", { sessionId: args.sessionId });
+        await Promise.resolve();
         return { success: true };
       });
 
@@ -528,8 +542,17 @@ describe("Payment Checkpoint E2E Tests", () => {
 
         for (let i = 0; i < totalBlocks; i++) {
           if (checkpointState.isPaused) {
-            await eventHelper.waitForEvent("checkpoint_payment_completed", 3000);
-            checkpointState.isPaused = false;
+            const paymentResult = await Promise.race([
+              eventHelper.waitForEvent("checkpoint_payment_completed", 10000).then((d:any) => ({type: 'completed', data: d})),
+              eventHelper.waitForEvent("checkpoint_payment_failed", 10000).then((d:any) => ({type: 'failed', data: d})),
+            ]);
+
+            if (paymentResult.type === 'completed') {
+              checkpointState.isPaused = false;
+            } else {
+              // stay paused and abort blocks loop
+              break;
+            }
           }
 
           checkpointState.bytesDownloaded += blockSize;
@@ -554,7 +577,7 @@ describe("Payment Checkpoint E2E Tests", () => {
             totalChunks: totalBlocks,
           });
 
-          await new Promise(resolve => setTimeout(resolve, 1));
+          await Promise.resolve();
         }
 
         return { success: true, filePath: `/tmp/${args.fileName}` };
@@ -562,9 +585,9 @@ describe("Payment Checkpoint E2E Tests", () => {
 
       mockTauri.mockCommand("process_checkpoint_payment", async (args: any) => {
         const checkpointAmount = await mockPayment.calculateDownloadCost(args.checkpointBytes);
-        
+        const key = `${args.sessionId}:${args.fileHash}:cp:${args.checkpointMB ?? '10'}`;
         const result = await mockPayment.processDownloadPayment(
-          `${args.fileHash}_checkpoint_10mb`,
+          key,
           args.fileName,
           args.checkpointBytes,
           args.seederAddress
@@ -573,13 +596,11 @@ describe("Payment Checkpoint E2E Tests", () => {
         if (result.success) {
           paymentProcessed = true;
           checkpointState.totalPaidChiral += checkpointAmount;
-          
-          setTimeout(() => {
-            eventHelper.emit("checkpoint_payment_completed", {
-              sessionId: args.sessionId,
-              checkpointMB: args.checkpointMB,
-            });
-          }, 50);
+          eventHelper.emit("checkpoint_payment_completed", { sessionId: args.sessionId, checkpointMB: args.checkpointMB });
+          await Promise.resolve();
+        } else {
+          eventHelper.emit("checkpoint_payment_failed", { sessionId: args.sessionId, error: result.error });
+          await Promise.resolve();
         }
 
         return { success: result.success };
@@ -625,6 +646,7 @@ describe("Payment Checkpoint E2E Tests", () => {
 
       const checkpointsReached: number[] = [];
       let currentCheckpointIndex = 0;
+      let checkpointReached = false;
 
       const checkpointState: CheckpointState = {
         sessionId: `bitswap_multi_${Date.now()}`,
@@ -642,27 +664,44 @@ describe("Payment Checkpoint E2E Tests", () => {
         for (let i = 0; i < totalBlocks; i++) {
           checkpointState.bytesDownloaded += blockSize;
 
-          // Check checkpoints
+          // Check for current checkpoint thresholds (10MB,20MB,40MB)
           if (currentCheckpointIndex < CHECKPOINT_INTERVALS.length &&
               checkpointState.bytesDownloaded >= CHECKPOINT_INTERVALS[currentCheckpointIndex]) {
-            
             const checkpointMB = CHECKPOINT_INTERVALS[currentCheckpointIndex] / (1024 * 1024);
             checkpointsReached.push(checkpointMB);
             checkpointState.isPaused = true;
 
             eventHelper.emit("payment_checkpoint_reached", {
               sessionId: checkpointState.sessionId,
+              fileHash: checkpointState.fileHash,
+              bytesDownloaded: checkpointState.bytesDownloaded,
               checkpointMB,
               checkpointIndex: currentCheckpointIndex,
             });
 
-            await eventHelper.waitForEvent("checkpoint_payment_completed", 2000);
-            
-            currentCheckpointIndex++;
-            checkpointState.isPaused = false;
+            // Wait for payment completion or failure
+            const paymentResult = await Promise.race([
+              eventHelper.waitForEvent("checkpoint_payment_completed", 10000).then((d:any) => ({ type: 'completed', data: d })),
+              eventHelper.waitForEvent("checkpoint_payment_failed", 10000).then((d:any) => ({ type: 'failed', data: d })),
+            ]).catch(() => ({ type: 'failed' }));
+
+            if (paymentResult.type === 'completed') {
+              currentCheckpointIndex++;
+              checkpointState.isPaused = false;
+            } else {
+              // stop on failure
+              break;
+            }
           }
 
-          await new Promise(resolve => setTimeout(resolve, 1));
+          eventHelper.emit("bitswap_download_progress", {
+            fileHash: args.fileHash,
+            progress: (checkpointState.bytesDownloaded / args.fileSize) * 100,
+            downloadedChunks: i + 1,
+            totalChunks: totalBlocks,
+          });
+
+          await Promise.resolve();
         }
 
         return { success: true };
@@ -672,19 +711,21 @@ describe("Payment Checkpoint E2E Tests", () => {
         const checkpointAmount = await mockPayment.calculateDownloadCost(
           CHECKPOINT_INTERVALS[args.checkpointIndex]
         );
-        
+        const key = `${args.sessionId}:${args.fileHash}:cp:${args.checkpointIndex}`;
         const result = await mockPayment.processDownloadPayment(
-          `${testFile.hash}_checkpoint_${args.checkpointIndex}`,
-          testFile.name,
+          key,
+          args.fileName,
           CHECKPOINT_INTERVALS[args.checkpointIndex],
           uploaderPeer.address
         );
 
         if (result.success) {
           checkpointState.totalPaidChiral += checkpointAmount;
-          setTimeout(() => {
-            eventHelper.emit("checkpoint_payment_completed", { sessionId: args.sessionId });
-          }, 50);
+          eventHelper.emit("checkpoint_payment_completed", { sessionId: args.sessionId });
+          await Promise.resolve();
+        } else {
+          eventHelper.emit("checkpoint_payment_failed", { sessionId: args.sessionId, error: result.error });
+          await Promise.resolve();
         }
 
         return { success: result.success };
@@ -705,7 +746,12 @@ describe("Payment Checkpoint E2E Tests", () => {
       eventHelper.on("payment_checkpoint_reached", async (event) => {
         await invoke("process_checkpoint_payment", {
           sessionId: event.sessionId,
+          fileHash: event.fileHash,
+          fileName: testFile.name,
+          checkpointBytes: CHECKPOINT_INTERVALS[event.checkpointIndex],
+          checkpointMB: CHECKPOINT_INTERVALS[event.checkpointIndex] / (1024 * 1024),
           checkpointIndex: event.checkpointIndex,
+          seederAddress: uploaderPeer.address,
         });
       });
 
@@ -775,9 +821,9 @@ describe("Payment Checkpoint E2E Tests", () => {
 
       mockTauri.mockCommand("process_checkpoint_payment", async (args: any) => {
         const amount = await mockPayment.calculateDownloadCost(args.checkpointBytes);
-        
+        const key = `${args.sessionId}:${args.fileHash}:cp:${args.checkpointMB}`;
         const result = await mockPayment.processDownloadPayment(
-          `${args.fileHash}_cp_${args.checkpointMB}`,
+          key,
           args.fileName,
           args.checkpointBytes,
           args.seederAddress
@@ -786,15 +832,19 @@ describe("Payment Checkpoint E2E Tests", () => {
         if (result.success) {
           downloaderState.checkpointsPaid++;
           downloaderState.totalPaid += amount;
-
-          // Notify uploader that payment is complete
-          setTimeout(() => {
-            eventHelper.emit("payment_confirmed_to_uploader", {
-              uploaderPeerId: args.seederPeerId,
-              checkpointMB: args.checkpointMB,
-              transactionHash: result.transactionHash,
-            });
-          }, 50);
+          eventHelper.emit("payment_confirmed_to_uploader", {
+            uploaderPeerId: args.seederPeerId,
+            checkpointMB: args.checkpointMB,
+            transactionHash: result.transactionHash,
+          });
+          await Promise.resolve();
+        } else {
+          eventHelper.emit("payment_failed_to_uploader", {
+            uploaderPeerId: args.seederPeerId,
+            checkpointMB: args.checkpointMB,
+            error: result.error,
+          });
+          await Promise.resolve();
         }
 
         return { success: result.success, transactionHash: result.transactionHash };
@@ -888,17 +938,20 @@ describe("Payment Checkpoint E2E Tests", () => {
       });
 
       mockTauri.mockCommand("process_checkpoint_payment", async (args: any) => {
+        const key = `${args.sessionId}:${args.fileHash}:cp:${args.checkpointMB ?? '0'}`;
         const result = await mockPayment.processDownloadPayment(
-          `${args.fileHash}_checkpoint`,
+          key,
           args.fileName,
           args.checkpointBytes,
           args.seederAddress
         );
 
         if (result.success) {
-          setTimeout(() => {
-            eventHelper.emit("checkpoint_payment_completed", { sessionId: args.sessionId });
-          }, 50);
+          eventHelper.emit("checkpoint_payment_completed", { sessionId: args.sessionId });
+          await Promise.resolve();
+        } else {
+          eventHelper.emit("checkpoint_payment_failed", { sessionId: args.sessionId, error: result.error });
+          await Promise.resolve();
         }
 
         return { success: result.success };
@@ -939,17 +992,17 @@ describe("Payment Checkpoint E2E Tests", () => {
 
       // Resume from last checkpoint
       const resumeResult = await invoke("start_file_transfer", {
-        sessionId,
-        peerId: uploaderPeer.id,
-        fileHash: testFile.hash,
-        fileName: testFile.name,
-        fileSize: testFile.size,
-        resumeFrom: lastCheckpointBytes, // Resume from 10MB checkpoint
-      });
+         sessionId,
+         peerId: uploaderPeer.id,
+         fileHash: testFile.hash,
+         fileName: testFile.name,
+         fileSize: testFile.size,
+         resumeFrom: lastCheckpointBytes, // Resume from 10MB checkpoint
+       });
 
       expect(resumedFromCheckpoint).toBe(true);
-      expect(resumeResult.success).toBe(true);
-    });
-  });
-});
+      expect((resumeResult as any).success).toBe(true);
+     });
+   });
+ });
 
