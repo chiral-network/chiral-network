@@ -1025,4 +1025,22 @@ mod tests {
         }
         assert_eq!(state.first_pending(), None);
     }
+
+    #[test]
+    fn test_is_stalled() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        // fresh state not stalled
+        assert!(!state.is_stalled(60));
+
+        // simulate old timestamp
+        state.updated_at = 0;
+        assert!(state.is_stalled(60));
+    }
 }
