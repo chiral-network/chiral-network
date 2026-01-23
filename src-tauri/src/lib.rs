@@ -6,6 +6,7 @@ pub mod config;
 pub mod control_plane;
 pub mod multi_source_download;
 pub mod download_restart;
+pub mod p2p_download_recovery;
 pub mod transfer_events;
 
 // Connection retry and resilience framework
