@@ -1065,6 +1065,27 @@ mod tests {
         assert!(!state.remove_peer("peer3"));
         assert_eq!(state.peer_cnt(), 1);
     }
+
+    #[test]
+    fn test_sync_received() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks(None);
+
+        let received: HashSet<u32> = [0, 2].iter().cloned().collect();
+        sync_received(&mut state, &received);
+
+        assert_eq!(state.chunks[0].state, ChunkState::Downloaded);
+        assert_eq!(state.chunks[1].state, ChunkState::Pending);
+        assert_eq!(state.chunks[2].state, ChunkState::Downloaded);
+        assert_eq!(state.chunks[3].state, ChunkState::Pending);
+    }
 }
 
 // =========================================================================
