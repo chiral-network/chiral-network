@@ -11,6 +11,19 @@ use tracing::{debug, info, warn};
 // 256kb chunks like ipfs
 pub const CHUNK_SIZE: u64 = 256 * 1024;
 
+// max concurrent resumes to avoid bandwidth saturation
+pub const MAX_RESUMES: usize = 3;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RecoveryErr {
+    NotFound,
+    VersionMismatch(u32),
+    IoErr(String),
+    ParseErr(String),
+    NoSpace,
+    Cancelled,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChunkState {
