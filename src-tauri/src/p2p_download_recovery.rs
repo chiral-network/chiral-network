@@ -243,6 +243,11 @@ impl DlState {
         self.chunks.len()
     }
 
+    // get chunk by index
+    pub fn get_chunk(&self, idx: u32) -> Option<&ChunkMeta> {
+        self.chunks.get(idx as usize)
+    }
+
     pub fn pending_chunks(&self) -> Vec<u32> {
         self.chunks
             .iter()
