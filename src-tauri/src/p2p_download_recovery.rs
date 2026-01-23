@@ -825,4 +825,28 @@ mod tests {
         assert_eq!(state.chunks[0].state, ChunkState::Pending);
         assert_eq!(state.chunks[1].state, ChunkState::Pending);
     }
+
+    #[test]
+    fn test_stats() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks(None);
+        state.mark_downloaded(0);
+        state.mark_verified(0);
+        state.mark_downloaded(1);
+        state.mark_failed(2);
+
+        let s = state.stats();
+        assert_eq!(s.total, 4);
+        assert_eq!(s.pending, 1);
+        assert_eq!(s.downloaded, 1);
+        assert_eq!(s.verified, 1);
+        assert_eq!(s.failed, 1);
+    }
 }
