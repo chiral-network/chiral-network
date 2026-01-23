@@ -157,6 +157,31 @@ impl DlState {
         }
     }
 
+    // batch mark multiple chunks as downloaded
+    pub fn mark_batch_downloaded(&mut self, indices: &[u32]) {
+        for &idx in indices {
+            if let Some(c) = self.chunks.get_mut(idx as usize) {
+                if c.state == ChunkState::Pending {
+                    c.state = ChunkState::Downloaded;
+                }
+            }
+        }
+        self.updated_at = now_unix();
+    }
+
+    // batch mark multiple chunks as verified
+    pub fn mark_batch_verified(&mut self, indices: &[u32]) {
+        for &idx in indices {
+            if let Some(c) = self.chunks.get_mut(idx as usize) {
+                if c.state != ChunkState::Verified {
+                    c.state = ChunkState::Verified;
+                    self.verified_bytes += c.size as u64;
+                }
+            }
+        }
+        self.updated_at = now_unix();
+    }
+
     pub fn pending_chunks(&self) -> Vec<u32> {
         self.chunks
             .iter()
