@@ -182,6 +182,26 @@ impl DlState {
         self.updated_at = now_unix();
     }
 
+    // reset failed chunks to pending for retry
+    pub fn reset_failed(&mut self) -> usize {
+        let mut cnt = 0;
+        for c in &mut self.chunks {
+            if c.state == ChunkState::Failed {
+                c.state = ChunkState::Pending;
+                cnt += 1;
+            }
+        }
+        if cnt > 0 {
+            self.updated_at = now_unix();
+        }
+        cnt
+    }
+
+    // get total chunk count
+    pub fn chunk_cnt(&self) -> usize {
+        self.chunks.len()
+    }
+
     pub fn pending_chunks(&self) -> Vec<u32> {
         self.chunks
             .iter()
