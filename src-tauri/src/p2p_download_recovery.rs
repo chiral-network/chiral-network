@@ -34,6 +34,20 @@ impl RecoverySvc {
     pub fn dl_dir(&self) -> &Path {
         &self.dl_dir
     }
+
+    // acquire permit before starting resume
+    pub async fn acquire(&self) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+        self.sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "sem closed".into())
+    }
+
+    // check available slots
+    pub fn available(&self) -> usize {
+        self.sem.available_permits()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
