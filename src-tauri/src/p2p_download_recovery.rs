@@ -261,6 +261,14 @@ impl DlState {
             .collect()
     }
 
+    // get first pending chunk for sequential fetch
+    pub fn first_pending(&self) -> Option<u32> {
+        self.chunks
+            .iter()
+            .find(|c| c.state == ChunkState::Pending || c.state == ChunkState::Failed)
+            .map(|c| c.idx)
+    }
+
     pub fn unverified_chunks(&self) -> Vec<u32> {
         self.chunks
             .iter()
