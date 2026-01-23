@@ -306,6 +306,11 @@ impl DlState {
         }
     }
 
+    // get peer count
+    pub fn peer_cnt(&self) -> usize {
+        self.peers.len()
+    }
+
     // check if stalled (no update in given seconds)
     pub fn is_stalled(&self, secs: u64) -> bool {
         let now = now_unix();
