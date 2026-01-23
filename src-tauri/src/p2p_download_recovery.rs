@@ -1000,4 +1000,29 @@ mod tests {
         assert_eq!(info.pending_cnt, 1);
         assert_eq!(info.peers.len(), 1);
     }
+
+    #[test]
+    fn test_first_pending() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks(None);
+        assert_eq!(state.first_pending(), Some(0));
+
+        state.mark_downloaded(0);
+        state.mark_verified(0);
+        assert_eq!(state.first_pending(), Some(1));
+
+        // mark all verified
+        for i in 0..4 {
+            state.mark_downloaded(i);
+            state.mark_verified(i);
+        }
+        assert_eq!(state.first_pending(), None);
+    }
 }
