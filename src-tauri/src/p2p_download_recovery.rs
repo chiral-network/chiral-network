@@ -58,6 +58,18 @@ impl ChunkMeta {
             state: ChunkState::Pending,
         }
     }
+
+    // calc chunk offset from index
+    pub fn offset_for(idx: u32) -> u64 {
+        idx as u64 * CHUNK_SIZE
+    }
+
+    // calc chunk size for given file size
+    pub fn size_for(idx: u32, file_size: u64) -> u32 {
+        let offset = Self::offset_for(idx);
+        let rem = file_size.saturating_sub(offset);
+        rem.min(CHUNK_SIZE) as u32
+    }
 }
 
 // persistent state stored as .chiral.p2p.meta.json
