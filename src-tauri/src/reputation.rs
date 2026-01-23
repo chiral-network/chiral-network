@@ -1846,6 +1846,81 @@ impl RepScoreCalc {
         };
         event.impact * weight * decay
     }
+
+    pub fn calc_score(&self, peer_id: &str, events: &[ReputationEvent]) -> RepScoreResult {
+        let cur_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.calc_score_at(peer_id, events, cur_ts)
+    }
+
+    pub fn calc_score_at(
+        &self,
+        peer_id: &str,
+        events: &[ReputationEvent],
+        cur_ts: u64,
+    ) -> RepScoreResult {
+        let mut peer_events: Vec<&ReputationEvent> = events
+            .iter()
+            .filter(|e| e.peer_id == peer_id)
+            .collect();
+
+        // newest first
+        peer_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+        if peer_events.len() > self.cfg.max_events {
+            peer_events.truncate(self.cfg.max_events);
+        }
+
+        if peer_events.is_empty() {
+            return RepScoreResult {
+                score: self.cfg.base_score,
+                event_cnt: 0,
+                pos_sum: 0.0,
+                neg_sum: 0.0,
+                confident: false,
+                oldest_ts: None,
+                newest_ts: None,
+                avg_decay: 1.0,
+            };
+        }
+
+        let mut pos_sum = 0.0;
+        let mut neg_sum = 0.0;
+        let mut decay_sum = 0.0;
+
+        for event in &peer_events {
+            let impact = self.calc_weighted_impact(event, cur_ts);
+            let decay = self.calc_decay(event.timestamp, cur_ts);
+            decay_sum += decay;
+
+            if impact >= 0.0 {
+                pos_sum += impact;
+            } else {
+                neg_sum += impact.abs();
+            }
+        }
+
+        // tanh keeps score bounded
+        let total = pos_sum - neg_sum;
+        let adj = (total / 100.0).tanh() * 0.5;
+        let score = (self.cfg.base_score + adj).clamp(self.cfg.min_score, self.cfg.max_score);
+
+        let cnt = peer_events.len();
+        let avg_decay = if cnt > 0 { decay_sum / cnt as f64 } else { 1.0 };
+
+        RepScoreResult {
+            score,
+            event_cnt: cnt,
+            pos_sum,
+            neg_sum,
+            confident: cnt >= self.cfg.min_events_confident,
+            oldest_ts: peer_events.last().map(|e| e.timestamp),
+            newest_ts: peer_events.first().map(|e| e.timestamp),
+            avg_decay,
+        }
+    }
 }
 
 impl Default for RepScoreCalc {
