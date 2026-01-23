@@ -16,6 +16,26 @@ pub const CHUNK_SIZE: u64 = 256 * 1024;
 // max concurrent resumes to avoid bandwidth saturation
 pub const MAX_RESUMES: usize = 3;
 
+// recovery service with rate limiting
+pub struct RecoverySvc {
+    sem: Arc<Semaphore>,
+    dl_dir: PathBuf,
+}
+
+impl RecoverySvc {
+    pub fn new(dl_dir: PathBuf) -> Self {
+        Self {
+            sem: Arc::new(Semaphore::new(MAX_RESUMES)),
+            dl_dir,
+        }
+    }
+
+    // get dir for scanning
+    pub fn dl_dir(&self) -> &Path {
+        &self.dl_dir
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RecoveryErr {
     NotFound,
