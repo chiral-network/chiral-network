@@ -307,6 +307,12 @@ impl DlState {
         self.updated_at = now_unix();
     }
 
+    // set manifest json
+    pub fn set_manifest(&mut self, json: String) {
+        self.manifest = Some(json);
+        self.updated_at = now_unix();
+    }
+
     // count chunks by state
     pub fn stats(&self) -> ChunkStats {
         let mut s = ChunkStats::default();
