@@ -48,6 +48,11 @@ impl RecoverySvc {
     pub fn available(&self) -> usize {
         self.sem.available_permits()
     }
+
+    // scan dl dir for incomplete downloads
+    pub async fn scan(&self) -> Vec<DlState> {
+        scan_incomplete(&self.dl_dir).await
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
