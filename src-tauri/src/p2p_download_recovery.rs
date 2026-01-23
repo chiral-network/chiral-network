@@ -295,6 +295,17 @@ impl DlState {
         }
     }
 
+    // remove peer from list
+    pub fn remove_peer(&mut self, peer: &str) -> bool {
+        if let Some(pos) = self.peers.iter().position(|p| p == peer) {
+            self.peers.remove(pos);
+            self.updated_at = now_unix();
+            true
+        } else {
+            false
+        }
+    }
+
     // check if stalled (no update in given seconds)
     pub fn is_stalled(&self, secs: u64) -> bool {
         let now = now_unix();
