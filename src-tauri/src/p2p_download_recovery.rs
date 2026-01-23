@@ -1086,6 +1086,24 @@ mod tests {
         assert_eq!(state.chunks[2].state, ChunkState::Downloaded);
         assert_eq!(state.chunks[3].state, ChunkState::Pending);
     }
+
+    #[test]
+    fn test_add_providers() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        let providers = vec!["p1".to_string(), "p2".to_string()];
+        add_providers(&mut state, &providers);
+
+        assert_eq!(state.peer_cnt(), 2);
+        assert!(state.peers.contains(&"p1".to_string()));
+        assert!(state.peers.contains(&"p2".to_string()));
+    }
 }
 
 // =========================================================================
