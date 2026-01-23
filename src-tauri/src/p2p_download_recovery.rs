@@ -766,4 +766,42 @@ mod tests {
         assert!(state.verified_bytes < before);
         assert_eq!(state.chunks[0].state, ChunkState::Failed);
     }
+
+    #[test]
+    fn test_batch_mark_downloaded() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks(None);
+        state.mark_batch_downloaded(&[0, 1, 2]);
+
+        assert_eq!(state.chunks[0].state, ChunkState::Downloaded);
+        assert_eq!(state.chunks[1].state, ChunkState::Downloaded);
+        assert_eq!(state.chunks[2].state, ChunkState::Downloaded);
+        assert_eq!(state.chunks[3].state, ChunkState::Pending);
+    }
+
+    #[test]
+    fn test_batch_mark_verified() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks(None);
+        state.mark_batch_downloaded(&[0, 1]);
+        state.mark_batch_verified(&[0, 1]);
+
+        assert_eq!(state.chunks[0].state, ChunkState::Verified);
+        assert_eq!(state.chunks[1].state, ChunkState::Verified);
+        assert_eq!(state.verified_bytes, 512 * 1024);
+    }
 }
