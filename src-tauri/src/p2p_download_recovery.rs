@@ -399,6 +399,38 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+// check available disk space using statvfs
+#[cfg(unix)]
+pub fn check_space(path: &Path, needed: u64) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
+    };
+
+    // use fs2 for cross-platform available space
+    match fs2::available_space(&dir) {
+        Ok(avail) => Ok(avail >= needed),
+        Err(e) => Err(format!("space check failed: {}", e)),
+    }
+}
+
+#[cfg(not(unix))]
+pub fn check_space(path: &Path, needed: u64) -> Result<bool, String> {
+    let dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
+    };
+
+    match fs2::available_space(&dir) {
+        Ok(avail) => Ok(avail >= needed),
+        Err(e) => Err(format!("space check failed: {}", e)),
+    }
+}
+
 // =========================================================================
 // dht integration
 // =========================================================================
