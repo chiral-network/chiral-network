@@ -248,6 +248,11 @@ impl DlState {
         self.chunks.get(idx as usize)
     }
 
+    // get chunk mut by index
+    pub fn get_chunk_mut(&mut self, idx: u32) -> Option<&mut ChunkMeta> {
+        self.chunks.get_mut(idx as usize)
+    }
+
     pub fn pending_chunks(&self) -> Vec<u32> {
         self.chunks
             .iter()
