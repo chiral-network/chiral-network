@@ -1,30 +1,22 @@
-// p2p_download_recovery.rs
-// P2P Chunk-Based Download Recovery with DHT Integration
-//
-// This module implements content-addressed download recovery that integrates
-// with the existing DHT and Bitswap infrastructure.
+// p2p chunk recovery with dht integration
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tracing::{debug, info, warn};
 
-/// Chunk size for P2P downloads (256KB, matching IPFS and manager.rs)
-pub const P2P_CHUNK_SIZE: u64 = 256 * 1024;
+// 256kb chunks like ipfs
+pub const CHUNK_SIZE: u64 = 256 * 1024;
 
-/// State of an individual chunk during download/recovery
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChunkState {
-    /// Not yet downloaded
     Pending,
-    /// Downloaded but not yet verified
     Downloaded,
-    /// Hash verified successfully
     Verified,
-    /// Hash verification failed, needs re-download
     Failed,
 }
 
@@ -34,161 +26,132 @@ impl Default for ChunkState {
     }
 }
 
-/// Metadata for a single chunk
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkMetadata {
-    /// Chunk index (0-based)
-    pub index: u32,
-    /// Byte offset in the file
+pub struct ChunkMeta {
+    pub idx: u32,
     pub offset: u64,
-    /// Size of this chunk in bytes
     pub size: u32,
-    /// Expected SHA-256 hash of the chunk (hex encoded)
-    pub expected_hash: Option<String>,
-    /// Current state of this chunk
+    pub hash: Option<String>,
     pub state: ChunkState,
 }
 
-impl ChunkMetadata {
-    pub fn new(index: u32, offset: u64, size: u32, expected_hash: Option<String>) -> Self {
+impl ChunkMeta {
+    pub fn new(idx: u32, offset: u64, size: u32, hash: Option<String>) -> Self {
         Self {
-            index,
+            idx,
             offset,
             size,
-            expected_hash,
+            hash,
             state: ChunkState::Pending,
         }
     }
 }
 
-/// Persistent state for a P2P download, stored as .chiral.p2p.meta.json
+// persistent state stored as .chiral.p2p.meta.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct P2pDownloadState {
-    /// Schema version for future compatibility
+pub struct DlState {
     pub version: u32,
-    /// Content-addressed identifier (merkle_root from FileMetadata)
     pub merkle_root: String,
-    /// Original file name
     pub file_name: String,
-    /// Total file size in bytes
     pub file_size: u64,
-    /// Path to the temporary download file
-    pub temp_file_path: String,
-    /// Path where the final file will be placed
-    pub final_file_path: String,
-    /// Chunk-level tracking
-    pub chunks: Vec<ChunkMetadata>,
-    /// Total number of verified bytes
+    pub tmp_path: String,
+    pub dst_path: String,
+    pub chunks: Vec<ChunkMeta>,
     pub verified_bytes: u64,
-    /// Peer IDs that have this content (for multi-source resume)
-    pub known_peers: Vec<String>,
-    /// Serialized FileManifest JSON (contains chunk hashes)
-    pub manifest_json: Option<String>,
-    /// Whether the file is encrypted
-    pub is_encrypted: bool,
-    /// Unix timestamp of last update
-    pub last_updated: u64,
+    pub peers: Vec<String>,
+    pub manifest: Option<String>,
+    pub encrypted: bool,
+    pub updated_at: u64,
 }
 
-impl P2pDownloadState {
-    pub const CURRENT_VERSION: u32 = 1;
+impl DlState {
+    pub const VERSION: u32 = 1;
 
-    /// Create new state for a fresh P2P download
     pub fn new(
         merkle_root: String,
         file_name: String,
         file_size: u64,
-        temp_file_path: String,
-        final_file_path: String,
+        tmp_path: String,
+        dst_path: String,
     ) -> Self {
         Self {
-            version: Self::CURRENT_VERSION,
+            version: Self::VERSION,
             merkle_root,
             file_name,
             file_size,
-            temp_file_path,
-            final_file_path,
+            tmp_path,
+            dst_path,
             chunks: Vec::new(),
             verified_bytes: 0,
-            known_peers: Vec::new(),
-            manifest_json: None,
-            is_encrypted: false,
-            last_updated: now_unix(),
+            peers: Vec::new(),
+            manifest: None,
+            encrypted: false,
+            updated_at: now_unix(),
         }
     }
 
-    /// Initialize chunks based on file size
-    pub fn init_chunks(&mut self, chunk_hashes: Option<&[String]>) {
-        let total_chunks = ((self.file_size + P2P_CHUNK_SIZE - 1) / P2P_CHUNK_SIZE) as u32;
+    pub fn init_chunks(&mut self, hashes: Option<&[String]>) {
+        let cnt = ((self.file_size + CHUNK_SIZE - 1) / CHUNK_SIZE) as u32;
         self.chunks.clear();
 
-        for i in 0..total_chunks {
-            let offset = i as u64 * P2P_CHUNK_SIZE;
-            let remaining = self.file_size.saturating_sub(offset);
-            let size = remaining.min(P2P_CHUNK_SIZE) as u32;
-
-            let hash = chunk_hashes.and_then(|h| h.get(i as usize).cloned());
-
-            self.chunks.push(ChunkMetadata::new(i, offset, size, hash));
+        for i in 0..cnt {
+            let offset = i as u64 * CHUNK_SIZE;
+            let rem = self.file_size.saturating_sub(offset);
+            let size = rem.min(CHUNK_SIZE) as u32;
+            let hash = hashes.and_then(|h| h.get(i as usize).cloned());
+            self.chunks.push(ChunkMeta::new(i, offset, size, hash));
         }
     }
 
-    /// Mark a chunk as downloaded (but not yet verified)
-    pub fn mark_chunk_downloaded(&mut self, index: u32) {
-        if let Some(chunk) = self.chunks.get_mut(index as usize) {
-            if chunk.state == ChunkState::Pending {
-                chunk.state = ChunkState::Downloaded;
-                self.last_updated = now_unix();
+    pub fn mark_downloaded(&mut self, idx: u32) {
+        if let Some(c) = self.chunks.get_mut(idx as usize) {
+            if c.state == ChunkState::Pending {
+                c.state = ChunkState::Downloaded;
+                self.updated_at = now_unix();
             }
         }
     }
 
-    /// Mark a chunk as verified
-    pub fn mark_chunk_verified(&mut self, index: u32) {
-        if let Some(chunk) = self.chunks.get_mut(index as usize) {
-            if chunk.state != ChunkState::Verified {
-                chunk.state = ChunkState::Verified;
-                self.verified_bytes += chunk.size as u64;
-                self.last_updated = now_unix();
+    pub fn mark_verified(&mut self, idx: u32) {
+        if let Some(c) = self.chunks.get_mut(idx as usize) {
+            if c.state != ChunkState::Verified {
+                c.state = ChunkState::Verified;
+                self.verified_bytes += c.size as u64;
+                self.updated_at = now_unix();
             }
         }
     }
 
-    /// Mark a chunk as failed (hash mismatch)
-    pub fn mark_chunk_failed(&mut self, index: u32) {
-        if let Some(chunk) = self.chunks.get_mut(index as usize) {
-            if chunk.state == ChunkState::Verified {
-                self.verified_bytes = self.verified_bytes.saturating_sub(chunk.size as u64);
+    pub fn mark_failed(&mut self, idx: u32) {
+        if let Some(c) = self.chunks.get_mut(idx as usize) {
+            if c.state == ChunkState::Verified {
+                self.verified_bytes = self.verified_bytes.saturating_sub(c.size as u64);
             }
-            chunk.state = ChunkState::Failed;
-            self.last_updated = now_unix();
+            c.state = ChunkState::Failed;
+            self.updated_at = now_unix();
         }
     }
 
-    /// Get indices of chunks that need to be downloaded
-    pub fn get_pending_chunks(&self) -> Vec<u32> {
+    pub fn pending_chunks(&self) -> Vec<u32> {
         self.chunks
             .iter()
             .filter(|c| c.state == ChunkState::Pending || c.state == ChunkState::Failed)
-            .map(|c| c.index)
+            .map(|c| c.idx)
             .collect()
     }
 
-    /// Get indices of chunks that need verification
-    pub fn get_unverified_chunks(&self) -> Vec<u32> {
+    pub fn unverified_chunks(&self) -> Vec<u32> {
         self.chunks
             .iter()
             .filter(|c| c.state == ChunkState::Downloaded)
-            .map(|c| c.index)
+            .map(|c| c.idx)
             .collect()
     }
 
-    /// Check if download is complete (all chunks verified)
     pub fn is_complete(&self) -> bool {
         !self.chunks.is_empty() && self.chunks.iter().all(|c| c.state == ChunkState::Verified)
     }
 
-    /// Calculate download progress (0.0 to 1.0)
     pub fn progress(&self) -> f32 {
         if self.file_size == 0 {
             return 1.0;
@@ -196,53 +159,44 @@ impl P2pDownloadState {
         self.verified_bytes as f32 / self.file_size as f32
     }
 
-    /// Add a known peer
-    pub fn add_peer(&mut self, peer_id: String) {
-        if !self.known_peers.contains(&peer_id) {
-            self.known_peers.push(peer_id);
-            self.last_updated = now_unix();
+    pub fn add_peer(&mut self, peer: String) {
+        if !self.peers.contains(&peer) {
+            self.peers.push(peer);
+            self.updated_at = now_unix();
         }
     }
 }
 
-/// Get the metadata file path for a download
-pub fn meta_path_for(temp_file_path: &Path) -> PathBuf {
-    let file_name = temp_file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("download");
-    temp_file_path.with_file_name(format!(".{}.chiral.p2p.meta.json", file_name))
+pub fn meta_path(tmp: &Path) -> PathBuf {
+    let name = tmp.file_name().and_then(|n| n.to_str()).unwrap_or("dl");
+    tmp.with_file_name(format!(".{}.chiral.p2p.meta.json", name))
 }
 
-/// Persist download state atomically (write to temp, then rename)
-pub async fn persist_state(state: &P2pDownloadState) -> Result<(), String> {
-    let temp_path = PathBuf::from(&state.temp_file_path);
-    let meta_path = meta_path_for(&temp_path);
+// atomic write: tmp file then rename
+pub async fn persist(state: &DlState) -> Result<(), String> {
+    let tmp = PathBuf::from(&state.tmp_path);
+    let path = meta_path(&tmp);
 
-    // Ensure parent directory exists
-    if let Some(parent) = meta_path.parent() {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .await
-            .map_err(|e| format!("Failed to create metadata directory: {}", e))?;
+            .map_err(|e| format!("mkdir failed: {}", e))?;
     }
 
-    // Serialize state
     let data = serde_json::to_vec_pretty(state)
-        .map_err(|e| format!("Failed to serialize state: {}", e))?;
+        .map_err(|e| format!("serialize failed: {}", e))?;
 
-    // Write to temp file first
-    let tmp_meta_path = meta_path.with_extension("tmp");
-    fs::write(&tmp_meta_path, &data)
+    let tmp_meta = path.with_extension("tmp");
+    fs::write(&tmp_meta, &data)
         .await
-        .map_err(|e| format!("Failed to write temp metadata: {}", e))?;
+        .map_err(|e| format!("write tmp failed: {}", e))?;
 
-    // Atomic rename
-    fs::rename(&tmp_meta_path, &meta_path)
+    fs::rename(&tmp_meta, &path)
         .await
-        .map_err(|e| format!("Failed to rename metadata file: {}", e))?;
+        .map_err(|e| format!("rename failed: {}", e))?;
 
     debug!(
-        "Persisted P2P download state for {} ({} chunks, {:.1}% complete)",
+        "persisted {} ({} chunks, {:.1}%)",
         state.merkle_root,
         state.chunks.len(),
         state.progress() * 100.0
@@ -251,137 +205,100 @@ pub async fn persist_state(state: &P2pDownloadState) -> Result<(), String> {
     Ok(())
 }
 
-/// Load download state from metadata file
-pub async fn load_state(meta_path: &Path) -> Result<P2pDownloadState, String> {
-    let data = fs::read(meta_path)
+pub async fn load(path: &Path) -> Result<DlState, String> {
+    let data = fs::read(path)
         .await
-        .map_err(|e| format!("Failed to read metadata file: {}", e))?;
+        .map_err(|e| format!("read failed: {}", e))?;
 
-    let state: P2pDownloadState =
-        serde_json::from_slice(&data).map_err(|e| format!("Failed to parse metadata: {}", e))?;
+    let state: DlState =
+        serde_json::from_slice(&data).map_err(|e| format!("parse failed: {}", e))?;
 
-    // Version check
-    if state.version > P2pDownloadState::CURRENT_VERSION {
-        return Err(format!(
-            "Unsupported metadata version: {} (max supported: {})",
-            state.version,
-            P2pDownloadState::CURRENT_VERSION
-        ));
+    if state.version > DlState::VERSION {
+        return Err(format!("version {} unsupported", state.version));
     }
 
     Ok(state)
 }
 
-/// Remove metadata file
-pub async fn remove_state(temp_file_path: &Path) {
-    let meta_path = meta_path_for(temp_file_path);
-    if let Err(e) = fs::remove_file(&meta_path).await {
+pub async fn remove_meta(tmp: &Path) {
+    let path = meta_path(tmp);
+    if let Err(e) = fs::remove_file(&path).await {
         if e.kind() != std::io::ErrorKind::NotFound {
-            warn!("Failed to remove metadata file {}: {}", meta_path.display(), e);
+            warn!("rm meta {} failed: {}", path.display(), e);
         }
     }
 }
 
-/// Scan a directory for incomplete P2P downloads
-pub async fn scan_for_incomplete_downloads(dir: &Path) -> Vec<P2pDownloadState> {
-    let mut results = Vec::new();
+pub async fn scan_incomplete(dir: &Path) -> Vec<DlState> {
+    let mut res = Vec::new();
 
     let mut entries = match fs::read_dir(dir).await {
         Ok(e) => e,
         Err(e) => {
-            warn!("Failed to read directory {}: {}", dir.display(), e);
-            return results;
+            warn!("readdir {} failed: {}", dir.display(), e);
+            return res;
         }
     };
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        // Look for .chiral.p2p.meta.json files
-        if file_name.ends_with(".chiral.p2p.meta.json") {
-            match load_state(&path).await {
+        if name.ends_with(".chiral.p2p.meta.json") {
+            match load(&path).await {
                 Ok(state) => {
                     if !state.is_complete() {
-                        info!(
-                            "Found incomplete P2P download: {} ({:.1}% complete)",
-                            state.merkle_root,
-                            state.progress() * 100.0
-                        );
-                        results.push(state);
+                        info!("found incomplete: {} ({:.1}%)", state.merkle_root, state.progress() * 100.0);
+                        res.push(state);
                     } else {
-                        // Complete download with leftover metadata - clean up
-                        debug!("Removing stale metadata for completed download: {}", state.merkle_root);
+                        debug!("removing stale meta for {}", state.merkle_root);
                         let _ = fs::remove_file(&path).await;
                     }
                 }
-                Err(e) => {
-                    warn!("Failed to load metadata from {}: {}", path.display(), e);
-                }
+                Err(e) => warn!("load {} failed: {}", path.display(), e),
             }
         }
     }
 
-    results
+    res
 }
 
-/// Verify a single chunk against its expected hash
-pub async fn verify_chunk(
-    file_path: &Path,
-    chunk: &ChunkMetadata,
-) -> Result<bool, String> {
-    let expected_hash = match &chunk.expected_hash {
+pub async fn verify_chunk(file: &Path, chunk: &ChunkMeta) -> Result<bool, String> {
+    let expected = match &chunk.hash {
         Some(h) => h,
-        None => {
-            // No hash to verify against - assume valid
-            return Ok(true);
-        }
+        None => return Ok(true), // no hash to verify
     };
 
-    let mut file = tokio::fs::File::open(file_path)
+    let mut f = tokio::fs::File::open(file)
         .await
-        .map_err(|e| format!("Failed to open file for verification: {}", e))?;
+        .map_err(|e| format!("open failed: {}", e))?;
 
-    // Seek to chunk offset
-    file.seek(std::io::SeekFrom::Start(chunk.offset))
+    f.seek(std::io::SeekFrom::Start(chunk.offset))
         .await
-        .map_err(|e| format!("Failed to seek to chunk {}: {}", chunk.index, e))?;
+        .map_err(|e| format!("seek chunk {} failed: {}", chunk.idx, e))?;
 
-    // Read chunk data
-    let mut buffer = vec![0u8; chunk.size as usize];
-    let bytes_read = file
-        .read_exact(&mut buffer)
-        .await
-        .map_err(|e| format!("Failed to read chunk {}: {}", chunk.index, e));
-
-    // Handle EOF gracefully (file might be smaller than expected)
-    if bytes_read.is_err() {
-        return Ok(false);
+    let mut buf = vec![0u8; chunk.size as usize];
+    if f.read_exact(&mut buf).await.is_err() {
+        return Ok(false); // eof or short read
     }
 
-    // Compute SHA-256 hash
     let mut hasher = Sha256::new();
-    hasher.update(&buffer);
-    let actual_hash = hex::encode(hasher.finalize());
+    hasher.update(&buf);
+    let actual = hex::encode(hasher.finalize());
 
-    let matches = actual_hash.eq_ignore_ascii_case(expected_hash);
-
-    if !matches {
-        debug!(
-            "Chunk {} hash mismatch: expected {}, got {}",
-            chunk.index, expected_hash, actual_hash
-        );
+    let ok = actual.eq_ignore_ascii_case(expected);
+    if !ok {
+        debug!("chunk {} mismatch: {} vs {}", chunk.idx, expected, actual);
     }
 
-    Ok(matches)
+    Ok(ok)
 }
 
-/// Verify all downloaded chunks in a state and update their status
-pub async fn verify_all_chunks(state: &mut P2pDownloadState) -> Result<VerificationResult, String> {
-    let temp_path = PathBuf::from(&state.temp_file_path);
+pub async fn verify_all(state: &mut DlState) -> Result<VerifyResult, String> {
+    let tmp = PathBuf::from(&state.tmp_path);
 
-    if !temp_path.exists() {
-        return Ok(VerificationResult {
+    if !tmp.exists() {
+        return Ok(VerifyResult {
             total: state.chunks.len(),
             verified: 0,
             failed: 0,
@@ -389,88 +306,205 @@ pub async fn verify_all_chunks(state: &mut P2pDownloadState) -> Result<Verificat
         });
     }
 
-    let mut result = VerificationResult::default();
-    result.total = state.chunks.len();
+    let mut res = VerifyResult::default();
+    res.total = state.chunks.len();
 
-    // Get chunks that need verification
-    let chunks_to_verify: Vec<_> = state
+    let to_verify: Vec<_> = state
         .chunks
         .iter()
         .filter(|c| c.state == ChunkState::Downloaded || c.state == ChunkState::Verified)
         .cloned()
         .collect();
 
-    for chunk in chunks_to_verify {
-        if chunk.expected_hash.is_none() {
-            result.skipped += 1;
+    for chunk in to_verify {
+        if chunk.hash.is_none() {
+            res.skipped += 1;
             continue;
         }
 
-        match verify_chunk(&temp_path, &chunk).await {
+        match verify_chunk(&tmp, &chunk).await {
             Ok(true) => {
-                state.mark_chunk_verified(chunk.index);
-                result.verified += 1;
+                state.mark_verified(chunk.idx);
+                res.verified += 1;
             }
             Ok(false) => {
-                state.mark_chunk_failed(chunk.index);
-                result.failed += 1;
+                state.mark_failed(chunk.idx);
+                res.failed += 1;
             }
             Err(e) => {
-                warn!("Verification error for chunk {}: {}", chunk.index, e);
-                state.mark_chunk_failed(chunk.index);
-                result.failed += 1;
+                warn!("verify chunk {} error: {}", chunk.idx, e);
+                state.mark_failed(chunk.idx);
+                res.failed += 1;
             }
         }
     }
 
-    Ok(result)
+    Ok(res)
 }
 
-/// Result of chunk verification
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct VerificationResult {
+pub struct VerifyResult {
     pub total: usize,
     pub verified: usize,
     pub failed: usize,
     pub skipped: usize,
 }
 
-/// Information about a recoverable download
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecoverableDownload {
+pub struct RecoverInfo {
     pub merkle_root: String,
     pub file_name: String,
     pub file_size: u64,
     pub progress: f32,
     pub verified_bytes: u64,
-    pub pending_chunks: usize,
-    pub known_peers: Vec<String>,
-    pub temp_file_path: String,
-    pub final_file_path: String,
+    pub pending_cnt: usize,
+    pub peers: Vec<String>,
+    pub tmp_path: String,
+    pub dst_path: String,
 }
 
-impl From<&P2pDownloadState> for RecoverableDownload {
-    fn from(state: &P2pDownloadState) -> Self {
+impl From<&DlState> for RecoverInfo {
+    fn from(s: &DlState) -> Self {
         Self {
-            merkle_root: state.merkle_root.clone(),
-            file_name: state.file_name.clone(),
-            file_size: state.file_size,
-            progress: state.progress(),
-            verified_bytes: state.verified_bytes,
-            pending_chunks: state.get_pending_chunks().len(),
-            known_peers: state.known_peers.clone(),
-            temp_file_path: state.temp_file_path.clone(),
-            final_file_path: state.final_file_path.clone(),
+            merkle_root: s.merkle_root.clone(),
+            file_name: s.file_name.clone(),
+            file_size: s.file_size,
+            progress: s.progress(),
+            verified_bytes: s.verified_bytes,
+            pending_cnt: s.pending_chunks().len(),
+            peers: s.peers.clone(),
+            tmp_path: s.tmp_path.clone(),
+            dst_path: s.dst_path.clone(),
         }
     }
 }
 
-/// Get current unix timestamp
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+// =========================================================================
+// dht integration
+// =========================================================================
+
+use crate::dht::models::FileMetadata;
+use crate::manager::FileManifest;
+
+pub fn from_metadata(
+    meta: &FileMetadata,
+    tmp_path: String,
+    dst_path: String,
+) -> DlState {
+    let mut state = DlState::new(
+        meta.merkle_root.clone(),
+        meta.file_name.clone(),
+        meta.file_size,
+        tmp_path,
+        dst_path,
+    );
+
+    let hashes = meta.manifest.as_ref().and_then(|j| parse_hashes(j));
+    state.init_chunks(hashes.as_deref());
+
+    for seeder in &meta.seeders {
+        state.add_peer(seeder.clone());
+    }
+
+    state.manifest = meta.manifest.clone();
+    state.encrypted = meta.is_encrypted;
+    state
+}
+
+pub fn parse_hashes(json: &str) -> Option<Vec<String>> {
+    let manifest: FileManifest = serde_json::from_str(json).ok()?;
+    Some(manifest.chunks.iter().map(|c| c.hash.clone()).collect())
+}
+
+pub fn sync_received(state: &mut DlState, received: &HashSet<u32>) {
+    for &idx in received {
+        if let Some(c) = state.chunks.get_mut(idx as usize) {
+            if c.state == ChunkState::Pending {
+                c.state = ChunkState::Downloaded;
+            }
+        }
+    }
+    state.updated_at = now_unix();
+}
+
+pub fn add_providers(state: &mut DlState, providers: &[String]) {
+    for p in providers {
+        state.add_peer(p.clone());
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryPlan {
+    pub state: DlState,
+    pub to_fetch: Vec<u32>,
+    pub verified: bool,
+    pub verify_res: Option<VerifyResult>,
+}
+
+pub async fn plan_recovery(mut state: DlState, verify: bool) -> Result<RecoveryPlan, String> {
+    let verify_res = if verify {
+        let res = verify_all(&mut state).await?;
+        info!(
+            "verified {}: {}/{} ok, {} failed",
+            state.merkle_root, res.verified, res.total, res.failed
+        );
+        Some(res)
+    } else {
+        None
+    };
+
+    let to_fetch = state.pending_chunks();
+    info!(
+        "recovery plan for {}: {} to fetch, {:.1}% done",
+        state.merkle_root,
+        to_fetch.len(),
+        state.progress() * 100.0
+    );
+
+    Ok(RecoveryPlan {
+        state,
+        to_fetch,
+        verified: verify,
+        verify_res,
+    })
+}
+
+pub async fn finalize(state: &DlState) -> Result<(), String> {
+    let tmp = PathBuf::from(&state.tmp_path);
+    let dst = PathBuf::from(&state.dst_path);
+
+    if !tmp.exists() {
+        return Err(format!("tmp file missing: {}", tmp.display()));
+    }
+
+    fs::rename(&tmp, &dst)
+        .await
+        .map_err(|e| format!("rename failed: {}", e))?;
+
+    remove_meta(&tmp).await;
+
+    info!("finalized {}: {} -> {}", state.merkle_root, tmp.display(), dst.display());
+    Ok(())
+}
+
+pub fn to_file_meta(state: &DlState) -> FileMetadata {
+    FileMetadata {
+        merkle_root: state.merkle_root.clone(),
+        file_name: state.file_name.clone(),
+        file_size: state.file_size,
+        seeders: state.peers.clone(),
+        is_encrypted: state.encrypted,
+        manifest: state.manifest.clone(),
+        download_path: Some(state.dst_path.clone()),
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
@@ -479,23 +513,23 @@ mod tests {
 
     #[test]
     fn test_chunk_state_default() {
-        let state: ChunkState = Default::default();
-        assert_eq!(state, ChunkState::Pending);
+        let s: ChunkState = Default::default();
+        assert_eq!(s, ChunkState::Pending);
     }
 
     #[test]
-    fn test_p2p_download_state_init_chunks() {
-        let mut state = P2pDownloadState::new(
-            "abc123".to_string(),
-            "test.bin".to_string(),
-            1024 * 1024, // 1MB
-            "/tmp/test.tmp".to_string(),
-            "/downloads/test.bin".to_string(),
+    fn test_init_chunks() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
         );
 
         state.init_chunks(None);
 
-        // 1MB / 256KB = 4 chunks
+        // 1mb / 256kb = 4 chunks
         assert_eq!(state.chunks.len(), 4);
         assert_eq!(state.chunks[0].offset, 0);
         assert_eq!(state.chunks[0].size, 256 * 1024);
@@ -503,92 +537,107 @@ mod tests {
     }
 
     #[test]
-    fn test_p2p_download_state_progress() {
-        let mut state = P2pDownloadState::new(
-            "abc123".to_string(),
-            "test.bin".to_string(),
+    fn test_progress() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
             1024 * 1024,
-            "/tmp/test.tmp".to_string(),
-            "/downloads/test.bin".to_string(),
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
         );
 
         state.init_chunks(None);
         assert_eq!(state.progress(), 0.0);
 
-        state.mark_chunk_downloaded(0);
-        state.mark_chunk_verified(0);
+        state.mark_downloaded(0);
+        state.mark_verified(0);
 
-        // 256KB / 1MB = 0.25
         assert!((state.progress() - 0.25).abs() < 0.01);
     }
 
     #[test]
-    fn test_p2p_download_state_pending_chunks() {
-        let mut state = P2pDownloadState::new(
-            "abc123".to_string(),
-            "test.bin".to_string(),
-            512 * 1024, // 512KB = 2 chunks
-            "/tmp/test.tmp".to_string(),
-            "/downloads/test.bin".to_string(),
+    fn test_pending_chunks() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
         );
 
         state.init_chunks(None);
+        assert_eq!(state.pending_chunks().len(), 2);
 
-        let pending = state.get_pending_chunks();
-        assert_eq!(pending.len(), 2);
+        state.mark_downloaded(0);
+        state.mark_verified(0);
 
-        state.mark_chunk_downloaded(0);
-        state.mark_chunk_verified(0);
-
-        let pending = state.get_pending_chunks();
+        let pending = state.pending_chunks();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0], 1);
     }
 
     #[test]
-    fn test_p2p_download_state_is_complete() {
-        let mut state = P2pDownloadState::new(
-            "abc123".to_string(),
-            "test.bin".to_string(),
-            256 * 1024, // Single chunk
-            "/tmp/test.tmp".to_string(),
-            "/downloads/test.bin".to_string(),
+    fn test_is_complete() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            256 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
         );
 
         state.init_chunks(None);
         assert!(!state.is_complete());
 
-        state.mark_chunk_downloaded(0);
+        state.mark_downloaded(0);
         assert!(!state.is_complete());
 
-        state.mark_chunk_verified(0);
+        state.mark_verified(0);
         assert!(state.is_complete());
     }
 
     #[test]
     fn test_add_peer() {
-        let mut state = P2pDownloadState::new(
-            "abc123".to_string(),
-            "test.bin".to_string(),
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
             1024,
-            "/tmp/test.tmp".to_string(),
-            "/downloads/test.bin".to_string(),
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
         );
 
-        state.add_peer("peer1".to_string());
-        state.add_peer("peer2".to_string());
-        state.add_peer("peer1".to_string()); // Duplicate
+        state.add_peer("peer1".into());
+        state.add_peer("peer2".into());
+        state.add_peer("peer1".into()); // dup
 
-        assert_eq!(state.known_peers.len(), 2);
+        assert_eq!(state.peers.len(), 2);
     }
 
     #[test]
-    fn test_meta_path_for() {
-        let temp_path = PathBuf::from("/downloads/test.tmp");
-        let meta_path = meta_path_for(&temp_path);
-        assert_eq!(
-            meta_path.to_str().unwrap(),
-            "/downloads/.test.tmp.chiral.p2p.meta.json"
+    fn test_meta_path() {
+        let tmp = PathBuf::from("/dl/test.tmp");
+        let path = meta_path(&tmp);
+        assert_eq!(path.to_str().unwrap(), "/dl/.test.tmp.chiral.p2p.meta.json");
+    }
+
+    #[test]
+    fn test_mark_failed_reduces_verified() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
         );
+
+        state.init_chunks(None);
+        state.mark_downloaded(0);
+        state.mark_verified(0);
+
+        let before = state.verified_bytes;
+        state.mark_failed(0);
+
+        assert!(state.verified_bytes < before);
+        assert_eq!(state.chunks[0].state, ChunkState::Failed);
     }
 }
