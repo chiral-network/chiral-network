@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
 // 256kb chunks like ipfs
