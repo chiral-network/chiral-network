@@ -1752,6 +1752,38 @@ impl TestResults {
     }
 }
 
+// reputation score calc with time decay
+
+/// config for rep score calc
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepScoreCfg {
+    pub half_life_secs: u64,      // decay half-life in seconds
+    pub grace_period_secs: u64,   // no decay within this window
+    pub base_score: f64,
+    pub min_score: f64,
+    pub max_score: f64,
+    pub pos_weight: f64,          // weight for positive events
+    pub neg_weight: f64,          // weight for negative events
+    pub max_events: usize,
+    pub min_events_confident: usize,
+}
+
+impl Default for RepScoreCfg {
+    fn default() -> Self {
+        Self {
+            half_life_secs: 7 * 24 * 3600, // 7 days
+            grace_period_secs: 3600,       // 1 hour
+            base_score: 0.5,
+            min_score: 0.0,
+            max_score: 1.0,
+            pos_weight: 1.0,
+            neg_weight: 1.5,               // negative events hurt more
+            max_events: 1000,
+            min_events_confident: 5,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
