@@ -1921,6 +1921,34 @@ impl RepScoreCalc {
             avg_decay,
         }
     }
+
+    pub fn calc_batch(
+        &self,
+        peer_ids: &[String],
+        events: &[ReputationEvent],
+    ) -> HashMap<String, RepScoreResult> {
+        let cur_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        peer_ids
+            .iter()
+            .map(|id| (id.clone(), self.calc_score_at(id, events, cur_ts)))
+            .collect()
+    }
+
+    pub fn extract_peer_ids(events: &[ReputationEvent]) -> Vec<String> {
+        let mut ids: Vec<String> = events.iter().map(|e| e.peer_id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    pub fn calc_all(&self, events: &[ReputationEvent]) -> HashMap<String, RepScoreResult> {
+        let ids = Self::extract_peer_ids(events);
+        self.calc_batch(&ids, events)
+    }
 }
 
 impl Default for RepScoreCalc {
