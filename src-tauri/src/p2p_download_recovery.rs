@@ -1099,3 +1099,17 @@ pub async fn p2p_remove_recovery(tmp_path: String) -> Result<(), String> {
     remove_meta(&tmp).await;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn p2p_verify_recovery(tmp_path: String) -> Result<VerifyResult, String> {
+    let tmp = PathBuf::from(&tmp_path);
+    let path = meta_path(&tmp);
+
+    let mut state = load(&path).await?;
+    let res = verify_all(&mut state).await?;
+
+    // persist updated state
+    persist(&state).await?;
+
+    Ok(res)
+}
