@@ -1784,6 +1784,19 @@ impl Default for RepScoreCfg {
     }
 }
 
+/// result from rep score calc
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepScoreResult {
+    pub score: f64,
+    pub event_cnt: usize,
+    pub pos_sum: f64,
+    pub neg_sum: f64,
+    pub confident: bool,
+    pub oldest_ts: Option<u64>,
+    pub newest_ts: Option<u64>,
+    pub avg_decay: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
