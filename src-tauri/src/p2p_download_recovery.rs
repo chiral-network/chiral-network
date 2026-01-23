@@ -190,6 +190,30 @@ impl DlState {
             self.updated_at = now_unix();
         }
     }
+
+    // count chunks by state
+    pub fn stats(&self) -> ChunkStats {
+        let mut s = ChunkStats::default();
+        for c in &self.chunks {
+            match c.state {
+                ChunkState::Pending => s.pending += 1,
+                ChunkState::Downloaded => s.downloaded += 1,
+                ChunkState::Verified => s.verified += 1,
+                ChunkState::Failed => s.failed += 1,
+            }
+        }
+        s.total = self.chunks.len();
+        s
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChunkStats {
+    pub total: usize,
+    pub pending: usize,
+    pub downloaded: usize,
+    pub verified: usize,
+    pub failed: usize,
 }
 
 pub fn meta_path(tmp: &Path) -> PathBuf {
