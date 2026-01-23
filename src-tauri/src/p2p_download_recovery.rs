@@ -301,6 +301,12 @@ impl DlState {
         now.saturating_sub(self.updated_at) > secs
     }
 
+    // set encrypted flag
+    pub fn set_encrypted(&mut self, enc: bool) {
+        self.encrypted = enc;
+        self.updated_at = now_unix();
+    }
+
     // count chunks by state
     pub fn stats(&self) -> ChunkStats {
         let mut s = ChunkStats::default();
