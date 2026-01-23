@@ -1797,6 +1797,35 @@ pub struct RepScoreResult {
     pub avg_decay: f64,
 }
 
+/// calculator for rep scores with time decay
+pub struct RepScoreCalc {
+    cfg: RepScoreCfg,
+}
+
+impl RepScoreCalc {
+    pub fn new() -> Self {
+        Self { cfg: RepScoreCfg::default() }
+    }
+
+    pub fn with_cfg(cfg: RepScoreCfg) -> Self {
+        Self { cfg }
+    }
+
+    pub fn cfg(&self) -> &RepScoreCfg {
+        &self.cfg
+    }
+
+    pub fn set_cfg(&mut self, cfg: RepScoreCfg) {
+        self.cfg = cfg;
+    }
+}
+
+impl Default for RepScoreCalc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
