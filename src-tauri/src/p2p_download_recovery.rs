@@ -1043,4 +1043,26 @@ mod tests {
         state.updated_at = 0;
         assert!(state.is_stalled(60));
     }
+
+    #[test]
+    fn test_remove_peer() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.add_peer("peer1".into());
+        state.add_peer("peer2".into());
+        assert_eq!(state.peer_cnt(), 2);
+
+        assert!(state.remove_peer("peer1"));
+        assert_eq!(state.peer_cnt(), 1);
+
+        // remove nonexistent
+        assert!(!state.remove_peer("peer3"));
+        assert_eq!(state.peer_cnt(), 1);
+    }
 }
