@@ -295,6 +295,12 @@ impl DlState {
         }
     }
 
+    // check if stalled (no update in given seconds)
+    pub fn is_stalled(&self, secs: u64) -> bool {
+        let now = now_unix();
+        now.saturating_sub(self.updated_at) > secs
+    }
+
     // count chunks by state
     pub fn stats(&self) -> ChunkStats {
         let mut s = ChunkStats::default();
