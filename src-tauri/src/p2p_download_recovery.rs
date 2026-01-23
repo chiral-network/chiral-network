@@ -1066,3 +1066,36 @@ mod tests {
         assert_eq!(state.peer_cnt(), 1);
     }
 }
+
+// =========================================================================
+// tauri commands
+// =========================================================================
+
+#[tauri::command]
+pub async fn p2p_scan_incomplete(dl_dir: String) -> Result<Vec<RecoverInfo>, String> {
+    let dir = PathBuf::from(dl_dir);
+    let states = scan_incomplete(&dir).await;
+    Ok(states.iter().map(RecoverInfo::from).collect())
+}
+
+#[tauri::command]
+pub async fn p2p_get_recovery(tmp_path: String) -> Result<Option<RecoverInfo>, String> {
+    let tmp = PathBuf::from(&tmp_path);
+    let path = meta_path(&tmp);
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    match load(&path).await {
+        Ok(state) => Ok(Some(RecoverInfo::from(&state))),
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+pub async fn p2p_remove_recovery(tmp_path: String) -> Result<(), String> {
+    let tmp = PathBuf::from(&tmp_path);
+    remove_meta(&tmp).await;
+    Ok(())
+}
