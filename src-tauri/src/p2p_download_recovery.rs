@@ -1113,3 +1113,11 @@ pub async fn p2p_verify_recovery(tmp_path: String) -> Result<VerifyResult, Strin
 
     Ok(res)
 }
+
+#[tauri::command]
+pub async fn p2p_get_stats(tmp_path: String) -> Result<ChunkStats, String> {
+    let tmp = PathBuf::from(&tmp_path);
+    let path = meta_path(&tmp);
+    let state = load(&path).await?;
+    Ok(state.stats())
+}
