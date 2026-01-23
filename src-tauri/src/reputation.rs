@@ -1836,6 +1836,16 @@ impl RepScoreCalc {
 
         (exp * std::f64::consts::LN_2).exp().clamp(0.0, 1.0)
     }
+
+    pub fn calc_weighted_impact(&self, event: &ReputationEvent, cur_ts: u64) -> f64 {
+        let decay = self.calc_decay(event.timestamp, cur_ts);
+        let weight = if event.impact >= 0.0 {
+            self.cfg.pos_weight
+        } else {
+            self.cfg.neg_weight
+        };
+        event.impact * weight * decay
+    }
 }
 
 impl Default for RepScoreCalc {
