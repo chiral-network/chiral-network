@@ -907,4 +907,24 @@ mod tests {
         let file_size = CHUNK_SIZE * 2 + 100;
         assert_eq!(ChunkMeta::size_for(2, file_size), 100);
     }
+
+    #[test]
+    fn test_unverified_chunks() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks(None);
+        state.mark_downloaded(0);
+        state.mark_downloaded(1);
+        state.mark_verified(0);
+
+        let unverified = state.unverified_chunks();
+        assert_eq!(unverified.len(), 1);
+        assert_eq!(unverified[0], 1);
+    }
 }
