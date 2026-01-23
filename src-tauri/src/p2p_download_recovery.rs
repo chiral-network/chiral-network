@@ -1121,3 +1121,8 @@ pub async fn p2p_get_stats(tmp_path: String) -> Result<ChunkStats, String> {
     let state = load(&path).await?;
     Ok(state.stats())
 }
+
+#[tauri::command]
+pub fn p2p_check_space(path: String, needed: u64) -> Result<bool, String> {
+    check_space(&PathBuf::from(path), needed)
+}
