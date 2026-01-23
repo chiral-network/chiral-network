@@ -890,4 +890,21 @@ mod tests {
         assert_eq!(s.verified, 1);
         assert_eq!(s.failed, 1);
     }
+
+    #[test]
+    fn test_chunk_offset_helpers() {
+        // test offset_for
+        assert_eq!(ChunkMeta::offset_for(0), 0);
+        assert_eq!(ChunkMeta::offset_for(1), CHUNK_SIZE);
+        assert_eq!(ChunkMeta::offset_for(4), CHUNK_SIZE * 4);
+
+        // test size_for with full chunks
+        let file_size = 1024 * 1024; // 1mb
+        assert_eq!(ChunkMeta::size_for(0, file_size), CHUNK_SIZE as u32);
+        assert_eq!(ChunkMeta::size_for(1, file_size), CHUNK_SIZE as u32);
+
+        // test last chunk smaller
+        let file_size = CHUNK_SIZE * 2 + 100;
+        assert_eq!(ChunkMeta::size_for(2, file_size), 100);
+    }
 }
