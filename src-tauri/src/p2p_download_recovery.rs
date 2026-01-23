@@ -531,11 +531,9 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-// check available disk space using statvfs
+// check available disk space
 #[cfg(unix)]
 pub fn check_space(path: &Path, needed: u64) -> Result<bool, String> {
-    use std::os::unix::fs::MetadataExt;
-
     let dir = if path.is_dir() {
         path.to_path_buf()
     } else {
