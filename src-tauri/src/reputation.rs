@@ -2312,4 +2312,154 @@ mod tests {
         assert_eq!(results.total_duration_ms, 60);
         assert_eq!(results.events_per_second, 1666);
     }
+
+    #[test]
+    fn test_rep_score_cfg_default() {
+        let cfg = RepScoreCfg::default();
+        assert_eq!(cfg.half_life_secs, 7 * 24 * 3600);
+        assert_eq!(cfg.grace_period_secs, 3600);
+        assert!((cfg.base_score - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_rep_score_calc_decay() {
+        let calc = RepScoreCalc::new();
+        let now = 1000000u64;
+
+        // current event has full impact
+        assert!((calc.calc_decay(now, now) - 1.0).abs() < f64::EPSILON);
+
+        // within grace period has full impact
+        let recent = now - 1800; // 30 min ago
+        assert!((calc.calc_decay(recent, now) - 1.0).abs() < f64::EPSILON);
+
+        // at half-life past grace has ~0.5 factor
+        let half_life = calc.cfg().half_life_secs;
+        let grace = calc.cfg().grace_period_secs;
+        let old = now - grace - half_life;
+        assert!((calc.calc_decay(old, now) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_rep_score_calc_no_events() {
+        let calc = RepScoreCalc::new();
+        let events: Vec<ReputationEvent> = vec![];
+        let res = calc.calc_score("peer-1", &events);
+
+        assert!((res.score - 0.5).abs() < f64::EPSILON);
+        assert_eq!(res.event_cnt, 0);
+        assert!(!res.confident);
+    }
+
+    #[test]
+    fn test_rep_score_calc_positive_events() {
+        let calc = RepScoreCalc::new();
+        let now = 1000000u64;
+
+        let events: Vec<ReputationEvent> = (0..10).map(|i| {
+            let mut e = ReputationEvent::new(
+                format!("e-{}", i),
+                "peer-1".to_string(),
+                "rater".to_string(),
+                EventType::FileTransferSuccess,
+                serde_json::json!({}),
+                10.0,
+            );
+            e.timestamp = now - (i * 60);
+            e
+        }).collect();
+
+        let res = calc.calc_score_at("peer-1", &events, now);
+        assert!(res.score > 0.5); // positive events push score up
+        assert_eq!(res.event_cnt, 10);
+        assert!(res.confident);
+    }
+
+    #[test]
+    fn test_rep_score_calc_negative_events() {
+        let calc = RepScoreCalc::new();
+        let now = 1000000u64;
+
+        let events: Vec<ReputationEvent> = (0..10).map(|i| {
+            let mut e = ReputationEvent::new(
+                format!("e-{}", i),
+                "peer-1".to_string(),
+                "rater".to_string(),
+                EventType::MaliciousBehaviorReport,
+                serde_json::json!({}),
+                -50.0,
+            );
+            e.timestamp = now - (i * 60);
+            e
+        }).collect();
+
+        let res = calc.calc_score_at("peer-1", &events, now);
+        assert!(res.score < 0.5); // negative events push score down
+    }
+
+    #[test]
+    fn test_rep_score_calc_filters_by_peer() {
+        let calc = RepScoreCalc::new();
+        let now = 1000000u64;
+
+        let mut e1 = ReputationEvent::new(
+            "e1".to_string(),
+            "peer-1".to_string(),
+            "rater".to_string(),
+            EventType::FileTransferSuccess,
+            serde_json::json!({}),
+            10.0,
+        );
+        e1.timestamp = now;
+
+        let mut e2 = ReputationEvent::new(
+            "e2".to_string(),
+            "peer-2".to_string(),
+            "rater".to_string(),
+            EventType::MaliciousBehaviorReport,
+            serde_json::json!({}),
+            -50.0,
+        );
+        e2.timestamp = now;
+
+        let events = vec![e1, e2];
+
+        // peer-1 should have good score
+        let r1 = calc.calc_score_at("peer-1", &events, now);
+        assert!(r1.score > 0.5);
+        assert_eq!(r1.event_cnt, 1);
+
+        // peer-2 should have bad score
+        let r2 = calc.calc_score_at("peer-2", &events, now);
+        assert!(r2.score < 0.5);
+        assert_eq!(r2.event_cnt, 1);
+    }
+
+    #[test]
+    fn test_rep_score_calc_batch() {
+        let calc = RepScoreCalc::new();
+        // use current time so event doesnt decay
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut e = ReputationEvent::new(
+            "e1".to_string(),
+            "peer-1".to_string(),
+            "rater".to_string(),
+            EventType::FileTransferSuccess,
+            serde_json::json!({}),
+            10.0,
+        );
+        e.timestamp = now;
+
+        let events = vec![e];
+        let ids = vec!["peer-1".to_string(), "peer-2".to_string()];
+        let results = calc.calc_batch(&ids, &events);
+
+        assert_eq!(results.len(), 2);
+        assert!(results["peer-1"].score > 0.5);
+        assert!((results["peer-2"].score - 0.5).abs() < f64::EPSILON);
+    }
 }
