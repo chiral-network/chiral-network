@@ -927,4 +927,27 @@ mod tests {
         assert_eq!(unverified.len(), 1);
         assert_eq!(unverified[0], 1);
     }
+
+    #[test]
+    fn test_recover_info_from() {
+        let mut state = DlState::new(
+            "abc123".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks(None);
+        state.mark_downloaded(0);
+        state.mark_verified(0);
+        state.add_peer("peer1".into());
+
+        let info: RecoverInfo = (&state).into();
+        assert_eq!(info.merkle_root, "abc123");
+        assert_eq!(info.file_name, "test.bin");
+        assert_eq!(info.file_size, 512 * 1024);
+        assert_eq!(info.pending_cnt, 1);
+        assert_eq!(info.peers.len(), 1);
+    }
 }
