@@ -1818,6 +1818,24 @@ impl RepScoreCalc {
     pub fn set_cfg(&mut self, cfg: RepScoreCfg) {
         self.cfg = cfg;
     }
+
+    // exponential decay: 2^(-age/half_life)
+    pub fn calc_decay(&self, event_ts: u64, cur_ts: u64) -> f64 {
+        if event_ts >= cur_ts {
+            return 1.0;
+        }
+
+        let age = cur_ts - event_ts;
+        if age <= self.cfg.grace_period_secs {
+            return 1.0;
+        }
+
+        let effective_age = age - self.cfg.grace_period_secs;
+        let half_life = self.cfg.half_life_secs as f64;
+        let exp = -(effective_age as f64) / half_life;
+
+        (exp * std::f64::consts::LN_2).exp().clamp(0.0, 1.0)
+    }
 }
 
 impl Default for RepScoreCalc {
