@@ -1616,4 +1616,448 @@ mod tests {
         assert_eq!(info.provider_count, 1);
         assert!(info.progress > 0.4 && info.progress < 0.6);
     }
+
+    // =========================================================================
+    // Multi-peer coordinator tests
+    // =========================================================================
+
+    #[test]
+    fn test_peer_stats_new() {
+        let stats = PeerStats::new("peer1".into());
+        assert_eq!(stats.peer_id, "peer1");
+        assert_eq!(stats.chunks_completed, 0);
+        assert_eq!(stats.chunks_failed, 0);
+        assert!(!stats.is_banned);
+    }
+
+    #[test]
+    fn test_peer_stats_record_success() {
+        let mut stats = PeerStats::new("peer1".into());
+
+        stats.record_success(256 * 1024, 1000); // 256KB in 1 second
+        assert_eq!(stats.chunks_completed, 1);
+        assert_eq!(stats.bytes_downloaded, 256 * 1024);
+        assert!(stats.avg_speed > 200_000.0); // ~256KB/s
+
+        stats.record_success(256 * 1024, 500); // faster
+        assert_eq!(stats.chunks_completed, 2);
+        assert!(stats.avg_speed > 300_000.0); // speed should increase
+    }
+
+    #[test]
+    fn test_peer_stats_record_failure() {
+        let mut stats = PeerStats::new("peer1".into());
+
+        for _ in 0..4 {
+            stats.record_failure();
+        }
+        assert_eq!(stats.chunks_failed, 4);
+        assert_eq!(stats.consecutive_fails, 4);
+        assert!(!stats.is_banned);
+
+        stats.record_failure(); // 5th failure
+        assert!(stats.is_banned);
+    }
+
+    #[test]
+    fn test_peer_stats_score() {
+        let mut stats = PeerStats::new("peer1".into());
+
+        // unknown peer has 0.5 reliability
+        let score = stats.score();
+        assert!(score > 0.0);
+
+        // after successes, score should increase
+        stats.record_success(1024 * 1024, 1000);
+        stats.record_success(1024 * 1024, 1000);
+        let new_score = stats.score();
+        assert!(new_score > score);
+
+        // banned peer has 0 score
+        stats.is_banned = true;
+        assert_eq!(stats.score(), 0.0);
+    }
+
+    #[test]
+    fn test_coordinator_new() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+        state.add_provider("peer2".into());
+
+        let coordinator = MultiPeerCoordinator::new(state);
+
+        assert_eq!(coordinator.peer_stats.len(), 2);
+        assert!(coordinator.peer_stats.contains_key("peer1"));
+        assert!(coordinator.peer_stats.contains_key("peer2"));
+    }
+
+    #[test]
+    fn test_coordinator_add_remove_peer() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+
+        let mut coordinator = MultiPeerCoordinator::new(state);
+        assert_eq!(coordinator.peer_stats.len(), 0);
+
+        coordinator.add_peer("peer1".into());
+        assert_eq!(coordinator.peer_stats.len(), 1);
+
+        coordinator.add_peer("peer2".into());
+        assert_eq!(coordinator.peer_stats.len(), 2);
+
+        coordinator.remove_peer("peer1");
+        assert_eq!(coordinator.peer_stats.len(), 1);
+        assert!(!coordinator.peer_stats.contains_key("peer1"));
+    }
+
+    #[test]
+    fn test_coordinator_assign_chunk() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+
+        let mut coordinator = MultiPeerCoordinator::new(state);
+
+        assert!(coordinator.assign_chunk(0, "peer1".into()));
+        assert!(!coordinator.assign_chunk(0, "peer1".into())); // already assigned
+
+        assert_eq!(coordinator.assignments.len(), 1);
+        assert_eq!(coordinator.assignments.get(&0).unwrap().peer_id, "peer1");
+    }
+
+    #[test]
+    fn test_coordinator_complete_chunk() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+
+        let mut coordinator = MultiPeerCoordinator::new(state);
+        coordinator.assign_chunk(0, "peer1".into());
+
+        coordinator.complete_chunk(0, 256 * 1024, 1000);
+
+        assert!(coordinator.assignments.is_empty());
+        assert_eq!(coordinator.state.chunks[0].state, ChunkState::Downloaded);
+        assert_eq!(coordinator.peer_stats.get("peer1").unwrap().chunks_completed, 1);
+    }
+
+    #[test]
+    fn test_coordinator_fail_chunk() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+        state.add_provider("peer2".into());
+
+        let mut coordinator = MultiPeerCoordinator::new(state);
+        coordinator.assign_chunk(0, "peer1".into());
+
+        // fail should reassign to different peer
+        let reassigned = coordinator.fail_chunk(0);
+        assert!(reassigned); // should have reassigned
+
+        assert_eq!(coordinator.peer_stats.get("peer1").unwrap().chunks_failed, 1);
+    }
+
+    #[test]
+    fn test_coordinator_pending_chunks() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+
+        let mut coordinator = MultiPeerCoordinator::new(state);
+
+        let pending = coordinator.pending_chunks();
+        assert_eq!(pending.len(), 2); // 512KB = 2 chunks
+
+        coordinator.assign_chunk(0, "peer1".into());
+
+        let pending = coordinator.pending_chunks();
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn test_coordinator_progress_info() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+
+        let mut coordinator = MultiPeerCoordinator::new(state);
+
+        let progress = coordinator.progress_info();
+        assert_eq!(progress.total_chunks, 2);
+        assert_eq!(progress.pending_chunks, 2);
+        assert_eq!(progress.verified_chunks, 0);
+        assert_eq!(progress.total_peers, 1);
+
+        coordinator.assign_chunk(0, "peer1".into());
+
+        let progress = coordinator.progress_info();
+        assert_eq!(progress.in_flight_chunks, 1);
+    }
+
+    #[test]
+    fn test_coordinator_available_peers() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            1024 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+        state.add_provider("peer2".into());
+
+        let mut coordinator = MultiPeerCoordinator::new(state);
+
+        // both peers should be available
+        let available = coordinator.available_peers();
+        assert_eq!(available.len(), 2);
+
+        // ban peer1
+        coordinator.peer_stats.get_mut("peer1").unwrap().is_banned = true;
+
+        let available = coordinator.available_peers();
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].0, "peer2");
+    }
+
+    // =========================================================================
+    // Corruption detection tests
+    // =========================================================================
+
+    #[test]
+    fn test_corruption_report_empty() {
+        let report = CorruptionReport {
+            total_checked: 0,
+            verified_ok: 0,
+            corrupted: Vec::new(),
+            missing: Vec::new(),
+        };
+
+        assert!(report.corrupted.is_empty());
+        assert!(report.missing.is_empty());
+    }
+
+    #[test]
+    fn test_mark_corrupted_for_redownload() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.mark_downloaded(0);
+        state.mark_downloaded(1);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let marked = rt.block_on(async {
+            mark_corrupted_for_redownload(&mut state, &[0]).await
+        });
+
+        assert_eq!(marked, 1);
+        assert_eq!(state.chunks[0].state, ChunkState::Failed);
+        assert_eq!(state.chunks[1].state, ChunkState::Downloaded);
+    }
+
+    // =========================================================================
+    // Error display tests
+    // =========================================================================
+
+    #[test]
+    fn test_error_display() {
+        assert_eq!(ChunkNetErr::NotFound.to_string(), "not found");
+        assert_eq!(ChunkNetErr::IoErr("test".into()).to_string(), "io error: test");
+        assert_eq!(
+            ChunkNetErr::HashMismatch { idx: 5, expected: "a".into(), got: "b".into() }.to_string(),
+            "chunk 5 hash mismatch: a != b"
+        );
+        assert_eq!(ChunkNetErr::MerkleInvalid.to_string(), "merkle root invalid");
+        assert_eq!(ChunkNetErr::NoProviders.to_string(), "no providers found");
+        assert_eq!(ChunkNetErr::ManifestMissing.to_string(), "manifest missing");
+        assert_eq!(ChunkNetErr::ParseErr("json".into()).to_string(), "parse error: json");
+    }
+
+    // =========================================================================
+    // Edge case tests
+    // =========================================================================
+
+    #[test]
+    fn test_empty_file() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "empty.bin".into(),
+            0,
+            "/tmp/empty.tmp".into(),
+            "/dl/empty.bin".into(),
+        );
+
+        state.init_chunks();
+        assert!(state.chunks.is_empty());
+        assert!(state.is_complete());
+        assert_eq!(state.progress(), 1.0);
+    }
+
+    #[test]
+    fn test_small_file() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "small.bin".into(),
+            100, // less than one chunk
+            "/tmp/small.tmp".into(),
+            "/dl/small.bin".into(),
+        );
+
+        state.init_chunks();
+        assert_eq!(state.chunks.len(), 1);
+        assert_eq!(state.chunks[0].size, 100);
+    }
+
+    #[test]
+    fn test_exact_chunk_boundary() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "exact.bin".into(),
+            CHUNK_SIZE * 3, // exactly 3 chunks
+            "/tmp/exact.tmp".into(),
+            "/dl/exact.bin".into(),
+        );
+
+        state.init_chunks();
+        assert_eq!(state.chunks.len(), 3);
+        assert_eq!(state.chunks[0].size, CHUNK_SIZE as u32);
+        assert_eq!(state.chunks[1].size, CHUNK_SIZE as u32);
+        assert_eq!(state.chunks[2].size, CHUNK_SIZE as u32);
+    }
+
+    #[test]
+    fn test_single_chunk_merkle() {
+        let h = hash_chunk(b"single chunk data");
+        let root = compute_merkle_root(&[h.clone()]).unwrap();
+        assert!(verify_merkle_root(&root, &[h]).unwrap());
+    }
+
+    #[test]
+    fn test_large_chunk_count_merkle() {
+        let hashes: Vec<String> = (0..100)
+            .map(|i| hash_chunk(format!("chunk {}", i).as_bytes()))
+            .collect();
+
+        let root = compute_merkle_root(&hashes).unwrap();
+        assert_eq!(root.len(), 64);
+        assert!(verify_merkle_root(&root, &hashes).unwrap());
+    }
+
+    #[test]
+    fn test_mark_failed_verified_chunk() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+
+        state.mark_downloaded(0);
+        state.mark_verified(0);
+        assert!(state.verified_bytes > 0);
+
+        let bytes_before = state.verified_bytes;
+        state.mark_failed(0);
+
+        // verified_bytes should decrease
+        assert!(state.verified_bytes < bytes_before);
+        assert_eq!(state.chunks[0].state, ChunkState::Failed);
+    }
+
+    #[test]
+    fn test_pending_chunks_includes_failed() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+
+        state.mark_downloaded(0);
+        state.mark_verified(0);
+        state.mark_downloaded(1);
+        state.mark_failed(1);
+
+        let pending = state.pending_chunks();
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains(&1)); // failed should be in pending
+    }
+
+    #[test]
+    fn test_coordinator_max_concurrent() {
+        let mut state = DlState::new(
+            "merkle123".into(),
+            "test.bin".into(),
+            CHUNK_SIZE * 10, // 10 chunks
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+
+        let mut coordinator = MultiPeerCoordinator::new(state);
+        coordinator.max_concurrent_per_peer = 2;
+
+        // assign 2 chunks
+        coordinator.assign_chunk(0, "peer1".into());
+        coordinator.assign_chunk(1, "peer1".into());
+
+        // peer1 should not be available now
+        let available = coordinator.available_peers();
+        assert!(available.is_empty());
+    }
 }
