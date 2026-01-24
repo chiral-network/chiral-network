@@ -632,6 +632,94 @@ fn now_unix() -> u64 {
 }
 
 // =========================================================================
+// tauri commands
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryInfo {
+    pub merkle_root: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub progress: f32,
+    pub pending_chunks: usize,
+    pub verified_chunks: usize,
+    pub failed_chunks: usize,
+    pub provider_count: usize,
+    pub is_complete: bool,
+}
+
+impl From<&DlState> for RecoveryInfo {
+    fn from(s: &DlState) -> Self {
+        let verified = s.chunks.iter().filter(|c| c.state == ChunkState::Verified).count();
+        let failed = s.chunks.iter().filter(|c| c.state == ChunkState::Failed).count();
+        let pending = s.chunks.iter().filter(|c| c.state == ChunkState::Pending).count();
+
+        Self {
+            merkle_root: s.merkle_root.clone(),
+            file_name: s.file_name.clone(),
+            file_size: s.file_size,
+            progress: s.progress(),
+            pending_chunks: pending,
+            verified_chunks: verified,
+            failed_chunks: failed,
+            provider_count: s.providers.len(),
+            is_complete: s.is_complete(),
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_scan(dl_dir: String) -> Result<Vec<RecoveryInfo>, String> {
+    let dir = PathBuf::from(dl_dir);
+    let states = scan_incomplete(&dir).await;
+    Ok(states.iter().map(RecoveryInfo::from).collect())
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_get_state(tmp_path: String) -> Result<Option<RecoveryInfo>, String> {
+    let tmp = PathBuf::from(&tmp_path);
+
+    match load(&tmp).await {
+        Ok(state) => Ok(Some(RecoveryInfo::from(&state))),
+        Err(ChunkNetErr::IoErr(_)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_verify(tmp_path: String) -> Result<VerifyResult, String> {
+    let tmp = PathBuf::from(&tmp_path);
+    let mut state = load(&tmp).await.map_err(|e| e.to_string())?;
+
+    let result = verify_all_chunks(&mut state).await.map_err(|e| e.to_string())?;
+    persist(&state).await.map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_remove(tmp_path: String) -> Result<(), String> {
+    let tmp = PathBuf::from(&tmp_path);
+    remove_meta(&tmp).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn p2p_chunk_compute_merkle(chunk_hashes: Vec<String>) -> Result<String, String> {
+    compute_merkle_root(&chunk_hashes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn p2p_chunk_verify_merkle(merkle_root: String, chunk_hashes: Vec<String>) -> Result<bool, String> {
+    verify_merkle_root(&merkle_root, &chunk_hashes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn p2p_chunk_hash(data: Vec<u8>) -> String {
+    hash_chunk(&data)
+}
+
+// =========================================================================
 // tests
 // =========================================================================
 
