@@ -37,6 +37,9 @@ pub mod encryption;
 pub mod keystore;
 pub mod manager;
 
+// P2P chunk network - real network integration for recovery
+pub mod p2p_chunk_network;
+
 // Proxy latency optimization module
 pub mod proxy_latency;
 
