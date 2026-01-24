@@ -178,8 +178,8 @@ async fn load_user_pools(app_handle: &AppHandle) -> Result<Vec<MiningPool>, Stri
     let content = std::fs::read_to_string(&pools_path)
         .map_err(|e| format!("Failed to read user pools: {}", e))?;
 
-    let pools: Vec<MiningPool> = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse user pools: {}", e))?;
+    let pools: Vec<MiningPool> =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse user pools: {}", e))?;
 
     info!("Loaded {} user-created pools from storage", pools.len());
     Ok(pools)
@@ -214,7 +214,10 @@ fn validate_pool_url(url: &str) -> Result<(String, u16), String> {
 
     let parts: Vec<&str> = url_without_protocol.split(':').collect();
     if parts.len() != 2 {
-        return Err("Pool URL must include host:port (e.g., stratum+tcp://pool.example.com:3333)".to_string());
+        return Err(
+            "Pool URL must include host:port (e.g., stratum+tcp://pool.example.com:3333)"
+                .to_string(),
+        );
     }
 
     let host = parts[0].to_string();
@@ -256,11 +259,18 @@ async fn check_pool_connectivity(host: &str, port: u16) -> bool {
 }
 
 /// Check pool connectivity with retry logic
-async fn check_pool_connectivity_with_retry(host: &str, port: u16, max_retries: u32) -> Result<(), String> {
+async fn check_pool_connectivity_with_retry(
+    host: &str,
+    port: u16,
+    max_retries: u32,
+) -> Result<(), String> {
     use tokio::time::{sleep, Duration};
 
     for attempt in 1..=max_retries {
-        info!("Connection attempt {}/{} to {}:{}", attempt, max_retries, host, port);
+        info!(
+            "Connection attempt {}/{} to {}:{}",
+            attempt, max_retries, host, port
+        );
 
         if check_pool_connectivity(host, port).await {
             return Ok(());
@@ -274,7 +284,10 @@ async fn check_pool_connectivity_with_retry(host: &str, port: u16, max_retries: 
         }
     }
 
-    Err(format!("Failed to connect to {}:{} after {} attempts", host, port, max_retries))
+    Err(format!(
+        "Failed to connect to {}:{} after {} attempts",
+        host, port, max_retries
+    ))
 }
 
 #[command]
@@ -308,16 +321,14 @@ pub async fn create_mining_pool(
     app_handle: AppHandle,
     address: String,
     name: String,
+    url: String,
     description: String,
     fee_percentage: f64,
     min_payout: f64,
     payment_method: String,
     region: String,
 ) -> Result<MiningPool, String> {
-    info!(
-        "Creating new mining pool: {} by {}",
-        name, address
-    );
+    info!("Creating new mining pool: {} by {}", name, address);
 
     // Validate pool name
     if name.trim().is_empty() {
@@ -326,6 +337,12 @@ pub async fn create_mining_pool(
     if name.len() > 100 {
         return Err("Pool name must be 100 characters or less".to_string());
     }
+
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("Pool URL is required".to_string());
+    }
+    validate_pool_url(&url)?;
 
     // Validate fee percentage
     if fee_percentage < 0.0 || fee_percentage > 10.0 {
@@ -350,7 +367,7 @@ pub async fn create_mining_pool(
     let new_pool = MiningPool {
         id: pool_id.clone(),
         name: name.clone(),
-        url: format!("stratum+tcp://{}:3333", pool_id),
+        url,
         description,
         fee_percentage,
         miners_count: 1,
@@ -448,7 +465,8 @@ pub async fn leave_mining_pool() -> Result<(), String> {
         return Err("Not currently connected to any pool".to_string());
     }
 
-    let pool_name = current_pool.as_ref()
+    let pool_name = current_pool
+        .as_ref()
         .map(|p| p.pool.name.clone())
         .unwrap_or_else(|| "Unknown Pool".to_string());
 
@@ -500,7 +518,8 @@ pub async fn get_pool_stats() -> Result<Option<PoolStats>, String> {
                 // Estimate 24h payout based on share percentage and pool blocks
                 let daily_blocks = pool_info.pool.blocks_found_24h as f64;
                 let block_reward = 2.0; // Chiral block reward
-                let expected_reward = (pool_info.stats.your_share_percentage / 100.0) * daily_blocks * block_reward;
+                let expected_reward =
+                    (pool_info.stats.your_share_percentage / 100.0) * daily_blocks * block_reward;
                 pool_info.stats.estimated_payout_24h = expected_reward;
             }
         }
@@ -589,4 +608,46 @@ pub async fn update_pool_discovery() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::ErrorKind;
+    use tokio::net::TcpListener;
+
+    #[test]
+    fn validate_pool_url_ok() {
+        let (host, port) = validate_pool_url("stratum+tcp://localhost:3333").unwrap();
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 3333);
+    }
+
+    #[test]
+    fn validate_pool_url_err() {
+        assert!(validate_pool_url("http://localhost:3333").is_err());
+        assert!(validate_pool_url("stratum+tcp://localhost").is_err());
+    }
+
+    #[tokio::test]
+    async fn pool_connectivity_ok() {
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!("skipping pool connectivity test: {}", err);
+                return;
+            }
+            Err(err) => panic!("failed to bind test listener: {}", err),
+        };
+        let addr = listener.local_addr().unwrap();
+
+        let accept_task = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+
+        let ok = check_pool_connectivity("127.0.0.1", addr.port()).await;
+        assert!(ok);
+
+        let _ = accept_task.await;
+    }
 }

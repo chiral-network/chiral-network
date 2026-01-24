@@ -18,6 +18,7 @@
     "test:e2e:real": "vitest run tests/e2e/real-network.test.ts --no-coverage --reporter=verbose",
     "test:e2e:real:uploader": "cross-env E2E_CROSS_MACHINE=true E2E_NODE_ROLE=uploader vitest run tests/e2e/real-network.test.ts --reporter=verbose",
     "test:e2e:real:downloader": "cross-env E2E_CROSS_MACHINE=true E2E_NODE_ROLE=downloader vitest run tests/e2e/real-network.test.ts --reporter=verbose",
+    "test:tauri:pool": "node scripts/tauri/minepool-wd.mjs",
     "signaling-server": "node src/lib/services/server/signalingServer.js"
   },
   "dependencies": {
