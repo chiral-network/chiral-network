@@ -136,6 +136,21 @@ On the Downloader machine:
 export E2E_ATTACH=true
 export E2E_UPLOADER_API_URL=http://<VM_PUBLIC_IP>:8081
 export E2E_DOWNLOADER_API_URL=http://127.0.0.1:8082
+
+# Optional: tune real-network timeouts (milliseconds)
+# - Global P2P download wait (WebRTC/Bitswap/FTP): default 600000 (10min)
+export E2E_P2P_DOWNLOAD_TIMEOUT_MS=600000
+# - Per-protocol overrides (take precedence over E2E_P2P_DOWNLOAD_TIMEOUT_MS)
+export E2E_WEBRTC_DOWNLOAD_TIMEOUT_MS=180000
+export E2E_BITSWAP_DOWNLOAD_TIMEOUT_MS=240000
+export E2E_FTP_DOWNLOAD_TIMEOUT_MS=180000
+# - DHT search per-attempt budget (overall search timeout is set by the test)
+export E2E_SEARCH_ATTEMPT_TIMEOUT_MS=15000
+
+# Optional: seeder connection grace period before WebRTC fails as "no reachable seeders"
+# (useful for NAT/relay scenarios; default 5000ms, max 120000ms)
+export E2E_SEEDER_CONNECT_WAIT_MS=30000
+
 npm run test:e2e:real
 ```
 
