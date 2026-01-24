@@ -2060,4 +2060,345 @@ mod tests {
         let available = coordinator.available_peers();
         assert!(available.is_empty());
     }
+
+    // =========================================================================
+    // Integration tests with file I/O
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_persist_and_load() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_test_{}", rand::random::<u32>()));
+        let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+
+        let tmp_file = tmp_dir.join("test_download.tmp");
+        let meta_file = tmp_dir.join("test_download.tmp.chiral.chunk.meta.json");
+
+        // create a test file
+        tokio::fs::write(&tmp_file, b"test content").await.unwrap();
+
+        let mut state = DlState::new(
+            "merkle_persist_test".into(),
+            "test.bin".into(),
+            512 * 1024,
+            tmp_file.to_string_lossy().to_string(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+        state.add_provider("peer1".into());
+        state.mark_downloaded(0);
+
+        // persist
+        persist(&state).await.unwrap();
+
+        // verify meta file exists
+        assert!(meta_file.exists());
+
+        // load
+        let loaded = load(&tmp_file).await.unwrap();
+        assert_eq!(loaded.merkle_root, "merkle_persist_test");
+        assert_eq!(loaded.providers.len(), 1);
+        assert_eq!(loaded.chunks[0].state, ChunkState::Downloaded);
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_verify_chunk_from_disk_valid() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_test_{}", rand::random::<u32>()));
+        let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+
+        let tmp_file = tmp_dir.join("test_verify.bin");
+
+        // write test data
+        let chunk_data = b"hello world test chunk data";
+        tokio::fs::write(&tmp_file, chunk_data).await.unwrap();
+
+        let chunk = ChunkMeta {
+            idx: 0,
+            offset: 0,
+            size: chunk_data.len() as u32,
+            hash: hash_chunk(chunk_data),
+            state: ChunkState::Downloaded,
+        };
+
+        let result = verify_chunk_from_disk(&tmp_file, &chunk).await.unwrap();
+        assert!(result);
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_verify_chunk_from_disk_corrupted() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_test_{}", rand::random::<u32>()));
+        let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+
+        let tmp_file = tmp_dir.join("test_corrupted.bin");
+
+        // write corrupted data
+        let original_data = b"original data";
+        let corrupted_data = b"corrupted!!!";
+        tokio::fs::write(&tmp_file, corrupted_data).await.unwrap();
+
+        let chunk = ChunkMeta {
+            idx: 0,
+            offset: 0,
+            size: corrupted_data.len() as u32,
+            hash: hash_chunk(original_data), // hash of original, not corrupted
+            state: ChunkState::Downloaded,
+        };
+
+        let result = verify_chunk_from_disk(&tmp_file, &chunk).await.unwrap();
+        assert!(!result); // should fail verification
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_scan_incomplete_finds_downloads() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_scan_{}", rand::random::<u32>()));
+        let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+
+        // create an incomplete download
+        let tmp_file = tmp_dir.join("incomplete.tmp");
+        tokio::fs::write(&tmp_file, b"partial data").await.unwrap();
+
+        let mut state = DlState::new(
+            "merkle_scan_test".into(),
+            "incomplete.bin".into(),
+            1024 * 1024,
+            tmp_file.to_string_lossy().to_string(),
+            "/dl/incomplete.bin".into(),
+        );
+        state.init_chunks();
+        state.mark_downloaded(0); // only first chunk done
+
+        persist(&state).await.unwrap();
+
+        // scan for incomplete
+        let incomplete = scan_incomplete(&tmp_dir).await;
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].merkle_root, "merkle_scan_test");
+        assert!(!incomplete[0].is_complete());
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_scan_incomplete_ignores_complete() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_scan_c_{}", rand::random::<u32>()));
+        let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+
+        // create a complete download
+        let tmp_file = tmp_dir.join("complete.tmp");
+        tokio::fs::write(&tmp_file, b"complete data").await.unwrap();
+
+        let mut state = DlState::new(
+            "merkle_complete_test".into(),
+            "complete.bin".into(),
+            512 * 1024,
+            tmp_file.to_string_lossy().to_string(),
+            "/dl/complete.bin".into(),
+        );
+        state.init_chunks();
+        // mark all chunks verified
+        for i in 0..state.chunks.len() {
+            state.mark_downloaded(i as u32);
+            state.mark_verified(i as u32);
+        }
+
+        persist(&state).await.unwrap();
+
+        // scan should not find complete downloads
+        let incomplete = scan_incomplete(&tmp_dir).await;
+        assert!(incomplete.is_empty());
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_detect_corruption_missing_chunks() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_corrupt_{}", rand::random::<u32>()));
+        let chunks_dir = tmp_dir.join("chunks");
+        let file_dir = chunks_dir.join("merkle_missing_test");
+        let _ = tokio::fs::create_dir_all(&file_dir).await;
+
+        let mut state = DlState::new(
+            "merkle_missing_test".into(),
+            "test.bin".into(),
+            512 * 1024,
+            tmp_dir.join("test.tmp").to_string_lossy().to_string(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+
+        // set chunk hashes
+        state.chunks[0].hash = hash_chunk(b"chunk 0 data");
+        state.chunks[1].hash = hash_chunk(b"chunk 1 data");
+
+        // mark as downloaded but don't create files
+        state.mark_downloaded(0);
+        state.mark_downloaded(1);
+
+        // detect corruption
+        let report = detect_corruption(&state, &chunks_dir).await.unwrap();
+
+        // both chunks should be missing
+        assert_eq!(report.missing.len(), 2);
+        assert!(report.missing.contains(&0));
+        assert!(report.missing.contains(&1));
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_detect_corruption_actual_corruption() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_corrupt2_{}", rand::random::<u32>()));
+        let chunks_dir = tmp_dir.join("chunks");
+        let file_dir = chunks_dir.join("merkle_corrupt_test");
+        let _ = tokio::fs::create_dir_all(&file_dir).await;
+
+        let mut state = DlState::new(
+            "merkle_corrupt_test".into(),
+            "test.bin".into(),
+            512 * 1024,
+            tmp_dir.join("test.tmp").to_string_lossy().to_string(),
+            "/dl/test.bin".into(),
+        );
+        state.init_chunks();
+
+        // set correct hashes
+        let chunk0_data = b"correct chunk 0 data";
+        let chunk1_data = b"correct chunk 1 data";
+        state.chunks[0].hash = hash_chunk(chunk0_data);
+        state.chunks[1].hash = hash_chunk(chunk1_data);
+        state.mark_downloaded(0);
+        state.mark_downloaded(1);
+
+        // write correct chunk 0
+        tokio::fs::write(file_dir.join("chunk_0.dat"), chunk0_data).await.unwrap();
+        // write corrupted chunk 1
+        tokio::fs::write(file_dir.join("chunk_1.dat"), b"CORRUPTED DATA!!!").await.unwrap();
+
+        // detect corruption
+        let report = detect_corruption(&state, &chunks_dir).await.unwrap();
+
+        assert_eq!(report.total_checked, 2);
+        assert_eq!(report.verified_ok, 1);
+        assert_eq!(report.corrupted.len(), 1);
+        assert!(report.corrupted.contains(&1));
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_full_download_flow() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_flow_{}", rand::random::<u32>()));
+        let chunks_dir = tmp_dir.join("chunks");
+        let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+
+        let tmp_file = tmp_dir.join("test_download.tmp");
+        tokio::fs::write(&tmp_file, b"").await.unwrap();
+
+        // simulate download start
+        let chunk0_data = b"chunk 0 content here";
+        let chunk1_data = b"chunk 1 content here";
+        let h0 = hash_chunk(chunk0_data);
+        let h1 = hash_chunk(chunk1_data);
+
+        use crate::manager::{ChunkInfo as MgrChunk, FileManifest};
+        let merkle_root = compute_merkle_root(&[h0.clone(), h1.clone()]).unwrap();
+
+        let manifest = FileManifest {
+            merkle_root: merkle_root.clone(),
+            chunks: vec![
+                MgrChunk {
+                    index: 0,
+                    hash: h0.clone(),
+                    size: chunk0_data.len(),
+                    encrypted_hash: "".into(),
+                    encrypted_size: 0,
+                },
+                MgrChunk {
+                    index: 1,
+                    hash: h1.clone(),
+                    size: chunk1_data.len(),
+                    encrypted_hash: "".into(),
+                    encrypted_size: 0,
+                },
+            ],
+            encrypted_key_bundle: None,
+        };
+
+        // call on_download_start
+        let state = on_download_start(
+            &merkle_root,
+            "test.bin",
+            (chunk0_data.len() + chunk1_data.len()) as u64,
+            &tmp_file.to_string_lossy(),
+            "/dl/test.bin",
+            Some(&manifest),
+        ).await.unwrap();
+
+        assert_eq!(state.merkle_root, merkle_root);
+        assert_eq!(state.chunks.len(), 2);
+        assert_eq!(state.chunks[0].hash, h0);
+        assert_eq!(state.chunks[1].hash, h1);
+
+        // simulate chunk complete
+        on_chunk_complete(&tmp_file.to_string_lossy(), 0, &h0).await.unwrap();
+        on_chunk_complete(&tmp_file.to_string_lossy(), 1, &h1).await.unwrap();
+
+        // simulate chunk verified
+        on_chunk_verified(&tmp_file.to_string_lossy(), 0).await.unwrap();
+        on_chunk_verified(&tmp_file.to_string_lossy(), 1).await.unwrap();
+
+        // load and check state
+        let final_state = load(&tmp_file).await.unwrap();
+        assert!(final_state.is_complete());
+
+        // call on_download_complete
+        on_download_complete(&tmp_file.to_string_lossy()).await.unwrap();
+
+        // meta file should be removed
+        let meta_path = tmp_dir.join("test_download.tmp.chiral.chunk.meta.json");
+        assert!(!meta_path.exists());
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_meta() {
+        let tmp_dir = std::env::temp_dir().join(format!("p2p_rm_{}", rand::random::<u32>()));
+        let _ = tokio::fs::create_dir_all(&tmp_dir).await;
+
+        let tmp_file = tmp_dir.join("to_remove.tmp");
+        tokio::fs::write(&tmp_file, b"data").await.unwrap();
+
+        let state = DlState::new(
+            "merkle_rm".into(),
+            "test.bin".into(),
+            100,
+            tmp_file.to_string_lossy().to_string(),
+            "/dl/test.bin".into(),
+        );
+
+        persist(&state).await.unwrap();
+
+        let meta_path = tmp_dir.join("to_remove.tmp.chiral.chunk.meta.json");
+        assert!(meta_path.exists());
+
+        remove_meta(&tmp_file).await;
+        assert!(!meta_path.exists());
+
+        // cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
 }
