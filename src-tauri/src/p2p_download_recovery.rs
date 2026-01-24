@@ -1104,6 +1104,16 @@ mod tests {
         assert!(state.peers.contains(&"p1".to_string()));
         assert!(state.peers.contains(&"p2".to_string()));
     }
+
+    #[test]
+    fn test_chunk_meta_new() {
+        let chunk = ChunkMeta::new(5, 1024 * 256, 100, Some("abc".into()));
+        assert_eq!(chunk.idx, 5);
+        assert_eq!(chunk.offset, 1024 * 256);
+        assert_eq!(chunk.size, 100);
+        assert_eq!(chunk.hash, Some("abc".into()));
+        assert_eq!(chunk.state, ChunkState::Pending);
+    }
 }
 
 // =========================================================================
