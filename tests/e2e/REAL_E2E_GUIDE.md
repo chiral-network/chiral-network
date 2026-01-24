@@ -144,6 +144,13 @@ export E2E_P2P_DOWNLOAD_TIMEOUT_MS=600000
 export E2E_WEBRTC_DOWNLOAD_TIMEOUT_MS=180000
 export E2E_BITSWAP_DOWNLOAD_TIMEOUT_MS=240000
 export E2E_FTP_DOWNLOAD_TIMEOUT_MS=180000
+export E2E_BITTORRENT_DOWNLOAD_TIMEOUT_MS=240000
+# - BitTorrent-specific internal caps (downloader node; defaults are now shorter too)
+export E2E_BITTORRENT_START_TIMEOUT_MS=30000
+export E2E_BITTORRENT_NO_PROGRESS_FAIL_MS=60000
+# - Vitest test-level timeout (prevents a single protocol from blocking the whole run)
+export E2E_TEST_TIMEOUT_MS=600000
+export E2E_BITTORRENT_TEST_TIMEOUT_MS=300000
 # - DHT search per-attempt budget (overall search timeout is set by the test)
 export E2E_SEARCH_ATTEMPT_TIMEOUT_MS=15000
 

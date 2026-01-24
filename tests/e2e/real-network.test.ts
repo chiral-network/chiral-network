@@ -33,6 +33,55 @@ function spawnNpm(args: string[], opts: Parameters<typeof spawn>[2]): ChildProce
   return spawn(npmCommand(), args, opts);
 }
 
+function getTestTimeoutMs(
+  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+): number {
+  // Priority:
+  // 1) E2E_{PROTOCOL}_TEST_TIMEOUT_MS
+  // 2) E2E_TEST_TIMEOUT_MS
+  // 3) protocol default (BitTorrent shorter to avoid long hangs during debugging)
+  const key = `E2E_${protocol.toUpperCase()}_TEST_TIMEOUT_MS`;
+  const raw =
+    process.env[key] ??
+    process.env.E2E_TEST_TIMEOUT_MS ??
+    (protocol === "BitTorrent" ? "300000" : "600000");
+
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 600000;
+}
+
+function getSearchTimeoutMs(
+  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+): number {
+  // Priority:
+  // 1) E2E_{PROTOCOL}_SEARCH_TIMEOUT_MS
+  // 2) E2E_SEARCH_TIMEOUT_MS
+  // 3) protocol default (BT shorter so it doesn't eat the whole test budget)
+  const key = `E2E_${protocol.toUpperCase()}_SEARCH_TIMEOUT_MS`;
+  const raw =
+    process.env[key] ??
+    process.env.E2E_SEARCH_TIMEOUT_MS ??
+    (protocol === "BitTorrent" ? "45000" : "90000");
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 90000;
+}
+
+function getReceiptTimeoutMs(
+  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+): number {
+  // Priority:
+  // 1) E2E_{PROTOCOL}_RECEIPT_TIMEOUT_MS
+  // 2) E2E_RECEIPT_TIMEOUT_MS
+  // 3) protocol default (BT shorter for faster fail)
+  const key = `E2E_${protocol.toUpperCase()}_RECEIPT_TIMEOUT_MS`;
+  const raw =
+    process.env[key] ??
+    process.env.E2E_RECEIPT_TIMEOUT_MS ??
+    (protocol === "BitTorrent" ? "60000" : "120000");
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 120000;
+}
+
 interface NodeConfig {
   nodeId: string;
   apiBaseUrl: string;
@@ -53,6 +102,8 @@ class RealE2ETestFramework {
   private testDir: string = "";
   private crossMachine: boolean = false;
   private requirePayment: boolean = false;
+  private torrentBase64ByHash: Map<string, string> = new Map();
+  private torrentSeederPortByHash: Map<string, number> = new Map();
 
   constructor(crossMachine: boolean = false) {
     this.crossMachine = crossMachine;
@@ -325,7 +376,7 @@ class RealE2ETestFramework {
    */
   async uploadFile(
     file: TestFile,
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
   ): Promise<string> {
     if (!this.uploaderConfig) throw new Error("Config not initialized");
 
@@ -359,6 +410,12 @@ class RealE2ETestFramework {
     }
 
     const result = await response.json();
+    if (result?.torrentBase64 && typeof result.torrentBase64 === "string") {
+      this.torrentBase64ByHash.set(result.fileHash, result.torrentBase64);
+    }
+    if (typeof result?.bittorrentPort === "number") {
+      this.torrentSeederPortByHash.set(result.fileHash, result.bittorrentPort);
+    }
     console.log(`✅ File uploaded. Hash: ${result.fileHash}`);
 
     return result.fileHash;
@@ -412,7 +469,7 @@ class RealE2ETestFramework {
 
     throw new Error(
       `Search timed out after ${timeout}ms (metadata not found). ` +
-        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and ${this.uploaderConfig.apiBaseUrl}/api/dht/peers. ` +
+        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and ${(this.uploaderConfig?.apiBaseUrl ?? "<uploader-api-unknown>")}/api/dht/peers. ` +
         `Also confirm the uploader's libp2p port (default tcp/4001) is reachable (firewall/NAT/relay).`
     );
   }
@@ -423,11 +480,20 @@ class RealE2ETestFramework {
   async downloadFile(
     fileHash: string,
     fileName: string,
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
   ): Promise<string> {
     if (!this.downloaderConfig) throw new Error("Config not initialized");
 
     console.log(`📥 Downloading file via ${protocol}: ${fileName}`);
+
+    // In real-network attach/cross-machine scenarios, the uploader's E2E API host is not always
+    // the BitTorrent seeder public IP (it can be localhost/private). Allow an explicit override.
+    const uploaderApiBaseUrl =
+      this.uploaderConfig?.apiBaseUrl ?? this.downloaderConfig.apiBaseUrl;
+    const bittorrentSeederIp =
+      protocol === "BitTorrent"
+        ? (process.env.E2E_UPLOADER_PUBLIC_IP ?? new URL(uploaderApiBaseUrl).hostname)
+        : undefined;
 
     const response = await fetch(`${this.downloaderConfig.apiBaseUrl}/api/download`, {
       method: "POST",
@@ -436,6 +502,14 @@ class RealE2ETestFramework {
         fileHash,
         fileName,
         protocol,
+        torrentBase64:
+          protocol === "BitTorrent" ? this.torrentBase64ByHash.get(fileHash) : undefined,
+        bittorrentSeederIp:
+          bittorrentSeederIp,
+        bittorrentSeederPort:
+          protocol === "BitTorrent"
+            ? this.torrentSeederPortByHash.get(fileHash)
+            : undefined,
       }),
     });
 
@@ -462,6 +536,7 @@ class RealE2ETestFramework {
     console.log(`⏳ Download started (id=${downloadId})`);
     const waitTimeoutMs = this.getP2PDownloadTimeoutMs(protocol);
     const start = Date.now();
+    let lastJob: any = null;
     while (Date.now() - start < waitTimeoutMs) {
       const st = await fetch(
         `${this.downloaderConfig.apiBaseUrl}/api/download/status/${downloadId}`
@@ -473,6 +548,7 @@ class RealE2ETestFramework {
         );
       }
       const job = await st.json();
+      lastJob = job;
       if (job.status === "success") {
         if (!job.verified) throw new Error("Downloaded file failed verification on node");
         console.log(`✅ File downloaded to: ${job.downloadPath}`);
@@ -484,12 +560,12 @@ class RealE2ETestFramework {
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error(
-      `Timed out waiting for download ${downloadId} (protocol=${protocol}, timeoutMs=${waitTimeoutMs})`
+      `Timed out waiting for download ${downloadId} (protocol=${protocol}, timeoutMs=${waitTimeoutMs}, lastStatus=${lastJob?.status ?? "unknown"}, lastError=${lastJob?.error ?? "none"})`
     );
   }
 
   private getP2PDownloadTimeoutMs(
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
   ): number {
     // Protocol-specific overrides (milliseconds). Fallback order:
     // 1) E2E_{PROTOCOL}_DOWNLOAD_TIMEOUT_MS
@@ -502,15 +578,39 @@ class RealE2ETestFramework {
           ? "E2E_BITSWAP_DOWNLOAD_TIMEOUT_MS"
           : protocol === "FTP"
             ? "E2E_FTP_DOWNLOAD_TIMEOUT_MS"
+            : protocol === "BitTorrent"
+              ? "E2E_BITTORRENT_DOWNLOAD_TIMEOUT_MS"
             : null;
 
     const raw =
       (byProtocolKey ? process.env[byProtocolKey] : undefined) ??
       process.env.E2E_P2P_DOWNLOAD_TIMEOUT_MS ??
-      "600000";
+      // BitTorrent can hang in "metadata ok but no progress" states; keep defaults shorter.
+      (protocol === "BitTorrent" ? "240000" : "600000");
 
     const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : 600000;
+    let timeoutMs = Number.isFinite(n) && n > 0 ? n : 600000;
+
+    // Align test-runner timeout with server-side BitTorrent "no-progress" timeout:
+    // if the test times out earlier, we only see lastStatus=running and lose the real error context.
+    if (protocol === "BitTorrent") {
+      const allowShort =
+        (process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? "").toLowerCase() === "1" ||
+        (process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? "").toLowerCase() === "true";
+
+      const noProgressRaw = Number(process.env.E2E_BITTORRENT_NO_PROGRESS_FAIL_MS ?? "60000");
+      const noProgressMs =
+        Number.isFinite(noProgressRaw) && noProgressRaw > 0
+          ? allowShort
+            ? noProgressRaw
+            : Math.max(noProgressRaw, 60_000)
+          : 60_000;
+
+      // Give the node time to either make progress or fail with peer diagnostics.
+      timeoutMs = Math.max(timeoutMs, noProgressMs + 15_000);
+    }
+
+    return timeoutMs;
   }
 
   /**
@@ -746,7 +846,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       const fileHash = await framework.uploadFile(testFile, "WebRTC");
       expect(fileHash).toBeTruthy();
 
-      const metadata = await framework.searchFile(fileHash, 60_000);
+      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("WebRTC"));
       expect(metadata).toBeTruthy();
 
       const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
@@ -782,7 +882,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
         const start = Date.now();
-        const timeoutMs = 120_000;
+      const timeoutMs = getReceiptTimeoutMs("WebRTC");
         while (Date.now() - start < timeoutMs) {
           const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
             method: "POST",
@@ -803,7 +903,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         throw new Error("Timed out waiting for tx receipt");
       })();
       expect(receipt.status).toBe("success");
-    }, 600000);
+    }, getTestTimeoutMs("WebRTC"));
   });
 
   describe("Bitswap Real Communication (Attach)", () => {
@@ -814,7 +914,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       expect(fileHash).toBeTruthy();
 
       // Bitswap metadata propagation can be slower than WebRTC/HTTP on real networks.
-      const metadata = await framework.searchFile(fileHash, 90_000);
+      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("Bitswap"));
       expect(metadata).toBeTruthy();
 
       const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
@@ -845,7 +945,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
       const start = Date.now();
-      const timeoutMs = 120_000;
+      const timeoutMs = getReceiptTimeoutMs("Bitswap");
       while (Date.now() - start < timeoutMs) {
         const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
           method: "POST",
@@ -863,7 +963,65 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         if (receipt.status === "failed") throw new Error("Transaction failed");
         await new Promise((res) => setTimeout(res, 1000));
       }
-    }, 600000);
+    }, getTestTimeoutMs("Bitswap"));
+  });
+
+  describe("BitTorrent Real Communication (Attach)", () => {
+    it("should upload, search, download (BitTorrent), and pay (tx receipt success)", async () => {
+      const testFile = framework.createTestFile("real-test-bittorrent.bin", 5);
+
+      const fileHash = await framework.uploadFile(testFile, "BitTorrent");
+      expect(fileHash).toBeTruthy();
+
+      // BitTorrent publish key is the info_hash; allow a bit more time for propagation.
+      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("BitTorrent"));
+      expect(metadata).toBeTruthy();
+
+      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
+      const price = metadata.price ?? 0.001;
+      expect(typeof uploaderAddress).toBe("string");
+
+      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "BitTorrent");
+      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
+      expect(verified).toBe(true);
+
+      // Final payment + receipt
+      const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+      const payRes = await fetch(`${downloaderApi}/api/pay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploaderAddress, price }),
+      });
+      if (!payRes.ok) {
+        const body = await payRes.text().catch(() => "");
+        throw new Error(
+          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+        );
+      }
+      const payJson = await payRes.json();
+      const txHash: string = payJson.txHash;
+      expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+
+      const start = Date.now();
+      const timeoutMs = getReceiptTimeoutMs("BitTorrent");
+      while (Date.now() - start < timeoutMs) {
+        const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ txHash }),
+        });
+        if (!r.ok) {
+          const body = await r.text().catch(() => "");
+          throw new Error(
+            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+          );
+        }
+        const receipt = await r.json();
+        if (receipt.status === "success") break;
+        if (receipt.status === "failed") throw new Error("Transaction failed");
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+    }, getTestTimeoutMs("BitTorrent"));
   });
 
   describe("FTP Real Communication (Attach)", () => {
@@ -906,7 +1064,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
       const start = Date.now();
-      const timeoutMs = 120_000;
+      const timeoutMs = getReceiptTimeoutMs("FTP");
       while (Date.now() - start < timeoutMs) {
         const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
           method: "POST",
@@ -924,7 +1082,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         if (receipt.status === "failed") throw new Error("Transaction failed");
         await new Promise((res) => setTimeout(res, 1000));
       }
-    }, 600000);
+    }, getTestTimeoutMs("FTP"));
   });
 
   // Payment checkpoint automation is currently UI-driven and not wired into the real-network harness yet.
