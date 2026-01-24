@@ -31,7 +31,7 @@
   const navigation = getContext('navigation') as { setCurrentPage: (page: string) => void };
 
   // Tab state
-  let activeTab: 'blocks' | 'search' | 'stats' = 'blocks';
+  let activeTab: 'blocks' | 'pending' | 'search' | 'stats' = 'blocks';
 
   // Block data
   interface BlockInfo {
@@ -73,6 +73,26 @@
     networkHashrate: '0',
     peerCount: 0
   };
+
+  // Txpool (off-chain pending/queued transactions)
+  type TxpoolState = 'pending' | 'queued';
+
+  interface TxpoolItem {
+    state: TxpoolState;
+    from: string;
+    nonce: number;
+    hash: string;
+    to?: string | null;
+    valueWeiHex?: string;
+    gasWeiHex?: string;
+    gasPriceWeiHex?: string;
+  }
+
+  let txpoolPending: TxpoolItem[] = [];
+  let txpoolQueued: TxpoolItem[] = [];
+  let txpoolCounts = { pending: 0, queued: 0 };
+  let isLoadingTxpool = false;
+  let txpoolError: string | null = null;
 
   // Fetch latest blocks
   async function fetchLatestBlocks() {
@@ -259,6 +279,83 @@
     return `${hash.substring(0, 10)}...${hash.substring(hash.length - 8)}`;
   }
 
+  function hexToNumber(hex: string | undefined | null): number {
+    if (!hex) return 0;
+    const clean = hex.startsWith('0x') || hex.startsWith('0X') ? hex.slice(2) : hex;
+    if (!clean) return 0;
+    return Number.parseInt(clean, 16);
+  }
+
+  function weiHexToCN(weiHex: string | undefined | null): string {
+    if (!weiHex) return '0';
+    try {
+      const n = BigInt(weiHex);
+      const whole = n / 1000000000000000000n;
+      const frac = n % 1000000000000000000n;
+      const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
+      return fracStr ? `${whole.toString()}.${fracStr.slice(0, 6)}` : whole.toString();
+    } catch {
+      return '0';
+    }
+  }
+
+  async function fetchTxpool() {
+    isLoadingTxpool = true;
+    txpoolError = null;
+    try {
+      const gethRunning = await invoke<boolean>('is_geth_running');
+      if (!gethRunning) {
+        txpoolPending = [];
+        txpoolQueued = [];
+        txpoolCounts = { pending: 0, queued: 0 };
+        return;
+      }
+
+      const [status, content] = await Promise.all([
+        invoke<any>('get_txpool_status'),
+        invoke<any>('get_txpool_content')
+      ]);
+
+      txpoolCounts = {
+        pending: hexToNumber(status?.pending),
+        queued: hexToNumber(status?.queued)
+      };
+
+      const flatten = (state: TxpoolState, obj: any): TxpoolItem[] => {
+        const out: TxpoolItem[] = [];
+        if (!obj || typeof obj !== 'object') return out;
+        for (const [from, byNonce] of Object.entries<any>(obj)) {
+          if (!byNonce || typeof byNonce !== 'object') continue;
+          for (const [nonceStr, tx] of Object.entries<any>(byNonce)) {
+            const nonce = Number.parseInt(nonceStr, 10);
+            if (!Number.isFinite(nonce)) continue;
+            out.push({
+              state,
+              from,
+              nonce,
+              hash: tx?.hash || '',
+              to: tx?.to ?? null,
+              valueWeiHex: tx?.value,
+              gasWeiHex: tx?.gas,
+              gasPriceWeiHex: tx?.gasPrice
+            });
+          }
+        }
+        out.sort((a, b) => a.nonce - b.nonce);
+        return out;
+      };
+
+      txpoolPending = flatten('pending', content?.pending);
+      txpoolQueued = flatten('queued', content?.queued);
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      txpoolError = errorMsg;
+      diagnosticLogger.error('BLOCKCHAIN', 'Failed to fetch txpool', { error: errorMsg });
+    } finally {
+      isLoadingTxpool = false;
+    }
+  }
+
   // Copy to clipboard
   function copyToClipboard(text: string) {
     navigator.clipboard.writeText(text);
@@ -277,6 +374,7 @@
   async function refreshAll() {
     await Promise.all([
       fetchLatestBlocks(),
+      fetchTxpool(),
       fetchNetworkStats()
     ]);
     showToast(tr('blockchain.refreshed'), 'success');
@@ -284,12 +382,16 @@
 
   onMount(() => {
     fetchLatestBlocks();
+    fetchTxpool();
     fetchNetworkStats();
 
     // Auto-refresh every 30 seconds
     const interval = setInterval(() => {
       if (activeTab === 'blocks') {
         fetchLatestBlocks();
+      }
+      if (activeTab === 'pending') {
+        fetchTxpool();
       }
       fetchNetworkStats();
     }, 30000);
@@ -441,6 +543,21 @@
       </div>
     </button>
     <button
+      class="px-4 py-2 font-medium transition-colors {activeTab === 'pending'
+        ? 'text-blue-600 border-b-2 border-blue-600'
+        : 'text-gray-700 hover:text-blue-500 hover:bg-gray-100'}"
+      on:click={() => {
+        activeTab = 'pending';
+        fetchTxpool();
+      }}
+    >
+      <div class="flex items-center gap-2">
+        <Receipt class="w-4 h-4" />
+        {tr('blockchain.tabs.pending')}
+        <Badge class="ml-1">{txpoolCounts.pending}</Badge>
+      </div>
+    </button>
+    <button
       class="px-4 py-2 font-medium transition-colors {activeTab === 'search'
         ? 'text-blue-600 border-b-2 border-blue-600'
         : 'text-gray-700 hover:text-blue-500 hover:bg-gray-100'}"
@@ -525,6 +642,168 @@
             {/each}
           </div>
         {/if}
+      </Card>
+    </div>
+  {/if}
+
+  {#if activeTab === 'pending'}
+    <div transition:fade={{ duration: 200 }} class="space-y-6">
+      <Card class="p-6">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h2 class="text-xl font-bold text-black">
+              {tr('blockchain.pending.title')}
+            </h2>
+            <p class="text-sm text-muted-foreground mt-1">
+              {tr('blockchain.pending.subtitle')}
+            </p>
+          </div>
+          <Button on:click={fetchTxpool} disabled={isLoadingTxpool} class="gap-2">
+            <RefreshCw class="w-4 h-4 {isLoadingTxpool ? 'animate-spin' : ''}" />
+            {tr('blockchain.refresh')}
+          </Button>
+        </div>
+
+        {#if txpoolError}
+          <div class="mt-4 bg-red-500/10 border border-red-500/20 rounded-lg p-4 text-sm text-red-700">
+            {txpoolError}
+          </div>
+        {/if}
+
+        <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <p class="text-sm text-gray-700">{tr('blockchain.pending.pending')}</p>
+            <p class="text-2xl font-bold text-black">{txpoolCounts.pending.toLocaleString()}</p>
+          </div>
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <p class="text-sm text-gray-700">{tr('blockchain.pending.queued')}</p>
+            <p class="text-2xl font-bold text-black">{txpoolCounts.queued.toLocaleString()}</p>
+          </div>
+        </div>
+
+        <div class="mt-6 space-y-6">
+          <div>
+            <h3 class="font-bold text-gray-900 mb-3">{tr('blockchain.pending.pending')}</h3>
+            {#if isLoadingTxpool}
+              <div class="flex items-center justify-center py-8">
+                <RefreshCw class="w-6 h-6 animate-spin text-blue-600" />
+              </div>
+            {:else if txpoolPending.length === 0}
+              <p class="text-sm text-gray-700">{tr('blockchain.pending.empty')}</p>
+            {:else}
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="text-left text-gray-600 border-b">
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.hash')}</th>
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.from')}</th>
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.to')}</th>
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.value')}</th>
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.nonce')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each txpoolPending as tx (tx.hash + ':' + tx.nonce)}
+                      <tr class="border-b last:border-b-0">
+                        <td class="py-2 pr-4">
+                          <div class="flex items-center gap-2">
+                            <span class="font-mono text-gray-900">{formatHash(tx.hash)}</span>
+                            <button on:click={() => copyToClipboard(tx.hash)} class="hover:text-blue-600">
+                              <Copy class="w-3 h-3" />
+                            </button>
+                          </div>
+                        </td>
+                        <td class="py-2 pr-4">
+                          <div class="flex items-center gap-2">
+                            <span class="font-mono text-xs text-gray-900 break-all">{formatHash(tx.from)}</span>
+                            <button on:click={() => copyToClipboard(tx.from)} class="hover:text-blue-600">
+                              <Copy class="w-3 h-3" />
+                            </button>
+                          </div>
+                        </td>
+                        <td class="py-2 pr-4">
+                          {#if tx.to}
+                            <div class="flex items-center gap-2">
+                              <span class="font-mono text-xs text-gray-900 break-all">{formatHash(tx.to)}</span>
+                              <button on:click={() => copyToClipboard(tx.to || '')} class="hover:text-blue-600">
+                                <Copy class="w-3 h-3" />
+                              </button>
+                            </div>
+                          {:else}
+                            <span class="text-gray-600">Contract Creation</span>
+                          {/if}
+                        </td>
+                        <td class="py-2 pr-4 text-gray-900">{weiHexToCN(tx.valueWeiHex)} CN</td>
+                        <td class="py-2 pr-4 text-gray-900">{tx.nonce}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+          </div>
+
+          <div>
+            <h3 class="font-bold text-gray-900 mb-3">{tr('blockchain.pending.queued')}</h3>
+            {#if isLoadingTxpool}
+              <div class="flex items-center justify-center py-8">
+                <RefreshCw class="w-6 h-6 animate-spin text-blue-600" />
+              </div>
+            {:else if txpoolQueued.length === 0}
+              <p class="text-sm text-gray-700">{tr('blockchain.pending.emptyQueued')}</p>
+            {:else}
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="text-left text-gray-600 border-b">
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.hash')}</th>
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.from')}</th>
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.to')}</th>
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.value')}</th>
+                      <th class="py-2 pr-4">{tr('blockchain.pending.fields.nonce')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each txpoolQueued as tx (tx.hash + ':' + tx.nonce)}
+                      <tr class="border-b last:border-b-0">
+                        <td class="py-2 pr-4">
+                          <div class="flex items-center gap-2">
+                            <span class="font-mono text-gray-900">{formatHash(tx.hash)}</span>
+                            <button on:click={() => copyToClipboard(tx.hash)} class="hover:text-blue-600">
+                              <Copy class="w-3 h-3" />
+                            </button>
+                          </div>
+                        </td>
+                        <td class="py-2 pr-4">
+                          <div class="flex items-center gap-2">
+                            <span class="font-mono text-xs text-gray-900 break-all">{formatHash(tx.from)}</span>
+                            <button on:click={() => copyToClipboard(tx.from)} class="hover:text-blue-600">
+                              <Copy class="w-3 h-3" />
+                            </button>
+                          </div>
+                        </td>
+                        <td class="py-2 pr-4">
+                          {#if tx.to}
+                            <div class="flex items-center gap-2">
+                              <span class="font-mono text-xs text-gray-900 break-all">{formatHash(tx.to)}</span>
+                              <button on:click={() => copyToClipboard(tx.to || '')} class="hover:text-blue-600">
+                                <Copy class="w-3 h-3" />
+                              </button>
+                            </div>
+                          {:else}
+                            <span class="text-gray-600">Contract Creation</span>
+                          {/if}
+                        </td>
+                        <td class="py-2 pr-4 text-gray-900">{weiHexToCN(tx.valueWeiHex)} CN</td>
+                        <td class="py-2 pr-4 text-gray-900">{tx.nonce}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+          </div>
+        </div>
       </Card>
     </div>
   {/if}

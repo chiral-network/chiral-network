@@ -1513,8 +1513,24 @@
     },
     "tabs": {
       "blocks": "최신 블록",
+      "pending": "대기 중 (txpool)",
       "search": "검색",
       "stats": "잔액 확인"
+    },
+    "pending": {
+      "title": "대기 중인 트랜잭션 (Txpool)",
+      "subtitle": "블록에 포함되기 전의 오프체인 트랜잭션",
+      "pending": "대기 중",
+      "queued": "큐",
+      "empty": "대기 중인 트랜잭션이 없습니다.",
+      "emptyQueued": "큐에 있는 트랜잭션이 없습니다.",
+      "fields": {
+        "hash": "해시",
+        "from": "보낸 사람",
+        "to": "받는 사람",
+        "value": "값",
+        "nonce": "Nonce"
+      }
     },
     "blocks": {
       "latest": "최신 블록",
