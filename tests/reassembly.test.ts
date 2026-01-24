@@ -129,11 +129,10 @@ describe('ReassemblyManager', () => {
     expect(s.writeInFlight).toBe(1);
     expect(s.writeQueueLength).toBe(2);
 
-    // First chunk should have been marked REQUESTED (before write completes)
-    expect(s.chunkStates[0]).toBe(ChunkState.REQUESTED);
-    // Other chunks should also be REQUESTED (they're enqueued)
-    expect(s.chunkStates[1]).toBe(ChunkState.REQUESTED);
-    expect(s.chunkStates[2]).toBe(ChunkState.REQUESTED);
+    // With new semantics, chunks are marked RECEIVED immediately after checksum validation
+    expect(s.chunkStates[0]).toBe(ChunkState.RECEIVED);
+    expect(s.chunkStates[1]).toBe(ChunkState.RECEIVED);
+    expect(s.chunkStates[2]).toBe(ChunkState.RECEIVED);
 
     // Fulfill first write
     resolves[0](true);
@@ -204,5 +203,64 @@ describe('ReassemblyManager', () => {
     expect(events.some((e) => e[0] === 'state' && e[1].state === ChunkState.REQUESTED)).toBe(true);
     expect(events.some((e) => e[0] === 'state' && e[1].state === ChunkState.RECEIVED)).toBe(true);
     expect(events.some((e) => e[0] === 'progress')).toBe(true);
+  });
+
+  it('simulates crash and resume using saved bitmap', async () => {
+    const manifest = {
+      fileSize: 400,
+      chunks: [
+        { index: 0, encryptedSize: 100 },
+        { index: 1, encryptedSize: 100 },
+        { index: 2, encryptedSize: 100 },
+        { index: 3, encryptedSize: 100 },
+      ],
+    };
+
+    // First run: receive chunks 0 and 2 and assume bitmap was saved by backend
+    reassemblyManager.initReassembly('t8', manifest, '/tmp/t8');
+
+    // Mock invoke to succeed for writes
+    (invoke as any).mockImplementation((cmd: string, args: any) => {
+      if (cmd === 'write_chunk_temp') return Promise.resolve(true);
+      return Promise.resolve(null);
+    });
+
+    await reassemblyManager.acceptChunk('t8', 0, new Uint8Array([1]));
+    await reassemblyManager.acceptChunk('t8', 2, new Uint8Array([3]));
+
+    const s = reassemblyManager.getState('t8')!;
+    expect(s.receivedChunks.includes(0)).toBe(true);
+    expect(s.receivedChunks.includes(2)).toBe(true);
+
+    // Simulate process crash and restart: new transfer id 't8r' will resume using bitmap loaded from backend
+    reassemblyManager.initReassembly('t8r', manifest, '/tmp/t8r');
+
+    // Mock load_chunk_bitmap to return the saved chunks for original transfer 't8'
+    (invoke as any).mockImplementation((cmd: string, args: any) => {
+      if (cmd === 'load_chunk_bitmap') {
+        return Promise.resolve([0, 2]);
+      }
+      if (cmd === 'write_chunk_temp') return Promise.resolve(true);
+      return Promise.resolve(null);
+    });
+
+    // Load saved bitmap (simulated) and mark received chunks on resumed manager
+    const loaded: number[] = await (invoke as any)('load_chunk_bitmap', { transferId: 't8' });
+    expect(loaded).toEqual([0, 2]);
+
+    for (const idx of loaded) {
+      reassemblyManager.markChunkReceived('t8r', idx);
+    }
+
+    let sr = reassemblyManager.getState('t8r')!;
+    expect(sr.receivedChunks.includes(0)).toBe(true);
+    expect(sr.receivedChunks.includes(2)).toBe(true);
+
+    // Now accept remaining chunks and finalize
+    await reassemblyManager.acceptChunk('t8r', 1, new Uint8Array([2]));
+    await reassemblyManager.acceptChunk('t8r', 3, new Uint8Array([4]));
+
+    sr = reassemblyManager.getState('t8r')!;
+    expect(sr.receivedChunks.length).toBe(4);
   });
 });

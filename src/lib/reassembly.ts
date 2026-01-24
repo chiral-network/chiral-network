@@ -167,6 +167,17 @@ export class ReassemblyManager {
       throw new Error(`Invalid chunk index ${chunkIndex}`);
     }
 
+    // Ignore already received chunks
+    if (state.chunkStates[chunkIndex] === ChunkState.RECEIVED) {
+      return true;
+    }
+
+    // Mark as requested only if previously UNREQUESTED
+    if (state.chunkStates[chunkIndex] === ChunkState.UNREQUESTED) {
+      state.chunkStates[chunkIndex] = ChunkState.REQUESTED;
+      this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.REQUESTED });
+    }
+
     const info = state.manifest.chunks[chunkIndex];
 
     // Validate checksum when available
@@ -180,9 +191,17 @@ export class ReassemblyManager {
       }
     }
 
-    // Mark requested
-    state.chunkStates[chunkIndex] = ChunkState.REQUESTED;
-    this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.REQUESTED });
+    // At this point, checksum validated. Mark logical receipt BEFORE enqueueing to reflect progress semantics
+    // (no need to guard against RECEIVED here because we returned earlier if it was already RECEIVED)
+    state.chunkStates[chunkIndex] = ChunkState.RECEIVED;
+    state.receivedChunks.add(chunkIndex);
+    state.corruptedChunks.delete(chunkIndex);
+    this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.RECEIVED });
+    this.emit("progress", {
+      transferId,
+      received: state.receivedChunks.size,
+      total: state.manifest.chunks.length,
+    });
 
     // Enforce hard queue length cap to bound memory
     // Count both queued and in-flight writes against the cap
@@ -200,29 +219,38 @@ export class ReassemblyManager {
 
     const run = async (): Promise<boolean> => {
       const offset = state.offsets[chunkIndex] || 0;
+
       try {
         const bytes = Array.from(chunkData as Uint8Array);
+
         await invoke("write_chunk_temp", {
           transferId,
           chunkIndex,
           offset,
           bytes,
+          chunkChecksum: info.checksum ?? undefined,
         });
 
-        state.receivedChunks.add(chunkIndex);
-        state.chunkStates[chunkIndex] = ChunkState.RECEIVED;
-        state.corruptedChunks.delete(chunkIndex);
-        this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.RECEIVED });
+        // Durability succeeded — nothing else to do since logical receipt was already marked
+        return true;
+      } catch (err) {
+        // Persistence failed → rollback logical receipt
+        state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
+        state.corruptedChunks.add(chunkIndex);
+        state.receivedChunks.delete(chunkIndex);
+
+        this.emit("chunkState", {
+          transferId,
+          chunkIndex,
+          state: ChunkState.CORRUPTED,
+        });
+
         this.emit("progress", {
           transferId,
           received: state.receivedChunks.size,
           total: state.manifest.chunks.length,
         });
-        return true;
-      } catch (err) {
-        state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
-        state.corruptedChunks.add(chunkIndex);
-        this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.CORRUPTED });
+
         return false;
       }
     };
@@ -280,9 +308,8 @@ export class ReassemblyManager {
     try {
       const res = await invoke("verify_and_finalize", {
         transferId,
-        expectedRoot: expectedRoot ?? null,
+        expectedSha256: expectedRoot ?? null,
         finalPath,
-        tmpPath: state.tmpPath,
       });
 
       const ok = (res as any) === true || (res && (res as any).ok === true);
