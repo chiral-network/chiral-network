@@ -38,6 +38,7 @@
   import { showToast } from "$lib/toast";
   import { getStorageStatus } from "$lib/uploadHelpers";
   import { fileService } from "$lib/services/fileService";
+  import { extractInfoHashFromMagnet } from "$lib/utils/magnetInfoHash";
   import { toHumanReadableSize } from "$lib/utils";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
@@ -1360,8 +1361,9 @@
 
   // Extract info hash from magnet link
   function extractInfoHash(magnetLink: string): string {
-    const match = magnetLink.match(/xt=urn:btih:([a-fA-F0-9]{40})/);
-    return match ? match[1] : "unknown";
+    // Supports both hex and base32 btih.
+    // Keep this local helper returning a string for UI display.
+    return extractInfoHashFromMagnet(magnetLink) ?? "unknown";
   }
 
   // Extract MD4 hash from ed2k link

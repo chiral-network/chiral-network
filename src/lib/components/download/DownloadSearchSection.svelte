@@ -15,6 +15,8 @@
   import { dhtSearchHistory, type SearchHistoryEntry, type SearchStatus } from '$lib/stores/searchHistory';
   import PeerSelectionModal, { type PeerInfo } from './PeerSelectionModal.svelte';
   import PeerSelectionService from '$lib/services/peerSelectionService';
+  import { extractInfoHashFromTorrentBytes } from '$lib/utils/torrentInfoHash';
+  import { extractInfoHashFromMagnet } from '$lib/utils/magnetInfoHash';
 
   type ToastType = 'success' | 'error' | 'info' | 'warning';
   type ToastPayload = { message: string; type?: ToastType; duration?: number; };
@@ -167,8 +169,7 @@
 
         // For magnet links, extract info_hash and search DHT directly
         console.log('🔍 Parsing magnet link:', identifier)
-        const urlParams = new URLSearchParams(identifier.split('?')[1])
-        const infoHash = urlParams.get('xt')?.replace('urn:btih:', '').toLowerCase()
+        const infoHash = extractInfoHashFromMagnet(identifier)
         console.log('🔍 Extracted info_hash (normalized to lowercase):', infoHash)
         if (infoHash) {
           try {
@@ -211,9 +212,33 @@
         if (file) {
           // Try to parse torrent file and search for it first
           try {
-            // For now, we'll search using a placeholder - ideally we'd parse the torrent
-            // to extract the info hash and search DHT. For simplicity, fall back to placeholder.
-          identifier = torrentFileName
+            const arrayBuffer = await file.arrayBuffer()
+            const bytes = new Uint8Array(arrayBuffer)
+            const infoHash = await extractInfoHashFromTorrentBytes(bytes)
+            console.log('🔍 Extracted info_hash from torrent file:', infoHash)
+
+            try {
+              console.log('🔍 Searching DHT by info_hash:', infoHash)
+              const params = { infoHash }
+              const metadata = await invoke('search_by_infohash', params) as FileMetadata | null
+              console.log('🔍 DHT search result:', metadata)
+              if (metadata) {
+                metadata.fileHash = metadata.merkleRoot || ""
+                latestMetadata = metadata
+                latestStatus = 'found'
+                hasSearched = true
+                pushMessage(`Found file: ${metadata.fileName}`, 'success')
+                isSearching = false
+                return
+              } else {
+                console.log('⚠️ No metadata found for info_hash:', infoHash)
+              }
+            } catch (error) {
+              console.error('❌ DHT search error:', error)
+            }
+
+            // If not found in DHT, proceed with torrent download flow
+            identifier = torrentFileName
           } catch (error) {
             console.log('Failed to parse torrent file:', error)
             identifier = torrentFileName
