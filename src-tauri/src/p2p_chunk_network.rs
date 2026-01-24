@@ -724,6 +724,11 @@ pub async fn on_download_complete(tmp_path: &str) -> Result<(), ChunkNetErr> {
     Ok(())
 }
 
+// get default chunks directory
+pub fn default_chunks_dir() -> PathBuf {
+    PathBuf::from("./chunks")
+}
+
 // hook for loading existing chunks on resume
 pub async fn load_existing_chunks(tmp_path: &str, chunks_dir: &Path) -> Result<DlState, ChunkNetErr> {
     let tmp = PathBuf::from(tmp_path);
@@ -847,6 +852,37 @@ pub fn p2p_chunk_verify_merkle(merkle_root: String, chunk_hashes: Vec<String>) -
 #[tauri::command]
 pub fn p2p_chunk_hash(data: Vec<u8>) -> String {
     hash_chunk(&data)
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_startup_recovery(dl_dir: String) -> Result<Vec<RecoveryInfo>, String> {
+    let dir = PathBuf::from(&dl_dir);
+    let chunks_dir = default_chunks_dir();
+
+    let mut recovered = Vec::new();
+
+    // scan for incomplete downloads
+    let states = scan_incomplete(&dir).await;
+
+    for state in states {
+        let tmp = PathBuf::from(&state.tmp_path);
+
+        // try to load existing chunks from disk
+        match load_existing_chunks(&state.tmp_path, &chunks_dir).await {
+            Ok(updated_state) => {
+                recovered.push(RecoveryInfo::from(&updated_state));
+                info!("recovered state for {}: {} chunks",
+                    updated_state.merkle_root,
+                    updated_state.chunks.iter().filter(|c| c.state != ChunkState::Pending).count()
+                );
+            }
+            Err(e) => {
+                warn!("failed to recover {}: {}", state.merkle_root, e);
+            }
+        }
+    }
+
+    Ok(recovered)
 }
 
 // =========================================================================
