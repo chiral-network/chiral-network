@@ -767,6 +767,111 @@ pub async fn load_existing_chunks(tmp_path: &str, chunks_dir: &Path) -> Result<D
 }
 
 // =========================================================================
+// corruption detection
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorruptionReport {
+    pub total_checked: u32,
+    pub verified_ok: u32,
+    pub corrupted: Vec<u32>,
+    pub missing: Vec<u32>,
+}
+
+// detect corrupted chunks by reading from disk and verifying hash
+pub async fn detect_corruption(state: &DlState, chunks_dir: &Path) -> Result<CorruptionReport, ChunkNetErr> {
+    let file_dir = chunks_dir.join(&state.merkle_root);
+    let mut report = CorruptionReport {
+        total_checked: 0,
+        verified_ok: 0,
+        corrupted: Vec::new(),
+        missing: Vec::new(),
+    };
+
+    for chunk in &state.chunks {
+        if chunk.hash.is_empty() {
+            continue; // no hash to verify
+        }
+
+        let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk.idx));
+
+        if !chunk_path.exists() {
+            if chunk.state == ChunkState::Downloaded || chunk.state == ChunkState::Verified {
+                report.missing.push(chunk.idx);
+            }
+            continue;
+        }
+
+        report.total_checked += 1;
+
+        // read chunk and verify
+        match fs::read(&chunk_path).await {
+            Ok(data) => {
+                if verify_chunk_hash(&data, &chunk.hash) {
+                    report.verified_ok += 1;
+                } else {
+                    report.corrupted.push(chunk.idx);
+                }
+            }
+            Err(_) => {
+                report.corrupted.push(chunk.idx);
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+// mark corrupted chunks as failed for re-download
+pub async fn mark_corrupted_for_redownload(
+    state: &mut DlState,
+    corrupted: &[u32],
+) -> u32 {
+    let mut marked = 0u32;
+
+    for &idx in corrupted {
+        if let Some(chunk) = state.chunks.get_mut(idx as usize) {
+            chunk.state = ChunkState::Failed;
+            marked += 1;
+        }
+    }
+
+    if marked > 0 {
+        state.updated_at = now_unix();
+    }
+
+    marked
+}
+
+// full corruption check and fix
+pub async fn check_and_fix_corruption(
+    tmp_path: &str,
+    chunks_dir: &Path,
+) -> Result<CorruptionReport, ChunkNetErr> {
+    let tmp = PathBuf::from(tmp_path);
+    let mut state = load(&tmp).await?;
+
+    let report = detect_corruption(&state, chunks_dir).await?;
+
+    if !report.corrupted.is_empty() || !report.missing.is_empty() {
+        // mark corrupted and missing for re-download
+        let mut to_mark = report.corrupted.clone();
+        to_mark.extend(&report.missing);
+
+        mark_corrupted_for_redownload(&mut state, &to_mark).await;
+        persist(&state).await?;
+
+        info!(
+            "marked {} corrupted + {} missing chunks for re-download",
+            report.corrupted.len(),
+            report.missing.len()
+        );
+    }
+
+    Ok(report)
+}
+
+// =========================================================================
 // tauri commands
 // =========================================================================
 
@@ -852,6 +957,14 @@ pub fn p2p_chunk_verify_merkle(merkle_root: String, chunk_hashes: Vec<String>) -
 #[tauri::command]
 pub fn p2p_chunk_hash(data: Vec<u8>) -> String {
     hash_chunk(&data)
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_check_corruption(tmp_path: String) -> Result<CorruptionReport, String> {
+    let chunks_dir = default_chunks_dir();
+    check_and_fix_corruption(&tmp_path, &chunks_dir)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

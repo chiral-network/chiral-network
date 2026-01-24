@@ -9681,7 +9681,8 @@ fn main() {
             p2p_chunk_network::p2p_chunk_compute_merkle,
             p2p_chunk_network::p2p_chunk_verify_merkle,
             p2p_chunk_network::p2p_chunk_hash,
-            p2p_chunk_network::p2p_chunk_startup_recovery
+            p2p_chunk_network::p2p_chunk_startup_recovery,
+            p2p_chunk_network::p2p_chunk_check_corruption
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
