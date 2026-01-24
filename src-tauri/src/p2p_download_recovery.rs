@@ -1154,6 +1154,21 @@ mod tests {
         }
         assert_eq!(state.chunks[0].state, ChunkState::Downloaded);
     }
+
+    #[test]
+    fn test_set_manifest() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        assert!(state.manifest.is_none());
+        state.set_manifest(r#"{"chunks":[]}"#.into());
+        assert!(state.manifest.is_some());
+    }
 }
 
 // =========================================================================
