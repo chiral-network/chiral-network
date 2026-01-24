@@ -7,7 +7,7 @@ use crate::manager::{FileManifest, Sha256Hasher};
 use rs_merkle::MerkleTree;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -996,6 +996,445 @@ pub async fn p2p_chunk_startup_recovery(dl_dir: String) -> Result<Vec<RecoveryIn
     }
 
     Ok(recovered)
+}
+
+// =========================================================================
+// multi-peer coordinator
+// =========================================================================
+
+/// Assignment of a chunk to a peer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkAssignment {
+    pub chunk_idx: u32,
+    pub peer_id: String,
+    pub assigned_at: u64,
+    pub attempts: u32,
+}
+
+/// Stats for a peer during download
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerStats {
+    pub peer_id: String,
+    pub chunks_completed: u32,
+    pub chunks_failed: u32,
+    pub bytes_downloaded: u64,
+    pub avg_speed: f64,   // bytes per second
+    pub last_active: u64,
+    pub consecutive_fails: u32,
+    pub is_banned: bool,
+}
+
+impl PeerStats {
+    pub fn new(peer_id: String) -> Self {
+        Self {
+            peer_id,
+            chunks_completed: 0,
+            chunks_failed: 0,
+            bytes_downloaded: 0,
+            avg_speed: 0.0,
+            last_active: now_unix(),
+            consecutive_fails: 0,
+            is_banned: false,
+        }
+    }
+
+    pub fn record_success(&mut self, bytes: u64, duration_ms: u64) {
+        self.chunks_completed += 1;
+        self.bytes_downloaded += bytes;
+        self.consecutive_fails = 0;
+        self.last_active = now_unix();
+
+        if duration_ms > 0 {
+            let speed = (bytes as f64) * 1000.0 / (duration_ms as f64);
+            // EMA for speed
+            let alpha = 0.3;
+            if self.avg_speed == 0.0 {
+                self.avg_speed = speed;
+            } else {
+                self.avg_speed = self.avg_speed * (1.0 - alpha) + speed * alpha;
+            }
+        }
+    }
+
+    pub fn record_failure(&mut self) {
+        self.chunks_failed += 1;
+        self.consecutive_fails += 1;
+        self.last_active = now_unix();
+
+        // ban after 5 consecutive fails
+        if self.consecutive_fails >= 5 {
+            self.is_banned = true;
+        }
+    }
+
+    /// Score for peer selection (higher is better)
+    pub fn score(&self) -> f64 {
+        if self.is_banned {
+            return 0.0;
+        }
+
+        let total = self.chunks_completed + self.chunks_failed;
+        let reliability = if total > 0 {
+            self.chunks_completed as f64 / total as f64
+        } else {
+            0.5 // unknown
+        };
+
+        // normalize speed (assume 1MB/s is good)
+        let speed_score = (self.avg_speed / (1024.0 * 1024.0)).min(1.0);
+
+        // combine reliability and speed
+        reliability * 0.6 + speed_score * 0.4
+    }
+}
+
+/// Coordinator for multi-peer chunk downloads
+pub struct MultiPeerCoordinator {
+    pub state: DlState,
+    pub peer_stats: HashMap<String, PeerStats>,
+    pub assignments: HashMap<u32, ChunkAssignment>,
+    pub max_concurrent_per_peer: usize,
+    pub max_retries: u32,
+    pub chunk_timeout_ms: u64,
+}
+
+impl MultiPeerCoordinator {
+    pub fn new(state: DlState) -> Self {
+        let mut peer_stats = HashMap::new();
+        for peer in &state.providers {
+            peer_stats.insert(peer.clone(), PeerStats::new(peer.clone()));
+        }
+
+        Self {
+            state,
+            peer_stats,
+            assignments: HashMap::new(),
+            max_concurrent_per_peer: 4,
+            max_retries: 3,
+            chunk_timeout_ms: 30_000,
+        }
+    }
+
+    /// Add a peer to the coordinator
+    pub fn add_peer(&mut self, peer_id: String) {
+        if !self.peer_stats.contains_key(&peer_id) {
+            self.peer_stats.insert(peer_id.clone(), PeerStats::new(peer_id.clone()));
+            self.state.add_provider(peer_id);
+        }
+    }
+
+    /// Remove a peer from the coordinator
+    pub fn remove_peer(&mut self, peer_id: &str) {
+        self.peer_stats.remove(peer_id);
+        self.state.providers.retain(|p| p != peer_id);
+
+        // reassign chunks from this peer
+        let to_reassign: Vec<u32> = self.assignments
+            .iter()
+            .filter(|(_, a)| a.peer_id == peer_id)
+            .map(|(idx, _)| *idx)
+            .collect();
+
+        for idx in to_reassign {
+            self.assignments.remove(&idx);
+        }
+    }
+
+    /// Get available peers (not banned, not at max concurrent)
+    pub fn available_peers(&self) -> Vec<(String, f64)> {
+        let mut peers: Vec<(String, f64)> = self.peer_stats
+            .iter()
+            .filter(|(peer_id, stats)| {
+                if stats.is_banned {
+                    return false;
+                }
+
+                // check concurrent assignments
+                let current_assignments = self.assignments
+                    .values()
+                    .filter(|a| &a.peer_id == *peer_id)
+                    .count();
+
+                current_assignments < self.max_concurrent_per_peer
+            })
+            .map(|(peer_id, stats)| (peer_id.clone(), stats.score()))
+            .collect();
+
+        // sort by score descending
+        peers.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        peers
+    }
+
+    /// Select best peer for a chunk
+    pub fn select_peer_for_chunk(&self, chunk_idx: u32) -> Option<String> {
+        // check if already assigned
+        if self.assignments.contains_key(&chunk_idx) {
+            return None;
+        }
+
+        let peers = self.available_peers();
+        if peers.is_empty() {
+            return None;
+        }
+
+        // weighted random selection
+        let total_score: f64 = peers.iter().map(|(_, s)| s).sum();
+        if total_score <= 0.0 {
+            return Some(peers[0].0.clone());
+        }
+
+        let mut r = rand::random::<f64>() * total_score;
+        for (peer_id, score) in &peers {
+            if r <= *score {
+                return Some(peer_id.clone());
+            }
+            r -= score;
+        }
+
+        Some(peers[0].0.clone())
+    }
+
+    /// Assign a chunk to a peer
+    pub fn assign_chunk(&mut self, chunk_idx: u32, peer_id: String) -> bool {
+        if self.assignments.contains_key(&chunk_idx) {
+            return false;
+        }
+
+        self.assignments.insert(chunk_idx, ChunkAssignment {
+            chunk_idx,
+            peer_id,
+            assigned_at: now_unix(),
+            attempts: 0,
+        });
+
+        true
+    }
+
+    /// Complete a chunk assignment successfully
+    pub fn complete_chunk(&mut self, chunk_idx: u32, bytes: u64, duration_ms: u64) {
+        if let Some(assignment) = self.assignments.remove(&chunk_idx) {
+            if let Some(stats) = self.peer_stats.get_mut(&assignment.peer_id) {
+                stats.record_success(bytes, duration_ms);
+            }
+            self.state.mark_downloaded(chunk_idx);
+        }
+    }
+
+    /// Fail a chunk assignment
+    pub fn fail_chunk(&mut self, chunk_idx: u32) -> bool {
+        if let Some(mut assignment) = self.assignments.remove(&chunk_idx) {
+            if let Some(stats) = self.peer_stats.get_mut(&assignment.peer_id) {
+                stats.record_failure();
+            }
+
+            assignment.attempts += 1;
+
+            // retry if under max retries
+            if assignment.attempts < self.max_retries {
+                // select a different peer
+                if let Some(new_peer) = self.select_peer_for_chunk(chunk_idx) {
+                    self.assignments.insert(chunk_idx, ChunkAssignment {
+                        chunk_idx,
+                        peer_id: new_peer,
+                        assigned_at: now_unix(),
+                        attempts: assignment.attempts,
+                    });
+                    return true;
+                }
+            }
+
+            // mark as failed in state
+            self.state.mark_failed(chunk_idx);
+            return false;
+        }
+        false
+    }
+
+    /// Check for timed out assignments
+    pub fn check_timeouts(&mut self) -> Vec<u32> {
+        let now = now_unix();
+        let timeout_secs = self.chunk_timeout_ms / 1000;
+        let mut timed_out = Vec::new();
+
+        for (idx, assignment) in &self.assignments {
+            if now.saturating_sub(assignment.assigned_at) > timeout_secs {
+                timed_out.push(*idx);
+            }
+        }
+
+        // handle timeouts as failures
+        for idx in &timed_out {
+            self.fail_chunk(*idx);
+        }
+
+        timed_out
+    }
+
+    /// Get pending chunks that need assignment
+    pub fn pending_chunks(&self) -> Vec<u32> {
+        self.state.chunks
+            .iter()
+            .filter(|c| {
+                (c.state == ChunkState::Pending || c.state == ChunkState::Failed)
+                    && !self.assignments.contains_key(&c.idx)
+            })
+            .map(|c| c.idx)
+            .collect()
+    }
+
+    /// Assign chunks to available peers
+    pub fn assign_pending(&mut self) -> Vec<ChunkAssignment> {
+        let pending = self.pending_chunks();
+        let mut assigned = Vec::new();
+
+        for idx in pending {
+            if let Some(peer_id) = self.select_peer_for_chunk(idx) {
+                if self.assign_chunk(idx, peer_id.clone()) {
+                    if let Some(a) = self.assignments.get(&idx) {
+                        assigned.push(a.clone());
+                    }
+                }
+            }
+        }
+
+        assigned
+    }
+
+    /// Get download progress info
+    pub fn progress_info(&self) -> CoordinatorProgress {
+        let total = self.state.chunks.len() as u32;
+        let verified = self.state.chunks.iter().filter(|c| c.state == ChunkState::Verified).count() as u32;
+        let downloaded = self.state.chunks.iter().filter(|c| c.state == ChunkState::Downloaded).count() as u32;
+        let pending = self.state.chunks.iter().filter(|c| c.state == ChunkState::Pending).count() as u32;
+        let failed = self.state.chunks.iter().filter(|c| c.state == ChunkState::Failed).count() as u32;
+        let in_flight = self.assignments.len() as u32;
+
+        let active_peers = self.peer_stats.iter()
+            .filter(|(_, s)| !s.is_banned && s.chunks_completed > 0)
+            .count() as u32;
+
+        let total_speed: f64 = self.peer_stats.values()
+            .filter(|s| !s.is_banned)
+            .map(|s| s.avg_speed)
+            .sum();
+
+        CoordinatorProgress {
+            total_chunks: total,
+            verified_chunks: verified,
+            downloaded_chunks: downloaded,
+            pending_chunks: pending,
+            failed_chunks: failed,
+            in_flight_chunks: in_flight,
+            active_peers,
+            total_peers: self.peer_stats.len() as u32,
+            avg_speed: total_speed,
+            progress_pct: if total > 0 { verified as f64 / total as f64 * 100.0 } else { 100.0 },
+        }
+    }
+
+    /// Check if download is complete
+    pub fn is_complete(&self) -> bool {
+        self.state.is_complete()
+    }
+}
+
+/// Progress info from coordinator
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoordinatorProgress {
+    pub total_chunks: u32,
+    pub verified_chunks: u32,
+    pub downloaded_chunks: u32,
+    pub pending_chunks: u32,
+    pub failed_chunks: u32,
+    pub in_flight_chunks: u32,
+    pub active_peers: u32,
+    pub total_peers: u32,
+    pub avg_speed: f64,
+    pub progress_pct: f64,
+}
+
+/// Request to fetch a chunk from a peer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkFetchRequest {
+    pub merkle_root: String,
+    pub chunk_idx: u32,
+    pub chunk_hash: String,
+    pub chunk_size: u32,
+    pub peer_id: String,
+}
+
+/// Result of a chunk fetch
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkFetchResult {
+    pub chunk_idx: u32,
+    pub success: bool,
+    pub bytes: u64,
+    pub duration_ms: u64,
+    pub error: Option<String>,
+}
+
+// tauri commands for multi-peer coordination
+
+#[tauri::command]
+pub async fn p2p_chunk_create_coordinator(tmp_path: String) -> Result<CoordinatorProgress, String> {
+    let tmp = PathBuf::from(&tmp_path);
+    let state = load(&tmp).await.map_err(|e| e.to_string())?;
+    let coordinator = MultiPeerCoordinator::new(state);
+    Ok(coordinator.progress_info())
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_assign_pending(tmp_path: String) -> Result<Vec<ChunkFetchRequest>, String> {
+    let tmp = PathBuf::from(&tmp_path);
+    let state = load(&tmp).await.map_err(|e| e.to_string())?;
+    let mut coordinator = MultiPeerCoordinator::new(state.clone());
+
+    let assignments = coordinator.assign_pending();
+
+    // create fetch requests
+    let requests: Vec<ChunkFetchRequest> = assignments
+        .iter()
+        .filter_map(|a| {
+            state.chunks.get(a.chunk_idx as usize).map(|c| ChunkFetchRequest {
+                merkle_root: state.merkle_root.clone(),
+                chunk_idx: a.chunk_idx,
+                chunk_hash: c.hash.clone(),
+                chunk_size: c.size,
+                peer_id: a.peer_id.clone(),
+            })
+        })
+        .collect();
+
+    Ok(requests)
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_report_result(
+    tmp_path: String,
+    chunk_idx: u32,
+    success: bool,
+    bytes: u64,
+    duration_ms: u64,
+) -> Result<(), String> {
+    let tmp = PathBuf::from(&tmp_path);
+    let mut state = load(&tmp).await.map_err(|e| e.to_string())?;
+
+    if success {
+        state.mark_downloaded(chunk_idx);
+    } else {
+        state.mark_failed(chunk_idx);
+    }
+
+    persist(&state).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn p2p_chunk_get_progress(tmp_path: String) -> Result<CoordinatorProgress, String> {
+    let tmp = PathBuf::from(&tmp_path);
+    let state = load(&tmp).await.map_err(|e| e.to_string())?;
+    let coordinator = MultiPeerCoordinator::new(state);
+    Ok(coordinator.progress_info())
 }
 
 // =========================================================================

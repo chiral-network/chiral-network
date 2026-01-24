@@ -9682,7 +9682,11 @@ fn main() {
             p2p_chunk_network::p2p_chunk_verify_merkle,
             p2p_chunk_network::p2p_chunk_hash,
             p2p_chunk_network::p2p_chunk_startup_recovery,
-            p2p_chunk_network::p2p_chunk_check_corruption
+            p2p_chunk_network::p2p_chunk_check_corruption,
+            p2p_chunk_network::p2p_chunk_create_coordinator,
+            p2p_chunk_network::p2p_chunk_assign_pending,
+            p2p_chunk_network::p2p_chunk_report_result,
+            p2p_chunk_network::p2p_chunk_get_progress
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
