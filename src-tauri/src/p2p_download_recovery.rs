@@ -278,7 +278,8 @@ impl DlState {
     }
 
     pub fn is_complete(&self) -> bool {
-        !self.chunks.is_empty() && self.chunks.iter().all(|c| c.state == ChunkState::Verified)
+        // empty file is complete, otherwise all chunks must be verified
+        self.chunks.is_empty() || self.chunks.iter().all(|c| c.state == ChunkState::Verified)
     }
 
     pub fn progress(&self) -> f32 {
