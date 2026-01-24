@@ -1114,6 +1114,22 @@ mod tests {
         assert_eq!(chunk.hash, Some("abc".into()));
         assert_eq!(chunk.state, ChunkState::Pending);
     }
+
+    #[test]
+    fn test_empty_file() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "empty.bin".into(),
+            0,
+            "/tmp/empty.tmp".into(),
+            "/dl/empty.bin".into(),
+        );
+
+        state.init_chunks(None);
+        assert_eq!(state.chunks.len(), 0);
+        assert!(state.is_complete());
+        assert_eq!(state.progress(), 1.0);
+    }
 }
 
 // =========================================================================
