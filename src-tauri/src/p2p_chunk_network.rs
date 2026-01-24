@@ -632,6 +632,136 @@ fn now_unix() -> u64 {
 }
 
 // =========================================================================
+// download integration hooks
+// =========================================================================
+
+// hook for multi_source_download - call when download starts
+pub async fn on_download_start(
+    merkle_root: &str,
+    file_name: &str,
+    file_size: u64,
+    tmp_path: &str,
+    dst_path: &str,
+    manifest: Option<&FileManifest>,
+) -> Result<DlState, ChunkNetErr> {
+    let mut state = DlState::new(
+        merkle_root.to_string(),
+        file_name.to_string(),
+        file_size,
+        tmp_path.to_string(),
+        dst_path.to_string(),
+    );
+
+    if let Some(m) = manifest {
+        state.init_from_manifest(m);
+    } else {
+        state.init_chunks();
+    }
+
+    persist(&state).await?;
+    info!("download started: {} -> {}", merkle_root, file_name);
+
+    Ok(state)
+}
+
+// hook for multi_source_download - call when chunk completes
+pub async fn on_chunk_complete(
+    tmp_path: &str,
+    chunk_idx: u32,
+    chunk_hash: &str,
+) -> Result<(), ChunkNetErr> {
+    let tmp = PathBuf::from(tmp_path);
+    let mut state = load(&tmp).await?;
+
+    // update chunk state
+    if let Some(chunk) = state.chunks.get_mut(chunk_idx as usize) {
+        chunk.state = ChunkState::Downloaded;
+        if !chunk_hash.is_empty() {
+            chunk.hash = chunk_hash.to_string();
+        }
+    }
+
+    state.updated_at = now_unix();
+    persist(&state).await?;
+
+    debug!("chunk {} complete for {}", chunk_idx, state.merkle_root);
+    Ok(())
+}
+
+// hook for multi_source_download - call when chunk verified
+pub async fn on_chunk_verified(tmp_path: &str, chunk_idx: u32) -> Result<(), ChunkNetErr> {
+    let tmp = PathBuf::from(tmp_path);
+    let mut state = load(&tmp).await?;
+
+    state.mark_verified(chunk_idx);
+    persist(&state).await?;
+
+    debug!("chunk {} verified for {}", chunk_idx, state.merkle_root);
+    Ok(())
+}
+
+// hook for multi_source_download - call when download completes
+pub async fn on_download_complete(tmp_path: &str) -> Result<(), ChunkNetErr> {
+    let tmp = PathBuf::from(tmp_path);
+    let state = load(&tmp).await?;
+
+    // verify merkle root
+    if let Some(ref manifest_json) = state.manifest_json {
+        if let Ok(manifest) = serde_json::from_str::<FileManifest>(manifest_json) {
+            let hashes: Vec<String> = manifest.chunks.iter().map(|c| c.hash.clone()).collect();
+            if !verify_merkle_root(&state.merkle_root, &hashes)? {
+                warn!("merkle root mismatch for completed download: {}", state.merkle_root);
+            } else {
+                info!("merkle root verified for completed download: {}", state.merkle_root);
+            }
+        }
+    }
+
+    // remove metadata file on success
+    remove_meta(&tmp).await;
+    info!("download complete: {}", state.merkle_root);
+
+    Ok(())
+}
+
+// hook for loading existing chunks on resume
+pub async fn load_existing_chunks(tmp_path: &str, chunks_dir: &Path) -> Result<DlState, ChunkNetErr> {
+    let tmp = PathBuf::from(tmp_path);
+    let mut state = load(&tmp).await?;
+
+    // scan chunks dir for existing chunks
+    let file_dir = chunks_dir.join(&state.merkle_root);
+    if file_dir.exists() {
+        let mut entries = fs::read_dir(&file_dir)
+            .await
+            .map_err(|e| ChunkNetErr::IoErr(e.to_string()))?;
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            // parse chunk_{idx}.dat
+            if name_str.starts_with("chunk_") && name_str.ends_with(".dat") {
+                if let Ok(idx) = name_str
+                    .trim_start_matches("chunk_")
+                    .trim_end_matches(".dat")
+                    .parse::<u32>()
+                {
+                    if let Some(chunk) = state.chunks.get_mut(idx as usize) {
+                        if chunk.state == ChunkState::Pending {
+                            chunk.state = ChunkState::Downloaded;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    persist(&state).await?;
+    Ok(state)
+}
+
+// =========================================================================
 // tauri commands
 // =========================================================================
 
