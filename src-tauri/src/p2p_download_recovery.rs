@@ -1130,6 +1130,30 @@ mod tests {
         assert!(state.is_complete());
         assert_eq!(state.progress(), 1.0);
     }
+
+    #[test]
+    fn test_get_chunk() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks(None);
+
+        // test get_chunk
+        assert!(state.get_chunk(0).is_some());
+        assert!(state.get_chunk(1).is_some());
+        assert!(state.get_chunk(2).is_none());
+
+        // test get_chunk_mut
+        if let Some(c) = state.get_chunk_mut(0) {
+            c.state = ChunkState::Downloaded;
+        }
+        assert_eq!(state.chunks[0].state, ChunkState::Downloaded);
+    }
 }
 
 // =========================================================================
