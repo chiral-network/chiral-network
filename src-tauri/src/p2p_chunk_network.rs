@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -413,29 +413,22 @@ pub async fn verify_all_chunks(state: &mut DlState) -> Result<VerifyResult, Chun
         }
     }
 
-    // update states
-    for idx in &failed_idxs {
-        state.mark_failed(*idx);
-    }
-    for chunk in &state.chunks {
-        if chunk.state == ChunkState::Downloaded && !failed_idxs.contains(&chunk.idx) {
-            state.mark_verified(chunk.idx);
-        }
-    }
-
-    // fix: mark_verified was inside loop incorrectly
-    // re-iterate properly
+    // collect indices to update
     let to_verify: Vec<u32> = state
         .chunks
         .iter()
-        .filter(|c| c.state == ChunkState::Downloaded)
+        .filter(|c| c.state == ChunkState::Downloaded && !failed_idxs.contains(&c.idx))
         .map(|c| c.idx)
         .collect();
 
+    // mark failed chunks
+    for idx in &failed_idxs {
+        state.mark_failed(*idx);
+    }
+
+    // mark verified chunks
     for idx in to_verify {
-        if !failed_idxs.contains(&idx) {
-            state.mark_verified(idx);
-        }
+        state.mark_verified(idx);
     }
 
     Ok(VerifyResult { verified, failed })
