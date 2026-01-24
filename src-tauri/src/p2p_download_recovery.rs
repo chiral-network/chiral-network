@@ -1169,6 +1169,21 @@ mod tests {
         state.set_manifest(r#"{"chunks":[]}"#.into());
         assert!(state.manifest.is_some());
     }
+
+    #[test]
+    fn test_set_encrypted() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        assert!(!state.encrypted);
+        state.set_encrypted(true);
+        assert!(state.encrypted);
+    }
 }
 
 // =========================================================================
