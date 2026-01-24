@@ -964,4 +964,68 @@ mod tests {
 
         assert_eq!(state.providers.len(), 2);
     }
+
+    #[test]
+    fn test_init_from_manifest() {
+        use crate::manager::{ChunkInfo as MgrChunk, FileManifest};
+
+        let manifest = FileManifest {
+            merkle_root: "abc123".to_string(),
+            chunks: vec![
+                MgrChunk {
+                    index: 0,
+                    hash: "hash0".to_string(),
+                    size: 1000,
+                    encrypted_hash: "".to_string(),
+                    encrypted_size: 0,
+                },
+                MgrChunk {
+                    index: 1,
+                    hash: "hash1".to_string(),
+                    size: 500,
+                    encrypted_hash: "".to_string(),
+                    encrypted_size: 0,
+                },
+            ],
+            encrypted_key_bundle: None,
+        };
+
+        let mut state = DlState::new(
+            "abc123".into(),
+            "test.bin".into(),
+            1500,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_from_manifest(&manifest);
+
+        assert_eq!(state.chunks.len(), 2);
+        assert_eq!(state.chunks[0].hash, "hash0");
+        assert_eq!(state.chunks[1].hash, "hash1");
+        assert!(state.manifest_json.is_some());
+    }
+
+    #[test]
+    fn test_recovery_info() {
+        let mut state = DlState::new(
+            "abc".into(),
+            "test.bin".into(),
+            512 * 1024,
+            "/tmp/test.tmp".into(),
+            "/dl/test.bin".into(),
+        );
+
+        state.init_chunks();
+        state.mark_downloaded(0);
+        state.mark_verified(0);
+        state.add_provider("peer1".into());
+
+        let info = RecoveryInfo::from(&state);
+        assert_eq!(info.merkle_root, "abc");
+        assert_eq!(info.verified_chunks, 1);
+        assert_eq!(info.pending_chunks, 1);
+        assert_eq!(info.provider_count, 1);
+        assert!(info.progress > 0.4 && info.progress < 0.6);
+    }
 }
