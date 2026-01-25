@@ -1631,8 +1631,24 @@
     },
     "tabs": {
       "blocks": "Derniers blocs",
+      "pending": "En attente (txpool)",
       "search": "Recherche",
       "stats": "Vérificateur de solde"
+    },
+    "pending": {
+      "title": "Transactions en attente (Txpool)",
+      "subtitle": "Transactions hors chaîne en attente d’être minées",
+      "pending": "En attente",
+      "queued": "En file",
+      "empty": "Aucune transaction en attente.",
+      "emptyQueued": "Aucune transaction en file.",
+      "fields": {
+        "hash": "Hash",
+        "from": "De",
+        "to": "À",
+        "value": "Valeur",
+        "nonce": "Nonce"
+      }
     },
     "blocks": {
       "latest": "Derniers blocs",

@@ -1632,8 +1632,24 @@
     },
     "tabs": {
       "blocks": "Blocos recentes",
+      "pending": "Pendentes (txpool)",
       "search": "Buscar",
       "stats": "Verificador de saldo"
+    },
+    "pending": {
+      "title": "Transações pendentes (Txpool)",
+      "subtitle": "Transações off-chain aguardando para serem mineradas",
+      "pending": "Pendentes",
+      "queued": "Em fila",
+      "empty": "Nenhuma transação pendente.",
+      "emptyQueued": "Nenhuma transação na fila.",
+      "fields": {
+        "hash": "Hash",
+        "from": "De",
+        "to": "Para",
+        "value": "Valor",
+        "nonce": "Nonce"
+      }
     },
     "blocks": {
       "latest": "Blocos recentes",

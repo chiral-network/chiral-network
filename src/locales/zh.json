@@ -1542,8 +1542,24 @@
     },
     "tabs": {
       "blocks": "最新区块",
+      "pending": "待打包 (txpool)",
       "search": "搜索",
       "stats": "余额查询"
+    },
+    "pending": {
+      "title": "待打包交易（Txpool）",
+      "subtitle": "链下交易，等待被打包进区块",
+      "pending": "待处理",
+      "queued": "队列中",
+      "empty": "暂无待处理交易。",
+      "emptyQueued": "暂无队列交易。",
+      "fields": {
+        "hash": "哈希",
+        "from": "来自",
+        "to": "发送至",
+        "value": "金额",
+        "nonce": "Nonce"
+      }
     },
     "blocks": {
       "latest": "最新区块",

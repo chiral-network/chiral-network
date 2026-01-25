@@ -1695,8 +1695,24 @@
     },
     "tabs": {
       "blocks": "Latest Blocks",
+      "pending": "Pending Txpool",
       "search": "Search",
       "stats": "Balance Checker"
+    },
+    "pending": {
+      "title": "Pending Transactions (Txpool)",
+      "subtitle": "Off-chain transactions waiting to be mined",
+      "pending": "Pending",
+      "queued": "Queued",
+      "empty": "No pending transactions.",
+      "emptyQueued": "No queued transactions.",
+      "fields": {
+        "hash": "Hash",
+        "from": "From",
+        "to": "To",
+        "value": "Value",
+        "nonce": "Nonce"
+      }
     },
     "blocks": {
       "latest": "Latest Blocks",
