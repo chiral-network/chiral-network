@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -7,6 +7,10 @@ use tracing::{debug, info, warn};
 /// Payment checkpoint configuration
 const INITIAL_CHECKPOINT_MB: u64 = 10; // First payment after 10 MB
 const MIN_CHECKPOINT_MB: u64 = 1; // Minimum checkpoint size (exponential scaling)
+const MB_BYTES: u64 = 1024 * 1024;
+const MAX_HISTORY_LEN: usize = 100; // cap history to avoid unbounded memory growth
+const RATE_LIMIT_WINDOW_SECS: u64 = 60; // window for rate limiting payment attempts
+const MAX_PAYMENT_ATTEMPTS: usize = 5; // max attempts per window
 
 /// Payment checkpoint states
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -52,6 +56,12 @@ pub struct PaymentCheckpoint {
     pub payment_mode: String,
     /// Checkpoint history (for tracking)
     pub checkpoint_history: Vec<CheckpointRecord>,
+    /// Seen transaction hashes to provide idempotency/replay protection
+    #[serde(default)]
+    pub seen_transaction_hashes: HashSet<String>,
+    /// Recent payment attempt timestamps (unix seconds) for simple rate limiting
+    #[serde(default)]
+    pub recent_payment_attempts: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +77,8 @@ pub struct CheckpointRecord {
 pub struct PaymentCheckpointService {
     /// Active download sessions with payment checkpoints
     sessions: Arc<RwLock<HashMap<String, PaymentCheckpoint>>>,
+    /// Per-session async mutexes to avoid concurrent mutations on same session
+    session_locks: Arc<RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 impl PaymentCheckpointService {
@@ -74,7 +86,17 @@ impl PaymentCheckpointService {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            session_locks: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Get or create per-session mutex
+    async fn get_or_create_session_lock(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.session_locks.write().await;
+        locks
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     /// Initialize a new payment checkpoint session
@@ -88,10 +110,24 @@ impl PaymentCheckpointService {
         price_per_mb: f64,
         payment_mode: String, // "exponential" or "upfront"
     ) -> Result<(), String> {
+        // Basic input validation
+        if session_id.is_empty() {
+            return Err("session_id must not be empty".to_string());
+        }
+        if file_hash.is_empty() {
+            return Err("file_hash must not be empty".to_string());
+        }
+        if file_size == 0 {
+            return Err("file_size must be > 0".to_string());
+        }
+        if !price_per_mb.is_finite() || price_per_mb < 0.0 {
+            return Err("price_per_mb must be a finite non-negative number".to_string());
+        }
+
         let initial_checkpoint = if payment_mode == "upfront" {
             file_size // Full file payment upfront
         } else {
-            INITIAL_CHECKPOINT_MB * 1024 * 1024 // 10 MB
+            INITIAL_CHECKPOINT_MB.saturating_mul(MB_BYTES)
         };
 
         let checkpoint = PaymentCheckpoint {
@@ -108,10 +144,20 @@ impl PaymentCheckpointService {
             price_per_mb,
             payment_mode: payment_mode.clone(),
             checkpoint_history: Vec::new(),
+            seen_transaction_hashes: HashSet::new(),
+            recent_payment_attempts: Vec::new(),
         };
 
         let mut sessions = self.sessions.write().await;
+        // Prevent accidental overwrite of existing session
+        if sessions.contains_key(&session_id) {
+            return Err(format!("session already exists: {}", session_id));
+        }
         sessions.insert(session_id.clone(), checkpoint);
+
+        // Ensure a per-session lock exists for this session
+        let mut locks = self.session_locks.write().await;
+        locks.entry(session_id.clone()).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())));
 
         info!(
             "Payment checkpoint session initialized: {} (mode: {}, first checkpoint: {} bytes)",
@@ -127,6 +173,10 @@ impl PaymentCheckpointService {
         session_id: &str,
         bytes_transferred: u64,
     ) -> Result<CheckpointState, String> {
+        // Acquire per-session lock to avoid races with other callers
+        let lock = self.get_or_create_session_lock(session_id).await;
+        let _guard = lock.lock().await;
+
         let mut sessions = self.sessions.write().await;
         let checkpoint = sessions
             .get_mut(session_id)
@@ -180,10 +230,41 @@ impl PaymentCheckpointService {
         transaction_hash: String,
         amount_paid: f64,
     ) -> Result<(), String> {
+        // Basic input validation
+        if transaction_hash.is_empty() {
+            return Err("transaction_hash must not be empty".to_string());
+        }
+        if !amount_paid.is_finite() || amount_paid < 0.0 {
+            return Err("amount_paid must be finite and non-negative".to_string());
+        }
+
+        // Acquire per-session lock to avoid races
+        let lock = self.get_or_create_session_lock(session_id).await;
+        let _guard = lock.lock().await;
+
         let mut sessions = self.sessions.write().await;
         let checkpoint = sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
+
+        // Rate limiting: prune old attempts and check count
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        checkpoint.recent_payment_attempts.retain(|ts| now_secs.saturating_sub(*ts) <= RATE_LIMIT_WINDOW_SECS);
+        if checkpoint.recent_payment_attempts.len() >= MAX_PAYMENT_ATTEMPTS {
+            warn!("Rate limit exceeded for session {}", session_id);
+            return Err("rate limit exceeded for payment attempts".to_string());
+        }
+        checkpoint.recent_payment_attempts.push(now_secs);
+
+        // Idempotency / replay protection
+        if checkpoint.seen_transaction_hashes.contains(&transaction_hash) {
+            warn!("Duplicate transaction hash for session {}: {}", session_id, transaction_hash);
+            return Err("duplicate transaction hash".to_string());
+        }
 
         // Verify we're in the right state
         let checkpoint_mb = match &checkpoint.state {
@@ -208,7 +289,17 @@ impl PaymentCheckpointService {
                 .as_secs(),
         });
 
+        // Cap history
+        if checkpoint.checkpoint_history.len() > MAX_HISTORY_LEN {
+            // keep the newest entries
+            let excess = checkpoint.checkpoint_history.len() - MAX_HISTORY_LEN;
+            checkpoint.checkpoint_history.drain(0..excess);
+        }
+
         checkpoint.total_paid_chiral += amount_paid;
+
+        // Record tx hash for idempotency
+        checkpoint.seen_transaction_hashes.insert(transaction_hash.clone());
 
         // Calculate next checkpoint using exponential scaling
         let next_checkpoint_mb = if checkpoint.payment_mode == "upfront" {
@@ -221,8 +312,9 @@ impl PaymentCheckpointService {
             next_mb
         };
 
-        checkpoint.next_checkpoint_bytes =
-            checkpoint.bytes_transferred + (next_checkpoint_mb * 1024 * 1024);
+        // Use saturating arithmetic to avoid overflow
+        let added = next_checkpoint_mb.saturating_mul(MB_BYTES);
+        checkpoint.next_checkpoint_bytes = checkpoint.bytes_transferred.saturating_add(added);
 
         // Update state to allow download to continue
         checkpoint.state = CheckpointState::PaymentReceived { transaction_hash: transaction_hash.clone() };
@@ -240,6 +332,10 @@ impl PaymentCheckpointService {
 
     /// Mark payment as failed
     pub async fn mark_payment_failed(&self, session_id: &str, reason: String) -> Result<(), String> {
+        // Acquire per-session lock
+        let lock = self.get_or_create_session_lock(session_id).await;
+        let _guard = lock.lock().await;
+
         let mut sessions = self.sessions.write().await;
         let checkpoint = sessions
             .get_mut(session_id)
@@ -254,6 +350,10 @@ impl PaymentCheckpointService {
 
     /// Mark session as completed
     pub async fn mark_completed(&self, session_id: &str) -> Result<(), String> {
+        // Acquire per-session lock
+        let lock = self.get_or_create_session_lock(session_id).await;
+        let _guard = lock.lock().await;
+
         let mut sessions = self.sessions.write().await;
         let checkpoint = sessions
             .get_mut(session_id)
@@ -278,8 +378,16 @@ impl PaymentCheckpointService {
 
     /// Remove a session (cleanup)
     pub async fn remove_session(&self, session_id: &str) -> Result<(), String> {
+        // Acquire per-session lock to avoid races with in-flight operations
+        let lock = self.get_or_create_session_lock(session_id).await;
+        let _guard = lock.lock().await;
+
         let mut sessions = self.sessions.write().await;
         sessions.remove(session_id);
+
+        // Remove the associated lock entry
+        let mut locks = self.session_locks.write().await;
+        locks.remove(session_id);
 
         debug!("Removed payment checkpoint session: {}", session_id);
 
@@ -333,7 +441,7 @@ mod tests {
 
         let checkpoint = service.get_checkpoint_info("test-session").await.unwrap();
         assert_eq!(checkpoint.state, CheckpointState::Active);
-        assert_eq!(checkpoint.next_checkpoint_bytes, 10 * 1024 * 1024);
+        assert_eq!(checkpoint.next_checkpoint_bytes, INITIAL_CHECKPOINT_MB * MB_BYTES);
     }
 
     #[tokio::test]
