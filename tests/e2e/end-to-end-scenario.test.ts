@@ -126,7 +126,16 @@ describe("End-to-End Scenario Tests", () => {
       const downloaderPeer = "downloader_node_456";
 
       mockTauri.mockCommand("search_file_metadata", async (args: any) => {
-        const result = await mockDHT.searchFileMetadata(args.fileHash);
+        // Respect optional timeoutMs passed by caller to emulate frontend timeout semantics.
+        const timeoutMs = typeof args?.timeoutMs === 'number' ? args.timeoutMs : undefined;
+        const searchPromise = mockDHT.searchFileMetadata(args.fileHash);
+        if (typeof timeoutMs === 'number' && timeoutMs > 0) {
+          return await Promise.race([
+            searchPromise,
+            new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+          ]);
+        }
+        const result = await searchPromise;
         if (result) {
           setTimeout(() => eventHelper.emit("found_file", result), 40);
         }
@@ -315,7 +324,16 @@ describe("End-to-End Scenario Tests", () => {
 
       // === PHASE 3: SEARCH ===
       mockTauri.mockCommand("search_file_metadata", async (args: any) => {
-        const result = await mockDHT.searchFileMetadata(args.fileHash);
+        // Respect optional timeoutMs passed by caller to emulate frontend timeout semantics.
+        const timeoutMs = typeof args?.timeoutMs === 'number' ? args.timeoutMs : undefined;
+        const searchPromise = mockDHT.searchFileMetadata(args.fileHash);
+        if (typeof timeoutMs === 'number' && timeoutMs > 0) {
+          return await Promise.race([
+            searchPromise,
+            new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+          ]);
+        }
+        const result = await searchPromise;
         if (result) {
           setTimeout(() => eventHelper.emit("found_file", result), 40);
         }
@@ -540,7 +558,20 @@ describe("End-to-End Scenario Tests", () => {
       const slowDHT = new MockDHTService(10000); // 10 second delay
 
       mockTauri.mockCommand("search_file_metadata", async (args: any) => {
-        return await slowDHT.searchFileMetadata(args.fileHash);
+        // Respect optional timeoutMs passed by caller to emulate frontend timeout semantics.
+        const timeoutMs = typeof args?.timeoutMs === 'number' ? args.timeoutMs : undefined;
+        const searchPromise = slowDHT.searchFileMetadata(args.fileHash);
+        if (typeof timeoutMs === 'number' && timeoutMs > 0) {
+          return await Promise.race([
+            searchPromise,
+            new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+          ]);
+        }
+        const result = await searchPromise;
+        if (result) {
+          setTimeout(() => eventHelper.emit("found_file", result), 40);
+        }
+        return result;
       });
 
       vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
