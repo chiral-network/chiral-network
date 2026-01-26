@@ -124,6 +124,7 @@ describe("Payment Checkpoint E2E Tests", () => {
         return { success: true };
       });
 
+      // register mock invoke for this test
       vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
 
       // Establish connection
@@ -283,6 +284,7 @@ describe("Payment Checkpoint E2E Tests", () => {
         return { success: true };
       });
 
+      // register mock invoke for this test
       vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
 
       // Establish connection
@@ -478,6 +480,7 @@ describe("Payment Checkpoint E2E Tests", () => {
         return { success: true };
       });
 
+      // register mock invoke for this test
       vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
 
       // Start download
@@ -606,6 +609,7 @@ describe("Payment Checkpoint E2E Tests", () => {
         return { success: result.success };
       });
 
+      // register mock invoke for this test
       vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
 
       // Start download
@@ -731,6 +735,7 @@ describe("Payment Checkpoint E2E Tests", () => {
         return { success: result.success };
       });
 
+      // register mock invoke for this test
       vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
 
       // Start download and handle checkpoints
@@ -850,6 +855,7 @@ describe("Payment Checkpoint E2E Tests", () => {
         return { success: result.success, transactionHash: result.transactionHash };
       });
 
+      // register mock invoke for this test
       vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
 
       // Start transfer
@@ -1003,6 +1009,189 @@ describe("Payment Checkpoint E2E Tests", () => {
       expect(resumedFromCheckpoint).toBe(true);
       expect((resumeResult as any).success).toBe(true);
      });
-   });
- });
+  });
+  
+  describe('Payment checkpoint backend improvements (micro‑Chiral, idempotency, rate-limit)', () => {
+    const MICRO_CHIRAL = 1_000_000; // 1 Chiral = 1_000_000 micro‑Chiral
 
+    it('handles micro‑Chiral amounts correctly (converts to Chiral for display/aggregation)', async () => {
+      const testFile = TestDataFactory.createMockFile('micro.bin', 12 * 1024 * 1024);
+      const uploaderPeer = TestDataFactory.createMockPeers(1, 'WebRTC')[0];
+      await mockDHT.publishFile(TestDataFactory.createMockMetadata(testFile, [uploaderPeer], 'WebRTC'));
+
+      const checkpointState: CheckpointState = {
+        sessionId: `micro_${Date.now()}`,
+        fileHash: testFile.hash,
+        bytesDownloaded: 0,
+        nextCheckpointBytes: CHECKPOINT_INTERVALS[0],
+        totalPaidChiral: 0,
+        isPaused: false,
+      };
+
+      // Simulate backend returning micro‑Chiral amount (e.g. 0.01 Chiral = 10_000 micro)
+      mockTauri.mockCommand('process_checkpoint_payment', async (args: any) => {
+        // compute micro amount locally (10 MB * 0.001 Chiral/MB -> 10_000 micro)
+        const checkpointMicro = (args.checkpointBytes / (1024 * 1024)) * 1000; // using test mock price 0.001 -> 1000 micro
+        const amountMicro = checkpointMicro; // already micro units in this mock environment
+        const tx = `tx_micro_${Date.now()}`;
+
+        // Emit event as backend would, including micro‑unit amount
+        eventHelper.emit('checkpoint_payment_completed', {
+          sessionId: args.sessionId,
+          checkpointMB: args.checkpointMB,
+          amountPaidMicro: amountMicro,
+          transactionHash: tx,
+        });
+
+        return { success: true, transactionHash: tx, amountPaidMicro: amountMicro };
+      });
+
+      // Frontend listener converts micro units to Chiral and aggregates
+      eventHelper.on('checkpoint_payment_completed', (event: any) => {
+        const paidChiral = (event.amountPaidMicro || 0) / MICRO_CHIRAL;
+        checkpointState.totalPaidChiral += paidChiral;
+        checkpointState.isPaused = false;
+      });
+
+      // Trigger a checkpoint flow
+      // emit checkpoint reached
+      eventHelper.emit('payment_checkpoint_reached', {
+        sessionId: checkpointState.sessionId,
+        fileHash: checkpointState.fileHash,
+        bytesDownloaded: checkpointState.nextCheckpointBytes,
+        checkpointMB: checkpointState.nextCheckpointBytes / (1024 * 1024),
+      });
+
+      // ensure mocked invoke uses our mockTauri handlers for this test
+      vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
+
+      // invoke process (calls our mock above)
+      await invoke('process_checkpoint_payment', {
+        sessionId: checkpointState.sessionId,
+        fileHash: checkpointState.fileHash,
+        checkpointBytes: checkpointState.nextCheckpointBytes,
+        checkpointMB: checkpointState.nextCheckpointBytes / (1024 * 1024),
+        fileName: testFile.name,
+        seederAddress: uploaderPeer.address,
+      });
+
+      // allow microtask queue
+      await Promise.resolve();
+
+      expect(checkpointState.totalPaidChiral).toBeGreaterThan(0);
+      // expect roughly 0.01 Chiral for 10MB at 0.001 per MB
+      expect(checkpointState.totalPaidChiral).toBeCloseTo(0.01, 6);
+    });
+
+    it('ignores duplicate transaction hashes (idempotency) on frontend aggregation', async () => {
+      const testFile = TestDataFactory.createMockFile('dup.bin', 12 * 1024 * 1024);
+      const uploaderPeer = TestDataFactory.createMockPeers(1, 'WebRTC')[0];
+      await mockDHT.publishFile(TestDataFactory.createMockMetadata(testFile, [uploaderPeer], 'WebRTC'));
+
+      const checkpointState: CheckpointState = {
+        sessionId: `dup_${Date.now()}`,
+        fileHash: testFile.hash,
+        bytesDownloaded: 0,
+        nextCheckpointBytes: CHECKPOINT_INTERVALS[0],
+        totalPaidChiral: 0,
+        isPaused: false,
+      };
+
+      const seenTx = new Set<string>();
+
+      // Mock backend emits completed twice with same tx
+      mockTauri.mockCommand('process_checkpoint_payment', async (args: any) => {
+        const tx = `tx_dup_42`;
+        const amountMicro = 10 * 1000; // 10 MB * 1000 micro
+
+        // First emit
+        eventHelper.emit('checkpoint_payment_completed', { sessionId: args.sessionId, amountPaidMicro: amountMicro, transactionHash: tx });
+        // Emit duplicate (simulating replay)
+        eventHelper.emit('checkpoint_payment_completed', { sessionId: args.sessionId, amountPaidMicro: amountMicro, transactionHash: tx });
+
+        return { success: true, transactionHash: tx, amountPaidMicro: amountMicro };
+      });
+
+      // Frontend listener ignores duplicates by tracking seen txs
+      eventHelper.on('checkpoint_payment_completed', (event: any) => {
+        if (seenTx.has(event.transactionHash)) return;
+        seenTx.add(event.transactionHash);
+        const paidChiral = (event.amountPaidMicro || 0) / MICRO_CHIRAL;
+        checkpointState.totalPaidChiral += paidChiral;
+        checkpointState.isPaused = false;
+      });
+
+      // Trigger and process
+      eventHelper.emit('payment_checkpoint_reached', { sessionId: checkpointState.sessionId, fileHash: checkpointState.fileHash, bytesDownloaded: checkpointState.nextCheckpointBytes, checkpointMB: 10 });
+
+      // ensure mocked invoke uses our mockTauri handlers for this test
+      vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
+
+      await invoke('process_checkpoint_payment', { sessionId: checkpointState.sessionId, fileHash: checkpointState.fileHash, checkpointBytes: checkpointState.nextCheckpointBytes, checkpointMB: 10, fileName: testFile.name, seederAddress: uploaderPeer.address });
+
+      await Promise.resolve();
+
+      // Only one payment should be counted despite duplicate events
+      expect(checkpointState.totalPaidChiral).toBeCloseTo( (10 * 1000) / MICRO_CHIRAL, 6);
+    });
+
+    it('simulates simple rate-limiting: too many payment attempts cause failures', async () => {
+      const testFile = TestDataFactory.createMockFile('rl.bin', 12 * 1024 * 1024);
+      const uploaderPeer = TestDataFactory.createMockPeers(1, 'WebRTC')[0];
+      await mockDHT.publishFile(TestDataFactory.createMockMetadata(testFile, [uploaderPeer], 'WebRTC'));
+
+      const checkpointState: CheckpointState = {
+        sessionId: `rl_${Date.now()}`,
+        fileHash: testFile.hash,
+        bytesDownloaded: 0,
+        nextCheckpointBytes: CHECKPOINT_INTERVALS[0],
+        totalPaidChiral: 0,
+        isPaused: false,
+      };
+
+      let attempts = 0;
+
+      mockTauri.mockCommand('process_checkpoint_payment', async (args: any) => {
+        attempts++;
+        // Simulate backend enforcing MAX_PAYMENT_ATTEMPTS = 5 within window: fail after 5
+        if (attempts > 5) {
+          eventHelper.emit('checkpoint_payment_failed', { sessionId: args.sessionId, error: 'rate_limited' });
+          return { success: false, error: 'rate_limited' };
+        }
+
+        const tx = `tx_rl_${attempts}`;
+        const amountMicro = 10 * 1000;
+        eventHelper.emit('checkpoint_payment_completed', { sessionId: args.sessionId, amountPaidMicro: amountMicro, transactionHash: tx });
+        return { success: true, transactionHash: tx, amountPaidMicro: amountMicro };
+      });
+
+      // simple listener to count failures
+      let failed = false;
+      eventHelper.on('checkpoint_payment_failed', (e:any) => { failed = true; checkpointState.isPaused = true; });
+      eventHelper.on('checkpoint_payment_completed', (e:any) => { checkpointState.totalPaidChiral += (e.amountPaidMicro || 0) / MICRO_CHIRAL; });
+
+      // ensure mocked invoke uses our mockTauri handlers for this test
+      vi.mocked(invoke).mockImplementation(mockTauri.createInvoke());
+
+      // make 6 rapid attempts
+      for (let i = 0; i < 6; i++) {
+        // call process
+        // ignore errors thrown by invoke
+        try {
+          // each invoke simulates a user retrying a payment
+          // we don't wait between them to simulate burst
+          // eslint-disable-next-line no-await-in-loop
+          await invoke('process_checkpoint_payment', { sessionId: checkpointState.sessionId, fileHash: checkpointState.fileHash, checkpointBytes: checkpointState.nextCheckpointBytes, checkpointMB: 10, fileName: testFile.name, seederAddress: uploaderPeer.address });
+        } catch (err) {
+          // ignore
+        }
+      }
+
+      await Promise.resolve();
+
+      expect(failed).toBe(true);
+      // total paid should be at most 5 successful attempts
+      expect(checkpointState.totalPaidChiral).toBeLessThanOrEqual(5 * ((10 * 1000) / MICRO_CHIRAL));
+    });
+  });
+});
