@@ -335,46 +335,6 @@
     </Card>
   </div>
 
-  {#if dhtHealth}
-    <Card class="p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div>
-          <p class="text-xs uppercase text-muted-foreground">Relay status</p>
-          <h3 class="text-lg font-semibold text-foreground">Active relay snapshot</h3>
-        </div>
-        <div class="px-3 py-1 rounded-full text-xs font-semibold"
-          class:bg-green-100={dhtHealth.autorelayEnabled}
-          class:text-green-800={dhtHealth.autorelayEnabled}
-          class:bg-gray-100={!dhtHealth.autorelayEnabled}
-          class:text-gray-800={!dhtHealth.autorelayEnabled}
-        >
-          {dhtHealth.autorelayEnabled ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
-        </div>
-      </div>
-
-      <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
-          <p class="text-xs uppercase text-muted-foreground">Active relay</p>
-          <p class="text-sm font-mono mt-1 break-all">{dhtHealth.activeRelayPeerId ?? $t('network.dht.relay.noPeer')}</p>
-          <p class="text-xs text-muted-foreground mt-1">
-            Status: {dhtHealth.relayReservationStatus ?? $t('network.dht.relay.pending')}
-          </p>
-        </div>
-        <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
-          <p class="text-xs uppercase text-muted-foreground">Pool</p>
-          <p class="text-sm font-medium mt-1">
-            {dhtHealth.totalRelaysInPool ?? 0} total · {dhtHealth.activeRelayCount ?? 0} active
-          </p>
-          <p class="text-xs text-muted-foreground mt-1">Renewals: {dhtHealth.reservationRenewals ?? 0}</p>
-        </div>
-        <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
-          <p class="text-xs uppercase text-muted-foreground">Health</p>
-          <p class="text-sm font-medium mt-1">
-            {#if typeof dhtHealth.relayHealthScore === 'number'}
-              {(dhtHealth.relayHealthScore * 100).toFixed(0)}%
-            {:else}
-              N/A
-            {/if}
           </p>
           <p class="text-xs text-muted-foreground mt-1">
             Last renewal: {dhtHealth.lastReservationRenewal ? formatNatTimestamp(dhtHealth.lastReservationRenewal) : $t('network.dht.health.never')}
@@ -420,4 +380,5 @@
     {/if}
   </Card>
 </div>
+
 
