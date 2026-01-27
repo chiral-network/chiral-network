@@ -44,7 +44,7 @@
   }
   
   // Tab State
-  let activeTab: 'overview' | 'peers' | 'diagnostics' = 'overview';
+  let activeTab: 'overview' | 'peers' | 'diagnostics' | 'relay' = 'overview';
 
   let discoveryRunning = false
   let newPeerAddress = ''
@@ -1809,6 +1809,13 @@
         <FileText class="mr-2 h-4 w-4" />
         Diagnostics
       </button>
+      <button
+        class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'relay' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground'}"
+        on:click={() => activeTab = 'relay'}
+      >
+        <Signal class="mr-2 h-4 w-4" />
+        Relay
+      </button>
     </nav>
   </div>
 
@@ -2683,6 +2690,11 @@
           </div>
         </div>
 
+      </div>
+    {:else if activeTab === 'relay'}
+      <div class="space-y-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        </div>
       </div>
     {/if}
 
