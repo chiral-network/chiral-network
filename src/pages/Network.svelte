@@ -387,6 +387,11 @@
     }
   }
 
+  function handleAutorelayToggle(event: Event) {
+    const target = event.target as HTMLInputElement
+    setAutorelay(!!target.checked)
+  }
+
   async function copyObservedAddr(addr: string) {
     try {
       await navigator.clipboard.writeText(addr)
@@ -2000,29 +2005,41 @@
 
             <!-- Relay Status -->
             <Card class="p-6">
-              <div class="flex items-center justify-between mb-4">
+            <div class="flex items-start justify-between mb-4">
+              <div>
                 <h3 class="text-lg font-semibold">Relay Status</h3>
-                <div class="flex items-center gap-1 bg-muted/30 p-1 rounded-md">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    class="h-8 px-3 text-xs transition-colors {$settings.enableAutorelay ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm' : 'text-muted-foreground hover:bg-transparent'}"
-                    on:click={() => setAutorelay(true)}
-                    disabled={autorelayToggling || $settings.enableAutorelay}
-                  >
-                    On
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    class="h-8 px-3 text-xs transition-colors {!$settings.enableAutorelay ? 'bg-red-600 text-white hover:bg-red-700 shadow-sm' : 'text-muted-foreground hover:bg-transparent'}"
-                    on:click={() => setAutorelay(false)}
-                    disabled={autorelayToggling || !$settings.enableAutorelay}
-                  >
-                    Off
-                  </Button>
-                </div>
+                <p class="text-sm text-muted-foreground">AutoRelay and active relay health</p>
               </div>
+              <Badge variant={$settings.enableAutorelay ? 'default' : 'secondary'} class={$settings.enableAutorelay ? 'bg-green-100 text-green-700' : ''}>
+                {$settings.enableAutorelay ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
+              </Badge>
+            </div>
+
+            <div class="space-y-4">
+              <div class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="enable-autorelay-network"
+                  checked={$settings.enableAutorelay}
+                  on:change={handleAutorelayToggle}
+                  disabled={autorelayToggling}
+                />
+                <Label for="enable-autorelay-network" class="cursor-pointer">
+                  {$t('relay.client.enableAutorelay')}
+                </Label>
+              </div>
+
+              {#if $settings.enableAutorelay}
+                <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                  <p class="text-sm text-purple-900">
+                    <strong>{$t('relay.client.howItWorks')}</strong>
+                  </p>
+                  <p class="text-xs text-purple-700 mt-1">
+                    {$t('relay.client.description')}
+                  </p>
+                </div>
+              {/if}
+
               {#if dhtStatus === 'connected' && dhtHealth}
                  <div>
                    <RelayErrorMonitor />
@@ -2030,9 +2047,10 @@
               {:else}
                  <div class="text-xs text-muted-foreground italic">Connect to DHT to view relay status.</div>
               {/if}
-            </Card>
-          </div>
+            </div>
+          </Card>
         </div>
+      </div>
       </div>
 
     <!-- PEERS TAB -->

@@ -10,6 +10,7 @@
   import Card from '$lib/components/ui/card.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Label from '$lib/components/ui/label.svelte';
+  import Badge from '$lib/components/ui/badge.svelte';
   import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte';
   import { Settings as SettingsIcon, RefreshCw } from 'lucide-svelte';
 
@@ -17,7 +18,6 @@
   let relayServerEnabled = false;
   let dhtIsRunning: boolean | null = null;
   let relayServerAlias = '';
-  let isRestartingAutorelay = false;
   let dhtHealth: DhtHealth | null = null;
 
   // AutoRelay client settings
@@ -139,32 +139,6 @@
     dhtIsRunning = true;
 
     return currentSettings;
-  }
-
-  async function handleAutorelayToggle(event: Event) {
-    const target = event.target as HTMLInputElement;
-    const newValue = target.checked;
-    const previousValue = autoRelayEnabled;
-
-    isRestartingAutorelay = true;
-    try {
-      autoRelayEnabled = newValue;
-      await saveSettings();
-
-      const { invoke } = await import('@tauri-apps/api/core');
-      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
-
-      if (isRunning) {
-        await restartDhtWithSettings();
-      }
-    } catch (error) {
-      console.error('Failed to toggle AutoRelay:', error);
-      autoRelayEnabled = previousValue;
-      await saveSettings();
-      alert($t('relay.errors.toggleFailed', { values: { error } }));
-    } finally {
-      isRestartingAutorelay = false;
-    }
   }
 
   let statusCheckInterval: number | undefined;
@@ -376,7 +350,7 @@
   </div>
 
   <div class="mb-6">
-    <!-- AutoRelay Client Settings -->
+    <!-- AutoRelay Client Settings (managed from Network page) -->
     <Card class="p-6">
       <div class="flex items-start gap-3 mb-4">
         <SettingsIcon class="w-6 h-6 text-purple-600" />
@@ -384,22 +358,15 @@
           <h2 class="text-xl font-bold text-gray-900">{$t('relay.client.title')}</h2>
           <p class="text-sm text-gray-600">{$t('relay.client.subtitle')}</p>
         </div>
+        <Badge class="ml-auto" variant={autoRelayEnabled ? 'default' : 'secondary'}>
+          {autoRelayEnabled ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
+        </Badge>
       </div>
 
-      <div class="space-y-4">
-        <div class="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="enable-autorelay"
-            bind:checked={autoRelayEnabled}
-            on:change={handleAutorelayToggle}
-            disabled={isRestartingAutorelay}
-          />
-          <Label for="enable-autorelay" class="cursor-pointer">
-            {$t('relay.client.enableAutorelay')}
-          </Label>
-        </div>
-
+      <div class="space-y-3">
+        <p class="text-sm text-muted-foreground">
+          AutoRelay can be toggled from the Network page. Current status is displayed here for monitoring.
+        </p>
         {#if autoRelayEnabled}
           <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
             <p class="text-sm text-purple-900">
