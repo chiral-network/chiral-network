@@ -11,12 +11,10 @@
   import Button from '$lib/components/ui/button.svelte';
   import Label from '$lib/components/ui/label.svelte';
   import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte';
-  import { Wifi, WifiOff, Server, Settings as SettingsIcon, RefreshCw } from 'lucide-svelte';
+  import { Settings as SettingsIcon, RefreshCw } from 'lucide-svelte';
 
   // Relay server status
   let relayServerEnabled = false;
-  let relayServerRunning = false;
-  let isToggling = false;
   let dhtIsRunning: boolean | null = null;
   let relayServerAlias = '';
   let isRestartingAutorelay = false;
@@ -79,19 +77,10 @@
   async function checkDhtStatus() {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const isRunning = await invoke<boolean>('is_dht_running').catch(() => false);
-      dhtIsRunning = isRunning;
-      
-      // If DHT is running and relay server is enabled in settings, mark it as running
-      if (isRunning && relayServerEnabled) {
-        relayServerRunning = true;
-      } else {
-        relayServerRunning = false;
-      }
+      dhtIsRunning = await invoke<boolean>('is_dht_running').catch(() => false);
     } catch (error) {
       console.error('Failed to check DHT status:', error);
       dhtIsRunning = false;
-      relayServerRunning = false;
     }
   }
 
@@ -146,41 +135,10 @@
     });
 
     relayServerEnabled = currentSettings.enableRelayServer ?? relayServerEnabled;
-    relayServerRunning = currentSettings.enableRelayServer ?? false;
     autoRelayEnabled = currentSettings.enableAutorelay ?? autoRelayEnabled;
     dhtIsRunning = true;
 
     return currentSettings;
-  }
-
-  async function toggleRelayServer() {
-    if (!dhtIsRunning) {
-      alert($t('relay.errors.dhtNotRunning'));
-      return;
-    }
-
-    isToggling = true;
-    try {
-      // Toggle the setting
-      relayServerEnabled = !relayServerEnabled;
-
-      // Save to settings
-      await saveSettings();
-
-      // Restart DHT with new settings
-      console.log('Restarting DHT with relay server:', relayServerEnabled);
-      await restartDhtWithSettings();
-
-      console.log(`Relay server ${relayServerEnabled ? 'enabled' : 'disabled'}`);
-    } catch (error) {
-      console.error('Failed to toggle relay server:', error);
-      alert($t('relay.errors.toggleFailed', { values: { error } }));
-      // Revert on error
-      relayServerEnabled = !relayServerEnabled;
-      await saveSettings();
-    } finally {
-      isToggling = false;
-    }
   }
 
   async function handleAutorelayToggle(event: Event) {
@@ -417,116 +375,7 @@
     <p class="text-muted-foreground mt-2">{$t('relay.subtitle')}</p>
   </div>
 
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-    <!-- Relay Server Control -->
-    <Card class="p-6">
-      <div class="flex items-start justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <Server class="w-6 h-6 text-blue-600" />
-          <div>
-            <h2 class="text-xl font-bold text-gray-900">{$t('relay.server.title')}</h2>
-            <p class="text-sm text-gray-600">{$t('relay.server.subtitle')}</p>
-          </div>
-        </div>
-        <div
-          class="px-3 py-1 rounded-full text-xs font-semibold"
-          class:bg-green-100={relayServerRunning}
-          class:text-green-800={relayServerRunning}
-          class:bg-gray-100={!relayServerRunning}
-          class:text-gray-800={!relayServerRunning}
-        >
-          {relayServerRunning ? $t('relay.server.running') : $t('relay.server.stopped')}
-        </div>
-      </div>
-
-      <div class="space-y-4">
-        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <p class="text-sm text-blue-900">
-            {$t('relay.server.description')}
-          </p>
-          <ul class="mt-2 text-sm text-blue-800 space-y-1">
-            <li>• {$t('relay.server.benefit1')}</li>
-            <li>• {$t('relay.server.benefit2')}</li>
-            <li>• {$t('relay.server.benefit3')}</li>
-          </ul>
-        </div>
-
-        <div>
-          <Label for="relay-alias">{$t('relay.server.aliasLabel')}</Label>
-          <input
-            type="text"
-            id="relay-alias"
-            bind:value={relayServerAlias}
-            on:blur={saveSettings}
-            placeholder={$t('relay.server.aliasPlaceholder')}
-            maxlength="50"
-            class="w-full border rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <p class="text-xs text-gray-500 mt-1">
-            {$t('relay.server.aliasHint')}
-          </p>
-        </div>
-
-        {#if dhtIsRunning === false}
-          <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-            <p class="text-sm font-semibold text-yellow-900">
-              {$t('relay.server.dhtNotRunning')}
-            </p>
-            <p class="text-xs text-yellow-700 mt-1">
-              {$t('relay.server.dhtNotRunningHint')}
-            </p>
-          </div>
-        {:else if dhtIsRunning === null}
-          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <p class="text-sm font-semibold text-blue-900">
-              Network Not Started
-            </p>
-            <p class="text-xs text-blue-700 mt-1">
-              Start the network from the Network page to enable relay functionality.
-            </p>
-          </div>
-        {/if}
-
-        <div class="flex items-center justify-between">
-          <Button
-            on:click={toggleRelayServer}
-            disabled={dhtIsRunning !== true || isToggling}
-            variant={relayServerEnabled ? 'destructive' : 'default'}
-            class="w-full"
-          >
-            {#if isToggling}
-              {relayServerEnabled ? $t('relay.server.disabling') : $t('relay.server.enabling')}
-            {:else if relayServerEnabled}
-              <WifiOff class="w-4 h-4 mr-2" />
-              {$t('relay.server.disable')}
-            {:else}
-              <Wifi class="w-4 h-4 mr-2" />
-              {$t('relay.server.enable')}
-            {/if}
-          </Button>
-        </div>
-
-        {#if relayServerRunning}
-          <div class="bg-green-50 border border-green-200 rounded-lg p-4">
-            <p class="text-sm font-semibold text-green-900">
-              {$t('relay.server.activeMessage')}
-            </p>
-            {#if relayServerAlias.trim()}
-              <div class="mt-2 flex items-center gap-2">
-                <span class="text-xs text-green-700">{$t('relay.server.broadcastingAs')}</span>
-                <span class="text-sm font-bold text-green-900 bg-green-100 px-2 py-1 rounded">
-                  {relayServerAlias}
-                </span>
-              </div>
-            {/if}
-            <p class="text-xs text-green-700 mt-2">
-              {$t('relay.server.earningReputation')}
-            </p>
-          </div>
-        {/if}
-      </div>
-    </Card>
-
+  <div class="mb-6">
     <!-- AutoRelay Client Settings -->
     <Card class="p-6">
       <div class="flex items-start gap-3 mb-4">
@@ -713,3 +562,4 @@
     {/if}
   </Card>
 </div>
+
