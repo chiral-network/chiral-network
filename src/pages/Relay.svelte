@@ -8,7 +8,6 @@
   import { relayErrorService } from '$lib/services/relayErrorService';
   import { showToast } from '$lib/toast';
   import Card from '$lib/components/ui/card.svelte';
-  import Button from '$lib/components/ui/button.svelte';
   import Label from '$lib/components/ui/label.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import RelayErrorMonitor from '$lib/components/RelayErrorMonitor.svelte';
@@ -141,94 +140,6 @@
   let statusCheckInterval: number | undefined;
   let healthPollInterval: number | undefined;
 
-  const formatNatTimestamp = (epoch?: number | null) => {
-    if (!epoch) return $t('network.dht.health.never');
-    return new Date(epoch * 1000).toLocaleString();
-  };
-
-  const relayErrorLog = relayErrorService.errorLog;
-  const formatRelayErrorTimestamp = (ms: number) => new Date(ms).toLocaleString();
-  let relayErrorClearedAt = 0;
-  $: filteredRelayErrors = $relayErrorLog.filter((err) => err.timestamp >= relayErrorClearedAt);
-  const formatHealthMessage = (value: string | null | undefined) => value ?? $t('network.dht.health.none');
-
-  type SnapshotRelayError = { message: string; type: string; timestamp: number; relayId: string; retryCount?: number };
-  const SNAPSHOT_STORAGE_KEY = 'relaySnapshotHistory';
-
-  function loadSnapshotHistory(): SnapshotRelayError[] {
-    try {
-      const raw = localStorage.getItem(SNAPSHOT_STORAGE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    } catch (e) {
-      console.error('Failed to load relay snapshot history', e);
-    }
-    return [];
-  }
-
-  function persistSnapshotHistory(history: SnapshotRelayError[]) {
-    try {
-      localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(history));
-    } catch (e) {
-      console.error('Failed to persist relay snapshot history', e);
-    }
-  }
-
-  let snapshotHistory: SnapshotRelayError[] = loadSnapshotHistory();
-
-  $: snapshotRelayError = (() => {
-    if (!dhtHealth) return null;
-    const message = formatHealthMessage(dhtHealth.lastRelayError || dhtHealth.lastError);
-    if (!message || message === $t('network.dht.health.none')) return null;
-
-    const atMs =
-      (dhtHealth.lastRelayErrorAt ?? dhtHealth.lastErrorAt ?? 0) * 1000;
-    if (relayErrorClearedAt && atMs < relayErrorClearedAt) return null;
-    return {
-      message,
-      type: dhtHealth.lastRelayErrorType ?? 'relay_error',
-      timestamp: atMs || Date.now(),
-      relayId: dhtHealth.activeRelayPeerId ?? 'unknown'
-    };
-  })();
-
-  // Accumulate snapshot-derived relay errors instead of replacing them
-  $: {
-    if (snapshotRelayError && snapshotRelayError.timestamp >= relayErrorClearedAt) {
-      const exists = snapshotHistory.some(
-        (e) =>
-          e.timestamp === snapshotRelayError.timestamp &&
-          e.message === snapshotRelayError.message &&
-          e.relayId === snapshotRelayError.relayId
-      );
-      if (!exists) {
-        snapshotHistory = [snapshotRelayError, ...snapshotHistory].slice(0, 100);
-        persistSnapshotHistory(snapshotHistory);
-      }
-    }
-  }
-
-  $: combinedRelayErrors = [...snapshotHistory, ...filteredRelayErrors];
-  $: dedupRelayErrors = (() => {
-    const seen = new Set<string>();
-    const out: typeof combinedRelayErrors = [];
-    for (const err of combinedRelayErrors) {
-      const key = `${err.relayId}-${err.type}-${err.message}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(err);
-    }
-    return out;
-  })();
-
-  function clearRelayErrors() {
-    relayErrorClearedAt = Date.now();
-    relayErrorService.clearErrorLog();
-    snapshotHistory = [];
-    persistSnapshotHistory(snapshotHistory);
-  }
-
   onMount(() => {
     settingsUnsubscribe = settings.subscribe(applySettingsState);
 
@@ -335,15 +246,6 @@
     </Card>
   </div>
 
-          </p>
-          <p class="text-xs text-muted-foreground mt-1">
-            Last renewal: {dhtHealth.lastReservationRenewal ? formatNatTimestamp(dhtHealth.lastReservationRenewal) : $t('network.dht.health.never')}
-          </p>
-        </div>
-      </div>
-    </Card>
-  {/if}
-
   <!-- Relay Error Monitor -->
   {#if autoRelayEnabled && dhtIsRunning === true}
     <div class="mt-6">
@@ -352,33 +254,6 @@
     </div>
   {/if}
 
-  <!-- Relay Error Log -->
-  <Card class="p-6 mt-6">
-    <div class="flex items-center justify-between mb-4">
-      <h3 class="text-lg font-semibold text-foreground">Relay Error Log</h3>
-      <Button size="sm" variant="outline" on:click={clearRelayErrors}>
-        Clear
-      </Button>
-    </div>
-    {#if dedupRelayErrors.length > 0}
-      <div class="max-h-72 overflow-y-auto space-y-2">
-        {#each dedupRelayErrors as error}
-          <div class="border-l-4 border-red-500 pl-3 py-2 bg-red-50 rounded">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold text-red-700">{error.type}</span>
-              <span class="text-xs text-muted-foreground">{formatRelayErrorTimestamp(error.timestamp)}</span>
-            </div>
-            <p class="text-sm text-gray-800 break-words">{error.message}</p>
-            <p class="text-xs text-gray-600 mt-1">
-              Relay {error.relayId} {#if typeof error.retryCount === 'number'}• Retry {error.retryCount}{/if}
-            </p>
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <p class="text-sm text-muted-foreground">No relay errors recorded.</p>
-    {/if}
-  </Card>
 </div>
 
 
