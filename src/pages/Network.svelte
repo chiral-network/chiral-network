@@ -118,6 +118,9 @@
   let relayServerAlias = $settings.relayServerAlias || ''
   let relayServerRunning = false
   let relayServerToggling = false
+  let healthCheckInterval = 30 // seconds
+  let isHealthCheckRunning = false
+  let relayHealthInitialized = false
 
   // Always preserve connections - no unreliable time-based detection
   
@@ -364,6 +367,7 @@
     autorelayToggling = true
     try {
       persistSettingsPatch({ enableAutorelay: enabled })
+      await initRelayHealthChecks()
       if (isTauri) {
         const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
         if (isRunning) {
@@ -390,6 +394,72 @@
   function handleAutorelayToggle(event: Event) {
     const target = event.target as HTMLInputElement
     setAutorelay(!!target.checked)
+  }
+
+  function clampHealthInterval(value: number) {
+    if (value < 10) return 10
+    if (value > 300) return 300
+    return value
+  }
+
+  function loadHealthCheckInterval() {
+    try {
+      const saved = localStorage.getItem('relayHealthCheckInterval')
+      if (saved) {
+        const parsed = parseInt(saved)
+        if (!Number.isNaN(parsed)) {
+          healthCheckInterval = clampHealthInterval(parsed)
+        }
+      }
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to load relay health interval', { error: error instanceof Error ? error.message : String(error) })
+    }
+    relayErrorService.setHealthCheckInterval(healthCheckInterval)
+  }
+
+  function updateHealthCheckInterval() {
+    healthCheckInterval = clampHealthInterval(healthCheckInterval)
+    relayErrorService.setHealthCheckInterval(healthCheckInterval)
+
+    try {
+      localStorage.setItem('relayHealthCheckInterval', healthCheckInterval.toString())
+      showToast(`Health check interval updated to ${healthCheckInterval}s`, 'success')
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to save relay health interval', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  function toggleHealthChecks() {
+    if (isHealthCheckRunning) {
+      relayErrorService.stopHealthChecks()
+      isHealthCheckRunning = false
+      showToast('Health checks stopped', 'info')
+    } else {
+      relayErrorService.startHealthChecks()
+      isHealthCheckRunning = true
+      showToast('Health checks started', 'success')
+    }
+  }
+
+  async function initRelayHealthChecks() {
+    if (relayHealthInitialized) return
+
+    const preferredRelays = get(settings).preferredRelays || []
+    const autorelay = $settings.enableAutorelay
+
+    if (preferredRelays.length === 0 && !autorelay) {
+      return
+    }
+
+    try {
+      await relayErrorService.initialize(preferredRelays, autorelay)
+      loadHealthCheckInterval()
+      relayErrorService.startHealthChecks()
+      isHealthCheckRunning = true
+      relayHealthInitialized = true
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to initialize relay health checks', { error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   async function copyObservedAddr(addr: string) {
@@ -1444,6 +1514,7 @@
           syncDhtStatusOnPageLoad(), // DHT check is independent from Geth check
           fetchChainId()
         ])
+        await initRelayHealthChecks()
 
         // Listen for download progress updates (only in Tauri)
         if (isTauri) {
@@ -1507,6 +1578,7 @@
         peerDiscoveryUnsub()
         peerDiscoveryUnsub = null
       }
+      relayErrorService.stopHealthChecks()
       // Note: We do NOT disconnect the signaling service here
       // It should persist across page navigations to maintain peer connections
     }
@@ -1537,6 +1609,7 @@
       peerDiscoveryUnsub()
       peerDiscoveryUnsub = null
     }
+    relayErrorService.stopHealthChecks()
     // Note: We do NOT stop the DHT service here
     // The DHT should persist across page navigations
   })
@@ -2049,8 +2122,71 @@
               {/if}
             </div>
           </Card>
+
+            <Card class="p-6">
+              <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                <RefreshCw class="h-5 w-5" />
+                Health Check Configuration
+              </h3>
+
+              <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <Label class="text-sm font-medium">Health Check Status</Label>
+                    <p class="text-xs text-muted-foreground mt-1">
+                      {isHealthCheckRunning ? 'Automatically checking relay health' : 'Health checks paused'}
+                    </p>
+                  </div>
+                  <button
+                    on:click={toggleHealthChecks}
+                    class="px-4 py-2 rounded-md text-sm font-medium transition-colors {isHealthCheckRunning
+                      ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+                  >
+                    {isHealthCheckRunning ? 'Running' : 'Stopped'}
+                  </button>
+                </div>
+
+                <div class="space-y-2">
+                  <Label for="health-check-interval" class="text-sm font-medium">
+                    Check Interval (seconds)
+                  </Label>
+                  <div class="flex items-center gap-3">
+                    <Input
+                      id="health-check-interval"
+                      type="number"
+                      min="10"
+                      max="300"
+                      step="5"
+                      bind:value={healthCheckInterval}
+                      class="flex-1"
+                      disabled={!isHealthCheckRunning}
+                    />
+                    <button
+                      on:click={updateHealthCheckInterval}
+                      disabled={!isHealthCheckRunning}
+                      class="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                  <p class="text-xs text-muted-foreground">
+                    How often to check relay connectivity (10-300 seconds). Lower values detect issues faster but use more resources.
+                  </p>
+                </div>
+
+                <div class="pt-4 border-t border-border">
+                  <div class="flex items-center justify-between text-sm">
+                    <span class="text-muted-foreground">Next check in:</span>
+                    <span class="font-medium">
+                      {isHealthCheckRunning ? `~${healthCheckInterval}s` : 'N/A'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
         </div>
-      </div>
       </div>
 
     <!-- PEERS TAB -->
