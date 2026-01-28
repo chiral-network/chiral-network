@@ -21,6 +21,7 @@
 
 import { writable, derived, get, type Readable } from "svelte/store";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Protocol } from "$lib/services/contentProtocols";
 
 // ============================================================================
 // Type Definitions (matching Rust types)
@@ -28,17 +29,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type TransferPriority = "low" | "normal" | "high";
 
-export type SourceType =
-  | "http"
-  | "ftp"
-  | "p2p"
-  | "bittorrent"
-  | "webrtc"
-  | "relay";
-
 export type TransferStatus =
   | "queued"
-  | "starting"
   | "downloading"
   | "paused"
   | "completed"
@@ -47,7 +39,7 @@ export type TransferStatus =
 
 export interface SourceInfo {
   id: string;
-  sourceType: SourceType;
+  protocol: Protocol;
   address: string;
   reputation?: number;
   estimatedSpeedBps?: number;
@@ -57,7 +49,7 @@ export interface SourceInfo {
 
 export interface SourceSummary {
   sourceId: string;
-  sourceType: SourceType;
+  protocol: Protocol;
   chunksProvided: number;
   bytesProvided: number;
   averageSpeedBps: number;
@@ -66,7 +58,7 @@ export interface SourceSummary {
 
 export interface ConnectedSource {
   sourceId: string;
-  sourceType: SourceType;
+  protocol: Protocol;
   sourceInfo: SourceInfo;
   connectedAt: number;
   assignedChunks: number[];
@@ -77,6 +69,7 @@ export interface ConnectedSource {
 export interface Transfer {
   transferId: string;
   fileHash: string;
+  protocol?: Protocol;
   fileName: string;
   fileSize: number;
   outputPath: string;
@@ -287,6 +280,7 @@ function handleQueuedEvent(transfers: Map<string, Transfer>, event: any) {
   const transfer: Transfer = {
     transferId: event.transferId,
     fileHash: event.fileHash,
+    protocol: event.protocol,
     fileName: event.fileName,
     fileSize: event.fileSize,
     outputPath: event.outputPath,
@@ -309,13 +303,14 @@ function handleQueuedEvent(transfers: Map<string, Transfer>, event: any) {
 
 function handleStartedEvent(transfers: Map<string, Transfer>, event: any) {
   let transfer = transfers.get(event.transferId);
-  
+
   // If transfer doesn't exist (e.g., FTP downloads skip the queued event),
   // create it from the started event data
   if (!transfer) {
     const newTransfer: Transfer = {
       transferId: event.transferId,
       fileHash: event.fileHash || event.transferId,
+      protocol: event.protocol,
       fileName: event.fileName || "Unknown",
       fileSize: event.fileSize || 0,
       outputPath: "",
@@ -337,6 +332,7 @@ function handleStartedEvent(transfers: Map<string, Transfer>, event: any) {
   }
 
   transfer.status = "starting";
+  transfer.protocol = event.protocol || transfer.protocol;
   transfer.startedAt = event.startedAt;
   transfer.totalChunks = event.totalChunks;
   transfer.availableSources = event.availableSources || [];
@@ -344,14 +340,14 @@ function handleStartedEvent(transfers: Map<string, Transfer>, event: any) {
 
 function handleSourceConnectedEvent(
   transfers: Map<string, Transfer>,
-  event: any
+  event: any,
 ) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
 
   const source: ConnectedSource = {
     sourceId: event.sourceId,
-    sourceType: event.sourceType,
+    protocol: event.protocol,
     sourceInfo: event.sourceInfo,
     connectedAt: event.connectedAt,
     assignedChunks: event.assignedChunks || [],
@@ -361,7 +357,7 @@ function handleSourceConnectedEvent(
 
   transfer.connectedSources.set(event.sourceId, source);
   transfer.activeSources = Array.from(
-    transfer.connectedSources.values()
+    transfer.connectedSources.values(),
   ).filter((s) => s.isActive).length;
 
   if (transfer.status === "starting") {
@@ -371,7 +367,7 @@ function handleSourceConnectedEvent(
 
 function handleSourceDisconnectedEvent(
   transfers: Map<string, Transfer>,
-  event: any
+  event: any,
 ) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
@@ -382,13 +378,13 @@ function handleSourceDisconnectedEvent(
   }
 
   transfer.activeSources = Array.from(
-    transfer.connectedSources.values()
+    transfer.connectedSources.values(),
   ).filter((s) => s.isActive).length;
 }
 
 function handleChunkCompletedEvent(
   transfers: Map<string, Transfer>,
-  event: any
+  event: any,
 ) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
@@ -410,6 +406,7 @@ function handleProgressEvent(transfers: Map<string, Transfer>, event: any) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
 
+  transfer.protocol = event.protocol || transfer.protocol;
   transfer.downloadedBytes = event.downloadedBytes;
   transfer.completedChunks = event.completedChunks;
   transfer.progressPercentage = event.progressPercentage;
@@ -427,6 +424,7 @@ function handlePausedEvent(transfers: Map<string, Transfer>, event: any) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
 
+  transfer.protocol = event.protocol || transfer.protocol;
   transfer.status = "paused";
   transfer.pausedAt = event.pausedAt;
   transfer.canResume = event.canResume;
@@ -438,6 +436,7 @@ function handleResumedEvent(transfers: Map<string, Transfer>, event: any) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
 
+  transfer.protocol = event.protocol || transfer.protocol;
   transfer.status = "downloading";
   transfer.pausedAt = undefined;
   transfer.pauseReason = undefined;
@@ -449,6 +448,7 @@ function handleCompletedEvent(transfers: Map<string, Transfer>, event: any) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
 
+  transfer.protocol = event.protocol || transfer.protocol;
   transfer.status = "completed";
   transfer.completedAt = event.completedAt;
   transfer.durationSeconds = event.durationSeconds;
@@ -463,6 +463,7 @@ function handleFailedEvent(transfers: Map<string, Transfer>, event: any) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
 
+  transfer.protocol = event.protocol || transfer.protocol;
   transfer.status = "failed";
   transfer.failedAt = event.failedAt;
   transfer.error = event.error;
@@ -475,6 +476,7 @@ function handleCanceledEvent(transfers: Map<string, Transfer>, event: any) {
   const transfer = transfers.get(event.transferId);
   if (!transfer) return;
 
+  transfer.protocol = event.protocol || transfer.protocol;
   transfer.status = "canceled";
   transfer.canceledAt = event.canceledAt;
   transfer.downloadedBytes = event.downloadedBytes;
@@ -548,8 +550,8 @@ export const activeTransfers: Readable<Transfer[]> = derived(
   transferStore,
   ($store) =>
     Array.from($store.transfers.values()).filter(
-      (t) => t.status === "downloading" || t.status === "starting"
-    )
+      (t) => t.status === "downloading" || t.status === "starting",
+    ),
 );
 
 /**
@@ -560,7 +562,7 @@ export const queuedTransfers: Readable<Transfer[]> = derived(
   ($store) =>
     Array.from($store.transfers.values())
       .filter((t) => t.status === "queued")
-      .sort((a, b) => (a.queuePosition || 0) - (b.queuePosition || 0))
+      .sort((a, b) => (a.queuePosition || 0) - (b.queuePosition || 0)),
 );
 
 /**
@@ -571,7 +573,7 @@ export const completedTransfers: Readable<Transfer[]> = derived(
   ($store) =>
     Array.from($store.transfers.values())
       .filter((t) => t.status === "completed")
-      .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0))
+      .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)),
 );
 
 /**
@@ -580,7 +582,7 @@ export const completedTransfers: Readable<Transfer[]> = derived(
 export const failedTransfers: Readable<Transfer[]> = derived(
   transferStore,
   ($store) =>
-    Array.from($store.transfers.values()).filter((t) => t.status === "failed")
+    Array.from($store.transfers.values()).filter((t) => t.status === "failed"),
 );
 
 /**
@@ -589,7 +591,7 @@ export const failedTransfers: Readable<Transfer[]> = derived(
 export const pausedTransfers: Readable<Transfer[]> = derived(
   transferStore,
   ($store) =>
-    Array.from($store.transfers.values()).filter((t) => t.status === "paused")
+    Array.from($store.transfers.values()).filter((t) => t.status === "paused"),
 );
 
 // ============================================================================
@@ -614,7 +616,7 @@ export async function subscribeToTransferEvents(): Promise<() => void> {
       "transfer:event",
       (event) => {
         transferStore.handleEvent(event.payload);
-      }
+      },
     );
 
     unlistenFunctions.push(unlisten);

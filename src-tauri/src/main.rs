@@ -35,11 +35,12 @@ pub mod tui;
 pub mod webhook_manager;
 
 // Re-export modules from the lib crate
+use app_state::CoreServices;
 use chiral_network::{
-    analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source, ed2k_client,
-    encryption, file_transfer, ftp_bookmarks, ftp_client, http_download, keystore, logger, manager,
-    multi_source_download, peer_selection, protocol_manager, protocols, reputation, stream_auth,
-    webrtc_service,
+    analytics, app_state, bandwidth, bittorrent_handler, dht, download_restart, download_source,
+    ed2k_client, encryption, file_transfer, ftp_bookmarks, ftp_client, http_download, keystore,
+    logger, manager, multi_source_download, p2p_chunk_network, p2p_download_recovery,
+    peer_selection, protocol_manager, protocols, reputation, stream_auth, webrtc_service,
 };
 use headless::create_dht_config_from_args;
 
@@ -63,8 +64,8 @@ use bandwidth::BandwidthController;
 use chiral_network::download_paths;
 use chiral_network::payment_checkpoint::PaymentCheckpointService;
 use chiral_network::transfer_events::{
-    current_timestamp_ms, ErrorCategory, SourceInfo, SourceType, TransferCompletedEvent,
-    TransferEventBus, TransferFailedEvent, TransferStartedEvent,
+    current_timestamp_ms, AppEventBus, ErrorCategory, SourceInfo, SourceType,
+    TransferCompletedEvent, TransferEventBus, TransferFailedEvent, TransferStartedEvent,
 };
 use dht::{models::DhtMetricsSnapshot, models::FileMetadata, DhtConfig, DhtEvent, DhtService};
 use directories::ProjectDirs;
@@ -280,164 +281,164 @@ fn load_settings_from_path(app_data_dir: &std::path::Path) -> BackendSettings {
 
 /// Initialize DHT and related network services with proper settings
 /// This should be called from Tauri's setup() hook after loading settings
-async fn initialize_network_services(
-    app_data_dir: &std::path::Path,
-    settings: &BackendSettings,
-    instance_suffix: &str,
-) -> Result<
-    (
-        Arc<DhtService>,
-        Arc<bittorrent_handler::BitTorrentHandler>,
-        Arc<chiral_network::ftp_server::FtpServer>,
-        Arc<ProtocolManager>,
-        protocols::ftp::EventBusHolder,
-    ),
-    String,
-> {
-    info!("Initializing network services...");
+// async fn initialize_network_services(
+//     app_data_dir: &std::path::Path,
+//     settings: &BackendSettings,
+//     instance_suffix: &str,
+// ) -> Result<
+//     (
+//         Arc<DhtService>,
+//         Arc<bittorrent_handler::BitTorrentHandler>,
+//         Arc<chiral_network::ftp_server::FtpServer>,
+//         Arc<ProtocolManager>,
+//         protocols::ftp::EventBusHolder,
+//     ),
+//     String,
+// > {
+//     info!("Initializing network services...");
 
-    // Determine DHT port from settings or environment
-    let env_dht_port = std::env::var("CHIRAL_DHT_PORT")
-        .or_else(|_| std::env::var("CHIRAL_P2P_PORT"))
-        .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok());
-    let dht_port: u16 = env_dht_port.or(settings.port).unwrap_or(4001);
+//     // Determine DHT port from settings or environment
+//     let env_dht_port = std::env::var("CHIRAL_DHT_PORT")
+//         .or_else(|_| std::env::var("CHIRAL_P2P_PORT"))
+//         .ok()
+//         .and_then(|s| s.trim().parse::<u16>().ok());
+//     let dht_port: u16 = env_dht_port.or(settings.port).unwrap_or(4001);
 
-    // Build DHT config from settings
-    let bootstrap_nodes = match settings.custom_bootstrap_nodes.clone() {
-        Some(nodes) if !nodes.is_empty() => nodes,
-        _ => get_bootstrap_nodes(),
-    };
+//     // Build DHT config from settings
+//     let bootstrap_nodes = match settings.custom_bootstrap_nodes.clone() {
+//         Some(nodes) if !nodes.is_empty() => nodes,
+//         _ => get_bootstrap_nodes(),
+//     };
 
-    let enable_autonat = match settings.disable_direct_nat_traversal {
-        Some(disabled) => !disabled,
-        None => settings.enable_autonat.unwrap_or(true),
-    };
+//     let enable_autonat = match settings.disable_direct_nat_traversal {
+//         Some(disabled) => !disabled,
+//         None => settings.enable_autonat.unwrap_or(true),
+//     };
 
-    let enable_autorelay = if settings.ip_privacy_mode.as_deref() != Some("off") {
-        true
-    } else {
-        settings.enable_autorelay.unwrap_or(true)
-    };
+//     let enable_autorelay = if settings.ip_privacy_mode.as_deref() != Some("off") {
+//         true
+//     } else {
+//         settings.enable_autorelay.unwrap_or(true)
+//     };
 
-    let autonat_probe_interval_secs = settings.autonat_probe_interval.unwrap_or(30);
-    let chunk_size_kb = settings.chunk_size.unwrap_or(256);
-    let cache_size_mb = settings
-        .cache_size
-        .and_then(|v| usize::try_from(v).ok())
-        .unwrap_or(1024);
-    let enable_relay_server = settings.enable_relay_server.unwrap_or(false);
-    let enable_upnp = settings.enable_upnp.unwrap_or(true);
-    let pure_client_mode = settings.pure_client_mode.unwrap_or(false);
-    let force_server_mode = settings.force_server_mode.unwrap_or(false);
-    let autonat_servers = settings
-        .autonat_servers
-        .clone()
-        .unwrap_or_else(|| bootstrap_nodes.clone());
+//     let autonat_probe_interval_secs = settings.autonat_probe_interval.unwrap_or(30);
+//     let chunk_size_kb = settings.chunk_size.unwrap_or(256);
+//     let cache_size_mb = settings
+//         .cache_size
+//         .and_then(|v| usize::try_from(v).ok())
+//         .unwrap_or(1024);
+//     let enable_relay_server = settings.enable_relay_server.unwrap_or(false);
+//     let enable_upnp = settings.enable_upnp.unwrap_or(true);
+//     let pure_client_mode = settings.pure_client_mode.unwrap_or(false);
+//     let force_server_mode = settings.force_server_mode.unwrap_or(false);
+//     let autonat_servers = settings
+//         .autonat_servers
+//         .clone()
+//         .unwrap_or_else(|| bootstrap_nodes.clone());
 
-    let preferred_relays = match settings.trusted_proxy_relays.clone() {
-        Some(relays) if !relays.is_empty() => relays,
-        _ => settings.preferred_relays.clone().unwrap_or_default(),
-    };
+//     let preferred_relays = match settings.trusted_proxy_relays.clone() {
+//         Some(relays) if !relays.is_empty() => relays,
+//         _ => settings.preferred_relays.clone().unwrap_or_default(),
+//     };
 
-    let proxy_address = if settings.enable_proxy.unwrap_or(false) {
-        settings
-            .proxy_address
-            .clone()
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    } else {
-        String::new()
-    };
+//     let proxy_address = if settings.enable_proxy.unwrap_or(false) {
+//         settings
+//             .proxy_address
+//             .clone()
+//             .unwrap_or_default()
+//             .trim()
+//             .to_string()
+//     } else {
+//         String::new()
+//     };
 
-    let blockstore_db_path = app_data_dir.join("blockstore_db");
-    let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
+//     let blockstore_db_path = app_data_dir.join("blockstore_db");
+//     let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
 
-    info!(
-        "Initializing DHT service with port {} and {} bootstrap nodes",
-        dht_port,
-        bootstrap_nodes.len()
-    );
+//     info!(
+//         "Initializing DHT service with port {} and {} bootstrap nodes",
+//         dht_port,
+//         bootstrap_nodes.len()
+//     );
 
-    let dht_config = DhtConfig::builder()
-        .port(dht_port)
-        .bootstrap_nodes(bootstrap_nodes)
-        .enable_autonat(enable_autonat)
-        .autonat_probe_interval(Duration::from_secs(autonat_probe_interval_secs))
-        .chunk_size_kb(chunk_size_kb)
-        .cache_size_mb(cache_size_mb)
-        .enable_autorelay(enable_autorelay)
-        .enable_relay_server(enable_relay_server)
-        .enable_upnp(enable_upnp)
-        .pure_client_mode(pure_client_mode)
-        .force_server_mode(force_server_mode)
-        .autonat_servers(autonat_servers)
-        .preferred_relays(preferred_relays)
-        .proxy_address(proxy_address)
-        .blockstore_db_path(async_blockstore_path)
-        .build();
+//     let dht_config = DhtConfig::builder()
+//         .port(dht_port)
+//         .bootstrap_nodes(bootstrap_nodes)
+//         .enable_autonat(enable_autonat)
+//         .autonat_probe_interval(Duration::from_secs(autonat_probe_interval_secs))
+//         .chunk_size_kb(chunk_size_kb)
+//         .cache_size_mb(cache_size_mb)
+//         .enable_autorelay(enable_autorelay)
+//         .enable_relay_server(enable_relay_server)
+//         .enable_upnp(enable_upnp)
+//         .pure_client_mode(pure_client_mode)
+//         .force_server_mode(force_server_mode)
+//         .autonat_servers(autonat_servers)
+//         .preferred_relays(preferred_relays)
+//         .proxy_address(proxy_address)
+//         .blockstore_db_path(async_blockstore_path)
+//         .build();
 
-    let dht_service = DhtService::new(dht_config, None, None, None)
-        .await
-        .map_err(|e| format!("Failed to create DHT service: {}", e))?;
-    let dht_service_arc = Arc::new(dht_service);
+//     let dht_service = DhtService::new(dht_config, None, None, None)
+//         .await
+//         .map_err(|e| format!("Failed to create DHT service: {}", e))?;
+//     let dht_service_arc = Arc::new(dht_service);
 
-    info!("DHT service initialized successfully");
+//     info!("DHT service initialized successfully");
 
-    // Initialize BitTorrent handler
-    let download_dir = app_data_dir.join(format!("downloads{}", instance_suffix));
-    if let Err(e) = std::fs::create_dir_all(&download_dir) {
-        warn!("Failed to create download directory: {}", e);
-    }
+//     // Initialize BitTorrent handler
+//     let download_dir = app_data_dir.join(format!("downloads{}", instance_suffix));
+//     if let Err(e) = std::fs::create_dir_all(&download_dir) {
+//         warn!("Failed to create download directory: {}", e);
+//     }
 
-    let port_range = 6881..6891;
-    info!(
-        "Initializing BitTorrent handler with port range {}-{}",
-        port_range.start, port_range.end
-    );
+//     let port_range = 6881..6891;
+//     info!(
+//         "Initializing BitTorrent handler with port range {}-{}",
+//         port_range.start, port_range.end
+//     );
 
-    let bittorrent_handler =
-        create_bt_handler_with_fallback(download_dir.clone(), dht_service_arc.clone(), port_range)
-            .await;
-    let bittorrent_handler_arc = Arc::new(bittorrent_handler);
+//     let bittorrent_handler =
+//         create_bt_handler_with_fallback(download_dir.clone(), dht_service_arc.clone(), port_range)
+//             .await;
+//     let bittorrent_handler_arc = Arc::new(bittorrent_handler);
 
-    info!("BitTorrent handler initialized");
+//     info!("BitTorrent handler initialized");
 
-    // Create FTP server
-    let ftp_files_dir = app_data_dir.join("ftp_files");
-    let ftp_server = Arc::new(chiral_network::ftp_server::FtpServer::new(
-        ftp_files_dir,
-        2121,
-    ));
+//     // Create FTP server
+//     let ftp_files_dir = app_data_dir.join("ftp_files");
+//     let ftp_server = Arc::new(chiral_network::ftp_server::FtpServer::new(
+//         ftp_files_dir,
+//         2121,
+//     ));
 
-    info!("FTP server initialized");
+//     info!("FTP server initialized");
 
-    // Create protocol manager
-    let mut manager = ProtocolManager::new();
+//     // Create protocol manager
+//     let mut manager = ProtocolManager::new();
 
-    let bittorrent_protocol_handler =
-        BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
-    manager.register(Arc::new(bittorrent_protocol_handler));
+//     let bittorrent_protocol_handler =
+//         BitTorrentProtocolHandler::new(bittorrent_handler_arc.clone());
+//     manager.register(Arc::new(bittorrent_protocol_handler));
 
-    let ed2k_handler =
-        protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
-    manager.register(Arc::new(ed2k_handler));
+//     let ed2k_handler =
+//         protocols::ed2k::Ed2kProtocolHandler::new("ed2k://|server|45.82.80.155|5687|/".to_string());
+//     manager.register(Arc::new(ed2k_handler));
 
-    let (ftp_handler, ftp_event_bus_holder) =
-        protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
-    manager.register(Arc::new(ftp_handler));
+//     let (ftp_handler, ftp_event_bus_holder) =
+//         protocols::ftp::FtpProtocolHandler::with_ftp_server(ftp_server.clone());
+//     manager.register(Arc::new(ftp_handler));
 
-    info!("Protocol manager initialized with BitTorrent, ED2K, and FTP handlers");
+//     info!("Protocol manager initialized with BitTorrent, ED2K, and FTP handlers");
 
-    Ok((
-        dht_service_arc,
-        bittorrent_handler_arc,
-        ftp_server,
-        Arc::new(manager),
-        ftp_event_bus_holder,
-    ))
-}
+//     Ok((
+//         dht_service_arc,
+//         bittorrent_handler_arc,
+//         ftp_server,
+//         Arc::new(manager),
+//         ftp_event_bus_holder,
+//     ))
+// }
 
 /// Get a unique file path by adding (1), (2), etc. if the file already exists
 /// Example: "file.txt" -> "file (1).txt" if "file.txt" exists
@@ -843,6 +844,7 @@ async fn check_geth_data_compatibility(
 
 #[tauri::command]
 async fn download(identifier: String, state: State<'_, AppState>) -> Result<(), String> {
+    info!("download command invoked: {}", identifier);
     println!("Received download command for: {}", identifier);
     #[allow(deprecated)]
     require_protocol_manager(&state)
@@ -858,6 +860,7 @@ async fn download_torrent_from_bytes(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    info!("download_torrent_from_bytes invoked: bytes={}", bytes.len());
     println!(
         "Received download_torrent_from_bytes command with {} bytes",
         bytes.len()
@@ -883,6 +886,10 @@ async fn download_torrent_from_magnet(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    info!(
+        "download_torrent_from_magnet invoked: magnet_link={}",
+        magnet_link
+    );
     println!(
         "Received download_torrent_from_magnet command: {}",
         magnet_link
@@ -948,6 +955,7 @@ async fn open_torrent_folder(info_hash: String, state: State<'_, AppState>) -> R
 /// It takes a local file path, starts seeding, and returns a magnet link.
 #[tauri::command]
 async fn seed(file_path: String, state: State<'_, AppState>) -> Result<String, String> {
+    info!("seed invoked: file_path={}", file_path);
     println!("Received seed command for: {}", file_path);
     // Delegate the seed operation to the protocol manager.
     #[allow(deprecated)]
@@ -973,6 +981,7 @@ async fn create_and_seed_torrent(
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    info!("create_and_seed_torrent invoked: file_path={}", file_path);
     // Use the BitTorrent handler directly to create and seed the torrent
     let handler = require_bittorrent_handler(&state).await?;
     create_and_seed_torrent_internal(file_path, handler).await
@@ -985,6 +994,10 @@ async fn bittorrent_post_download_publish(
     info_hash: String,
     state: State<'_, AppState>,
 ) -> Result<bittorrent_handler::PostDownloadResult, String> {
+    info!(
+        "bittorrent_post_download_publish invoked: info_hash={}",
+        info_hash
+    );
     println!("Post-download publish for info_hash: {}", info_hash);
     let handler = require_bittorrent_handler(&state).await?;
     handler.post_download_seed_and_publish(&info_hash).await
@@ -1147,6 +1160,7 @@ async fn estimate_transaction_gas(
 
 #[tauri::command]
 async fn can_afford_download(state: State<'_, AppState>, price: f64) -> Result<bool, String> {
+    info!("can_afford_download invoked: price={}", price);
     let account = get_active_account(&state).await?;
     let balance_str = get_balance(&account).await?;
     let balance = balance_str
@@ -1161,6 +1175,10 @@ async fn process_download_payment(
     uploader_address: String,
     price: f64,
 ) -> Result<String, String> {
+    info!(
+        "process_download_payment invoked: uploader_address={} price={}",
+        uploader_address, price
+    );
     // Get the active account address
     let account = get_active_account(&state).await?;
 
@@ -1191,6 +1209,10 @@ async fn record_download_payment(
     transaction_hash: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    info!(
+        "record_download_payment invoked: file_hash={} file_name={} amount={} tx_hash={}",
+        file_hash, file_name, amount, transaction_hash
+    );
     println!(
         "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) from {} (peer: {}) tx: {}",
         amount,
@@ -1319,6 +1341,7 @@ async fn download_geth_binary(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    info!("download_geth_binary invoked");
     let downloader = state.downloader.clone();
     let app_handle = app.clone();
 
@@ -2154,7 +2177,15 @@ async fn start_dht_node(
     let analytics_arc = state.analytics.clone();
 
     tokio::spawn(async move {
+        use chiral_network::transfer_events::{
+            AppEventBus, MetadataFoundEvent, ProvidersFoundEvent, SearchCompleteEvent,
+            SearchStartedEvent, SearchTimeoutEvent, SeederFileInfoEvent, SeederGeneralInfoEvent,
+        };
         use std::time::Duration;
+
+        // Create AppEventBus for emitting unified search events
+        let search_event_bus = AppEventBus::new(app_handle.clone());
+
         loop {
             // If the DHT service has been shut down, the weak reference will be None
             let events = dht_clone_for_pump.drain_events(64).await;
@@ -2385,18 +2416,15 @@ async fn start_dht_node(
                         }
                     }
 
-                    // Progressive search events
+                    // Progressive search events - use AppEventBus for unified event emission
                     DhtEvent::SearchStarted {
                         file_hash,
                         timestamp,
                     } => {
-                        let _ = app_handle.emit(
-                            "search_started",
-                            serde_json::json!({
-                                "fileHash": file_hash,
-                                "timestamp": timestamp
-                            }),
-                        );
+                        search_event_bus.emit_search_started(SearchStartedEvent {
+                            file_hash,
+                            timestamp,
+                        });
                     }
 
                     DhtEvent::DhtMetadataFound {
@@ -2407,20 +2435,17 @@ async fn start_dht_node(
                         mime_type,
                     } => {
                         info!(
-                            "📡 Emitting dht_metadata_found event to frontend: {}",
+                            "📡 Emitting metadata_found event to frontend: {}",
                             file_name
                         );
-                        let _ = app_handle.emit(
-                            "dht_metadata_found",
-                            serde_json::json!({
-                                "fileHash": file_hash,
-                                "fileName": file_name,
-                                "fileSize": file_size,
-                                "createdAt": created_at,
-                                "mimeType": mime_type
-                            }),
-                        );
-                        info!("✅ EMITTED DHTMETADATAFOUND TO FRONTEND");
+                        search_event_bus.emit_metadata_found(MetadataFoundEvent {
+                            file_hash,
+                            file_name,
+                            file_size,
+                            created_at,
+                            mime_type,
+                        });
+                        info!("✅ EMITTED METADATA_FOUND TO FRONTEND");
                     }
 
                     DhtEvent::ProvidersFound {
@@ -2428,14 +2453,11 @@ async fn start_dht_node(
                         providers,
                         count,
                     } => {
-                        let _ = app_handle.emit(
-                            "providers_found",
-                            serde_json::json!({
-                                "fileHash": file_hash,
-                                "providers": providers,
-                                "count": count
-                            }),
-                        );
+                        search_event_bus.emit_providers_found(ProvidersFoundEvent {
+                            file_hash,
+                            providers,
+                            count,
+                        });
                     }
 
                     DhtEvent::SeederGeneralInfoFound {
@@ -2445,16 +2467,13 @@ async fn start_dht_node(
                         wallet_address,
                         default_price_per_mb,
                     } => {
-                        let _ = app_handle.emit(
-                            "seeder_general_info",
-                            serde_json::json!({
-                                "fileHash": file_hash,
-                                "seederIndex": seeder_index,
-                                "peerId": peer_id,
-                                "walletAddress": wallet_address,
-                                "defaultPricePerMb": default_price_per_mb,
-                            }),
-                        );
+                        search_event_bus.emit_seeder_general_info(SeederGeneralInfoEvent {
+                            file_hash,
+                            seeder_index,
+                            peer_id,
+                            wallet_address,
+                            default_price_per_mb,
+                        });
                     }
 
                     DhtEvent::SeederFileInfoFound {
@@ -2465,17 +2484,14 @@ async fn start_dht_node(
                         supported_protocols,
                         protocol_details,
                     } => {
-                        let _ = app_handle.emit(
-                            "seeder_file_info",
-                            serde_json::json!({
-                                "fileHash": file_hash,
-                                "seederIndex": seeder_index,
-                                "peerId": peer_id,
-                                "pricePerMb": price_per_mb,
-                                "supportedProtocols": supported_protocols,
-                                "protocolDetails": protocol_details
-                            }),
-                        );
+                        search_event_bus.emit_seeder_file_info(SeederFileInfoEvent {
+                            file_hash,
+                            seeder_index,
+                            peer_id,
+                            price_per_mb,
+                            supported_protocols,
+                            protocol_details,
+                        });
                     }
 
                     DhtEvent::SearchComplete {
@@ -2483,14 +2499,11 @@ async fn start_dht_node(
                         total_seeders,
                         duration_ms,
                     } => {
-                        let _ = app_handle.emit(
-                            "search_complete",
-                            serde_json::json!({
-                                "fileHash": file_hash,
-                                "totalSeeders": total_seeders,
-                                "durationMs": duration_ms
-                            }),
-                        );
+                        search_event_bus.emit_search_complete(SearchCompleteEvent {
+                            file_hash,
+                            total_seeders,
+                            duration_ms,
+                        });
                     }
 
                     DhtEvent::SearchTimeout {
@@ -2498,14 +2511,11 @@ async fn start_dht_node(
                         partial_seeders,
                         missing_count,
                     } => {
-                        let _ = app_handle.emit(
-                            "search_timeout",
-                            serde_json::json!({
-                                "fileHash": file_hash,
-                                "partialSeeders": partial_seeders,
-                                "missingCount": missing_count
-                            }),
-                        );
+                        search_event_bus.emit_search_timeout(SearchTimeoutEvent {
+                            file_hash,
+                            partial_seeders,
+                            missing_count,
+                        });
                     }
 
                     _ => {}
@@ -2514,9 +2524,30 @@ async fn start_dht_node(
         }
     });
 
+    // Restore wallet address in DHT SeederGeneralInfo if miner_address was already set
+    {
+        let miner_address = state.miner_address.lock().await;
+        if let Some(ref address) = *miner_address {
+            if let Err(e) = dht_arc.update_wallet_address(address.clone()).await {
+                warn!("Failed to restore wallet address in DHT: {}", e);
+            } else {
+                info!(
+                    "Restored wallet address in DHT SeederGeneralInfo: {}",
+                    address
+                );
+            }
+        }
+    }
+
     {
         let mut dht_guard = state.dht.lock().await;
         *dht_guard = Some(dht_arc.clone());
+    }
+
+    // Also store in CoreServices for protocol_manager access
+    {
+        let core = app.state::<CoreServices>();
+        *core.dht.lock().await = Some(dht_arc.clone());
     }
 
     // Store BitTorrent handler + protocol manager in state
@@ -2535,15 +2566,13 @@ async fn start_dht_node(
         app.clone(),
     );
 
-    // Reinitialize upload/download protocol manager with new DHT service
+    // Reinitialize upload/download protocol manager
+    // Services (DHT, FileTransfer) are queried from CoreServices when needed
     {
-        let upload_protocol_manager = Arc::new(protocol_manager::ProtocolManager::new(
-            dht_arc.clone(),
-            app.clone(),
-        ));
+        let upload_protocol_manager = Arc::new(protocol_manager::ProtocolManager::new(app.clone()));
         let mut protocol_manager_guard = state.upload_download_protocol_manager.lock().await;
         *protocol_manager_guard = Some(upload_protocol_manager);
-        info!("✓ Upload/Download Protocol Manager reinitialized with new DHT service");
+        info!("✓ Upload/Download Protocol Manager reinitialized");
     }
 
     // Store chunk manager in AppState
@@ -4196,6 +4225,7 @@ fn detect_locale() -> String {
 /// Get the resolved download directory.
 #[tauri::command]
 fn get_download_directory(app: tauri::AppHandle) -> Result<String, String> {
+    info!("get_download_directory invoked");
     download_paths::get_download_directory(&app)
 }
 
@@ -4291,6 +4321,11 @@ async fn start_file_transfer_service(
         let mut ft_guard = state.file_transfer.lock().await;
         *ft_guard = Some(ft_arc.clone());
     }
+    // Also store in CoreServices for protocol_manager access
+    {
+        let core = app.state::<CoreServices>();
+        *core.file_transfer.lock().await = Some(ft_arc.clone());
+    }
 
     // Initialize WebRTC service with file transfer service (without multi_source_service initially)
     let webrtc_service = WebRTCService::new(
@@ -4306,6 +4341,11 @@ async fn start_file_transfer_service(
     {
         let mut webrtc_guard = state.webrtc.lock().await;
         *webrtc_guard = Some(webrtc_arc.clone());
+    }
+    // Also store in CoreServices for protocol_manager access
+    {
+        let core = app.state::<CoreServices>();
+        *core.webrtc.lock().await = Some(webrtc_arc.clone());
     }
 
     // Set the global singleton to the SAME instance (not a duplicate!)
@@ -4360,6 +4400,11 @@ async fn start_file_transfer_service(
         {
             let mut webrtc_guard = state.webrtc.lock().await;
             *webrtc_guard = Some(webrtc_arc_updated.clone());
+        }
+        // Also update CoreServices with the new WebRTC instance
+        {
+            let core = app.state::<CoreServices>();
+            *core.webrtc.lock().await = Some(webrtc_arc_updated.clone());
         }
         set_webrtc_service(webrtc_arc_updated.clone()).await;
 
@@ -4451,6 +4496,14 @@ async fn upload_file_to_network(
         .map_err(|e| format!("Failed to get file size: {}", e))?
         .len();
 
+    info!(
+        "upload_file_to_network invoked: file={} size={} price={} protocol={}",
+        original_file_name,
+        file_size,
+        price,
+        protocol.as_deref().unwrap_or("default")
+    );
+
     // Normalize protocol for robust matching (tests/users may send different casing like "Bitswap", "BitSwap", "BITSWAP").
     let protocol_upper = protocol.as_deref().unwrap_or("").trim().to_uppercase();
     let dont_need_to_copy_protocols = vec!["BITSWAP", "WEBRTC"];
@@ -4467,6 +4520,7 @@ async fn upload_file_to_network(
 
         match protocol_upper.as_str() {
             "HTTP" => {
+                info!("upload_file_to_network using protocol: HTTP");
                 let permanent_path = state.http_server_state.storage_dir.join(&file_hash);
                 // Move/rename temp file to permanent storage instead of copying
                 tokio::fs::rename(&file_path, &permanent_path)
@@ -4488,6 +4542,7 @@ async fn upload_file_to_network(
                     .await;
             }
             "BITTORRENT" => {
+                info!("upload_file_to_network using protocol: BitTorrent");
                 // Check if file exists before attempting to seed
                 if !std::path::Path::new(&file_path).exists() {
                     error!(
@@ -4583,6 +4638,7 @@ async fn upload_file_to_network(
                 }
             }
             "ED2K" => {
+                info!("upload_file_to_network using protocol: ED2K");
                 // Actually use the ED2K protocol handler to generate real ed2k links
 
                 let file_path_buf = PathBuf::from(&file_path);
@@ -4691,6 +4747,7 @@ async fn upload_file_to_network(
                 }
             }
             "FTP" => {
+                info!("upload_file_to_network using protocol: FTP");
                 // FTP upload uses the built-in FTP server
                 println!("📡 FTP upload: Using built-in FTP server");
 
@@ -4816,6 +4873,7 @@ async fn upload_file_to_network(
                 return Ok(());
             }
             "Bitswap" | "bitswap" | "BitSwap" | "BITSWAP" => {
+                info!("upload_file_to_network using protocol: Bitswap");
                 // Use streaming upload for Bitswap to handle large files
                 println!(
                     "📡 Using streaming Bitswap upload for protocol: {}",
@@ -5048,6 +5106,7 @@ async fn upload_file_to_network(
                 return Ok(());
             }
             _ => {
+                info!("upload_file_to_network using protocol: WebRTC/default");
                 // WebRTC and other protocols use the default Chiral flow
                 // Spawn in background task to avoid callback timeout issues
                 println!(
@@ -5412,16 +5471,28 @@ async fn test_ftp_connection(
 
     // Connect based on FTPS setting
     if use_ftps {
-        use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
+        use std::sync::Arc;
+        use suppaftp::{RustlsConnector, RustlsFtpStream};
 
-        // Create TLS connector
-        let tls_connector = NativeTlsConnector::from(
-            native_tls::TlsConnector::new()
-                .map_err(|e| format!("Failed to create TLS connector: {}", e))?,
-        );
+        // Create TLS connector with rustls
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        for cert in rustls_native_certs::load_native_certs()
+            .map_err(|e| format!("Failed to load native root certificates: {}", e))?
+        {
+            root_cert_store
+                .add(&rustls::Certificate(cert.0))
+                .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
+        }
+
+        let tls_config = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+
+        let tls_connector = RustlsConnector::from(Arc::new(tls_config));
 
         // Connect to FTPS server
-        let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
+        let mut ftp_stream = RustlsFtpStream::connect_secure_implicit(
             format!("{}:{}", host, port),
             tls_connector,
             host,
@@ -5497,6 +5568,11 @@ async fn upload_to_external_ftp(
     use suppaftp::types::FileType;
     use suppaftp::Mode;
 
+    info!(
+        "upload_to_external_ftp invoked: file_path={} ftp_url={} use_ftps={} passive_mode={}",
+        file_path, ftp_url, use_ftps, passive_mode
+    );
+
     println!("[FTP_UPLOAD] Starting FTP upload");
     println!("[FTP_UPLOAD] File path: {}", file_path);
     println!("[FTP_UPLOAD] FTP URL: {}", ftp_url);
@@ -5549,28 +5625,33 @@ async fn upload_to_external_ftp(
 
     // Upload based on FTPS setting
     if use_ftps {
-        use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
+        use std::sync::Arc;
+        use suppaftp::{RustlsConnector, RustlsFtpStream};
 
-        println!("[FTP_UPLOAD] Using FTPS (secure) connection");
+        // Create TLS connector with rustls
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        for cert in rustls_native_certs::load_native_certs()
+            .map_err(|e| format!("Failed to load native root certificates: {}", e))?
+        {
+            root_cert_store
+                .add(&rustls::Certificate(cert.0))
+                .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
+        }
 
-        // Create TLS connector
-        println!("[FTP_UPLOAD] Creating TLS connector...");
-        let tls_connector = NativeTlsConnector::from(
-            native_tls::TlsConnector::new()
-                .map_err(|e| format!("Failed to create TLS connector: {}", e))?,
-        );
+        let tls_config = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+
+        let tls_connector = RustlsConnector::from(Arc::new(tls_config));
 
         // Connect to FTPS server
-        let connect_addr = format!("{}:{}", host, port);
-        println!(
-            "[FTP_UPLOAD] Connecting to FTPS server at {}...",
-            connect_addr
-        );
-        println!("[FTP_UPLOAD] NOTE: No timeout configured - this may hang indefinitely!");
-        let mut ftp_stream =
-            NativeTlsFtpStream::connect_secure_implicit(connect_addr, tls_connector, host)
-                .map_err(|e| format!("Failed to connect to FTPS server: {}", e))?;
-        println!("[FTP_UPLOAD] FTPS connection established!");
+        let mut ftp_stream = RustlsFtpStream::connect_secure_implicit(
+            format!("{}:{}", host, port),
+            tls_connector,
+            host,
+        )
+        .map_err(|e| format!("Failed to connect to FTPS server: {}", e))?;
 
         // Set passive mode
         if passive_mode {
@@ -5689,41 +5770,32 @@ async fn start_ftp_download(
     output_path: String,
     username: Option<String>,
     password: Option<String>,
-) -> Result<String, String> {
+) -> Result<StartFtpDownloadResponse, String> {
+    info!(
+        "start_ftp_download invoked: url={} output_path={}",
+        url, output_path
+    );
     let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
     let host = parsed.host_str().ok_or("Invalid FTP URL")?;
-    let path = parsed.path();
-    let file_name = path.split('/').last().unwrap_or("ftp_download").to_string();
 
-    // Generate a unique transfer ID
-    let transfer_id = format!("ftp-{}", uuid::Uuid::new_v4());
+    // Generate a unique transfer ID (UUID hash only, no protocol prefix)
+    let transfer_id = uuid::Uuid::new_v4().to_string();
 
     // Create transfer event bus for emitting events
     let transfer_event_bus = TransferEventBus::new(app.clone());
     let analytics_service = state.analytics.clone();
     let start_time = std::time::Instant::now();
 
-    // Connect to FTP
-    let mut ftp = FtpStream::connect((host, 21))
-        .map_err(|e| format!("Failed to connect to FTP server: {}", e))?;
+    let file_size = 0u64;
 
-    // Login
-    if let (Some(user), Some(pass)) = (username.clone(), password.clone()) {
-        ftp.login(&user, &pass)
-            .map_err(|e| format!("FTP login failed: {}", e))?;
-    } else {
-        ftp.login("anonymous", "anonymous")
-            .map_err(|e| format!("Anonymous login failed: {}", e))?;
-    }
-
-    // Get file size if possible
-    let file_size = match ftp.size(path) {
-        Ok(size) => size as u64,
-        Err(e) => {
-            warn!("Could not get file size for {}: {}", path, e);
-            0 // Continue with download even if size is unknown
-        }
-    };
+    // Get unique output path to avoid overwriting existing files
+    let unique_output_path = get_unique_filepath(Path::new(&output_path));
+    let output_path = unique_output_path.to_string_lossy().to_string();
+    let file_name = unique_output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("ftp_download")
+        .to_string();
 
     // Emit started event
     transfer_event_bus
@@ -5731,6 +5803,7 @@ async fn start_ftp_download(
             TransferStartedEvent {
                 transfer_id: transfer_id.clone(),
                 file_hash: transfer_id.clone(),
+                protocol: "FTP".to_string(),
                 file_name: file_name.clone(),
                 file_size,
                 total_chunks: 1,
@@ -5751,116 +5824,114 @@ async fn start_ftp_download(
         )
         .await;
 
-    // Get unique output path to avoid overwriting existing files
-    let unique_output_path = get_unique_filepath(Path::new(&output_path));
-    let output_path = unique_output_path.to_string_lossy().to_string();
-
-    // Create output file
-    let mut file = std::fs::File::create(&output_path).map_err(|e| {
-        // Capture error message before moving
-        let error_msg = format!("Failed to create output file: {}", e);
-
-        // Emit failed event on file creation error
-        let event_bus = TransferEventBus::new(app.clone());
-        let analytics = analytics_service.clone();
-        let tid = transfer_id.clone();
-        let error_for_event = error_msg.clone();
-        tokio::spawn(async move {
-            event_bus
-                .emit_failed_with_analytics(
-                    TransferFailedEvent {
-                        transfer_id: tid.clone(),
-                        file_hash: tid,
-                        failed_at: current_timestamp_ms(),
-                        error: error_for_event,
-                        error_category: ErrorCategory::Filesystem,
-                        downloaded_bytes: 0,
-                        total_bytes: file_size,
-                        retry_possible: true,
-                    },
-                    &analytics,
-                )
-                .await;
-        });
-        error_msg
-    })?;
-
-    // Track downloaded bytes for progress updates
-    let downloaded_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let downloaded_bytes_clone = downloaded_bytes.clone();
-
-    // Retrieve file and stream in chunks
-    let result = ftp.retr(path, |reader| {
-        let mut buffer = [0u8; 65536]; // 64 KB
-        loop {
-            let bytes_read = reader
-                .read(&mut buffer)
-                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
-            if bytes_read == 0 {
-                break; // End of file
-            }
-            file.write_all(&buffer[..bytes_read])
-                .map_err(|e| suppaftp::FtpError::ConnectionError(e))?;
-            downloaded_bytes_clone
-                .fetch_add(bytes_read as u64, std::sync::atomic::Ordering::Relaxed);
+    let encrypted_password = match password.as_deref() {
+        Some(pwd) => {
+            Some(ftp_client::encrypt_ftp_password(pwd, &transfer_id).map_err(|e| e.to_string())?)
         }
-        Ok(())
-    });
-
-    ftp.quit().ok();
-
-    let total_downloaded = downloaded_bytes.load(std::sync::atomic::Ordering::Relaxed);
-    let duration = start_time.elapsed();
-    let avg_speed = if duration.as_secs_f64() > 0.0 {
-        total_downloaded as f64 / duration.as_secs_f64()
-    } else {
-        0.0
+        None => None,
     };
 
-    match result {
-        Ok(()) => {
-            // Emit completed event
-            transfer_event_bus
-                .emit_completed_with_analytics(
-                    TransferCompletedEvent {
-                        transfer_id: transfer_id.clone(),
-                        file_hash: transfer_id,
-                        file_name,
-                        file_size: total_downloaded,
-                        output_path: output_path.clone(),
-                        completed_at: current_timestamp_ms(),
-                        duration_seconds: duration.as_secs(),
-                        average_speed_bps: avg_speed,
-                        total_chunks: 1,
-                        sources_used: Vec::new(),
-                    },
-                    &analytics_service,
-                )
-                .await;
+    let ftp_source = chiral_network::gossipsub_metadata::FtpSourceInfo {
+        url: url.clone(),
+        username: username.clone(),
+        encrypted_password,
+        passive_mode: true,
+        use_ftps: parsed.scheme() == "ftps",
+        timeout_secs: Some(30),
+        supports_resume: false,
+        file_size: 0,
+        last_checked: None,
+        is_available: true,
+    };
 
-            Ok(format!("Downloaded successfully to {}", output_path))
-        }
-        Err(e) => {
-            // Emit failed event
-            transfer_event_bus
-                .emit_failed_with_analytics(
-                    TransferFailedEvent {
-                        transfer_id: transfer_id.clone(),
-                        file_hash: transfer_id,
-                        failed_at: current_timestamp_ms(),
-                        error: format!("FTP RETR failed: {}", e),
-                        error_category: ErrorCategory::Network,
-                        downloaded_bytes: total_downloaded,
-                        total_bytes: file_size,
-                        retry_possible: true,
-                    },
-                    &analytics_service,
-                )
-                .await;
+    let protocol_manager = {
+        let guard = state.upload_download_protocol_manager.lock().await;
+        guard.as_ref().cloned().ok_or_else(|| {
+            "Protocol manager not initialized. Start the DHT node first.".to_string()
+        })?
+    };
 
-            Err(format!("FTP RETR failed: {}", e))
+    let transfer_event_bus = transfer_event_bus.clone();
+    let analytics_service = analytics_service.clone();
+    let transfer_id_clone = transfer_id.clone();
+    let output_path_clone = output_path.clone();
+    let file_name_clone = file_name.clone();
+    let ftp_source = ftp_source;
+    let protocol_manager_clone = protocol_manager.clone();
+    let file_size_clone = file_size;
+
+    tokio::spawn(async move {
+        let result = protocol_manager_clone
+            .download_via_ftp(
+                ftp_source,
+                transfer_id_clone.clone(),
+                output_path_clone.clone(),
+            )
+            .await;
+
+        let total_downloaded = std::fs::metadata(&output_path_clone)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let duration = start_time.elapsed();
+        let avg_speed = if duration.as_secs_f64() > 0.0 {
+            total_downloaded as f64 / duration.as_secs_f64()
+        } else {
+            0.0
+        };
+
+        match result {
+            Ok(()) => {
+                transfer_event_bus
+                    .emit_completed_with_analytics(
+                        TransferCompletedEvent {
+                            transfer_id: transfer_id_clone.clone(),
+                            file_hash: transfer_id_clone.clone(),
+                            protocol: "FTP".to_string(),
+                            file_name: file_name_clone,
+                            file_size: total_downloaded,
+                            output_path: output_path_clone,
+                            completed_at: current_timestamp_ms(),
+                            duration_seconds: duration.as_secs(),
+                            average_speed_bps: avg_speed,
+                            total_chunks: 1,
+                            sources_used: Vec::new(),
+                        },
+                        &analytics_service,
+                    )
+                    .await;
+            }
+            Err(e) => {
+                transfer_event_bus
+                    .emit_failed_with_analytics(
+                        TransferFailedEvent {
+                            transfer_id: transfer_id_clone.clone(),
+                            file_hash: transfer_id_clone.clone(),
+                            protocol: "FTP".to_string(),
+                            failed_at: current_timestamp_ms(),
+                            error: format!("FTP download failed: {}", e),
+                            error_category: ErrorCategory::Network,
+                            downloaded_bytes: total_downloaded,
+                            total_bytes: file_size_clone,
+                            retry_possible: true,
+                        },
+                        &analytics_service,
+                    )
+                    .await;
+            }
         }
-    }
+    });
+
+    Ok(StartFtpDownloadResponse {
+        transfer_id,
+        output_path,
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartFtpDownloadResponse {
+    transfer_id: String,
+    output_path: String,
 }
 
 #[tauri::command]
@@ -5995,6 +6066,7 @@ async fn get_ed2k_download_status(
     file_hash: String,
     state: State<'_, AppState>,
 ) -> Result<Ed2kDownloadStatus, String> {
+    info!("get_ed2k_download_status invoked: file_hash={}", file_hash);
     // Since ED2K downloading is not implemented yet,
     // return a placeholder status
     Ok(Ed2kDownloadStatus {
@@ -6101,403 +6173,33 @@ async fn download_blocks_from_network(
 #[tauri::command]
 async fn download_file_from_network(
     state: State<'_, AppState>,
+    peer_id: String,
     file_hash: String,
-    output_path: String, // Remove the underscore - we'll use this now
+    file_name: String,
+    file_size: u64,
+    output_path: String,
 ) -> Result<String, String> {
-    use std::path::Path;
+    info!(
+        "download_file_from_network invoked: peer_id={} file_hash={} file_name={} file_size={} output_path={}",
+        peer_id, file_hash, file_name, file_size, output_path
+    );
 
-    // ✅ VALIDATE OUTPUT PATH BEFORE STARTING DOWNLOAD
-    let path = Path::new(&output_path);
+    // Get protocol manager from AppState (initialized when DHT starts)
+    let protocol_manager_guard = state.upload_download_protocol_manager.lock().await;
+    let protocol_manager = protocol_manager_guard
+        .as_ref()
+        .ok_or_else(|| "Protocol manager not initialized. Start the DHT node first.".to_string())?;
 
-    // Check if parent directory exists
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            return Err(format!(
-                "Download failed: Directory does not exist: {}",
-                parent.display()
-            ));
-        }
-        if !parent.is_dir() {
-            return Err(format!(
-                "Download failed: Path is not a directory: {}",
-                parent.display()
-            ));
-        }
-    } else {
-        return Err("Download failed: Invalid file path".to_string());
-    }
+    // Delegate to protocol manager
+    let transfer_id = protocol_manager
+        .download_via_webrtc(peer_id, file_hash, file_name, file_size, output_path)
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?;
 
-    let ft = {
-        let ft_guard = state.file_transfer.lock().await;
-        ft_guard.as_ref().cloned()
-    };
+    // Analytics tracking (presentation layer concern)
+    state.analytics.increment_active_downloads().await;
 
-    if let Some(_ft) = ft {
-        info!("Starting P2P download for: {}", file_hash);
-
-        // Search DHT for file metadata
-        let dht = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
-        };
-
-        if let Some(dht_service) = dht {
-            // Search for file metadata in DHT with 35 second timeout
-            // This is longer than the Kademlia query timeout (30s) to account for:
-            // - Provider queries that run in parallel (can take 3-5s)
-            // - Network latency and retries
-            // - Multiple query rounds for distant peers
-
-            // Trigger search and poll cache
-            if let Err(e) = dht_service.search_metadata(file_hash.clone(), 35000).await {
-                return Err(format!("Failed to trigger DHT search: {}", e));
-            }
-
-            let mut metadata_opt = None;
-            for _ in 0..350 {
-                // 350 * 100ms = 35s
-                if let Some(m) = dht_service.get_cached_metadata(&file_hash).await {
-                    metadata_opt = Some(m);
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-
-            match metadata_opt {
-                Some(metadata) => {
-                    info!(
-                        "Found file metadata in DHT: {} (size: {} bytes)",
-                        metadata.file_name, metadata.file_size
-                    );
-
-                    // Record requested output path so the WebRTC assembler can respect it.
-                    // Bitswap already uses the passed output_path directly, but WebRTC assembles in webrtc_service.rs.
-                    {
-                        // If the caller passed a directory path, write into it using the metadata file name.
-                        let resolved = {
-                            let p = std::path::PathBuf::from(&output_path);
-                            if p.exists() && p.is_dir() {
-                                p.join(&metadata.file_name).to_string_lossy().to_string()
-                            } else {
-                                output_path.clone()
-                            }
-                        };
-
-                        webrtc_service::set_requested_download_output_path(
-                            metadata.merkle_root.clone(),
-                            resolved,
-                        )
-                        .await;
-                    }
-
-                    // Implement peer discovery for file chunks
-                    info!(
-                        "Discovering peers for file: {} with {} known seeders",
-                        metadata.file_name,
-                        metadata.seeders.len()
-                    );
-
-                    if metadata.seeders.is_empty() {
-                        return Err(format!(
-                            "No seeders available for file: {} ({})",
-                            metadata.file_name, metadata.merkle_root
-                        ));
-                    }
-
-                    // Discover and verify available peers for this file
-                    let available_peers = dht_service
-                        .discover_peers_for_file(&metadata)
-                        .await
-                        .map_err(|e| format!("Peer discovery failed: {}", e))?;
-
-                    if available_peers.is_empty() {
-                        warn!("File found but no seeders currently available or reachable");
-                        return Err(format!(
-                            "No seeders available for '{}'. The file exists but no peers are currently online or reachable.",
-                            metadata.file_name
-                        ));
-                    }
-
-                    // Implement chunk requesting protocol with real WebRTC
-                    // Create WebRTC offer for the first available peer
-                    let webrtc = {
-                        let webrtc_guard = state.webrtc.lock().await;
-                        webrtc_guard.as_ref().cloned()
-                    };
-
-                    if let Some(webrtc_service) = webrtc {
-                        // Try multiple peers with retry logic
-                        let max_retries = 3;
-                        let mut last_error = String::new();
-                        let mut tried_peers: Vec<String> = Vec::new();
-
-                        for attempt in 0..max_retries {
-                            // Select the best peer that hasn't been tried yet
-                            let selected_peer = if available_peers.len() == 1 {
-                                available_peers[0].clone()
-                            } else {
-                                // Filter out already tried peers
-                                let untried_peers: Vec<_> = available_peers
-                                    .iter()
-                                    .filter(|p| !tried_peers.contains(p))
-                                    .cloned()
-                                    .collect();
-
-                                if untried_peers.is_empty() {
-                                    // All peers tried, start over with delay
-                                    if attempt < max_retries - 1 {
-                                        info!("All peers tried, waiting before retry...");
-                                        tokio::time::sleep(Duration::from_secs(2)).await;
-                                        tried_peers.clear();
-                                    }
-                                    available_peers[0].clone()
-                                } else {
-                                    // Use peer selection strategy on untried peers
-                                    let recommended = dht_service
-                                        .select_peers_with_strategy(
-                                            &untried_peers,
-                                            1,
-                                            peer_selection::SelectionStrategy::FastestFirst,
-                                            false,
-                                        )
-                                        .await;
-                                    recommended
-                                        .into_iter()
-                                        .next()
-                                        .unwrap_or_else(|| untried_peers[0].clone())
-                                }
-                            };
-
-                            tried_peers.push(selected_peer.clone());
-                            info!(
-                                "Selected peer {} for WebRTC download (attempt {}/{})",
-                                selected_peer,
-                                attempt + 1,
-                                max_retries
-                            );
-
-                            // Check if peer is connected, try to reconnect if not
-                            let connected_peers = dht_service.get_connected_peers().await;
-                            if !connected_peers.contains(&selected_peer) {
-                                info!(
-                                    "Peer {} not connected, attempting to reconnect...",
-                                    selected_peer
-                                );
-                                // Try to reconnect
-                                let _ = dht_service
-                                    .connect_to_peer_by_id(selected_peer.clone())
-                                    .await;
-                                // Give it a moment to establish connection
-                                tokio::time::sleep(Duration::from_millis(500)).await;
-
-                                // Re-check connection
-                                let connected_peers = dht_service.get_connected_peers().await;
-                                if !connected_peers.contains(&selected_peer) {
-                                    warn!(
-                                        "Failed to reconnect to peer {}, trying next peer",
-                                        selected_peer
-                                    );
-                                    last_error = format!("Peer {} not reachable", selected_peer);
-                                    continue;
-                                }
-                            }
-
-                            // Check if we already have an open WebRTC connection to this peer
-                            if webrtc_service.has_open_connection(&selected_peer).await {
-                                info!(
-                                    "♻️ Reusing existing WebRTC connection to peer {}",
-                                    selected_peer
-                                );
-
-                                // Just send the file request directly
-                                let file_request = webrtc_service::WebRTCFileRequest {
-                                    file_hash: metadata.merkle_root.clone(),
-                                    file_name: metadata.file_name.clone(),
-                                    file_size: metadata.file_size,
-                                    requester_peer_id: dht_service.get_peer_id().await,
-                                    recipient_public_key: None,
-                                };
-
-                                match webrtc_service
-                                    .send_file_request(selected_peer.clone(), file_request)
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        info!("Sent file request for {} to peer {} (reused connection)", metadata.file_name, selected_peer);
-                                        state.analytics.increment_active_downloads().await;
-                                        return Ok(format!(
-                                            "WebRTC download initiated: {} ({} bytes) from peer {} (reused connection)",
-                                            metadata.file_name, metadata.file_size, selected_peer
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to send file request on existing connection: {}, will create new connection", e);
-                                        // Fall through to create new connection
-                                    }
-                                }
-                            }
-
-                            // Create WebRTC offer
-                            match webrtc_service.create_offer(selected_peer.clone()).await {
-                                Ok(offer) => {
-                                    info!("Created WebRTC offer for peer {}", selected_peer);
-
-                                    // Send WebRTC offer via DHT signaling
-                                    let offer_request = dht::WebRTCOfferRequest {
-                                        offer_sdp: offer,
-                                        file_hash: metadata.merkle_root.clone(),
-                                        requester_peer_id: dht_service.get_peer_id().await,
-                                    };
-
-                                    match dht_service
-                                        .send_webrtc_offer(selected_peer.clone(), offer_request)
-                                        .await
-                                    {
-                                        Ok(answer_receiver) => {
-                                            info!(
-                                                "Sent WebRTC offer to peer {}, waiting for answer",
-                                                selected_peer
-                                            );
-
-                                            // Wait for WebRTC answer with timeout
-                                            match tokio::time::timeout(
-                                                Duration::from_secs(30),
-                                                answer_receiver,
-                                            )
-                                            .await
-                                            {
-                                                Ok(Ok(Ok(answer_response))) => {
-                                                    info!(
-                                                        "Received WebRTC answer from peer {}",
-                                                        selected_peer
-                                                    );
-
-                                                    // Establish WebRTC connection with the answer
-                                                    match webrtc_service
-                                                        .establish_connection_with_answer(
-                                                            selected_peer.clone(),
-                                                            answer_response.answer_sdp,
-                                                        )
-                                                        .await
-                                                    {
-                                                        Ok(_) => {
-                                                            info!("WebRTC connection established with peer {}", selected_peer);
-
-                                                            // Send file request over WebRTC data channel
-                                                            let file_request =
-                                                                webrtc_service::WebRTCFileRequest {
-                                                                    file_hash: metadata
-                                                                        .merkle_root
-                                                                        .clone(),
-                                                                    file_name: metadata
-                                                                        .file_name
-                                                                        .clone(),
-                                                                    file_size: metadata.file_size,
-                                                                    requester_peer_id: dht_service
-                                                                        .get_peer_id()
-                                                                        .await,
-                                                                    recipient_public_key: None,
-                                                                };
-
-                                                            match webrtc_service
-                                                                .send_file_request(
-                                                                    selected_peer.clone(),
-                                                                    file_request,
-                                                                )
-                                                                .await
-                                                            {
-                                                                Ok(_) => {
-                                                                    info!("Sent file request for {} to peer {}", metadata.file_name, selected_peer);
-                                                                    state
-                                                                        .analytics
-                                                                        .increment_active_downloads(
-                                                                        )
-                                                                        .await;
-                                                                    return Ok(format!(
-                                                                        "WebRTC download initiated: {} ({} bytes) from peer {}",
-                                                                        metadata.file_name, metadata.file_size, selected_peer
-                                                                    ));
-                                                                }
-                                                                Err(e) => {
-                                                                    warn!("Failed to send file request: {}", e);
-                                                                    last_error = format!(
-                                                                        "Failed to send file request: {}",
-                                                                        e
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            warn!("Failed to establish WebRTC connection: {}", e);
-                                                            last_error = format!(
-                                                                "WebRTC connection failed: {}",
-                                                                e
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                                Ok(Ok(Err(e))) => {
-                                                    warn!("WebRTC signaling failed: {}", e);
-                                                    last_error =
-                                                        format!("WebRTC signaling failed: {}", e);
-                                                }
-                                                Ok(Err(_)) => {
-                                                    warn!("WebRTC answer receiver was canceled");
-                                                    last_error =
-                                                        "WebRTC answer receiver was canceled"
-                                                            .to_string();
-                                                }
-                                                Err(_) => {
-                                                    warn!(
-                                                        "WebRTC answer timeout from peer {}",
-                                                        selected_peer
-                                                    );
-                                                    last_error = format!(
-                                                        "WebRTC answer timeout from peer {}",
-                                                        selected_peer
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            warn!("Failed to send WebRTC offer: {}", e);
-                                            last_error =
-                                                format!("Failed to send WebRTC offer: {}", e);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to create WebRTC offer: {}", e);
-                                    last_error = format!("WebRTC setup failed: {}", e);
-                                }
-                            }
-
-                            // If we get here, this attempt failed - try again with delay
-                            if attempt < max_retries - 1 {
-                                info!("WebRTC attempt {} failed, retrying in 1s...", attempt + 1);
-                                tokio::time::sleep(Duration::from_secs(1)).await;
-                            }
-                        }
-
-                        // All retries exhausted
-                        Err(format!(
-                            "WebRTC download failed after {} attempts: {}",
-                            max_retries, last_error
-                        ))
-                    } else {
-                        Err("WebRTC service not available".to_string())
-                    }
-                }
-                None => {
-                    return Err("DHT search timed out - file metadata not found".to_string());
-                }
-            }
-        } else {
-            return Err("DHT service not available".to_string());
-        }
-    } else {
-        Err("File transfer service is not running".to_string())
-    }
+    Ok(transfer_id)
 }
 
 #[tauri::command]
@@ -6554,6 +6256,11 @@ async fn save_temp_file_for_upload(
     file_name: String,
     file_data: Vec<u8>,
 ) -> Result<String, String> {
+    info!(
+        "save_temp_file_for_upload invoked: file_name={} size={}",
+        file_name,
+        file_data.len()
+    );
     let temp_dir = std::env::temp_dir().join("chiral_uploads");
     fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp directory: {}", e))?;
 
@@ -6581,6 +6288,10 @@ async fn get_file_size(file_path: String) -> Result<u64, String> {
 
 #[tauri::command]
 async fn create_temp_file_for_streaming(file_name: String) -> Result<String, String> {
+    info!(
+        "create_temp_file_for_streaming invoked: file_name={}",
+        file_name
+    );
     let temp_dir = std::env::temp_dir().join("chiral_uploads");
     fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp directory: {}", e))?;
 
@@ -6605,6 +6316,12 @@ async fn append_chunk_to_temp_file(
     use tokio::fs::OpenOptions;
     use tokio::io::AsyncWriteExt;
 
+    info!(
+        "append_chunk_to_temp_file invoked: path={} size={}",
+        temp_file_path,
+        chunk_data.len()
+    );
+
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -6627,6 +6344,8 @@ async fn append_chunk_to_temp_file(
 async fn copy_file_to_temp(file_path: String) -> Result<String, String> {
     use std::path::Path;
     use tokio::fs;
+
+    info!("copy_file_to_temp invoked: file_path={}", file_path);
 
     let temp_dir = std::env::temp_dir().join("chiral_uploads");
     fs::create_dir_all(&temp_dir)
@@ -6661,6 +6380,10 @@ async fn start_streaming_upload(
     price: f64,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    info!(
+        "start_streaming_upload invoked: file_name={} file_size={} price={}",
+        file_name, file_size, price
+    );
     // Check for active account - require login for all uploads
     let account = get_active_account(&state).await?;
 
@@ -6709,6 +6432,13 @@ async fn upload_file_chunk(
     is_last_chunk: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    tracing::debug!(
+        "upload_file_chunk invoked: upload_id={} index={} size={} last={}",
+        upload_id,
+        _chunk_index,
+        chunk_data.len(),
+        is_last_chunk
+    );
     let mut upload_sessions = state.upload_sessions.lock().await;
     let session = upload_sessions
         .get_mut(&upload_id)
@@ -6769,6 +6499,7 @@ async fn cancel_streaming_upload(
     upload_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    info!("cancel_streaming_upload invoked: upload_id={}", upload_id);
     let mut upload_sessions = state.upload_sessions.lock().await;
     upload_sessions.remove(&upload_id);
     Ok(())
@@ -6794,6 +6525,16 @@ async fn init_streaming_download(
     chunk_size: u32,
 ) -> Result<String, String> {
     use std::time::SystemTime;
+
+    info!(
+        "init_streaming_download invoked: file_hash={} file_name={} file_size={} output_path={} total_chunks={} chunk_size={}",
+        file_hash,
+        file_name,
+        file_size,
+        output_path,
+        total_chunks,
+        chunk_size
+    );
 
     // Generate unique session ID
     let session_id = format!(
@@ -6849,6 +6590,13 @@ async fn write_download_chunk(
 ) -> Result<bool, String> {
     use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
+    tracing::debug!(
+        "write_download_chunk invoked: session_id={} chunk_index={} size={}",
+        session_id,
+        chunk_index,
+        chunk_data.len()
+    );
+
     let mut sessions = state.download_sessions.lock().await;
     let session = sessions
         .get_mut(&session_id)
@@ -6893,6 +6641,10 @@ async fn get_streaming_download_progress(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(u32, u32), String> {
+    info!(
+        "get_streaming_download_progress invoked: session_id={}",
+        session_id
+    );
     let sessions = state.download_sessions.lock().await;
     let session = sessions
         .get(&session_id)
@@ -6907,6 +6659,10 @@ async fn finalize_streaming_download(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<String, String> {
+    info!(
+        "finalize_streaming_download invoked: session_id={}",
+        session_id
+    );
     let mut sessions = state.download_sessions.lock().await;
     let session = sessions
         .remove(&session_id)
@@ -6943,6 +6699,10 @@ async fn cancel_streaming_download(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
+    info!(
+        "cancel_streaming_download invoked: session_id={}",
+        session_id
+    );
     let mut sessions = state.download_sessions.lock().await;
     if let Some(session) = sessions.remove(&session_id) {
         // Delete temp file if it exists
@@ -6961,6 +6721,10 @@ async fn save_download_checkpoint(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
+    info!(
+        "save_download_checkpoint invoked: session_id={}",
+        session_id
+    );
     let sessions = state.download_sessions.lock().await;
     let session = sessions
         .get(&session_id)
@@ -6998,6 +6762,10 @@ async fn resume_download_from_checkpoint(
     state: State<'_, AppState>,
     checkpoint_path: String,
 ) -> Result<(String, Vec<u32>), String> {
+    info!(
+        "resume_download_from_checkpoint invoked: checkpoint_path={}",
+        checkpoint_path
+    );
     let checkpoint_data = tokio::fs::read_to_string(&checkpoint_path)
         .await
         .map_err(|e| format!("Failed to read checkpoint: {}", e))?;
@@ -7107,6 +6875,7 @@ async fn get_file_transfer_events(state: State<'_, AppState>) -> Result<Vec<Stri
 async fn get_download_metrics(
     state: State<'_, AppState>,
 ) -> Result<DownloadMetricsSnapshot, String> {
+    info!("get_download_metrics invoked");
     let ft = {
         let ft_guard = state.file_transfer.lock().await;
         ft_guard.as_ref().cloned()
@@ -7210,6 +6979,13 @@ async fn start_multi_source_download(
     max_peers: Option<usize>,
     chunk_size: Option<usize>,
 ) -> Result<String, String> {
+    info!(
+        "start_multi_source_download invoked: file_hash={} output_path={} max_peers={:?} chunk_size={:?}",
+        file_hash,
+        output_path,
+        max_peers,
+        chunk_size
+    );
     let ms = {
         let ms_guard = state.multi_source_download.lock().await;
         ms_guard.as_ref().cloned()
@@ -7231,6 +7007,10 @@ async fn cancel_multi_source_download(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<(), String> {
+    info!(
+        "cancel_multi_source_download invoked: file_hash={}",
+        file_hash
+    );
     let ms = {
         let ms_guard = state.multi_source_download.lock().await;
         ms_guard.as_ref().cloned()
@@ -7248,6 +7028,7 @@ async fn get_multi_source_progress(
     state: State<'_, AppState>,
     file_hash: String,
 ) -> Result<Option<MultiSourceProgress>, String> {
+    info!("get_multi_source_progress invoked: file_hash={}", file_hash);
     let ms = {
         let ms_guard = state.multi_source_download.lock().await;
         ms_guard.as_ref().cloned()
@@ -7295,40 +7076,6 @@ async fn get_proxy_optimization_status(
     } else {
         Err("Multi-source download service not available for proxy optimization status".to_string())
     }
-}
-
-#[tauri::command]
-async fn download_file_multi_source(
-    state: State<'_, AppState>,
-    file_hash: String,
-    output_path: String,
-    prefer_multi_source: Option<bool>,
-    max_peers: Option<usize>,
-) -> Result<String, String> {
-    let prefer_multi_source = prefer_multi_source.unwrap_or(true);
-
-    // If multi-source is preferred and available, use it
-    if prefer_multi_source {
-        let ms = {
-            let ms_guard = state.multi_source_download.lock().await;
-            ms_guard.as_ref().cloned()
-        };
-
-        if let Some(multi_source_service) = ms {
-            info!("Using multi-source download for file: {}", file_hash);
-            return multi_source_service
-                .start_download(file_hash.clone(), output_path, max_peers, None)
-                .await
-                .map(|_| format!("Multi-source download initiated for: {}", file_hash));
-        }
-    }
-
-    // Fallback to original single-source download
-    info!(
-        "Falling back to single-source download for file: {}",
-        file_hash
-    );
-    download_file_from_network(state, file_hash, output_path).await
 }
 
 #[tauri::command]
@@ -7383,6 +7130,12 @@ async fn encrypt_file_for_upload(
     password: Option<String>,
 ) -> Result<(String, encryption::EncryptionInfo), String> {
     use std::path::Path;
+
+    info!(
+        "encrypt_file_for_upload invoked: input_path={} has_password={}",
+        input_path,
+        password.is_some()
+    );
 
     let input = Path::new(&input_path);
     if !input.exists() {
@@ -9127,8 +8880,8 @@ async fn download_ftp(url: String, app_handle: tauri::AppHandle) -> Result<(), S
 
     let host = parsed_url.host_str().unwrap_or("unknown").to_string();
 
-    // Generate transfer ID
-    let transfer_id = format!("ftp-{:x}", {
+    // Generate transfer ID (hash only, no protocol prefix)
+    let transfer_id = format!("{:x}", {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         url.hash(&mut hasher);
@@ -9159,6 +8912,7 @@ async fn download_ftp(url: String, app_handle: tauri::AppHandle) -> Result<(), S
     let queued_event = TransferQueuedEvent {
         transfer_id: transfer_id.clone(),
         file_hash: transfer_id.clone(),
+        protocol: "FTP".to_string(),
         file_name: file_name.clone(),
         file_size: 0, // Unknown until connected
         output_path: output_path.to_string_lossy().to_string(),
@@ -9184,6 +8938,7 @@ async fn download_ftp(url: String, app_handle: tauri::AppHandle) -> Result<(), S
     let started_event = TransferStartedEvent {
         transfer_id: transfer_id.clone(),
         file_hash: transfer_id.clone(),
+        protocol: "FTP".to_string(),
         file_name: file_name.clone(),
         file_size: 0,
         total_chunks: 1,
@@ -9232,6 +8987,7 @@ async fn download_ftp(url: String, app_handle: tauri::AppHandle) -> Result<(), S
                 let failed_event = TransferFailedEvent {
                     transfer_id: transfer_id_clone.clone(),
                     file_hash: transfer_id_clone.clone(),
+                    protocol: "FTP".to_string(),
                     failed_at: current_timestamp_ms(),
                     error: format!("FTP connection failed: {}", e),
                     error_category: ErrorCategory::Network,
@@ -9294,6 +9050,7 @@ async fn download_ftp(url: String, app_handle: tauri::AppHandle) -> Result<(), S
 
                     let progress_event = TransferProgressEvent {
                         transfer_id: transfer_id_for_callback.clone(),
+                        protocol: "FTP".to_string(),
                         downloaded_bytes: downloaded,
                         total_bytes: total,
                         completed_chunks: if total > 0 && downloaded >= total {
@@ -9338,6 +9095,7 @@ async fn download_ftp(url: String, app_handle: tauri::AppHandle) -> Result<(), S
                 let completed_event = TransferCompletedEvent {
                     transfer_id: transfer_id_clone.clone(),
                     file_hash: transfer_id_clone.clone(),
+                    protocol: "FTP".to_string(),
                     file_name: file_name_clone.clone(),
                     file_size: bytes_downloaded,
                     output_path: output_path.to_string_lossy().to_string(),
@@ -9370,6 +9128,7 @@ async fn download_ftp(url: String, app_handle: tauri::AppHandle) -> Result<(), S
                 let failed_event = TransferFailedEvent {
                     transfer_id: transfer_id_clone.clone(),
                     file_hash: transfer_id_clone.clone(),
+                    protocol: "FTP".to_string(),
                     failed_at: current_timestamp_ms(),
                     error: format!("FTP download failed: {}", e),
                     error_category: ErrorCategory::Network,
@@ -9393,6 +9152,7 @@ async fn start_download_restart(
     request: download_restart::StartDownloadRequest,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    info!("start_download_restart invoked");
     let dr_guard = state.download_restart.lock().await;
     if let Some(ref service) = *dr_guard {
         service
@@ -9409,6 +9169,10 @@ async fn pause_download_restart(
     download_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    info!(
+        "pause_download_restart invoked: download_id={}",
+        download_id
+    );
     let dr_guard = state.download_restart.lock().await;
     if let Some(ref service) = *dr_guard {
         service
@@ -9425,6 +9189,10 @@ async fn resume_download_restart(
     download_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    info!(
+        "resume_download_restart invoked: download_id={}",
+        download_id
+    );
     let dr_guard = state.download_restart.lock().await;
     if let Some(ref service) = *dr_guard {
         service
@@ -9441,6 +9209,10 @@ async fn get_download_status_restart(
     download_id: String,
     state: State<'_, AppState>,
 ) -> Result<download_restart::DownloadStatus, String> {
+    info!(
+        "get_download_status_restart invoked: download_id={}",
+        download_id
+    );
     let dr_guard = state.download_restart.lock().await;
     if let Some(ref service) = *dr_guard {
         service
@@ -9916,6 +9688,8 @@ fn main() {
             load_account_from_keystore,
             list_keystore_accounts,
             remove_account_from_keystore,
+            upload_via_ftp,
+            upload_via_webrtc,
             pool::discover_mining_pools,
             pool::create_mining_pool,
             pool::join_mining_pool,
@@ -10019,7 +9793,6 @@ fn main() {
             get_multi_source_progress,
             update_proxy_latency,
             get_proxy_optimization_status,
-            download_file_multi_source,
             get_file_transfer_events,
             write_file,
             init_streaming_download,
@@ -10162,9 +9935,27 @@ fn main() {
             clear_blockstore,
             cleanup_old_blockstore_files,
             auto_cleanup_blockstore,
-            // Upload protocol manager commands
-            upload_via_ftp,
-            upload_via_webrtc
+            // P2P chunk network commands
+            p2p_chunk_network::p2p_chunk_scan,
+            p2p_chunk_network::p2p_chunk_get_state,
+            p2p_chunk_network::p2p_chunk_verify,
+            p2p_chunk_network::p2p_chunk_remove,
+            p2p_chunk_network::p2p_chunk_compute_merkle,
+            p2p_chunk_network::p2p_chunk_verify_merkle,
+            p2p_chunk_network::p2p_chunk_hash,
+            p2p_chunk_network::p2p_chunk_startup_recovery,
+            p2p_chunk_network::p2p_chunk_check_corruption,
+            p2p_chunk_network::p2p_chunk_create_coordinator,
+            p2p_chunk_network::p2p_chunk_assign_pending,
+            p2p_chunk_network::p2p_chunk_report_result,
+            p2p_chunk_network::p2p_chunk_get_progress,
+            // P2P download recovery commands
+            p2p_download_recovery::p2p_scan_incomplete,
+            p2p_download_recovery::p2p_get_recovery,
+            p2p_download_recovery::p2p_remove_recovery,
+            p2p_download_recovery::p2p_verify_recovery,
+            p2p_download_recovery::p2p_get_stats,
+            p2p_download_recovery::p2p_check_space
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -10294,6 +10085,9 @@ fn main() {
                 app_data_dir.join("ftp_files"),
                 2121,
             ));
+
+            // Manage CoreServices first - shared services accessed by protocol_manager
+            app.manage(CoreServices::new());
 
             app.manage(AppState {
                 geth: Mutex::new(GethProcess::new()),
@@ -10442,6 +10236,58 @@ fn main() {
 
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::block_on(async move {
+                    let state = app_handle.state::<AppState>();
+
+                    // Initialize FileTransferService if not already running
+                    {
+                        let ft_guard = state.file_transfer.lock().await;
+                        if ft_guard.is_none() {
+                            drop(ft_guard);
+                            let ft = FileTransferService::new_with_app_handle(app_handle.clone())
+                                .await
+                                .map_err(|e| format!("Failed to start file transfer service: {}", e))
+                                .unwrap();
+                            let ft_arc = Arc::new(ft);
+                            // Store in AppState
+                            let mut ft_guard = state.file_transfer.lock().await;
+                            *ft_guard = Some(ft_arc.clone());
+                            // Also store in CoreServices for protocol_manager access
+                            let core = app_handle.state::<CoreServices>();
+                            *core.file_transfer.lock().await = Some(ft_arc.clone());
+                            info!("✓ FileTransferService initialized in setup");
+                        }
+                    }
+
+                    // Initialize WebRTC service if not already running
+                    {
+                        let webrtc_guard = state.webrtc.lock().await;
+                        if webrtc_guard.is_none() {
+                            drop(webrtc_guard);
+                            let ft_guard = state.file_transfer.lock().await;
+                            if let Some(ref ft) = *ft_guard {
+                                let webrtc = WebRTCService::new(
+                                    app_handle.clone(),
+                                    ft.clone(),
+                                    state.keystore.clone(),
+                                    state.bandwidth.clone(),
+                                )
+                                .await
+                                .map_err(|e| format!("Failed to start WebRTC service: {}", e))
+                                .unwrap();
+                                let webrtc_arc = Arc::new(webrtc);
+                                // Store in AppState
+                                let mut webrtc_guard = state.webrtc.lock().await;
+                                *webrtc_guard = Some(webrtc_arc.clone());
+                                // Also store in CoreServices for protocol_manager access
+                                let core = app_handle.state::<CoreServices>();
+                                *core.webrtc.lock().await = Some(webrtc_arc.clone());
+                                set_webrtc_service(webrtc_arc).await;
+                                info!("✓ WebRTCService initialized in setup");
+                            }
+                        }
+                    }
+
+                    // Now start DHT (FileTransferService and WebRTCService are available)
                     let state = app_handle.state::<AppState>();
                     match start_dht_node(
                         app_handle.clone(),
@@ -11027,6 +10873,10 @@ async fn encrypt_file_for_self_upload(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<FileManifestForJs, String> {
+    info!(
+        "encrypt_file_for_self_upload invoked: file_path={}",
+        file_path
+    );
     // 1. Get the active user's private key from state to derive the public key.
     let private_key_hex = state
         .active_account_private_key
@@ -11079,6 +10929,11 @@ async fn encrypt_file_for_recipient(
     file_path: String,
     recipient_public_key: Option<String>,
 ) -> Result<FileManifestForJs, String> {
+    info!(
+        "encrypt_file_for_recipient invoked: file_path={} has_recipient_key={}",
+        file_path,
+        recipient_public_key.is_some()
+    );
     // Get the app data directory for chunk storage
     let app_data_dir = app
         .path()
@@ -11604,6 +11459,14 @@ async fn pump_dht_events(
     proxies_arc: Arc<Mutex<Vec<ProxyNode>>>,
     relay_reputation_arc: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
 ) {
+    use chiral_network::transfer_events::{
+        AppEventBus, MetadataFoundEvent, ProvidersFoundEvent, SearchCompleteEvent,
+        SearchStartedEvent, SearchTimeoutEvent, SeederFileInfoEvent, SeederGeneralInfoEvent,
+    };
+
+    // Create AppEventBus for emitting unified search events
+    let search_event_bus = AppEventBus::new(app_handle.clone());
+
     loop {
         let events = dht_service.drain_events(64).await;
         if events.is_empty() {
@@ -11733,18 +11596,15 @@ async fn pump_dht_events(
                     }
                 }
 
-                // Progressive search events
+                // Progressive search events - use AppEventBus for unified event emission
                 DhtEvent::SearchStarted {
                     file_hash,
                     timestamp,
                 } => {
-                    let _ = app_handle.emit(
-                        "search_started",
-                        serde_json::json!({
-                            "fileHash": file_hash,
-                            "timestamp": timestamp
-                        }),
-                    );
+                    search_event_bus.emit_search_started(SearchStartedEvent {
+                        file_hash,
+                        timestamp,
+                    });
                 }
                 DhtEvent::DhtMetadataFound {
                     file_hash,
@@ -11754,34 +11614,28 @@ async fn pump_dht_events(
                     mime_type,
                 } => {
                     info!(
-                        "📡 [Command Event Pump] Emitting dht_metadata_found: {}",
+                        "📡 [Command Event Pump] Emitting metadata_found: {}",
                         file_name
                     );
-                    let _ = app_handle.emit(
-                        "dht_metadata_found",
-                        serde_json::json!({
-                            "fileHash": file_hash,
-                            "fileName": file_name,
-                            "fileSize": file_size,
-                            "createdAt": created_at,
-                            "mimeType": mime_type
-                        }),
-                    );
-                    info!("✅ [Command Event Pump] EMITTED DHTMETADATAFOUND TO FRONTEND");
+                    search_event_bus.emit_metadata_found(MetadataFoundEvent {
+                        file_hash,
+                        file_name,
+                        file_size,
+                        created_at,
+                        mime_type,
+                    });
+                    info!("✅ [Command Event Pump] EMITTED METADATA_FOUND TO FRONTEND");
                 }
                 DhtEvent::ProvidersFound {
                     file_hash,
                     providers,
                     count,
                 } => {
-                    let _ = app_handle.emit(
-                        "providers_found",
-                        serde_json::json!({
-                            "fileHash": file_hash,
-                            "providers": providers,
-                            "count": count
-                        }),
-                    );
+                    search_event_bus.emit_providers_found(ProvidersFoundEvent {
+                        file_hash,
+                        providers,
+                        count,
+                    });
                 }
                 DhtEvent::SeederGeneralInfoFound {
                     file_hash,
@@ -11790,16 +11644,13 @@ async fn pump_dht_events(
                     wallet_address,
                     default_price_per_mb,
                 } => {
-                    let _ = app_handle.emit(
-                        "seeder_general_info",
-                        serde_json::json!({
-                            "fileHash": file_hash,
-                            "seederIndex": seeder_index,
-                            "peerId": peer_id,
-                            "walletAddress": wallet_address,
-                            "defaultPricePerMb": default_price_per_mb,
-                        }),
-                    );
+                    search_event_bus.emit_seeder_general_info(SeederGeneralInfoEvent {
+                        file_hash,
+                        seeder_index,
+                        peer_id,
+                        wallet_address,
+                        default_price_per_mb,
+                    });
                 }
                 DhtEvent::SeederFileInfoFound {
                     file_hash,
@@ -11809,45 +11660,36 @@ async fn pump_dht_events(
                     supported_protocols,
                     protocol_details,
                 } => {
-                    let _ = app_handle.emit(
-                        "seeder_file_info",
-                        serde_json::json!({
-                            "fileHash": file_hash,
-                            "seederIndex": seeder_index,
-                            "peerId": peer_id,
-                            "pricePerMb": price_per_mb,
-                            "supportedProtocols": supported_protocols,
-                            "protocolDetails": protocol_details
-                        }),
-                    );
+                    search_event_bus.emit_seeder_file_info(SeederFileInfoEvent {
+                        file_hash,
+                        seeder_index,
+                        peer_id,
+                        price_per_mb,
+                        supported_protocols,
+                        protocol_details,
+                    });
                 }
                 DhtEvent::SearchComplete {
                     file_hash,
                     total_seeders,
                     duration_ms,
                 } => {
-                    let _ = app_handle.emit(
-                        "search_complete",
-                        serde_json::json!({
-                            "fileHash": file_hash,
-                            "totalSeeders": total_seeders,
-                            "durationMs": duration_ms
-                        }),
-                    );
+                    search_event_bus.emit_search_complete(SearchCompleteEvent {
+                        file_hash,
+                        total_seeders,
+                        duration_ms,
+                    });
                 }
                 DhtEvent::SearchTimeout {
                     file_hash,
                     partial_seeders,
                     missing_count,
                 } => {
-                    let _ = app_handle.emit(
-                        "search_timeout",
-                        serde_json::json!({
-                            "fileHash": file_hash,
-                            "partialSeeders": partial_seeders,
-                            "missingCount": missing_count
-                        }),
-                    );
+                    search_event_bus.emit_search_timeout(SearchTimeoutEvent {
+                        file_hash,
+                        partial_seeders,
+                        missing_count,
+                    });
                 }
 
                 _ => {}

@@ -1,6 +1,6 @@
 <script lang="ts">
     import './styles/globals.css'
-    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server, Database } from 'lucide-svelte'
+    import { Upload, Download, Wallet, Globe, BarChart3, Settings, Cpu, Menu, X, Star, Server, Database, LogOut, ChevronDown, Droplet } from 'lucide-svelte'
     import UploadPage from './pages/Upload.svelte'
     import DownloadPage from './pages/Download.svelte'
     import AccountPage from './pages/Account.svelte'
@@ -9,8 +9,8 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
-    import RelayPage from './pages/Relay.svelte'
     import Blockchain from './pages/Blockchain.svelte'
+    import ChiralDropPage from './pages/ChiralDrop.svelte'
     import NotFound from './pages/NotFound.svelte'
 import { networkStatus, settings, userLocation, wallet, activeBandwidthLimits, etcAccount, showAuthWizard } from './lib/stores'
 import type { AppSettings, ActiveBandwidthLimits } from './lib/stores'
@@ -31,7 +31,8 @@ import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { detectUserRegion } from '$lib/services/geolocation';
 import { lockAccount } from '$lib/services/accountLock';
 import { paymentService } from '$lib/services/paymentService';
-import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+import { transferStore } from '$lib/stores/transferEventsStore';
+import { transferService } from '$lib/services/transferService';
     import { showToast } from '$lib/toast';
 import { walletService } from '$lib/wallet';
 import { listen, type Event } from '@tauri-apps/api/event';
@@ -245,7 +246,6 @@ $: canShowLockAction = !showFirstRunWizard;
     let stopGethMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
     let unlistenTorrentPayment: (() => void) | null = null;
-    let transferEventsUnsubscribe: (() => void) | null = null;
     let unsubscribeGethStatus: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
@@ -263,10 +263,13 @@ $: canShowLockAction = !showFirstRunWizard;
       }, 2500);
 
       try {
-      // Subscribe to transfer events from backend (non-blocking)
-      subscribeToTransferEvents()
-        .then((unsub) => {
-          transferEventsUnsubscribe = unsub;
+      // Initialize TransferService which subscribes to ALL transfer events:
+      // - Unified transfer:event (FTP downloads)
+      // - Protocol-specific events (BitTorrent, WebRTC, Bitswap, HTTP, multi-source)
+      // This replaces the direct subscribeToTransferEvents() call and normalizes
+      // all protocol events into the unified transferStore.
+      transferService.initialize()
+        .then(() => {
           transferStoreUnsubscribe = transferStore.subscribe(($store) => {
 
           if (!$store || !$store.transfers) {
@@ -479,10 +482,18 @@ $: canShowLockAction = !showFirstRunWizard;
                   // Re-enable syncing and trigger a sync
                   walletService.setRestoringAccount(false);
                   
-                  // Now sync from blockchain
+                   // Now sync from blockchain
                   await walletService.refreshTransactions();
                   await walletService.refreshBalance();
                   walletService.startProgressiveLoading();
+
+                  // Ensure DHT SeederGeneralInfo has the wallet address (fixes GossipSub metadata on refresh)
+                  try {
+                    await invoke('update_wallet_address_for_services', { address });
+                  } catch (error) {
+                    const errorMsg = error instanceof Error ? error.message : String(error);
+                    diagnosticLogger.warn('ACCOUNT', 'Failed to sync wallet to DHT', { error: errorMsg });
+                  }
                 } catch (error) {
                   const errorMsg = error instanceof Error ? error.message : String(error);
                   diagnosticLogger.error('ACCOUNT', 'Failed to restore account from backend', { error: errorMsg });
@@ -938,15 +949,12 @@ $: canShowLockAction = !showFirstRunWizard;
       if (unlistenTorrentPayment) {
         unlistenTorrentPayment();
       }
-      if (transferEventsUnsubscribe) {
-        transferEventsUnsubscribe();
-      }
+      // Clean up TransferService (unsubscribes from all transfer events)
+      transferService.cleanup().catch(console.error);
       if (transferStoreUnsubscribe) {
         transferStoreUnsubscribe();
         transferStoreUnsubscribe = null;
       }
-      // Also ensure transfer events are fully unsubscribed
-      unsubscribeFromTransferEvents();
       if (unsubscribeScheduler) {
         unsubscribeScheduler();
         unsubscribeScheduler = null;
@@ -970,8 +978,28 @@ $: canShowLockAction = !showFirstRunWizard;
   });
 
 
-  let sidebarCollapsed = false;
-  let sidebarMenuOpen = false;
+  let navDropdownOpen = false;
+  let mobileMenuOpen = false;
+
+  // Close dropdown when clicking outside
+  function handleClickOutside(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    if (navDropdownOpen && !target.closest('.nav-dropdown-container')) {
+      navDropdownOpen = false;
+    }
+  }
+
+  onMount(() => {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('click', handleClickOutside);
+    }
+  });
+
+  onDestroy(() => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('click', handleClickOutside);
+    }
+  });
 
   // Restore the previous scroll position when page changes
   $: if (currentPage) {
@@ -991,10 +1019,10 @@ $: canShowLockAction = !showFirstRunWizard;
       { id: "account", label: $t("nav.account"), icon: Wallet },
       { id: "analytics", label: $t("nav.analytics"), icon: BarChart3 },
       { id: "blockchain", label: $t("nav.blockchain"), icon: Database },
+      { id: "chiraldrop", label: $t("nav.chiraldrop"), icon: Droplet },
       { id: "download", label: $t("nav.download"), icon: Download },
       { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "network", label: $t("nav.network"), icon: Globe },
-      { id: "relay", label: $t("nav.relay"), icon: Server },
       { id: "reputation", label: $t("nav.reputation"), icon: Star },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
       { id: "upload", label: $t("nav.upload"), icon: Upload },
@@ -1023,10 +1051,6 @@ $: canShowLockAction = !showFirstRunWizard;
       component: NetworkPage,
     },
     {
-      path: "relay",
-      component: RelayPage,
-    },
-    {
       path: "mining",
       component: MiningPage,
     },
@@ -1041,6 +1065,10 @@ $: canShowLockAction = !showFirstRunWizard;
     {
       path: "blockchain",
       component: Blockchain,
+    },
+    {
+      path: "chiraldrop",
+      component: ChiralDropPage,
     },
     {
       path: "account",
@@ -1061,7 +1089,7 @@ $: canShowLockAction = !showFirstRunWizard;
   });
 </script>
 
-<div class="flex bg-background h-full">
+<div class="flex flex-col bg-background h-full">
   {#if loading}
     <div class="w-full h-full flex items-center justify-center">
       <div
@@ -1087,151 +1115,194 @@ $: canShowLockAction = !showFirstRunWizard;
       </div>
     </div>
   {:else}
-    <!-- Desktop Sidebar -->
-    <!-- Make the sidebar sticky so it stays visible while the main content scrolls -->
-    <div
-      class="hidden md:block {sidebarCollapsed
-        ? 'w-16'
-        : 'w-64'} bg-card border-r transition-all sticky top-0 h-screen"
-    >
-      <nav class="p-2 space-y-2 h-full overflow-y-auto">
-        <!-- Sidebar Header (desktop only) -->
-        <div class="flex items-center justify-between px-2 py-2 mb-2">
-          <div class="flex items-center">
-            <button
-              aria-label={$t(
-                sidebarCollapsed ? "nav.expandSidebar" : "nav.collapseSidebar",
-              )}
-              class="p-2 rounded transition-colors hover:bg-gray-100"
-              on:click={() => (sidebarCollapsed = !sidebarCollapsed)}
-            >
-              <Menu class="h-5 w-5" />
-            </button>
-            {#if !sidebarCollapsed}
-              <span class="ml-2 font-bold text-base">{$t("nav.menu")}</span>
-            {/if}
+    <!-- Desktop Navbar -->
+    <nav class="sticky top-0 z-50 bg-card border-b">
+      <div class="px-4 py-3">
+        <div class="flex items-center justify-between">
+          <!-- Left: Logo/Brand -->
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-lg">Chiral Network</span>
           </div>
 
-          {#if !sidebarCollapsed}
-            <div class="flex items-center gap-2 text-xs">
+          <!-- Center: Primary Navigation -->
+          <div class="hidden md:flex items-center gap-1">
+            <!-- Download -->
+            <button
+              on:click={() => navigateTo('download', '/download')}
+              class="px-4 py-2 rounded transition-colors {currentPage === 'download' ? 'bg-primary text-primary-foreground' : 'hover:bg-gray-100'}"
+            >
+              <div class="flex items-center gap-2">
+                <Download class="h-4 w-4" />
+                <span>{menuItems.find(i => i.id === 'download')?.label || 'Download'}</span>
+              </div>
+            </button>
+
+            <!-- Upload -->
+            <button
+              on:click={() => navigateTo('upload', '/upload')}
+              class="px-4 py-2 rounded transition-colors {currentPage === 'upload' ? 'bg-primary text-primary-foreground' : 'hover:bg-gray-100'}"
+            >
+              <div class="flex items-center gap-2">
+                <Upload class="h-4 w-4" />
+                <span>{menuItems.find(i => i.id === 'upload')?.label || 'Upload'}</span>
+              </div>
+            </button>
+
+            <!-- Account -->
+            <button
+              on:click={() => navigateTo('account', '/account')}
+              class="px-4 py-2 rounded transition-colors {currentPage === 'account' ? 'bg-primary text-primary-foreground' : 'hover:bg-gray-100'}"
+            >
+              <div class="flex items-center gap-2">
+                <Wallet class="h-4 w-4" />
+                <span>{menuItems.find(i => i.id === 'account')?.label || 'Account'}</span>
+              </div>
+            </button>
+
+            <!-- Network -->
+            <button
+              on:click={() => navigateTo('network', '/network')}
+              class="px-4 py-2 rounded transition-colors {currentPage === 'network' ? 'bg-primary text-primary-foreground' : 'hover:bg-gray-100'}"
+            >
+              <div class="flex items-center gap-2">
+                <Globe class="h-4 w-4" />
+                <span>{menuItems.find(i => i.id === 'network')?.label || 'Network'}</span>
+              </div>
+            </button>
+
+            <!-- Settings -->
+            <button
+              on:click={() => navigateTo('settings', '/settings')}
+              class="px-4 py-2 rounded transition-colors {currentPage === 'settings' ? 'bg-primary text-primary-foreground' : 'hover:bg-gray-100'}"
+            >
+              <div class="flex items-center gap-2">
+                <Settings class="h-4 w-4" />
+                <span>{menuItems.find(i => i.id === 'settings')?.label || 'Settings'}</span>
+              </div>
+            </button>
+
+            <!-- More Dropdown -->
+            <div class="relative nav-dropdown-container">
+              <button
+                on:click={() => navDropdownOpen = !navDropdownOpen}
+                class="px-4 py-2 rounded transition-colors hover:bg-gray-100 flex items-center gap-1"
+              >
+                <span>{$t('nav.more')}</span>
+                <ChevronDown class="h-4 w-4" />
+              </button>
+
+              {#if navDropdownOpen}
+                <div 
+                  class="absolute right-0 mt-1 w-48 rounded-md border bg-white shadow-lg z-50"
+                  role="button"
+                  tabindex="0"
+                  on:click|stopPropagation
+                  on:keydown={(e) => e.key === 'Escape' && (navDropdownOpen = false)}
+                >
+                  {#each menuItems.filter(item => !['download', 'upload', 'account', 'network', 'settings'].includes(item.id)) as item}
+                    {@const requiresGeth = item.id === 'blockchain' || item.id === 'mining'}
+                    {@const isBlocked = requiresGeth && $gethStatus !== 'running'}
+                    <button
+                      on:click={() => {
+                        if (isBlocked) return;
+                        navigateTo(item.id, `/${item.id}`);
+                        navDropdownOpen = false;
+                      }}
+                      class="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center gap-2 {isBlocked ? 'cursor-not-allowed opacity-60' : ''}"
+                      disabled={isBlocked}
+                      title={isBlocked ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
+                    >
+                      <svelte:component this={item.icon} class="h-4 w-4" />
+                      <span>{item.label}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Right: Status and Logout -->
+          <div class="hidden md:flex items-center gap-4">
+            <!-- Connection Status -->
+            <div class="flex items-center gap-2 text-sm">
               <div
                 class="w-2 h-2 rounded-full {$networkStatus === 'connected'
                   ? 'bg-green-500'
                   : 'bg-red-500'}"
               ></div>
-              <span class="text-muted-foreground"
-                >{$networkStatus === "connected"
+              <span class="text-muted-foreground">
+                {$networkStatus === "connected"
                   ? $t("nav.connected")
-                  : $t("nav.disconnected")}</span
-              >
-            </div>
-          {:else}
-            <div
-              class="w-2 h-2 rounded-full {$networkStatus === 'connected'
-                ? 'bg-green-500'
-                : 'bg-red-500'}"
-            ></div>
-          {/if}
-        </div>
-
-        <!-- Sidebar Nav Items -->
-        {#each menuItems as item}
-          {@const requiresGeth = item.id === 'blockchain' || item.id === 'mining'}
-          {@const isBlocked = requiresGeth && $gethStatus !== 'running'}
-          <button
-            on:click={() => {
-              if (isBlocked) return;
-              navigateTo(item.id, `/${item.id}`);
-            }}
-            class="w-full group {isBlocked ? 'cursor-not-allowed opacity-60' : ''}"
-            aria-current={currentPage === item.id ? "page" : undefined}
-            disabled={isBlocked}
-            title={isBlocked ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
-          >
-            <div
-              class="flex items-center {sidebarCollapsed
-                ? 'justify-center'
-                : ''} rounded {currentPage === item.id
-                ? 'bg-gray-200'
-                : isBlocked ? '' : 'group-hover:bg-gray-100'}"
-            >
-              <span
-                class="flex items-center justify-center rounded w-10 h-10 relative"
-              >
-                <svelte:component this={item.icon} class="h-5 w-5" />
-                {#if sidebarCollapsed}
-                  <span
-                    class="tooltip absolute left-full ml-2 top-1/2 -translate-y-1/2 hidden whitespace-nowrap rounded bg-black text-white text-xs px-2 py-1 z-50"
-                    >{item.label}</span
-                  >
-                {/if}
+                  : $t("nav.disconnected")}
               </span>
-              {#if !sidebarCollapsed}
-                <span class="flex-1 px-2 py-1 text-left">{item.label}</span>
-              {/if}
             </div>
+
+            <!-- Logout Button -->
+            <button
+              on:click={async () => await lockAccount()}
+              class="px-3 py-2 rounded transition-colors hover:bg-red-100 text-red-600 flex items-center gap-2"
+              title={$t('actions.lockWallet')}
+            >
+              <LogOut class="h-4 w-4" />
+              <span class="text-sm">{$t('actions.logout')}</span>
+            </button>
+          </div>
+
+          <!-- Mobile Menu Button -->
+          <button
+            class="md:hidden p-2 rounded hover:bg-gray-100"
+            on:click={() => mobileMenuOpen = true}
+          >
+            <Menu class="h-6 w-6" />
           </button>
-        {/each}
-      </nav>
-    </div>
+        </div>
+      </div>
+    </nav>
 
-    <!-- Sidebar Menu Button -->
-    <div class="absolute top-2 right-2 md:hidden">
-      <button
-        class="p-2 rounded bg-card shadow"
-        on:click={() => (sidebarMenuOpen = true)}
-      >
-        <Menu class="h-6 w-6" />
-      </button>
-    </div>
-
-    <!-- Sidebar Menu Overlay -->
-    {#if sidebarMenuOpen}
+    <!-- Mobile Menu Overlay -->
+    {#if mobileMenuOpen}
       <!-- Backdrop -->
       <div
         class="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
         role="button"
         tabindex="0"
-        aria-label={$t("nav.closeSidebarMenu")}
-        on:click={() => (sidebarMenuOpen = false)}
+        aria-label={$t("nav.closeMenu")}
+        on:click={() => mobileMenuOpen = false}
         on:keydown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
-            sidebarMenuOpen = false;
+            mobileMenuOpen = false;
           }
         }}
       ></div>
 
-      <!-- Sidebar -->
-      <div
-        class="fixed top-0 right-0 h-full w-64 bg-white z-50 flex flex-col md:hidden"
-      >
-        <!-- Sidebar Header -->
+      <!-- Mobile Menu -->
+      <div class="fixed top-0 right-0 h-full w-64 bg-white z-50 flex flex-col md:hidden">
+        <!-- Header -->
         <div class="flex justify-between items-center p-4 border-b">
-          <!-- Left side -->
-          <span class="font-bold text-base">{$t("nav.menu")}</span>
+          <span class="font-bold text-base">Chiral Network</span>
+          <button on:click={() => mobileMenuOpen = false}>
+            <X class="h-6 w-6" />
+          </button>
+        </div>
 
-          <!-- Right side -->
-          <div class="flex items-center gap-3">
-            <div class="flex items-center gap-2">
-              <div
-                class="w-2 h-2 rounded-full {$networkStatus === 'connected'
-                  ? 'bg-green-500'
-                  : 'bg-red-500'}"
-              ></div>
-              <span class="text-muted-foreground text-sm"
-                >{$networkStatus === "connected"
-                  ? $t("nav.connected")
-                  : $t("nav.disconnected")}</span
-              >
-            </div>
-            <button on:click={() => (sidebarMenuOpen = false)}>
-              <X class="h-6 w-6" />
-            </button>
+        <!-- Status -->
+        <div class="px-4 py-3 border-b">
+          <div class="flex items-center gap-2">
+            <div
+              class="w-2 h-2 rounded-full {$networkStatus === 'connected'
+                ? 'bg-green-500'
+                : 'bg-red-500'}"
+            ></div>
+            <span class="text-muted-foreground text-sm">
+              {$networkStatus === "connected"
+                ? $t("nav.connected")
+                : $t("nav.disconnected")}
+            </span>
           </div>
         </div>
 
-        <!-- Sidebar Nav Items -->
-        <nav class="flex-1 p-4 space-y-2">
+        <!-- Menu Items -->
+        <nav class="flex-1 p-4 space-y-2 overflow-y-auto">
           {#each menuItems as item}
             {@const requiresGeth = item.id === 'blockchain' || item.id === 'mining'}
             {@const isBlocked = requiresGeth && $gethStatus !== 'running'}
@@ -1239,10 +1310,9 @@ $: canShowLockAction = !showFirstRunWizard;
               on:click={() => {
                 if (isBlocked) return;
                 navigateTo(item.id, `/${item.id}`);
-                sidebarMenuOpen = false;
+                mobileMenuOpen = false;
               }}
-              class="w-full flex items-center rounded px-4 py-3 text-lg {isBlocked ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-100'}"
-              aria-current={currentPage === item.id ? "page" : undefined}
+              class="w-full flex items-center rounded px-4 py-3 text-base {currentPage === item.id ? 'bg-primary text-primary-foreground' : isBlocked ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-100'}"
               disabled={isBlocked}
               title={isBlocked ? $t('nav.blockchainUnavailable') + ' ' + $t('nav.networkPageLink') : ''}
             >
@@ -1251,12 +1321,25 @@ $: canShowLockAction = !showFirstRunWizard;
             </button>
           {/each}
         </nav>
+
+        <!-- Logout Button -->
+        <div class="p-4 border-t">
+          <button
+            on:click={async () => {
+              await lockAccount();
+              mobileMenuOpen = false;
+            }}
+            class="w-full px-4 py-3 rounded bg-red-50 text-red-600 hover:bg-red-100 flex items-center justify-center gap-2"
+          >
+            <LogOut class="h-5 w-5" />
+            <span>{$t('actions.logout')}</span>
+          </button>
+        </div>
       </div>
     {/if}
   {/if}
 
   <!-- Main Content -->
-  <!-- Ensure main content doesn't go under the sticky sidebar -->
   <div id="main-content" class="flex-1 overflow-y-auto">
     <div class="p-6">
       <!-- <Router {routes} /> -->

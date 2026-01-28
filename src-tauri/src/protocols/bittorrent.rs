@@ -193,6 +193,7 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: info_hash.clone(),
                         file_hash: info_hash.clone(),
+                        protocol: "BitTorrent".to_string(),
                         failed_at: Self::now_ms(),
                         error: format!("Failed to start BitTorrent download: {}", e),
                         error_category: ErrorCategory::Protocol,
@@ -243,6 +244,7 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
             bus.emit_started(TransferStartedEvent {
                 transfer_id: info_hash.clone(),
                 file_hash: info_hash.clone(),
+                protocol: "BitTorrent".to_string(),
                 file_name: display_name.clone(),
                 file_size: 0, // Unknown until metadata is fetched
                 total_chunks: 0, // Unknown until metadata is fetched
@@ -355,6 +357,7 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
         if let Some(ref bus) = self.event_bus {
             bus.emit_paused(TransferPausedEvent {
                 transfer_id: identifier.to_string(),
+                protocol: "BitTorrent".to_string(),
                 paused_at: Self::now_ms(),
                 reason: PauseReason::UserRequested,
                 can_resume: true,
@@ -391,6 +394,7 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
         if let Some(ref bus) = self.event_bus {
             bus.emit_resumed(TransferResumedEvent {
                 transfer_id: identifier.to_string(),
+                protocol: "BitTorrent".to_string(),
                 resumed_at: Self::now_ms(),
                 downloaded_bytes,
                 remaining_bytes: total_bytes.saturating_sub(downloaded_bytes),
@@ -424,6 +428,7 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
         if let Some(ref bus) = self.event_bus {
             bus.emit_canceled(TransferCanceledEvent {
                 transfer_id: identifier.to_string(),
+                protocol: "BitTorrent".to_string(),
                 canceled_at: Self::now_ms(),
                 downloaded_bytes,
                 total_bytes,
@@ -480,6 +485,7 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
                                 bus.emit_completed(TransferCompletedEvent {
                                     transfer_id: identifier.to_string(),
                                     file_hash: identifier.to_string(),
+                                    protocol: "BitTorrent".to_string(),
                                     file_name: state.name.clone().unwrap_or_else(|| identifier.to_string()),
                                     file_size: progress.total_bytes,
                                     output_path: state.output_path.to_string_lossy().to_string(),
@@ -506,6 +512,7 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
                                 bus.emit_failed(TransferFailedEvent {
                                     transfer_id: identifier.to_string(),
                                     file_hash: identifier.to_string(),
+                                    protocol: "BitTorrent".to_string(),
                                     failed_at: now_ms,
                                     error: "BitTorrent download error".to_string(),
                                     error_category: ErrorCategory::Protocol,
@@ -540,6 +547,7 @@ impl ProtocolHandler for BitTorrentProtocolHandler {
 
                         bus.emit_progress(TransferProgressEvent {
                             transfer_id: identifier.to_string(),
+                            protocol: "BitTorrent".to_string(),
                             downloaded_bytes: progress.downloaded_bytes,
                             total_bytes: progress.total_bytes,
                             completed_chunks: 0, // BitTorrent manages pieces internally

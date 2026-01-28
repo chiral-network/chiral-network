@@ -1,14 +1,13 @@
-// Protocol Details Types - Mirrors Rust gossipsub_metadata.rs structures
-
-export interface ProtocolDetails {
-  http?: HttpProtocolDetails;
-  ftp?: FtpProtocolDetails;
-  ed2k?: Ed2kProtocolDetails;
-  bittorrent?: BitTorrentProtocolDetails;
-  bitswap?: BitswapProtocolDetails;
-  webrtc?: WebRtcProtocolDetails;
-  encryption?: EncryptionDetails;
-}
+import { Protocol } from "$lib/services/contentProtocols/types";
+export type ProtocolDetailsByProtocol = {
+  [Protocol.HTTP]: HttpProtocolDetails;
+  [Protocol.FTP]: FtpProtocolDetails;
+  [Protocol.ED2K]: Ed2kProtocolDetails;
+  [Protocol.BitTorrent]: BitTorrentProtocolDetails;
+  [Protocol.WebRTC]: WebRtcProtocolDetails;
+  [Protocol.UNKNOWN]: never;
+};
+export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 
 // HTTP Protocol Details
 export interface HttpProtocolDetails {

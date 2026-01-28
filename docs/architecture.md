@@ -60,22 +60,20 @@ export interface IContentProtocol {
   getPeersServing(identification: FileIdentification): Promise<PeerInfo[]>;
 
   /** Retrieve metadata for a file/content */
-  getFileMetadata(
-    identification: FileIdentification,
-  ): Promise<FileMetadata | null>;
+  getFileMetadata(identification: FileIdentification): Promise<FileMetadata | null>;
 
   /** Download content from a peer */
   getContentFrom(
     peerId: string,
     identification: FileIdentification,
     progressUpdate: ProgressUpdate,
-    outputPath?: string,
+    outputPath?: string
   ): Promise<Uint8Array | Void>;
 
   /** Start seeding/sharing content */
   startSeeding(
     filePathOrData: string | Uint8Array,
-    progressUpdate: ProgressUpdate,
+    progressUpdate: ProgressUpdate
   ): Promise<FileMetadata>;
 
   /** Stop seeding/sharing content */
@@ -131,7 +129,7 @@ export class ProtocolManager {
   }
 
   setProtocol(protocol: Protocol): void {
-    this.currentProtocol = protocol;
+    this.currentProtocol = protocol
   }
 
   getProtocol(): Protocol {
@@ -149,37 +147,44 @@ export class ProtocolManager {
 
 #### Example Usage in BitSwap
 
-- `get_peers_serving(identification: filemetadata)`
-  - Invokes a Tauri command that calls `kademlia.get_providers(identification.merkel_root)`.
-  - Returns a list of peers currently serving the content.
+* `get_peers_serving(identification: filemetadata)`
 
-- `get_file_metadata(identification: string (merkel_root))`
-  - Queries the DHT for metadata associated with the content.
-  - In Bitswap, this involves retrieving the FileMetadata structure using `kademlia.get`.
+  * Invokes a Tauri command that calls `kademlia.get_providers(identification.merkel_root)`.
+  * Returns a list of peers currently serving the content.
 
-- `get_content_from(peerId, identification, progress_update)`
-  - Invokes `bitswap.get_from(identification, peerId)` in the swarm event loop.
-  - Calls `progress_update(receivedChunks / totalChunks)` as chunks are received.
-  - Returns void, `progress_update(1)` invoked when download completes.
+* `get_file_metadata(identification: string (merkel_root))`
 
-- `start_seeding(identification, file_path | data, progress_update)`
-  - File path as input
-  - Generates `FileMetadata` and inserts it into the DHT.
-  - Chunks the file and stores blocks in the on-disk blockstore.
-  - Calls `progress_update` as each chunk is stored.
-  - Returns FileMetaData
+  * Queries the DHT for metadata associated with the content.
+  * In Bitswap, this involves retrieving the FileMetadata structure using `kademlia.get`.
 
-- `stop_seeding(identification)`
-  - Removes the file metadata from the DHT.
-  - Deletes associated chunks from the on-disk blockstore.
-  - **Note:** If multiple files share the same CID, a reference count mechanism should decrement instead of deleting the blocks.
+* `get_content_from(peerId, identification, progress_update)`
 
-- `pause_download_for(identification)` / `resume_download_for(identification)` / `cancel_download_for(identification)`
-  - Standard operations to control ongoing downloads.
-  - Returns true if success
+  * Invokes `bitswap.get_from(identification, peerId)` in the swarm event loop.
+  * Calls `progress_update(receivedChunks / totalChunks)` as chunks are received.
+  * Returns void, `progress_update(1)` invoked when download completes.
 
-- `set_protocol(protocol)`
-  - Switches the active protocol for all subsequent operations.
+* `start_seeding(identification, file_path | data, progress_update)`
+  * File path as input
+  * Generates `FileMetadata` and inserts it into the DHT.
+  * Chunks the file and stores blocks in the on-disk blockstore.
+  * Calls `progress_update` as each chunk is stored.
+  * Returns FileMetaData
+
+* `stop_seeding(identification)`
+
+  * Removes the file metadata from the DHT.
+  * Deletes associated chunks from the on-disk blockstore.
+  * **Note:** If multiple files share the same CID, a reference count mechanism should decrement instead of deleting the blocks.
+
+* `pause_download_for(identification)` / `resume_download_for(identification)` / `cancel_download_for(identification)`
+
+  * Standard operations to control ongoing downloads.
+  * Returns true if success
+
+* `set_protocol(protocol)`
+
+  * Switches the active protocol for all subsequent operations.
+
 
 ### How It Works
 
@@ -227,9 +232,10 @@ Example DHT Response [TODO revise this]:
     },
     {
       peer_id: "12D3KooY...",
-      protocols: ["bitswap"],  // IPFS-style content exchange
+      protocols: ["chiral-private"],  // Style 2 protocol
+      private_endpoint: "/ip4/10.0.0.5/tcp/4001/p2p/12D3KooY...",
       wallet: "0x1B2c3D4e...",
-      cids: ["bafybeif...", "bafybeig..."]
+      chunks: [0, 1, 2, ..., 15]
     }
   ]
 }
@@ -253,12 +259,12 @@ Uses established public protocols for data transfer, with payments settled separ
 When a downloader initiates a file transfer using a public protocol like HTTP or BitTorrent, the following sequence of events occurs:
 
 1.  **Peer Discovery and Protocol Selection:** The downloader queries the Chiral DHT to find peers seeding the content. The DHT returns a list of seeders, each advertising the protocol(s) they support (e.g., HTTP, BitTorrent).
-    - **Seeder-Side:** Seeders advertise a default protocol based on their network capability (HTTP for public IPs, WebTorrent for those behind a NAT).
-    - **Downloader-Side:** The downloader analyzes the list of available seeders and protocols, and selects the optimal protocol(s) based on factors like user preference, network conditions, and file characteristics. The client can decide to use multiple protocols simultaneously from different peers to maximize speed.
+    *   **Seeder-Side:** Seeders advertise a default protocol based on their network capability (HTTP for public IPs, WebTorrent for those behind a NAT).
+    *   **Downloader-Side:** The downloader analyzes the list of available seeders and protocols, and selects the optimal protocol(s) based on factors like user preference, network conditions, and file characteristics. The client can decide to use multiple protocols simultaneously from different peers to maximize speed.
 2.  **Peer Handshake and Price Negotiation:** The downloader and seeder(s) establish a connection. A handshake process is performed, during which they agree upon the terms of the transfer, including pricing. This negotiation is facilitated through DHT messages (the exact mechanism is to be defined).
 3.  **Initiation of Download:** Once terms are agreed upon, the downloader can commence the download from the seeder using one or both of the following methods (the default is to be determined):
-    - **Public Protocol:** The transfer occurs directly over the specified public protocol (e.g., HTTP, BitTorrent).
-    - **Private Protocol:** The transfer is wrapped within the Chiral private protocol.
+    *   **Public Protocol:** The transfer occurs directly over the specified public protocol (e.g., HTTP, BitTorrent).
+    *   **Private Protocol:** The transfer is wrapped within the Chiral private protocol.
 4.  **Parallel Downloading from Public Sources:** Concurrently with the above steps, the downloader can also fetch parts of the file from its original public source (e.g., the public BitTorrent network), enabling multi-source downloads.
 
 **Default Protocol Selection by Network Capability**:
@@ -351,21 +357,24 @@ Characteristics:
 
 Complete Flow:
 1. DHT Discovery Phase (COMMON STEP):
-   - Query DHT for file hash → Get minimal record
-   - DHT returns peers with supported protocols (including bitswap)
-   - Obtain peer contact info
+   - Query DHT for file hash → Get seeder list
+   - DHT returns peers advertising "chiral-private" protocol
+   - Get private endpoint addresses
 
-2. Messaging Protocol Phase:
-   - Send INFO_REQUEST to selected peer
-   - Receive INFO_RESPONSE with transfer terms (price, wallet, protocol)
-   - Send PROTOCOL_SPECIFIC_REQUEST
-   - Receive PROTOCOL_SPECIFIC_RESPONSE with CID list and peer ID
+2. Connect to Private Protocol Peer:
+   - Establish connection to peer's private endpoint
+   - Protocol handshake
 
-3. BitSwap Transfer:
-   - Establish libp2p connection using peer ID
-   - Exchange blocks using Bitswap protocol
-   - Verify blocks using CID hashes
-   - Make payments per INFO_RESPONSE terms
+3. Atomic Chunk Exchange (Repeat for each chunk):
+   - Request chunk + provide payment proof
+   - Seeder verifies payment on blockchain
+   - Seeder sends chunk if payment valid
+   - Client verifies chunk hash
+   - Repeat for all chunks
+
+4. Complete Transfer:
+   - All chunks received and verified
+   - Payments already settled during transfer (in-band)
 
 Advantages:
 - Atomic exchange (pay-per-chunk)
@@ -378,6 +387,50 @@ Challenges:
 - Higher overhead (payment per chunk)
 - Complexity
 ```
+
+**Option B: WebRPC-Based Private Protocol**
+
+```
+Characteristics:
+- RPC-style protocol
+- Session-based transfers
+- Batch payment for multiple chunks
+- Custom protocol design
+
+Complete Flow:
+1. DHT Discovery Phase (COMMON STEP):
+   - Query DHT for file hash → Get seeder list
+   - DHT returns peers advertising "chiral-private" protocol
+   - Get private endpoint addresses
+
+2. Session-Based Transfer:
+   - Establish session with payment channel
+   - Stream chunks with payment proofs (IN-BAND)
+   - Batch payment settlement during session
+   - Close session
+
+3. Complete Transfer:
+   - All chunks received and verified
+   - Payments settled during session (in-band)
+
+Advantages:
+- Lower payment overhead
+- Better performance
+- Flexible design
+- Starts with same DHT discovery as Style 1
+
+Challenges:
+- Custom protocol complexity
+- Requires both peers to support
+- More implementation work
+```
+
+**[Decision Needed - Discussion with Students]**:
+
+- Which private protocol to implement?
+- BitSwap-like (proven concept, atomic) vs WebRPC (custom, flexible)
+- Or implement both and let clients choose?
+- Priority vs public protocols? (Now, I am leanning to support public protocols first)
 
 **In-Band Payment Benefits**:
 
@@ -541,7 +594,7 @@ Limitations:
 - STUN/TURN infrastructure needed
 ```
 
-##### 3. BitTorrent Protocol Integration (Alternative for NAT'd Nodes)
+##### 3. BitTorrent Protocol Integration  (Alternative for NAT'd Nodes)
 
 **[Discussion Needed]**: Should BitTorrent be the default for NAT'd nodes instead of WebTorrent?
 
@@ -623,12 +676,11 @@ Standard BitTorrent clients that do not support this extension will simply ignor
 
 We may need to have a discussion on whether the program should configure Chiral clients to block all non-Chiral peers, creating a private BitTorrent network. This approach comes with some trade-offs/concerns:
 
-- **Harming the BitTorrent Network:** The primary advantage of BitTorrent integration is access to the large public swarm. Blocking non-Chiral peers would negatively impace this, possibly casuing harm to the the health of the public torrent network.
-- **Tracker Penalities/Backlash:** If Chiral clients download from the public swarm but refuse to upload to public peers, they are acting as sole "leeches." This may be seen as a challenge to the cooperative spirit of BitTorrent. Some trackers may even ban clients with poor share ratios.
+*   **Harming the BitTorrent Network:** The primary advantage of BitTorrent integration is access to the large public swarm. Blocking non-Chiral peers would negatively impace this, possibly casuing harm to the the health of the public torrent network.
+*   **Tracker Penalities/Backlash:** If Chiral clients download from the public swarm but refuse to upload to public peers, they are acting as sole "leeches." This may be seen as a challenge to the cooperative spirit of BitTorrent. Some trackers may even ban clients with poor share ratios.
 
-The recommended approach seems to be the hybrid model: **prioritize Chiral clients but maintain compatibility with the public swarm.**
-
-````
+The recommended approach seems to be the hybrid model: **prioritize Chiral clients but maintain compatibility with the public swarm.** 
+```
 
 The BitTorrent protocol is integrated as a primary method for file transfer, leveraging the global BitTorrent network to enhance multi-source download capabilities. It acts as an additional source within `multi_source_download.rs`, coordinated by a central `ProtocolManager`.
 
@@ -714,7 +766,7 @@ sequenceDiagram
     BHandler-->>-Manager: Progress Events
     Manager-->>-Tauri: emit('torrent_progress', ...)
     Tauri-->>-UI: Event received, update progress bar
-````
+```
 
 ##### 4. ed2k (eDonkey2000) Protocol
 
@@ -753,12 +805,12 @@ function selectDefaultSeedingProtocol(): Protocol {
   if (hasPublicIP()) {
     return Protocol.HTTP; // DEFAULT for public IP nodes
   }
-
+  
   // Behind NAT - try UPnP first
   if (tryUPnPPortForward()) {
     return Protocol.HTTP; // Use HTTP if UPnP succeeds
   }
-
+  
   // UPnP failed or unavailable
   // [DECISION NEEDED]: WebTorrent or BitTorrent as default?
   return Protocol.WebTorrent; // Current default for NAT'd nodes

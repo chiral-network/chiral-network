@@ -80,9 +80,15 @@ describe("Bitswap Critical Path E2E", () => {
       mockTauri.mockCommand("search_file_metadata", async (args: any) => {
         const result = await mockDHT.searchFileMetadata(args.fileHash);
         if (result) {
-          // Simulate found_file event
+          // Simulate dht_metadata_found event
           setTimeout(() => {
-            eventHelper.emit("found_file", result);
+            eventHelper.emit("dht_metadata_found", {
+              fileHash: result.fileHash,
+              fileName: result.fileName,
+              fileSize: result.fileSize,
+              createdAt: result.createdAt,
+              mimeType: result.mimeType,
+            });
           }, 50);
         }
         return result;

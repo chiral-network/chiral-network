@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
+import { type ProtocolDetails } from "./types/protocols";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
 const __rep = ReputationStore.getInstance();
@@ -105,20 +106,6 @@ export interface EncryptionInfo {
   algorithm: string;
   keyDerivation: string;
 }
-
-/**
- * Protocol-specific details for downloading a file
- */
-export interface ProtocolDetails {
-  cids?: string[];
-  httpSources?: HttpSourceInfo[];
-  ftpSources?: FtpSourceInfo[];
-  ed2kSources?: Ed2kSourceInfo[];
-  infoHash?: string;
-  trackers?: string[];
-  encryption?: EncryptionInfo;
-}
-
 /**
  * General information about a seeder (broadcasted on topic: seeder/{peerID})
  */
@@ -568,8 +555,9 @@ export class DhtService {
 
     try {
       // Trigger the backend search - results will come via progressive events
-      // Events: search_started, dht_metadata_found, providers_found,
-      // seeder_general_info, seeder_file_info, search_complete/search_timeout
+      // Events (via search:* channels): search:started, search:metadata_found,
+      // search:providers_found, search:seeder_general_info, search:seeder_file_info,
+      // search:complete, search:timeout
       console.log("🔍 Frontend triggering search_file_metadata for:", trimmed);
       await invoke<void>("search_file_metadata", {
         fileHash: trimmed,

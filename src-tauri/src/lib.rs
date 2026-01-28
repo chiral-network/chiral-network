@@ -1,11 +1,14 @@
 // Library exports for testing
+pub mod app_state;
 pub mod protocols;
 pub mod analytics;
 pub mod bandwidth;
-pub mod config; 
+pub mod chunk_verification;
+pub mod config;
 pub mod control_plane;
 pub mod multi_source_download;
 pub mod download_restart;
+pub mod p2p_download_recovery;
 pub mod transfer_events;
 
 // Connection retry and resilience framework
@@ -38,6 +41,9 @@ pub mod protocol_manager;
 pub mod encryption;
 pub mod keystore;
 pub mod manager;
+
+// P2P chunk network - real network integration for recovery
+pub mod p2p_chunk_network;
 
 // Proxy latency optimization module
 pub mod proxy_latency;

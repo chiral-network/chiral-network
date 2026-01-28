@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import Card from '$lib/components/ui/card.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
   import Button from '$lib/components/ui/button.svelte'
@@ -10,7 +10,7 @@
   import { peers, networkStats, userLocation, settings, wallet } from '$lib/stores'
   import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText, Wifi, WifiOff } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
   import { get } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
@@ -50,7 +50,7 @@
   }
   
   // Tab State
-  let activeTab: 'overview' | 'peers' | 'diagnostics' = 'overview';
+  let activeTab: 'overview' | 'peers' | 'diagnostics' | 'relay' = 'overview';
 
   let discoveryRunning = false
   let newPeerAddress = ''
@@ -77,7 +77,7 @@
       lastSeen: 'desc',       // Most Recent first
       location: 'asc',        // Closest first
       status: 'asc',          // Online first
-      nickname: 'asc'         // A → Z first
+      nickname: 'asc'         // A â†’ Z first
     }
     sortDirection = defaults[sortBy]
   }
@@ -135,6 +135,22 @@
   let lastNatConfidence: NatConfidence | null = null
   let cancelConnection = false
   let isConnecting = false  // Prevent multiple simultaneous connection attempts
+  let relayServerEnabled = $settings.enableRelayServer
+  let relayServerAlias = $settings.relayServerAlias || ''
+  let relayServerRunning = false
+  let relayServerToggling = false
+  let healthCheckInterval = 30 // seconds
+  let isHealthCheckRunning = false
+  let relayHealthInitialized = false
+  const relayErrorLog = relayErrorService.errorLog
+  const formatRelayErrorTimestamp = (ms: number) => new Date(ms).toLocaleString()
+  let relayErrorClearedAt = 0
+  $: filteredRelayErrors = $relayErrorLog.filter((err) => err.timestamp >= relayErrorClearedAt)
+  const formatHealthMessage = (value: string | null | undefined) => value ?? $t('network.dht.health.none')
+  type SnapshotRelayError = { message: string; type: string; timestamp: number; relayId: string; retryCount?: number }
+  const SNAPSHOT_STORAGE_KEY = 'relaySnapshotHistory'
+  const DHT_PORT_STORAGE_KEY = 'chiralDhtPort'
+  let snapshotHistory: SnapshotRelayError[] = []
 
   // Always preserve connections - no unreliable time-based detection
   
@@ -146,6 +162,16 @@
   let peerDiscoveryUnsub: (() => void) | null = null;
   let stopPeerEvents: (() => void) | null = null;
   let signalingConnected = false;
+
+  $: if ($settings.enableRelayServer !== relayServerEnabled) {
+    relayServerEnabled = $settings.enableRelayServer;
+  }
+
+  $: if (($settings.relayServerAlias || '') !== relayServerAlias) {
+    relayServerAlias = $settings.relayServerAlias || '';
+  }
+
+  $: relayServerRunning = relayServerEnabled && dhtStatus !== 'disconnected';
 
   // Helper: add a connected peer to the central peers store (if not present)
   function addConnectedPeer(address: string) {
@@ -310,11 +336,68 @@
     return merged
   }
 
+  function persistRelayServerSettings(patch: Partial<AppSettings> = {}): AppSettings {
+    const merged = persistSettingsPatch({
+      enableRelayServer: relayServerEnabled,
+      relayServerAlias: relayServerAlias.trim(),
+      ...patch,
+    })
+
+    relayServerEnabled = merged.enableRelayServer ?? false
+    relayServerAlias = merged.relayServerAlias || ''
+    return merged
+  }
+
+  async function toggleRelayServer() {
+    if (relayServerToggling) return
+    relayServerToggling = true
+
+    const desiredState = !relayServerEnabled
+
+    try {
+      relayServerEnabled = desiredState
+      const merged = persistRelayServerSettings({ enableRelayServer: desiredState })
+
+      const dhtRunning = isTauri
+        ? await invoke<boolean>('is_dht_running').catch(() => false)
+        : dhtStatus !== 'disconnected'
+
+      if (dhtRunning) {
+        if (dhtPollInterval) {
+          clearInterval(dhtPollInterval)
+          dhtPollInterval = undefined
+        }
+        await stopDht()
+        if (!dhtBootstrapNodes.length) {
+          await fetchBootstrapNodes()
+        }
+        await startDht()
+      } else {
+        relayServerRunning = false
+      }
+
+      relayServerRunning = merged.enableRelayServer && dhtStatus !== 'disconnected'
+      showToast(desiredState ? 'Relay server enabled' : 'Relay server disabled', 'success')
+    } catch (error) {
+      relayServerEnabled = !desiredState
+      persistRelayServerSettings({ enableRelayServer: relayServerEnabled })
+      errorLogger.networkError(`Failed to toggle relay server: ${error instanceof Error ? error.message : String(error)}`)
+      showToast('Failed to update relay server setting', 'error')
+    } finally {
+      relayServerToggling = false
+    }
+  }
+
+  function saveRelayServerAlias() {
+    persistRelayServerSettings()
+  }
+
   async function setAutorelay(enabled: boolean) {
     if (autorelayToggling) return
     autorelayToggling = true
     try {
       persistSettingsPatch({ enableAutorelay: enabled })
+      await initRelayHealthChecks()
       if (isTauri) {
         const isRunning = await invoke<boolean>('is_dht_running').catch(() => false)
         if (isRunning) {
@@ -336,6 +419,180 @@
     } finally {
       autorelayToggling = false
     }
+  }
+
+  function handleAutorelayToggle(event: Event) {
+    const target = event.target as HTMLInputElement
+    setAutorelay(!!target.checked)
+  }
+
+  function clampHealthInterval(value: number) {
+    if (value < 10) return 10
+    if (value > 300) return 300
+    return value
+  }
+
+  function loadSnapshotHistory(): SnapshotRelayError[] {
+    try {
+      const raw = localStorage.getItem(SNAPSHOT_STORAGE_KEY)
+      if (!raw) return []
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to load relay snapshot history', { error: error instanceof Error ? error.message : String(error) })
+    }
+    return []
+  }
+
+  function persistSnapshotHistory(history: SnapshotRelayError[]) {
+    try {
+      localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(history))
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to persist relay snapshot history', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  snapshotHistory = loadSnapshotHistory()
+
+  function loadDhtPort() {
+    try {
+      const raw = localStorage.getItem(DHT_PORT_STORAGE_KEY)
+      if (!raw) return
+      const parsed = parseInt(raw, 10)
+      if (Number.isNaN(parsed)) return
+      if (parsed < 1 || parsed > 65535) return
+      dhtPort = parsed
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to load DHT port', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  function persistDhtPort(value: number) {
+    try {
+      localStorage.setItem(DHT_PORT_STORAGE_KEY, value.toString())
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to persist DHT port', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  function handleDhtPortChange() {
+    if (!Number.isFinite(dhtPort)) return
+    const next = Math.trunc(dhtPort)
+    if (next < 1 || next > 65535) return
+    if (next !== dhtPort) {
+      dhtPort = next
+    }
+    persistDhtPort(next)
+  }
+
+  function loadHealthCheckInterval() {
+    try {
+      const saved = localStorage.getItem('relayHealthCheckInterval')
+      if (saved) {
+        const parsed = parseInt(saved)
+        if (!Number.isNaN(parsed)) {
+          healthCheckInterval = clampHealthInterval(parsed)
+        }
+      }
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to load relay health interval', { error: error instanceof Error ? error.message : String(error) })
+    }
+    relayErrorService.setHealthCheckInterval(healthCheckInterval)
+  }
+
+  function updateHealthCheckInterval() {
+    healthCheckInterval = clampHealthInterval(healthCheckInterval)
+    relayErrorService.setHealthCheckInterval(healthCheckInterval)
+
+    try {
+      localStorage.setItem('relayHealthCheckInterval', healthCheckInterval.toString())
+      showToast(`Health check interval updated to ${healthCheckInterval}s`, 'success')
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to save relay health interval', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  function toggleHealthChecks() {
+    if (isHealthCheckRunning) {
+      relayErrorService.stopHealthChecks()
+      isHealthCheckRunning = false
+      showToast('Health checks stopped', 'info')
+    } else {
+      relayErrorService.startHealthChecks()
+      isHealthCheckRunning = true
+      showToast('Health checks started', 'success')
+    }
+  }
+
+  async function initRelayHealthChecks() {
+    if (relayHealthInitialized) return
+
+    const preferredRelays = get(settings).preferredRelays || []
+    const autorelay = $settings.enableAutorelay
+
+    if (preferredRelays.length === 0 && !autorelay) {
+      return
+    }
+
+    try {
+      await relayErrorService.initialize(preferredRelays, autorelay)
+      loadHealthCheckInterval()
+      relayErrorService.startHealthChecks()
+      isHealthCheckRunning = true
+      relayHealthInitialized = true
+    } catch (error) {
+      diagnosticLogger.debug('Network', 'Failed to initialize relay health checks', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  $: snapshotRelayError = (() => {
+    if (!dhtHealth) return null
+    const message = formatHealthMessage(dhtHealth.lastRelayError || dhtHealth.lastError)
+    if (!message || message === $t('network.dht.health.none')) return null
+
+    const atMs = (dhtHealth.lastRelayErrorAt ?? dhtHealth.lastErrorAt ?? 0) * 1000
+    if (relayErrorClearedAt && atMs < relayErrorClearedAt) return null
+    return {
+      message,
+      type: dhtHealth.lastRelayErrorType ?? 'relay_error',
+      timestamp: atMs || Date.now(),
+      relayId: dhtHealth.activeRelayPeerId ?? 'unknown'
+    } as SnapshotRelayError
+  })()
+
+  $: {
+    if (snapshotRelayError && snapshotRelayError.timestamp >= relayErrorClearedAt) {
+      const exists = snapshotHistory.some(
+        (e) =>
+          e.timestamp === snapshotRelayError.timestamp &&
+          e.message === snapshotRelayError.message &&
+          e.relayId === snapshotRelayError.relayId
+      )
+      if (!exists) {
+        snapshotHistory = [snapshotRelayError, ...snapshotHistory].slice(0, 100)
+        persistSnapshotHistory(snapshotHistory)
+      }
+    }
+  }
+
+  $: combinedRelayErrors = [...snapshotHistory, ...filteredRelayErrors]
+  $: dedupRelayErrors = (() => {
+    const seen = new Set<string>()
+    const out: typeof combinedRelayErrors = []
+    for (const err of combinedRelayErrors) {
+      const key = `${err.relayId}-${err.type}-${err.message}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(err)
+    }
+    return out
+  })()
+
+  function clearRelayErrors() {
+    relayErrorClearedAt = Date.now()
+    relayErrorService.clearErrorLog()
+    snapshotHistory = []
+    persistSnapshotHistory(snapshotHistory)
   }
 
   async function copyObservedAddr(addr: string) {
@@ -432,7 +689,7 @@
       lowPeerCountUnlisten = await listen('dht_low_peer_count', (event) => {
         const payload = event.payload as { peer_count: number; minimum: number; message: string };
         if (payload && payload.message) {
-          dhtEvents = [...dhtEvents, `⚠️ ${payload.message}`];
+          dhtEvents = [...dhtEvents, `âš ï¸ ${payload.message}`];
           showToast(payload.message, 'warning');
           diagnosticLogger.debug('Network', payload.message, { peerCount: payload.peer_count, minimum: payload.minimum });
         }
@@ -487,7 +744,7 @@
           dhtPeerId = backendPeerId
           dhtService.setPeerId(backendPeerId)
           dhtPeerCount = peerCount
-          dhtEvents = [...dhtEvents, `✓ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
+          dhtEvents = [...dhtEvents, `âœ“ DHT already running with peer ID: ${backendPeerId.slice(0, 16)}...`]
           
           // Get health snapshot
           const health = await dhtService.getHealth()
@@ -500,7 +757,7 @@
           // Set status based on peer count
           dhtStatus = dhtPeerCount > 0 ? 'connected' : 'connecting'
           if (dhtPeerCount > 0) {
-            dhtEvents = [...dhtEvents, `✓ Connected to ${dhtPeerCount} peer(s)`]
+            dhtEvents = [...dhtEvents, `âœ“ Connected to ${dhtPeerCount} peer(s)`]
           }
           startDhtPolling()
           return
@@ -517,7 +774,7 @@
       // Check if user cancelled during the delay
       if (cancelConnection) {
         dhtStatus = 'disconnected'
-        dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+        dhtEvents = [...dhtEvents, 'âš  Connection cancelled by user']
         return
       }
       
@@ -539,7 +796,7 @@
       })
       dhtPeerId = peerId
       dhtService.setPeerId(peerId)
-      dhtEvents = [...dhtEvents, `✓ DHT started with peer ID: ${peerId.slice(0, 16)}...`]
+      dhtEvents = [...dhtEvents, `âœ“ DHT started with peer ID: ${peerId.slice(0, 16)}...`]
       
       // Try to connect to bootstrap nodes
       let connectionSuccessful = false
@@ -553,7 +810,7 @@
         // Check if user cancelled during connection attempt
         if (cancelConnection) {
           await stopDht()
-          dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+          dhtEvents = [...dhtEvents, 'âš  Connection cancelled by user']
           return
         }
         
@@ -561,15 +818,15 @@
           // Try connecting to the first available bootstrap node
           await dhtService.connectPeer(dhtBootstrapNodes[0])
           connectionSuccessful = true
-          dhtEvents = [...dhtEvents, `✓ Connection initiated to bootstrap nodes (waiting for handshake...)`]
+          dhtEvents = [...dhtEvents, `âœ“ Connection initiated to bootstrap nodes (waiting for handshake...)`]
           
           // Poll for actual connection after a delay
           setTimeout(async () => {
             const dhtPeerCountResult = await invoke('get_dht_peer_count') as number
             if (dhtPeerCountResult > 0) {
-              dhtEvents = [...dhtEvents, `✓ Successfully connected! Peers: ${dhtPeerCountResult}`]
+              dhtEvents = [...dhtEvents, `âœ“ Successfully connected! Peers: ${dhtPeerCountResult}`]
             } else {
-              dhtEvents = [...dhtEvents, `⚠ Connection pending... (bootstrap nodes may be unreachable)`]
+              dhtEvents = [...dhtEvents, `âš  Connection pending... (bootstrap nodes may be unreachable)`]
             }
           }, 3000)
         } catch (error: any) {
@@ -591,9 +848,9 @@
             // These are expected bootstrap connection failures - DHT can still work
             errorMessage = 'Bootstrap nodes unreachable - running in standalone mode'
             connectionSuccessful = true
-            dhtEvents = [...dhtEvents, `⚠ Bootstrap connection failed but DHT is operational`]
-            dhtEvents = [...dhtEvents, `ℹ Other nodes can connect to you at: /ip4/YOUR_IP/tcp/${dhtPort}/p2p/${dhtPeerId?.slice(0, 16)}...`]
-            dhtEvents = [...dhtEvents, `💡 To connect with others, share your connection address above`]
+            dhtEvents = [...dhtEvents, `âš  Bootstrap connection failed but DHT is operational`]
+            dhtEvents = [...dhtEvents, `â„¹ Other nodes can connect to you at: /ip4/YOUR_IP/tcp/${dhtPort}/p2p/${dhtPeerId?.slice(0, 16)}...`]
+            dhtEvents = [...dhtEvents, `ðŸ’¡ To connect with others, share your connection address above`]
           } else {
             errorMessage = 'Unknown connection error - running in standalone mode'
             connectionSuccessful = true
@@ -601,9 +858,9 @@
           
           if (!connectionSuccessful) {
             dhtError = errorMessage
-            dhtEvents = [...dhtEvents, `✗ Connection failed: ${errorMessage}`]
+            dhtEvents = [...dhtEvents, `âœ— Connection failed: ${errorMessage}`]
           } else {
-            dhtEvents = [...dhtEvents, `⚠ ${errorMessage}`]
+            dhtEvents = [...dhtEvents, `âš  ${errorMessage}`]
           }
         }
       }
@@ -629,15 +886,15 @@
       // Handle port already in use error (Windows error 10048)
       if (errorMessage.includes('10048') || errorMessage.includes('address already in use') || errorMessage.includes('Address in use')) {
         errorMessage = `Port ${dhtPort} is already in use. Try stopping the DHT first, or choose a different port.`
-        dhtEvents = [...dhtEvents, `✗ Port conflict detected on ${dhtPort}`]
-        dhtEvents = [...dhtEvents, `💡 Try clicking "Stop DHT" first, or change the port number`]
+        dhtEvents = [...dhtEvents, `âœ— Port conflict detected on ${dhtPort}`]
+        dhtEvents = [...dhtEvents, `ðŸ’¡ Try clicking "Stop DHT" first, or change the port number`]
       } else if (errorMessage.includes('already running')) {
         errorMessage = 'DHT is already running. Try stopping it first.'
-        dhtEvents = [...dhtEvents, `⚠ DHT already running - click "Stop DHT" to restart`]
+        dhtEvents = [...dhtEvents, `âš  DHT already running - click "Stop DHT" to restart`]
       }
       
       dhtError = errorMessage
-      dhtEvents = [...dhtEvents, `✗ Failed to start DHT: ${errorMessage}`]
+      dhtEvents = [...dhtEvents, `âœ— Failed to start DHT: ${errorMessage}`]
     } finally {
       isConnecting = false;
     }
@@ -668,13 +925,13 @@
         if (events.length > 0) {
           const formattedEvents = events.map(event => {
             if (event.peerDisconnected) {
-              return `✗ Peer disconnected: ${event.peerDisconnected.peer_id.slice(0, 12)}... (Reason: ${event.peerDisconnected.cause})`
+              return `âœ— Peer disconnected: ${event.peerDisconnected.peer_id.slice(0, 12)}... (Reason: ${event.peerDisconnected.cause})`
             } else if (event.peerConnected) {
-              return `✓ Peer connected: ${event.peerConnected.slice(0, 12)}...`
+              return `âœ“ Peer connected: ${event.peerConnected.slice(0, 12)}...`
             } else if (event.peerDiscovered) {
-              return `ℹ Peer discovered: ${event.peerDiscovered.slice(0, 12)}...`
+              return `â„¹ Peer discovered: ${event.peerDiscovered.slice(0, 12)}...`
             } else if (event.error) {
-              return `✗ Error: ${event.error}`
+              return `âœ— Error: ${event.error}`
             }
             return JSON.stringify(event) // Fallback for other event types
           })
@@ -701,12 +958,12 @@
           // If backend is running but no peers, show 'connecting' not 'disconnected'
           if (dhtStatus === 'connected') {
             dhtStatus = 'connecting'
-            dhtEvents = [...dhtEvents, '⚠ Lost connection to all peers']
+            dhtEvents = [...dhtEvents, 'âš  Lost connection to all peers']
           }
         } else {
           if (dhtStatus !== 'connected') {
             dhtStatus = 'connected'
-            dhtEvents = [...dhtEvents, `✓ Reconnected to ${peerCount} peer(s)`]
+            dhtEvents = [...dhtEvents, `âœ“ Reconnected to ${peerCount} peer(s)`]
           }
         }
 
@@ -732,7 +989,7 @@
   function cancelDhtConnection() {
     cancelConnection = true
     dhtStatus = 'disconnected'
-    dhtEvents = [...dhtEvents, '⚠ Connection cancelled by user']
+    dhtEvents = [...dhtEvents, 'âš  Connection cancelled by user']
     showToast($t('network.dht.connectionCancelled'), 'info')
   }
 
@@ -762,7 +1019,7 @@
       dhtPeerId = null
       dhtError = null
       connectionAttempts = 0
-      dhtEvents = [...dhtEvents, `✓ DHT stopped - port ${dhtPort} released`]
+      dhtEvents = [...dhtEvents, `âœ“ DHT stopped - port ${dhtPort} released`]
       dhtHealth = null
       // copiedListenAddr = null
       lastNatState = null
@@ -773,7 +1030,7 @@
       await new Promise(resolve => setTimeout(resolve, 500))
     } catch (error) {
       errorLogger.dhtInitError(`Failed to stop DHT: ${error instanceof Error ? error.message : String(error)}`);
-      dhtEvents = [...dhtEvents, `✗ Failed to stop DHT: ${error}`]
+      dhtEvents = [...dhtEvents, `âœ— Failed to stop DHT: ${error}`]
       // Even if stop failed, clear local state
       dhtStatus = 'disconnected'
       dhtPeerId = null
@@ -831,7 +1088,7 @@
         
         // Set status based on peer count - polling will handle dynamic updates
         dhtStatus = peerCount > 0 ? 'connected' : 'connecting'
-        dhtEvents = [...dhtEvents, `✓ DHT restored (${peerCount} peer${peerCount !== 1 ? 's' : ''} connected)`]
+        dhtEvents = [...dhtEvents, `âœ“ DHT restored (${peerCount} peer${peerCount !== 1 ? 's' : ''} connected)`]
         startDhtPolling() // Always start polling when DHT is running
       } else {
         dhtStatus = 'disconnected'
@@ -849,7 +1106,7 @@
       dhtHealth = null
       lastNatState = null
       lastNatConfidence = null
-      dhtEvents = [...dhtEvents, '⚠ Error checking network status']
+      dhtEvents = [...dhtEvents, 'âš  Error checking network status']
     }
   }
 
@@ -1483,6 +1740,8 @@
         }
       }
       
+      loadDhtPort()
+
       // Initialize async operations (preserves connections)
       const initAsync = async () => {
         // Run ALL independent checks in parallel for better performance
@@ -1492,6 +1751,7 @@
           syncDhtStatusOnPageLoad(), // DHT check is independent from Geth check
           fetchChainId()
         ])
+        await initRelayHealthChecks()
 
         // Listen for download progress updates (only in Tauri)
         if (isTauri) {
@@ -1555,6 +1815,7 @@
         peerDiscoveryUnsub()
         peerDiscoveryUnsub = null
       }
+      relayErrorService.stopHealthChecks()
       // Note: We do NOT disconnect the signaling service here
       // It should persist across page navigations to maintain peer connections
     }
@@ -1585,6 +1846,7 @@
       peerDiscoveryUnsub()
       peerDiscoveryUnsub = null
     }
+    relayErrorService.stopHealthChecks()
     // Note: We do NOT stop the DHT service here
     // The DHT should persist across page navigations
   })
@@ -1644,8 +1906,8 @@
         <div>
           <h4 class="font-medium text-foreground">Traffic</h4>
           <div class="text-sm font-bold mt-1 flex gap-3 text-purple-600 dark:text-purple-400">
-            <span>↓ {$networkStats.avgDownloadSpeed.toFixed(1)} MB/s</span>
-            <span>↑ {$networkStats.avgUploadSpeed.toFixed(1)} MB/s</span>
+            <span>â†“ {$networkStats.avgDownloadSpeed.toFixed(1)} MB/s</span>
+            <span>â†‘ {$networkStats.avgUploadSpeed.toFixed(1)} MB/s</span>
           </div>
         </div>
       </div>
@@ -1703,6 +1965,13 @@
       >
         <FileText class="mr-2 h-4 w-4" />
         Diagnostics
+      </button>
+      <button
+        class="group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'relay' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground'}"
+        on:click={() => activeTab = 'relay'}
+      >
+        <Signal class="mr-2 h-4 w-4" />
+        Relay
       </button>
     </nav>
   </div>
@@ -1911,7 +2180,7 @@
                   <div class="space-y-2">
                     <Label for="dht-port">Network Port</Label>
                     <div class="flex gap-3">
-                      <Input id="dht-port" type="number" bind:value={dhtPort} class="max-w-[120px]" />
+                      <Input id="dht-port" type="number" bind:value={dhtPort} on:change={handleDhtPortChange} class="max-w-[120px]" />
                       <Button on:click={startDht} class="flex-1" disabled={connectionAttempts > 0}>
                         <Play class="h-4 w-4 mr-2" />
                         Connect Network
@@ -1987,93 +2256,57 @@
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           
-          <!-- Left Column: Hole Punching & Geo -->
-          <div class="space-y-6">
-            <!-- Hole Punching (DCUtR) -->
-            <Card class="p-6">
-              <div class="flex items-center justify-between mb-4">
-                  <h3 class="text-lg font-semibold">Hole Punching (DCUtR)</h3>
-                {#if dhtHealth}
-                    <Badge variant={dhtHealth.dcutrEnabled ? 'default' : 'secondary'} class={dhtHealth.dcutrEnabled ? 'bg-blue-100 text-blue-800 hover:bg-blue-200' : ''}>
-                        {dhtHealth.dcutrEnabled ? 'Enabled' : 'Disabled'}
-                    </Badge>
-                {/if}
-            </div>
-            
-            {#if dhtHealth}
-              <div class="grid grid-cols-3 gap-4 text-center mb-4">
-                 <div class="p-2 bg-muted/20 rounded-lg">
-                    <div class="text-2xl font-bold">{dhtHealth.dcutrHolePunchAttempts || 0}</div>
-                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Attempts</div>
-                 </div>
-                 <div class="p-2 bg-green-50/50 dark:bg-green-900/10 rounded-lg">
-                    <div class="text-2xl font-bold text-green-600 dark:text-green-400">{dhtHealth.dcutrHolePunchSuccesses || 0}</div>
-                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Success</div>
-                 </div>
-                 <div class="p-2 bg-red-50/50 dark:bg-red-900/10 rounded-lg">
-                    <div class="text-2xl font-bold text-red-600 dark:text-red-400">{dhtHealth.dcutrHolePunchFailures || 0}</div>
-                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Failed</div>
-                 </div>
-              </div>
-
-              <div class="space-y-3 pt-3 border-t">
-                 <div class="flex justify-between text-sm">
-                    <span class="text-muted-foreground">Success Rate</span>
-                    <span class="font-medium">
-                        {dhtHealth.dcutrHolePunchAttempts > 0 
-                            ? ((dhtHealth.dcutrHolePunchSuccesses / dhtHealth.dcutrHolePunchAttempts) * 100).toFixed(1) 
-                            : '0.0'}%
-                    </span>
-                 </div>
-                 <div class="flex justify-between text-sm">
-                    <span class="text-muted-foreground">Last Success</span>
-                    <span class="font-mono text-xs">{formatNatTimestamp(dhtHealth.lastDcutrSuccess)}</span>
-                 </div>
-              </div>
-            {:else}
-              <div class="py-8 text-center">
-                 <p class="text-sm text-muted-foreground">DHT not connected.</p>
-              </div>
-            {/if}
-          </Card>
-            
-            <!-- Geographic Distribution -->
-            <GeoDistributionCard />
-          </div>
-
-          <!-- Relay Status -->
+          <!-- Hole Punching (DCUtR) -->
           <Card class="p-6">
             <div class="flex items-center justify-between mb-4">
-              <h3 class="text-lg font-semibold">Relay Status</h3>
-              <div class="flex items-center gap-1 bg-muted/30 p-1 rounded-md">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  class="h-8 px-3 text-xs transition-colors {$settings.enableAutorelay ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm' : 'text-muted-foreground hover:bg-transparent'}"
-                  on:click={() => setAutorelay(true)}
-                  disabled={autorelayToggling || $settings.enableAutorelay}
-                >
-                  On
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  class="h-8 px-3 text-xs transition-colors {!$settings.enableAutorelay ? 'bg-red-600 text-white hover:bg-red-700 shadow-sm' : 'text-muted-foreground hover:bg-transparent'}"
-                  on:click={() => setAutorelay(false)}
-                  disabled={autorelayToggling || !$settings.enableAutorelay}
-                >
-                  Off
-                </Button>
-              </div>
-            </div>
-            {#if dhtStatus === 'connected' && dhtHealth}
-               <div>
-                 <RelayErrorMonitor />
+                <h3 class="text-lg font-semibold">Hole Punching (DCUtR)</h3>
+              {#if dhtHealth}
+                  <Badge variant={dhtHealth.dcutrEnabled ? 'default' : 'secondary'} class={dhtHealth.dcutrEnabled ? 'bg-blue-100 text-blue-800 hover:bg-blue-200' : ''}>
+                      {dhtHealth.dcutrEnabled ? 'Enabled' : 'Disabled'}
+                  </Badge>
+              {/if}
+          </div>
+          
+          {#if dhtHealth}
+            <div class="grid grid-cols-3 gap-4 text-center mb-4">
+               <div class="p-2 bg-muted/20 rounded-lg">
+                  <div class="text-2xl font-bold">{dhtHealth.dcutrHolePunchAttempts || 0}</div>
+                  <div class="text-xs text-muted-foreground uppercase tracking-wider">Attempts</div>
                </div>
-            {:else}
-               <div class="text-xs text-muted-foreground italic">Connect to DHT to view relay status.</div>
-            {/if}
-          </Card>
+               <div class="p-2 bg-green-50/50 dark:bg-green-900/10 rounded-lg">
+                  <div class="text-2xl font-bold text-green-600 dark:text-green-400">{dhtHealth.dcutrHolePunchSuccesses || 0}</div>
+                  <div class="text-xs text-muted-foreground uppercase tracking-wider">Success</div>
+               </div>
+               <div class="p-2 bg-red-50/50 dark:bg-red-900/10 rounded-lg">
+                  <div class="text-2xl font-bold text-red-600 dark:text-red-400">{dhtHealth.dcutrHolePunchFailures || 0}</div>
+                  <div class="text-xs text-muted-foreground uppercase tracking-wider">Failed</div>
+               </div>
+            </div>
+
+            <div class="space-y-3 pt-3 border-t">
+               <div class="flex justify-between text-sm">
+                  <span class="text-muted-foreground">Success Rate</span>
+                  <span class="font-medium">
+                      {dhtHealth.dcutrHolePunchAttempts > 0 
+                          ? ((dhtHealth.dcutrHolePunchSuccesses / dhtHealth.dcutrHolePunchAttempts) * 100).toFixed(1) 
+                          : '0.0'}%
+                  </span>
+               </div>
+               <div class="flex justify-between text-sm">
+                  <span class="text-muted-foreground">Last Success</span>
+                  <span class="font-mono text-xs">{formatNatTimestamp(dhtHealth.lastDcutrSuccess)}</span>
+               </div>
+            </div>
+          {:else}
+            <div class="py-8 text-center">
+               <p class="text-sm text-muted-foreground">DHT not connected.</p>
+            </div>
+          {/if}
+        </Card>
+
+          <!-- Geographic Distribution -->
+          <GeoDistributionCard />
+
         </div>
       </div>
 
@@ -2224,7 +2457,7 @@
                     <div>
                        <div class="flex items-center gap-2">
                          <span class="font-medium">{peer.nickname || 'Anonymous'}</span>
-                         <Badge variant="outline" class="text-xs py-0 h-5">⭐ {peer.reputation?.toFixed(1) || '0.0'}</Badge>
+                         <Badge variant="outline" class="text-xs py-0 h-5">â­ {peer.reputation?.toFixed(1) || '0.0'}</Badge>
                        </div>
                        <p class="text-xs text-muted-foreground font-mono mt-0.5">{peer.address.substring(0, 20)}...</p>
                     </div>
@@ -2415,6 +2648,295 @@
           </div>
         </div>
 
+      </div>
+    <!-- Relay TAB -->
+    {:else if activeTab === 'relay'}
+      <div class="space-y-6">
+        <!-- Relay Server Control -->
+        <Card class="p-6">
+          <div class="flex items-start justify-between mb-4">
+            <div class="flex items-center gap-3">
+              <Server class="w-6 h-6 text-blue-600" />
+              <div>
+                <h3 class="text-lg font-semibold">{$t('relay.server.title')}</h3>
+                <p class="text-sm text-muted-foreground">{$t('relay.server.subtitle')}</p>
+              </div>
+            </div>
+            <div
+              class="px-3 py-1 rounded-full text-xs font-semibold"
+              class:bg-green-100={relayServerRunning}
+              class:text-green-800={relayServerRunning}
+              class:bg-gray-100={!relayServerRunning}
+              class:text-gray-800={!relayServerRunning}
+            >
+              {relayServerRunning ? $t('relay.server.running') : $t('relay.server.stopped')}
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <p class="text-sm text-blue-900">
+                {$t('relay.server.description')}
+              </p>
+              <ul class="mt-2 text-sm text-blue-800 space-y-1">
+                <li>- {$t('relay.server.benefit1')}</li>
+                <li>- {$t('relay.server.benefit2')}</li>
+                <li>- {$t('relay.server.benefit3')}</li>
+              </ul>
+            </div>
+
+            <div class="space-y-2">
+              <Label for="relay-alias">{$t('relay.server.aliasLabel')}</Label>
+              <Input
+                id="relay-alias"
+                type="text"
+                bind:value={relayServerAlias}
+                on:blur={saveRelayServerAlias}
+                placeholder={$t('relay.server.aliasPlaceholder')}
+                maxlength="50"
+                class="w-full"
+              />
+              <p class="text-xs text-muted-foreground">
+                {$t('relay.server.aliasHint')}
+              </p>
+            </div>
+
+            {#if dhtStatus === 'disconnected'}
+              <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                <p class="text-sm font-semibold text-yellow-900">
+                  {$t('relay.server.dhtNotRunning')}
+                </p>
+                <p class="text-xs text-yellow-700 mt-1">
+                  {$t('relay.server.dhtNotRunningHint')}
+                </p>
+              </div>
+            {/if}
+
+            <div class="flex items-center justify-between">
+              <Button
+                on:click={toggleRelayServer}
+                disabled={relayServerToggling || dhtStatus === 'disconnected'}
+                variant={relayServerEnabled ? 'destructive' : 'default'}
+                class="w-full"
+              >
+                {#if relayServerToggling}
+                  {relayServerEnabled ? $t('relay.server.disabling') : $t('relay.server.enabling')}
+                {:else if relayServerEnabled}
+                  <WifiOff class="w-4 h-4 mr-2" />
+                  {$t('relay.server.disable')}
+                {:else}
+                  <Wifi class="w-4 h-4 mr-2" />
+                  {$t('relay.server.enable')}
+                {/if}
+              </Button>
+            </div>
+
+            {#if relayServerRunning}
+              <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                <p class="text-sm font-semibold text-green-900">
+                  {$t('relay.server.activeMessage')}
+                </p>
+                {#if relayServerAlias.trim()}
+                  <div class="mt-2 flex items-center gap-2">
+                    <span class="text-xs text-green-700">{$t('relay.server.broadcastingAs')}</span>
+                    <span class="text-sm font-bold text-green-900 bg-green-100 px-2 py-1 rounded">
+                      {relayServerAlias}
+                    </span>
+                  </div>
+                {/if}
+                <p class="text-xs text-green-700 mt-2">
+                  {$t('relay.server.earningReputation')}
+                </p>
+              </div>
+            {/if}
+          </div>
+        </Card>
+
+        <!-- Relay Status -->
+        <Card class="p-6">
+          <div class="flex items-start justify-between mb-4">
+            <div>
+              <h3 class="text-lg font-semibold">Relay Status</h3>
+              <p class="text-sm text-muted-foreground">AutoRelay and active relay health</p>
+            </div>
+            <Badge variant={$settings.enableAutorelay ? 'default' : 'secondary'} class={$settings.enableAutorelay ? 'bg-green-100 text-green-700' : ''}>
+              {$settings.enableAutorelay ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
+            </Badge>
+          </div>
+
+          <div class="space-y-4">
+            <div class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="enable-autorelay-network"
+                checked={$settings.enableAutorelay}
+                on:change={handleAutorelayToggle}
+                disabled={autorelayToggling}
+              />
+              <Label for="enable-autorelay-network" class="cursor-pointer">
+                {$t('relay.client.enableAutorelay')}
+              </Label>
+            </div>
+
+            {#if $settings.enableAutorelay}
+              <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                <p class="text-sm text-purple-900">
+                  <strong>{$t('relay.client.howItWorks')}</strong>
+                </p>
+                <p class="text-xs text-purple-700 mt-1">
+                  {$t('relay.client.description')}
+                </p>
+              </div>
+            {/if}
+
+            {#if dhtStatus === 'connected' && dhtHealth}
+               <div>
+                 <RelayErrorMonitor />
+               </div>
+            {:else}
+               <div class="text-xs text-muted-foreground italic">Connect to DHT to view relay status.</div>
+            {/if}
+          </div>
+        </Card>
+
+        <Card class="p-6">
+          <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+            <RefreshCw class="h-5 w-5" />
+            Health Check Configuration
+          </h3>
+
+          <div class="space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <Label class="text-sm font-medium">Health Check Status</Label>
+                <p class="text-xs text-muted-foreground mt-1">
+                  {isHealthCheckRunning ? 'Automatically checking relay health' : 'Health checks paused'}
+                </p>
+              </div>
+              <button
+                on:click={toggleHealthChecks}
+                class="px-4 py-2 rounded-md text-sm font-medium transition-colors {isHealthCheckRunning
+                  ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+              >
+                {isHealthCheckRunning ? 'Running' : 'Stopped'}
+              </button>
+            </div>
+
+            <div class="space-y-2">
+              <Label for="health-check-interval" class="text-sm font-medium">
+                Check Interval (seconds)
+              </Label>
+              <div class="flex items-center gap-3">
+                <Input
+                  id="health-check-interval"
+                  type="number"
+                  min="10"
+                  max="300"
+                  step="5"
+                  bind:value={healthCheckInterval}
+                  class="flex-1"
+                  disabled={!isHealthCheckRunning}
+                />
+                <button
+                  on:click={updateHealthCheckInterval}
+                  disabled={!isHealthCheckRunning}
+                  class="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Apply
+                </button>
+              </div>
+              <p class="text-xs text-muted-foreground">
+                How often to check relay connectivity (10-300 seconds). Lower values detect issues faster but use more resources.
+              </p>
+            </div>
+
+            <div class="pt-4 border-t border-border">
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-muted-foreground">Next check in:</span>
+                <span class="font-medium">
+                  {isHealthCheckRunning ? `~${healthCheckInterval}s` : 'N/A'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+        {#if dhtHealth}
+          <Card class="p-6">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <p class="text-xs uppercase text-muted-foreground">Relay status</p>
+                <h3 class="text-lg font-semibold text-foreground">Active relay snapshot</h3>
+              </div>
+              <div class="px-3 py-1 rounded-full text-xs font-semibold"
+                class:bg-green-100={dhtHealth.autorelayEnabled}
+                class:text-green-800={dhtHealth.autorelayEnabled}
+                class:bg-gray-100={!dhtHealth.autorelayEnabled}
+                class:text-gray-800={!dhtHealth.autorelayEnabled}
+              >
+                {dhtHealth.autorelayEnabled ? $t('network.dht.relay.enabled') : $t('network.dht.relay.disabled')}
+              </div>
+            </div>
+
+            <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
+                <p class="text-xs uppercase text-muted-foreground">Active relay</p>
+                <p class="text-sm font-mono mt-1 break-all">{dhtHealth.activeRelayPeerId ?? $t('network.dht.relay.noPeer')}</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Status: {dhtHealth.relayReservationStatus ?? $t('network.dht.relay.pending')}
+                </p>
+              </div>
+              <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
+                <p class="text-xs uppercase text-muted-foreground">Pool</p>
+                <p class="text-sm font-medium mt-1">
+                  {dhtHealth.totalRelaysInPool ?? 0} total / {dhtHealth.activeRelayCount ?? 0} active
+                </p>
+                <p class="text-xs text-muted-foreground mt-1">Renewals: {dhtHealth.reservationRenewals ?? 0}</p>
+              </div>
+              <div class="bg-muted/40 rounded-lg p-3 border border-muted/40">
+                <p class="text-xs uppercase text-muted-foreground">Health</p>
+                <p class="text-sm font-medium mt-1">
+                  {#if typeof dhtHealth.relayHealthScore === 'number'}
+                    {(dhtHealth.relayHealthScore * 100).toFixed(0)}%
+                  {:else}
+                    N/A
+                  {/if}
+                </p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Last renewal: {dhtHealth.lastReservationRenewal ? formatNatTimestamp(dhtHealth.lastReservationRenewal) : $t('network.dht.health.never')}
+                </p>
+              </div>
+            </div>
+          </Card>
+        {/if}
+
+        <Card class="p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold text-foreground">Relay Error Log</h3>
+            <Button size="sm" variant="outline" on:click={clearRelayErrors}>
+              Clear
+            </Button>
+          </div>
+          {#if dedupRelayErrors.length > 0}
+            <div class="max-h-72 overflow-y-auto space-y-2">
+              {#each dedupRelayErrors as error}
+                <div class="border-l-4 border-red-500 pl-3 py-2 bg-red-50 rounded">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-semibold text-red-700">{error.type}</span>
+                    <span class="text-xs text-muted-foreground">{formatRelayErrorTimestamp(error.timestamp)}</span>
+                  </div>
+                  <p class="text-sm text-gray-800 break-words">{error.message}</p>
+                  <p class="text-xs text-gray-600 mt-1">
+                    Relay {error.relayId} {#if typeof error.retryCount === 'number'}Retry {error.retryCount}{/if}
+                  </p>
+                </div>
+              {/each}
+            </div>
+            {:else}
+              <p class="text-sm text-muted-foreground">No relay errors recorded.</p>
+            {/if}
+        </Card>
       </div>
     {/if}
 

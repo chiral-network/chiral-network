@@ -1,6 +1,6 @@
 import { writable, derived } from "svelte/store";
 import { normalizeRegion, GEO_REGIONS, UNKNOWN_REGION_ID } from "$lib/geo";
-
+import { Protocol } from "./services/contentProtocols/types";
 // ============================================================================
 // Network Constants (fetched from backend)
 // ============================================================================
@@ -19,15 +19,7 @@ export interface FileItem {
   hash: string; // Content hash (Merkle root) for grouping
   protocolHash?: string; // Protocol-specific hash/link (magnet, ed2k, ftp url, etc.)
   size: number;
-  status:
-    | "downloading"
-    | "paused"
-    | "completed"
-    | "failed"
-    | "uploaded"
-    | "queued"
-    | "seeding"
-    | "canceled";
+  status: TransferStatus;
   progress?: number;
   uploadDate?: Date;
   owner?: string;
@@ -55,7 +47,7 @@ export interface FileItem {
   version?: number;
   isDownload?: boolean;
   isSeedingDownload?: boolean;
-  protocol?: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap"; // Protocol used for upload
+  protocol?: Protocol; // Protocol used for upload
   uploaderAddress?: string; // Wallet address of the uploader for payment
 
   // Download-side payment terms (single payee model)
@@ -66,7 +58,7 @@ export interface FileItem {
 }
 
 export interface ProtocolEntry {
-  protocol: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap";
+  protocol: Protocol;
   hash: string; // Protocol-specific hash (Merkle, magnet, ed2k, etc.)
   fileItem: FileItem; // Reference to the original file item
   technicalInfo: {
@@ -322,7 +314,7 @@ export const coalescedFiles = derived(files, ($files): CoalescedFileItem[] => {
 
     // Create protocol entries
     const protocols: ProtocolEntry[] = fileItems.map((file) => ({
-      protocol: file.protocol || "WebRTC", // Default to WebRTC if not specified
+      protocol: file.protocol || Protocol.UNKNOWN, // Default to WebRTC if not specified
       hash: file.protocolHash || file.hash, // Use protocol-specific hash if available, otherwise content hash
       fileItem: file,
       technicalInfo: {
@@ -523,7 +515,6 @@ export const peerGeoDistribution = derived(
 );
 
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
-export const downloadQueue = writable<FileItem[]>([]);
 export const userLocation = writable<string>("US-East");
 export const etcAccount = writable<ETCAccount | null>(null);
 export const blacklist = writable<BlacklistEntry[]>(blacklistedPeers);
@@ -614,7 +605,7 @@ export const totalReceived = derived(transactions, ($txs) =>
 export interface ActiveTransfer {
   fileId: string;
   transferId: string;
-  type: "p2p" | "webrtc";
+  type: Protocol;
 }
 
 export const activeTransfers = writable<Map<string, ActiveTransfer>>(new Map());
@@ -700,8 +691,9 @@ export interface AppSettings {
   enableFileLogging: boolean; // Enable file-based logging
   maxLogSizeMB: number; // Maximum size of a single log file in MB
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
+  useDynamicPricing: boolean; // Use dynamic pricing for uploads
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
-  selectedProtocol: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap"; // Protocol selected for file uploads
+  selectedProtocol: Protocol; // Protocol selected for file uploads
 }
 
 // Export the settings store
@@ -756,8 +748,9 @@ export const settings = writable<AppSettings>({
   enableFileLogging: false, // Disabled by default
   maxLogSizeMB: 10, // 10 MB per log file by default
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
+  useDynamicPricing: false,
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
-  selectedProtocol: "WebRTC", // Default upload protocol
+  selectedProtocol: Protocol.UNKNOWN, // Default upload protocol
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
@@ -769,6 +762,7 @@ import {
   pollTransactionStatus,
   type TransactionStatus as ApiTransactionStatus,
 } from "./services/transactionService";
+import type { TransferStatus } from "./stores/transferEventsStore";
 
 // Active polling tracker
 const activePollingTasks = new Map<string, boolean>();
@@ -778,6 +772,7 @@ const activePollingTasks = new Map<string, boolean>();
  */
 export async function addTransactionWithPolling(
   transaction: Transaction,
+  onStatusUpdate?: (status: ApiTransactionStatus) => void,
 ): Promise<void> {
   if (!transaction.transaction_hash) {
     throw new Error("Transaction must have a hash for polling");
@@ -813,7 +808,8 @@ export async function addTransactionWithPolling(
                     ? "success"
                     : status.status === "failed"
                       ? "failed"
-                      : status.status === "pending"
+                      : status.status === "pending" ||
+                          status.status === "submitted"
                         ? "pending"
                         : "submitted",
                 confirmations: status.confirmations || 0,
@@ -825,6 +821,7 @@ export async function addTransactionWithPolling(
             return tx;
           }),
         );
+        onStatusUpdate?.(status);
       },
       120, // 2 minutes max polling
       2000, // 2 second intervals
@@ -863,4 +860,76 @@ export function updateTransactionStatus(
       tx.transaction_hash === txHash ? { ...tx, ...updates } : tx,
     ),
   );
+}
+
+import { Server, Globe } from "lucide-svelte";
+export type ProtocolDetails = {
+  id: string;
+  name: string;
+  icon: typeof Globe;
+  colorClass: string;
+};
+
+export const PROTOCOL_BADGES: Record<Protocol, ProtocolDetails> = {
+  WEBRTC: {
+    id: "webrtc",
+    name: "WebRTC",
+    icon: Globe,
+    colorClass: "bg-blue-100 text-blue-800",
+  },
+  BITTORRENT: {
+    id: "bittorrent",
+    name: "BitTorrent",
+    icon: Server,
+    colorClass: "bg-green-100 text-green-800",
+  },
+  HTTP: {
+    id: "http",
+    name: "HTTP",
+    icon: Globe,
+    colorClass: "bg-gray-100 text-gray-800",
+  },
+  FTP: {
+    id: "ftp",
+    name: "FTP",
+    icon: Server,
+    colorClass: "bg-gray-100 text-gray-800",
+  },
+  ED2K: {
+    id: "ed2k",
+    name: "ED2K",
+    icon: Server,
+    colorClass: "bg-orange-100 text-orange-800",
+  },
+  UNKNOWN: {
+    id: "unknown",
+    name: "Unknown",
+    icon: Globe,
+    colorClass: "bg-purple-100 text-purple-800",
+  },
+};
+export interface SeederInfo {
+  index: number;
+  peerId: string;
+  walletAddress?: string;
+  pricePerMb?: number;
+  protocols?: Protocol[];
+  protocolDetails?: any;
+  hasGeneralInfo: boolean;
+  hasFileInfo: boolean;
+}
+
+export interface ProgressiveSearchState {
+  status: "idle" | "searching" | "complete" | "timeout";
+  basicMetadata: {
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    createdAt: number;
+    mimeType?: string;
+  } | null;
+  // some providers may not respond
+  providers: string[];
+  // created from peers who responded
+  seeders: SeederInfo[];
 }

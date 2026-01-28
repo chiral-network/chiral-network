@@ -7,13 +7,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { Protocol } from "./contentProtocols/types";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-export type UploadProtocol = "FTP" | "WebRTC" | "BitTorrent" | "HTTP" | "Bitswap";
-
 export interface FtpConfig {
   url: string;
   username?: string;
@@ -52,7 +50,7 @@ export interface FileHashingProgress {
 }
 
 export interface UploadOptions {
-  protocol: UploadProtocol;
+  protocol: Protocol;
   filePath: string;
   pricePerMb: number;
   ftpConfig?: FtpConfig;
@@ -64,7 +62,7 @@ export interface UploadResult {
   fileHash?: string;
   protocolHash?: string;
   error?: string;
-  protocol: UploadProtocol;
+  protocol: Protocol;
 }
 
 // ============================================================================
@@ -78,7 +76,7 @@ export async function uploadViaFtp(
   filePath: string,
   pricePerMb: number,
   ftpConfig: FtpConfig,
-  onHashingProgress?: (progress: FileHashingProgress) => void
+  onHashingProgress?: (progress: FileHashingProgress) => void,
 ): Promise<FtpUploadResult> {
   // Listen for hashing progress events
   let unlisten: UnlistenFn | null = null;
@@ -90,7 +88,7 @@ export async function uploadViaFtp(
         if (event.payload.filePath === filePath) {
           onHashingProgress(event.payload);
         }
-      }
+      },
     );
   }
 
@@ -120,7 +118,7 @@ export async function uploadViaFtp(
 export async function uploadViaWebRTC(
   filePath: string,
   pricePerMb: number,
-  onHashingProgress?: (progress: FileHashingProgress) => void
+  onHashingProgress?: (progress: FileHashingProgress) => void,
 ): Promise<WebRTCUploadResult> {
   // Listen for hashing progress events
   let unlisten: UnlistenFn | null = null;
@@ -132,7 +130,7 @@ export async function uploadViaWebRTC(
         if (event.payload.filePath === filePath) {
           onHashingProgress(event.payload);
         }
-      }
+      },
     );
   }
 
@@ -155,7 +153,7 @@ export async function uploadViaWebRTC(
  * Upload file via BitTorrent (legacy - uses existing command)
  */
 export async function uploadViaBitTorrent(
-  filePath: string
+  filePath: string,
 ): Promise<{ magnetLink: string }> {
   const magnetLink = await invoke<string>("create_and_seed_torrent", {
     filePath,
@@ -171,7 +169,7 @@ export async function uploadViaBitTorrent(
 export async function uploadViaLegacyProtocol(
   filePath: string,
   price: number,
-  protocol: UploadProtocol
+  protocol: Protocol,
 ): Promise<{ merkleRoot: string }> {
   // Copy file to temp location to prevent original from being moved
   const tempFilePath = await invoke<string>("copy_file_to_temp", {
@@ -187,7 +185,7 @@ export async function uploadViaLegacyProtocol(
     tempFilePath,
     price,
     protocol,
-    originalFileName
+    originalFileName,
   );
 
   return { merkleRoot: metadata.merkleRoot || "" };
@@ -209,12 +207,15 @@ export async function uploadViaLegacyProtocol(
  * @param options - Upload configuration options
  * @returns UploadResult with success status and file hash
  */
-export async function uploadFile(options: UploadOptions): Promise<UploadResult> {
-  const { protocol, filePath, pricePerMb, ftpConfig, onHashingProgress } = options;
+export async function uploadFile(
+  options: UploadOptions,
+): Promise<UploadResult> {
+  const { protocol, filePath, pricePerMb, ftpConfig, onHashingProgress } =
+    options;
 
   try {
     switch (protocol) {
-      case "FTP": {
+      case Protocol.FTP: {
         if (!ftpConfig) {
           throw new Error("FTP configuration is required for FTP uploads");
         }
@@ -223,7 +224,7 @@ export async function uploadFile(options: UploadOptions): Promise<UploadResult> 
           filePath,
           pricePerMb,
           ftpConfig,
-          onHashingProgress
+          onHashingProgress,
         );
 
         return {
@@ -234,11 +235,11 @@ export async function uploadFile(options: UploadOptions): Promise<UploadResult> 
         };
       }
 
-      case "WebRTC": {
+      case Protocol.WebRTC: {
         const result = await uploadViaWebRTC(
           filePath,
           pricePerMb,
-          onHashingProgress
+          onHashingProgress,
         );
 
         return {
@@ -249,7 +250,7 @@ export async function uploadFile(options: UploadOptions): Promise<UploadResult> 
         };
       }
 
-      case "BitTorrent": {
+      case Protocol.BitTorrent: {
         const result = await uploadViaBitTorrent(filePath);
 
         return {
@@ -260,8 +261,7 @@ export async function uploadFile(options: UploadOptions): Promise<UploadResult> 
         };
       }
 
-      case "HTTP":
-      case "Bitswap": {
+      case Protocol.HTTP: {
         // Get file size to calculate total price
         const fileSize = await invoke<number>("get_file_size", { filePath });
         const totalPrice = (fileSize / (1024 * 1024)) * pricePerMb;
@@ -269,7 +269,7 @@ export async function uploadFile(options: UploadOptions): Promise<UploadResult> 
         const result = await uploadViaLegacyProtocol(
           filePath,
           totalPrice,
-          protocol
+          protocol,
         );
 
         return {
@@ -278,6 +278,10 @@ export async function uploadFile(options: UploadOptions): Promise<UploadResult> 
           protocolHash: result.merkleRoot,
           protocol,
         };
+      }
+      // to be implemented
+      case Protocol.ED2K: {
+        throw new Error(`Unsupported protocol: ${protocol}`);
       }
 
       default: {
@@ -346,7 +350,7 @@ export async function validateUploadPrerequisites(): Promise<{
  */
 export async function calculateFilePrice(
   filePath: string,
-  pricePerMb: number
+  pricePerMb: number,
 ): Promise<number> {
   const fileSize = await invoke<number>("get_file_size", { filePath });
   const fileSizeMB = fileSize / (1024 * 1024);

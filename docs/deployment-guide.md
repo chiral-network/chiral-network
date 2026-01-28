@@ -260,8 +260,8 @@ METRICS_PORT=9090
 ```bash
 # Generate genesis configuration for Ethereum network
 chiral-node tools genesis \
-  --chain-id 987654 \
-  --network-id 987654 \
+  --chain-id 98765 \
+  --network-id 98765 \
   --timestamp $(date +%s) \
   --difficulty 0x400000 \
   --gas-limit 0x47b760 \

@@ -13,7 +13,8 @@ let toastCounter = 0;
 
 export function showToast(
   message: string,
-  type: "success" | "error" | "info" | "warning" = "success"
+  type: "success" | "error" | "info" | "warning" = "success",
+  duration = 3000,
 ) {
   const id = `${Date.now()}-${toastCounter++}`;
 
@@ -26,9 +27,9 @@ export function showToast(
   // Automatically removed after 3 seconds
   setTimeout(() => {
     toasts.update((currentToasts) =>
-      currentToasts.filter((toast) => toast.id !== id)
+      currentToasts.filter((toast) => toast.id !== id),
     );
-  }, 3000);
+  }, duration);
 }
 
 export { toasts };

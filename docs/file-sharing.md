@@ -143,38 +143,6 @@ The application maintains search history:
 - **Seeder count** updated in real-time
 - **Filter by status** (available, unavailable)
 
-## BitSwap Protocol
-
-BitSwap is an IPFS-style content exchange protocol that uses CIDs (Content Identifiers) for block-based file transfer.
-
-### How BitSwap Works
-
-1. **CID-Based Addressing**: Files are identified by their SHA-256 content hash, expressed as a CID (e.g., `bafybeifx...`).
-2. **Multi-CID Files**: Large files are split into chunks, each with its own CID. The file manifest contains an array of all CIDs.
-3. **Block Exchange**: Peers exchange blocks using the Bitswap protocol, requesting blocks by CID.
-4. **Verification**: Each block is verified by hashing it and comparing against the expected CID.
-
-### Using BitSwap
-
-1. **Obtain File Hash**: Get the SHA-256 hash from a peer (out-of-band).
-2. **Query DHT**: Search for the file to get minimal metadata.
-3. **Request Transfer Terms**: Send INFO_REQUEST to seeders.
-4. **Get BitSwap Details**: Send PROTOCOL_SPECIFIC_REQUEST to receive CID list and peer ID.
-5. **Connect via libp2p**: Establish connection using peer ID from response.
-6. **Exchange Blocks**: Use Bitswap to request and receive blocks by CID.
-7. **Pay Per Terms**: Make payments according to INFO_RESPONSE terms.
-
-### PROTOCOL_SPECIFIC_RESPONSE for BitSwap
-
-```json
-{
-  "protocol": "bitswap",
-  "cids": ["bafybeifx...", "bafybeigy...", "bafybeihz..."],
-  "peerId": "12D3KooW...",
-  "multiaddrs": ["/ip4/192.168.1.100/tcp/4001/p2p/12D3KooW..."]
-}
-```
-
 ## **System Overview Diagram**
 
 ```mermaid
@@ -184,21 +152,17 @@ sequenceDiagram
     participant B as Seeder
     participant ETH
 
-    A->>DHT: Query file hash (minimal metadata)
-    DHT-->>A: Return {fileHash, fileName, fileSize}
-    A->>B: INFO_REQUEST
-    B->>A: INFO_RESPONSE {protocol, pricePerMb, wallet}
-    A->>B: PROTOCOL_SPECIFIC_REQUEST
-    B->>A: PROTOCOL_SPECIFIC_RESPONSE {protocol-specific details}
+    A->>DHT: Query file hash (metadata request)
+    DHT-->>A: Return seeders + price info
+    A->>B: Initiate file handshake
     A->>ETH: Verify wallet balance
     ETH-->>A: Balance confirmation
-    A->>B: Begin transfer (per protocol)
+    A->>B: Begin download
 
     loop Pay-per-MB transfer
         A->>ETH: Send microtransaction
         ETH-->>B: Credit Chiral tokens
         B-->>A: Serve next MB segment
-    end
     end
 
     A-->>DHT: Log download transaction
@@ -209,17 +173,21 @@ sequenceDiagram
 
 ### File Metadata:
 
-The DHT stores only minimal file metadata. Protocol-specific details are obtained through the messaging protocol.
-
 ```typescript
 {
-  fileHash: string; // SHA-256 content hash (64 hex chars)
-  fileName: string; // Original filename
-  fileSize: number; // Size in bytes
+  fileHash: string          // SHA-256 content hash
+  fileName: string          // Original filename
+  fileSize: number          // Size in bytes
+  seeders: string[]         // List of seeder peer IDs
+  createdAt: number         // Unix timestamp
+  merkleRoot?: string       // Merkle tree root for chunks
+  mimeType?: string         // File MIME type
+  keyFingerprint?: string   // Key verification
+  version?: number          // File version number
+  cids?: string[]           // Content IDs for chunks
+  price: number             // price of file in Chiral
 }
 ```
-
-Note: The seeder list is obtained via `get_seeders_for_file()`. Price, wallet address, and transfer protocol are obtained via INFO_REQUEST/INFO_RESPONSE.
 
 ## Seeding Behavior
 

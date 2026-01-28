@@ -1726,7 +1726,6 @@ async fn run_dht_node(
                     let files = published_files.lock().await.clone();
                     for (file_hash, file_info) in files.iter() {
                         let file_topic = file_seeder_topic(&peer_id, file_hash);
-                        info!("file found");
                         match serde_json::to_vec(&file_info) {
                             Ok(data) => {
                                 if let Err(e) = swarm.behaviour_mut().gossipsub.publish(file_topic.clone(), data) {

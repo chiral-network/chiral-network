@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use suppaftp::types::FileType;
-use suppaftp::{FtpStream, NativeTlsConnector, NativeTlsFtpStream};
+use suppaftp::{FtpStream, RustlsConnector, RustlsFtpStream};
 use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
 use serde::{Serialize, Deserialize};
@@ -44,6 +44,25 @@ pub struct FtpFileEntry {
 /// - Allowing time for slow network connections to establish
 /// - Preventing indefinite hangs on unresponsive servers
 const DEFAULT_FTP_TIMEOUT_SECS: u64 = 30;
+
+/// Create a rustls TLS connector for FTPS connections
+fn create_rustls_connector() -> Result<RustlsConnector> {
+    let mut root_cert_store = rustls::RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs()
+        .context("Failed to load native root certificates")?
+    {
+        root_cert_store
+            .add(&rustls::Certificate(cert.0))
+            .context("Failed to add certificate to store")?;
+    }
+    
+    let tls_config = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+
+    Ok(RustlsConnector::from(Arc::new(tls_config)))
+}
 
 /// FTP download progress callback
 pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send>;
@@ -186,14 +205,12 @@ impl FtpClient {
             "Connecting to FTPS server"
         );
 
-        // Create TLS connector
-        let tls_connector = NativeTlsConnector::from(
-            native_tls::TlsConnector::new().context("Failed to create TLS connector")?,
-        );
+        // Create TLS connector with rustls
+        let tls_connector = create_rustls_connector()?;
 
         // Note: connect_secure_implicit doesn't support timeout directly,
         // so we use the deprecated method but set timeouts after connection
-        let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
+        let mut ftp_stream = RustlsFtpStream::connect_secure_implicit(
             format!("{}:{}", host, port),
             tls_connector,
             &host,
@@ -492,11 +509,9 @@ pub async fn list_ftp_directory(source_info: &FtpSourceInfo) -> Result<Vec<FtpFi
         // Connect to FTP server
         let ftp_stream = if source_clone.use_ftps {
             // FTPS connection
-            let tls_connector = NativeTlsConnector::from(
-                native_tls::TlsConnector::new().context("Failed to create TLS connector")?
-            );
+            let tls_connector = create_rustls_connector()?;
 
-            let mut stream = NativeTlsFtpStream::connect_secure_implicit(
+            let mut stream = RustlsFtpStream::connect_secure_implicit(
                 format!("{}:{}", host, port),
                 tls_connector,
                 &host,
@@ -618,11 +633,9 @@ pub async fn delete_ftp_file(source_info: &FtpSourceInfo) -> Result<()> {
 
         if source_clone.use_ftps {
             // FTPS connection
-            let tls_connector = NativeTlsConnector::from(
-                native_tls::TlsConnector::new().context("Failed to create TLS connector")?
-            );
+            let tls_connector = create_rustls_connector()?;
 
-            let mut stream = NativeTlsFtpStream::connect_secure_implicit(
+            let mut stream = RustlsFtpStream::connect_secure_implicit(
                 format!("{}:{}", host, port),
                 tls_connector,
                 &host,
@@ -701,11 +714,9 @@ pub async fn rename_ftp_file(source_info: &FtpSourceInfo, new_name: &str) -> Res
 
         if source_clone.use_ftps {
             // FTPS connection
-            let tls_connector = NativeTlsConnector::from(
-                native_tls::TlsConnector::new().context("Failed to create TLS connector")?
-            );
+            let tls_connector = create_rustls_connector()?;
 
-            let mut stream = NativeTlsFtpStream::connect_secure_implicit(
+            let mut stream = RustlsFtpStream::connect_secure_implicit(
                 format!("{}:{}", host, port),
                 tls_connector,
                 &host,
@@ -766,11 +777,9 @@ pub async fn create_ftp_directory(source_info: &FtpSourceInfo) -> Result<()> {
 
         if source_clone.use_ftps {
             // FTPS connection
-            let tls_connector = NativeTlsConnector::from(
-                native_tls::TlsConnector::new().context("Failed to create TLS connector")?
-            );
+            let tls_connector = create_rustls_connector()?;
 
-            let mut stream = NativeTlsFtpStream::connect_secure_implicit(
+            let mut stream = RustlsFtpStream::connect_secure_implicit(
                 format!("{}:{}", host, port),
                 tls_connector,
                 &host,

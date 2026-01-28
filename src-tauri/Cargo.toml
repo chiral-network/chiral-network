@@ -42,7 +42,7 @@ aes = "0.8"
 ctr = "0.9"
 hmac = "0.12"
 directories = "5.0"
-reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream", "rustls-tls"], default-features = false }
 url = "2.5"
 urlencoding = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -77,8 +77,10 @@ tokio-socks = "0.5"
 
 # FTP client for FTP download support (sync API)
 # Using 5.3 for compatibility with connect_secure_implicit() method
-suppaftp = { version = "5.4", features = ["native-tls", "secure", "deprecated"] }
-native-tls = "0.2"
+# Note: Using rustls 0.21 to avoid aws-lc-sys dependency which requires C compiler on Windows
+suppaftp = { version = "5.3", features = ["rustls", "secure", "deprecated", "native-tls"] }
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+rustls-native-certs = "0.6"
 
 # FTP server for serving uploaded files
 unftp-sbe-fs = "0.2"

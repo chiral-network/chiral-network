@@ -176,7 +176,7 @@ impl FtpProtocolHandler {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         url.hash(&mut hasher);
-        format!("ftp-{:x}", hasher.finish())
+        format!("{:x}", hasher.finish())
     }
 
     /// Extract file name from URL path
@@ -239,6 +239,7 @@ impl FtpProtocolHandler {
 
                                 let _ = bus.emit_progress(TransferProgressEvent {
                                     transfer_id: transfer_id.to_string(),
+                                    protocol: "FTP".to_string(),
                                     downloaded_bytes,
                                     total_bytes: file_size,
                                     completed_chunks: 0,
@@ -415,6 +416,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                 bus.emit_started(TransferStartedEvent {
                     transfer_id: id.clone(),
                     file_hash: id.clone(),
+                    protocol: "FTP".to_string(),
                     file_name: task_file_name.clone(),
                     file_size,
                     total_chunks: 1, // FTP downloads as single chunk
@@ -471,6 +473,7 @@ impl ProtocolHandler for FtpProtocolHandler {
 
                         let _ = bus.emit_progress(crate::transfer_events::TransferProgressEvent {
                             transfer_id: transfer_id_for_cb.clone(),
+                            protocol: "FTP".to_string(),
                             downloaded_bytes: downloaded,
                             total_bytes: total,
                             completed_chunks: 0,
@@ -533,6 +536,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                         bus.emit_completed(TransferCompletedEvent {
                             transfer_id: id.clone(),
                             file_hash: id.clone(),
+                            protocol: "FTP".to_string(),
                             file_name: task_file_name.clone(),
                             file_size: downloaded_bytes,
                             output_path: output_path.to_string_lossy().to_string(),
@@ -581,6 +585,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                         if let Some(ref bus) = event_bus {
                             bus.emit_paused(TransferPausedEvent {
                                 transfer_id: id.clone(),
+                                protocol: "FTP".to_string(),
                                 paused_at: current_timestamp_ms(),
                                 reason: PauseReason::UserRequested,
                                 can_resume: true,
@@ -606,6 +611,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                         if let Some(ref bus) = event_bus {
                             bus.emit_canceled(TransferCanceledEvent {
                                 transfer_id: id.clone(),
+                                protocol: "FTP".to_string(),
                                 canceled_at: current_timestamp_ms(),
                                 downloaded_bytes,
                                 total_bytes: 0,
@@ -635,6 +641,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                         bus.emit_failed(TransferFailedEvent {
                             transfer_id: id.clone(),
                             file_hash: id.clone(),
+                            protocol: "FTP".to_string(),
                             failed_at: current_timestamp_ms(),
                             error: format!("FTP download failed: {}", e),
                             error_category: ErrorCategory::Network,
@@ -741,6 +748,7 @@ impl ProtocolHandler for FtpProtocolHandler {
             if let Some(ref bus) = self.get_event_bus() {
                 bus.emit_paused(TransferPausedEvent {
                     transfer_id: identifier.to_string(),
+                    protocol: "FTP".to_string(),
                     paused_at: Self::now_ms(),
                     reason: PauseReason::UserRequested,
                     can_resume: true,
@@ -784,6 +792,7 @@ impl ProtocolHandler for FtpProtocolHandler {
             let downloaded_bytes = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
             bus.emit_resumed(TransferResumedEvent {
                 transfer_id: identifier.to_string(),
+                protocol: "FTP".to_string(),
                 resumed_at: current_timestamp_ms(),
                 downloaded_bytes,
                 remaining_bytes: 0,
@@ -850,6 +859,7 @@ impl ProtocolHandler for FtpProtocolHandler {
 
                         let _ = bus.emit_progress(crate::transfer_events::TransferProgressEvent {
                             transfer_id: transfer_id_for_cb.clone(),
+                            protocol: "FTP".to_string(),
                             downloaded_bytes: downloaded,
                             total_bytes: total,
                             completed_chunks: 0,
@@ -882,6 +892,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                         bus.emit_completed(TransferCompletedEvent {
                             transfer_id: id.clone(),
                             file_hash: id.clone(),
+                            protocol: "FTP".to_string(),
                             file_name: task_file_name.clone(),
                             file_size: downloaded_bytes,
                             output_path: output_path.to_string_lossy().to_string(),
@@ -909,6 +920,7 @@ impl ProtocolHandler for FtpProtocolHandler {
                         bus.emit_failed(TransferFailedEvent {
                             transfer_id: id.clone(),
                             file_hash: id.clone(),
+                            protocol: "FTP".to_string(),
                             failed_at: current_timestamp_ms(),
                             error: format!("FTP resume failed: {}", e),
                             error_category: ErrorCategory::Network,
@@ -952,6 +964,7 @@ impl ProtocolHandler for FtpProtocolHandler {
             if let Some(ref bus) = self.get_event_bus() {
                 bus.emit_canceled(TransferCanceledEvent {
                     transfer_id: identifier.to_string(),
+                    protocol: "FTP".to_string(),
                     canceled_at: Self::now_ms(),
                     downloaded_bytes,
                     total_bytes: state.file_size,

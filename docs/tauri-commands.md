@@ -26,13 +26,6 @@ Local functionality inside the desktop app is exposed through Tauri commands and
 - **Returns**: `{ address: string; private_key: string }`
 - **Description**: Imports an existing account from a raw hex private key, storing it as the active session account.
 
-### `update_wallet_address_for_services`
-
-- **Parameters**
-  - `address: string`
-- **Returns**: `void`
-- **Description**: Updates the wallet address across all backend services including miner address and GossipSub SeederGeneralInfo. This ensures the wallet address is consistently propagated to the DHT for peer discovery and payment routing. Call this whenever the active wallet changes.
-
 ### `has_active_account`
 
 - **Parameters**: _(none)_
@@ -288,7 +281,7 @@ These commands manage pool metadata locally and persist user-created pools to di
   - `preferred_relays?: string[]`
   - `enable_relay_server?: boolean`
 - **Returns**: `string` – the local libp2p peer ID.
-- **Description**: Boots the libp2p/Kademlia node, wires up file-transfer and multi-source services, and starts emitting events (`dht_peer_*`, `nat_status_update`, `found_file`, etc.) to the frontend.
+- **Description**: Boots the libp2p/Kademlia node, wires up file-transfer and multi-source services, and starts emitting events (`dht_peer_*`, `nat_status_update`, `dht_metadata_found`, etc.) to the frontend.
 
 ### `stop_dht_node`
 
@@ -333,6 +326,12 @@ These commands manage pool metadata locally and persist user-created pools to di
 - **Parameters**: _(none)_
 - **Returns**: `DhtMetricsSnapshot | null`
 - **Description**: Captures node health including peer counts, reachability, AutoRelay/DCUtR stats, observed addresses, and reservation metrics.
+
+### `get_dht_events`
+
+- **Parameters**: _(none)_
+- **Returns**: `string[]`
+- **Description**: Drains up to 100 queued DHT events. Each entry is a colon-delimited token such as `peer_discovered:<peer>:<addresses>` or JSON payloads for file/reputation events.
 
 ### `test_backend_connection`
 
@@ -501,6 +500,11 @@ These commands manage pool metadata locally and persist user-created pools to di
 - **Returns**: `void`
 - **Description**: Writes raw bytes to disk (utility used by various features).
 
+### `get_file_transfer_events`
+
+- **Parameters**: _(none)_
+- **Returns**: `string[]`
+- **Description**: Drains recent file-transfer events (upload/download notifications, errors, download attempt JSON blobs).
 
 ### `get_download_metrics`
 
@@ -719,7 +723,7 @@ A utility function to parse an ed2k link string into its structured `Ed2kSourceI
   - `file_hash: string`
   - `timeout_ms?: number`
 - **Returns**: `void`
-- **Description**: Triggers an asynchronous metadata search in the DHT (results arrive via `found_file` events).
+- **Description**: Triggers an asynchronous metadata search in the DHT (results arrive via `dht_metadata_found` events).
 
 ### `get_file_seeders`
 

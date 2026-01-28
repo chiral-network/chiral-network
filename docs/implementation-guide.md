@@ -177,12 +177,7 @@ impl DhtService {
         })
     }
 
-    pub async fn publish_file(&self, file_hash: String, file_name: String, file_size: u64) -> Result<(), String> {
-        let metadata = serde_json::json!({
-            "fileHash": file_hash,
-            "fileName": file_name,
-            "fileSize": file_size
-        });
+    pub async fn publish_file(&self, metadata: FileMetadata) -> Result<(), String> {
         self.cmd_tx.send(DhtCommand::PublishFile(metadata)).await
             .map_err(|e| e.to_string())
     }
@@ -367,15 +362,9 @@ export class FileService {
     return blob;
   }
 
-  private async searchDHT(
-    hash: string,
-  ): Promise<{ fileHash: string; fileName: string; fileSize: number } | null> {
-    // Search DHT for minimal file metadata
-    return await invoke<{
-      fileHash: string;
-      fileName: string;
-      fileSize: number;
-    }>("search_dht_metadata", { hash });
+  private async searchDHT(hash: string): Promise<FileMetadata | null> {
+    // Search DHT for file metadata without centralized market
+    return await invoke<FileMetadata>("search_dht_metadata", { hash });
   }
 }
 ```
@@ -406,16 +395,13 @@ pub async fn upload_file(
     // Calculate file hash
     let file_hash = calculate_file_hash(&data);
 
-    // Store chunks locally for BitSwap/block exchange
-    store_chunks_locally(&chunks).await?;
+    // Start seeding chunks (make available to network)
+    for chunk in chunks {
+        publish_chunk_to_dht(&chunk).await?;
+    }
 
-    // Register minimal metadata in DHT
-    let metadata = serde_json::json!({
-        "fileHash": file_hash,
-        "fileName": name,
-        "fileSize": size
-    });
-    dht_put(&file_hash, &metadata).await?;
+    // Register in DHT
+    register_in_dht(&file_hash, &chunks).await?;
 
     Ok(file_hash)
 }
@@ -425,28 +411,21 @@ pub async fn download_file(
     hash: String,
     seeder: String
 ) -> Result<Vec<Vec<u8>>, String> {
-    // Get minimal file metadata from DHT
+    // Get file metadata from DHT
     let metadata = get_file_metadata(&hash).await?;
 
-    // Query seeder for transfer terms (INFO_REQUEST)
-    let transfer_terms = get_transfer_terms(&hash, &seeder).await?;
-
-    // Query seeder for protocol-specific details (PROTOCOL_SPECIFIC_REQUEST)
-    let protocol_details = get_protocol_details(&hash, &seeder, &transfer_terms.content_protocol).await?;
-
-    // Download based on protocol
-    let chunks = match transfer_terms.content_protocol.as_str() {
-        "bitswap" => download_via_bitswap(&hash, &seeder, protocol_details).await?,
-        "http" => download_via_http(&hash, &seeder, protocol_details).await?,
-        "bittorrent" => download_via_bittorrent(&hash, &seeder, protocol_details).await?,
-        _ => return Err(format!("Unsupported protocol: {}", transfer_terms.content_protocol))
-    };
+    // Download chunks from seeder (any node can be a seeder)
+    let mut chunks = Vec::new();
+    for chunk_info in metadata.chunks {
+        let chunk_data = download_chunk(&seeder, &chunk_info.hash).await?;
+        chunks.push(chunk_data);
+    }
 
     // Verify and decrypt chunks
     let decrypted = decrypt_chunks(chunks)?;
 
-    // Make payment per transfer terms
-    make_payment(&transfer_terms.wallet_address, &hash, decrypted.len()).await?;
+    // Distribute payment rewards to seeders
+    distribute_rewards(&metadata.seeders, &file_hash).await?;
 
     Ok(decrypted)
 }

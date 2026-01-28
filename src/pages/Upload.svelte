@@ -49,7 +49,7 @@
   import { settings } from "$lib/stores";
   import { paymentService } from '$lib/services/paymentService';
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import type { UploadProtocol } from "$lib/services/uploadService";
+  import { protocolManager, type Protocol } from "$lib/services/contentProtocols";
   const tr = (k: string, params?: Record<string, any>): string =>
     $t(k, params);
 
@@ -169,6 +169,43 @@
   // Protocol selection state - initialize with WebRTC as default
   let selectedProtocol = $settings.selectedProtocol || "WebRTC";
 
+  let dynamicPricePerMb: number | null = null;
+  let dynamicPriceError: string | null = null;
+  let isFetchingDynamicPrice = false;
+  let lastDynamicPricingEnabled = false;
+
+  $: if ($settings.useDynamicPricing && !lastDynamicPricingEnabled) {
+    lastDynamicPricingEnabled = true;
+    refreshDynamicPrice();
+  }
+
+  $: if (!$settings.useDynamicPricing && lastDynamicPricingEnabled) {
+    lastDynamicPricingEnabled = false;
+    dynamicPriceError = null;
+    dynamicPricePerMb = null;
+  }
+
+  $: pricingLabel = (() => {
+    if ($settings.useDynamicPricing) {
+      if (isFetchingDynamicPrice) {
+        return "Pricing: Dynamic (loading...)";
+      }
+      if (dynamicPricePerMb !== null) {
+        return `Pricing: Dynamic (${dynamicPricePerMb} Chiral/MB)`;
+      }
+      if (dynamicPriceError) {
+        return "Pricing: Dynamic (unavailable)";
+      }
+      return "Pricing: Dynamic";
+    }
+
+    const pricePerMb = $settings.pricePerMb;
+    const priceLabel = Number.isFinite(pricePerMb)
+      ? pricePerMb.toFixed(8)
+      : "N/A";
+    return `Pricing: ${priceLabel} Chiral/MB`;
+  })();
+
   // Ensure settings store always has a valid protocol (defensive fix)
   $: if (!$settings.selectedProtocol) {
     settings.update(s => ({ ...s, selectedProtocol: "WebRTC" }));
@@ -178,6 +215,10 @@
   // Sync selectedProtocol changes back to settings
   $: if (selectedProtocol && selectedProtocol !== $settings.selectedProtocol) {
     settings.update(s => ({ ...s, selectedProtocol }));
+  }
+
+  $: if (selectedProtocol) {
+    protocolManager.setProtocol(selectedProtocol as Protocol);
   }
 
   // Encrypted sharing state
@@ -193,6 +234,51 @@
   let ftpPassword = '';
   let ftpUseFTPS = false;
   let ftpPassiveMode = true;
+  let ftpConfigLoaded = false;
+  let ftpPersistSignal = "";
+  const ftpStorageKey = "upload.ftpConfig";
+  let ftpPersistTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  function loadPersistedFtpConfig() {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(ftpStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        url?: string;
+        username?: string;
+        password?: string;
+        useFtps?: boolean;
+        passiveMode?: boolean;
+      };
+      ftpUrl = parsed.url ?? "";
+      ftpUsername = parsed.username ?? "";
+      ftpPassword = parsed.password ?? "";
+      ftpUseFTPS = parsed.useFtps ?? false;
+      ftpPassiveMode = parsed.passiveMode ?? true;
+    } catch (error) {
+      console.warn("Failed to load FTP config from localStorage:", error);
+    }
+  }
+
+  function schedulePersistFtpConfig() {
+    if (typeof window === "undefined") return;
+    if (ftpPersistTimeout) clearTimeout(ftpPersistTimeout);
+    ftpPersistTimeout = setTimeout(() => {
+      try {
+        const payload = {
+          url: ftpUrl,
+          username: ftpUsername,
+          password: ftpPassword,
+          useFtps: ftpUseFTPS,
+          passiveMode: ftpPassiveMode,
+        };
+        window.localStorage.setItem(ftpStorageKey, JSON.stringify(payload));
+      } catch (error) {
+        console.warn("Failed to persist FTP config to localStorage:", error);
+      }
+    }, 200);
+  }
 
   // Track upload progress for each file (refactored architecture)
   let uploadProgress = new Map<string, { percent: number; status: string }>();
@@ -234,33 +320,45 @@
     }
   }
 
+  function getManualPricePerMb(): number {
+    const pricePerMb = $settings.pricePerMb;
+    if (!Number.isFinite(pricePerMb) || pricePerMb <= 0) {
+      throw new Error("Invalid price per MB setting");
+    }
+    return Number(pricePerMb.toFixed(8));
+  }
+
   async function calculateFilePrice(sizeInBytes: number): Promise<number> {
-    const sizeInMB = sizeInBytes / 1_048_576; // Convert bytes to MB
+    if (sizeInBytes <= 0) {
+      throw new Error("File size must be greater than 0");
+    }
+
+    const pricePerMb = await calculatePricePerMb(sizeInBytes);
+    const sizeInMB = sizeInBytes / 1_048_576;
+    return Number((sizeInMB * pricePerMb).toFixed(8));
+  }
+
+  async function refreshDynamicPrice() {
+    if (isFetchingDynamicPrice) {
+      return;
+    }
+
+    isFetchingDynamicPrice = true;
+    dynamicPriceError = null;
+    dynamicPricePerMb = null;
 
     try {
-      const dynamicPrice =
-        await paymentService.calculateDownloadCost(sizeInBytes);
-      if (Number.isFinite(dynamicPrice) && dynamicPrice > 0) {
-        return Number(dynamicPrice.toFixed(8));
+      const price = await paymentService.getDynamicPricePerMB(1.2);
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new Error("Dynamic price unavailable");
       }
+      dynamicPricePerMb = Number(price.toFixed(8));
     } catch (error) {
-      console.warn(
-        "Dynamic price calculation failed, falling back to static rate:",
-        error,
-      );
+      dynamicPriceError =
+        error instanceof Error ? error.message : "Failed to fetch dynamic price";
+    } finally {
+      isFetchingDynamicPrice = false;
     }
-
-    try {
-      const pricePerMb = await paymentService.getDynamicPricePerMB(1.2);
-      if (Number.isFinite(pricePerMb) && pricePerMb > 0) {
-        return Number((sizeInMB * pricePerMb).toFixed(8));
-      }
-    } catch (secondaryError) {
-      console.warn("Secondary dynamic price lookup failed:", secondaryError);
-    }
-
-    const fallbackPricePerMb = 0.001;
-    return Number((sizeInMB * fallbackPricePerMb).toFixed(8));
   }
 
   $: storageLabel = isRefreshingStorage
@@ -385,6 +483,8 @@
   let signalingService: any = null;
   let unlisten: (() => void) | null = null;
   onMount(async () => {
+    loadPersistedFtpConfig();
+    ftpConfigLoaded = true;
     // Check if in client mode
     await checkClientMode();
 
@@ -776,24 +876,40 @@
               }
 
               try {
-                let metadata;
                 const filePrice = await calculateFilePrice(file.size);
+                const sizeInMb = file.size / (1024 * 1024);
+                const pricePerMb = sizeInMb > 0 ? filePrice / sizeInMb : 0;
+
+                const ftpConfig =
+                  selectedProtocol === "FTP"
+                    ? {
+                        url: ftpUrl,
+                        username: ftpUsername || undefined,
+                        password: ftpPassword || undefined,
+                        useFtps: ftpUseFTPS,
+                        passiveMode: ftpPassiveMode,
+                      }
+                    : undefined;
 
                 // Use streaming upload for all protocols to avoid memory issues with large files
                 // All protocol handlers read from file paths on disk
                 const tempFilePath = await uploadFileStreamingToDisk(file);
-                metadata = await dhtService.publishFileToNetwork(
-                  tempFilePath,
-                  filePrice,
-                  selectedProtocol,
-                  file.name,
-                );
+                const result = await protocolManager.uploadFile({
+                  protocol: selectedProtocol as Protocol,
+                  filePath: tempFilePath,
+                  pricePerMb,
+                  ftpConfig,
+                });
+
+                if (!result.success) {
+                  throw new Error(result.error || "Upload failed");
+                }
 
                 // Check for same content + same protocol (true duplicate)
                 if (
                   get(files).some(
                     (f) =>
-                      f.hash === metadata.merkleRoot &&
+                      f.hash === result.fileHash &&
                       f.protocol === selectedProtocol,
                   )
                 ) {
@@ -805,30 +921,19 @@
                   continue;
                 }
 
-                // Construct protocol-specific hash for display
-                let protocolHash = metadata.merkleRoot || "";
-                if (selectedProtocol === "BitTorrent" && metadata.infoHash) {
-                  // Construct magnet link for BitTorrent
-                  const trackers = metadata.trackers
-                    ? metadata.trackers.join("&tr=")
-                    : "udp://tracker.openbittorrent.com:80";
-                  protocolHash = `magnet:?xt=urn:btih:${metadata.infoHash}&tr=${trackers}`;
-                }
-
                 const newFile = {
                   id: `file-${Date.now()}-${Math.random()}`,
-                  name: metadata.fileName,
+                  name: file.name,
                   path: file.name,
-                  hash: metadata.merkleRoot || "",
-                  protocolHash,
-                  size: metadata.fileSize,
+                  hash: result.fileHash || "",
+                  protocolHash: result.protocolHash || result.fileHash || "",
+                  size: file.size,
                   status: "seeding" as const,
-                  seeders: metadata.seeders?.length ?? 0,
-                  seederAddresses: metadata.seeders ?? [],
+                  seeders: 1,
+                  seederAddresses: [],
                   leechers: 0,
-                  uploadDate: new Date(metadata.createdAt),
+                  uploadDate: new Date(),
                   price: filePrice,
-                  cids: metadata.cids,
                   protocol: selectedProtocol,
                 };
 
@@ -942,7 +1047,24 @@
     if (unlisten) {
       unlisten();
     }
+    if (ftpPersistTimeout) {
+      clearTimeout(ftpPersistTimeout);
+    }
   });
+
+  $: if (isTauri) {
+    ftpPersistSignal = JSON.stringify({
+      url: ftpUrl,
+      username: ftpUsername,
+      password: ftpPassword,
+      useFtps: ftpUseFTPS,
+      passiveMode: ftpPassiveMode,
+    });
+  }
+
+  $: if (isTauri && ftpConfigLoaded && ftpPersistSignal) {
+    schedulePersistFtpConfig();
+  }
 
   let persistTimeout: ReturnType<typeof setTimeout> | null = null;
   const unsubscribeFiles = files.subscribe(($files) => {
@@ -1069,8 +1191,8 @@
   }
 
   /**
-   * Add files to network using the new uploadService (refactored for DRY)
-   * Replaces old implementation with cleaner, protocol-agnostic approach
+   * Add files to network using the protocol manager
+   * Keeps protocol-specific details out of the UI
    */
   async function addFilesFromPaths(paths: string[]) {
     console.log("[UPLOAD] addFilesFromPaths called with", paths.length, "file(s)");
@@ -1085,9 +1207,8 @@
     console.log("[UPLOAD] 60-second timeout failsafe armed");
 
     try {
-      // Import upload service
+      // Import validation helper
       const {
-        uploadFile,
         validateUploadPrerequisites,
       } = await import("$lib/services/uploadService");
 
@@ -1106,7 +1227,7 @@
 
       let addedCount = 0;
 
-      // Process each file with new uploadService
+      // Process each file with the protocol manager
       for (const filePath of paths) {
         try {
           const fileName = filePath.replace(/^.*[\\/]/, "") || "";
@@ -1145,8 +1266,8 @@
           uploadProgress.set(filePath, { percent: 0, status: "uploading" });
           uploadProgress = uploadProgress;
 
-          const result = await uploadFile({
-            protocol: selectedProtocol as UploadProtocol,
+          const result = await protocolManager.uploadFile({
+            protocol: selectedProtocol as Protocol,
             filePath,
             pricePerMb,
             ftpConfig,
@@ -1236,21 +1357,34 @@
    * Helper to calculate price per MB (extracted for reusability)
    */
   async function calculatePricePerMb(sizeInBytes: number): Promise<number> {
-    const sizeInMB = sizeInBytes / (1024 * 1024);
-
-    // Try dynamic pricing first
-    try {
-      const dynamicPrice = await paymentService.calculateDownloadCost(sizeInBytes);
-      if (Number.isFinite(dynamicPrice) && dynamicPrice > 0) {
-        return Number((dynamicPrice / sizeInMB).toFixed(8));
-      }
-    } catch (error) {
-      console.warn("Dynamic pricing failed, using static rate:", error);
+    if (sizeInBytes <= 0) {
+      throw new Error("File size must be greater than 0");
     }
 
-    // Fallback to static pricing
-    const staticPricePerMB = 0.001; // 0.001 Chiral per MB
-    return staticPricePerMB;
+    if ($settings.useDynamicPricing) {
+      const sizeInMB = sizeInBytes / (1024 * 1024);
+      try {
+        const dynamicPrice = await paymentService.calculateDownloadCost(sizeInBytes);
+        if (Number.isFinite(dynamicPrice) && dynamicPrice > 0) {
+          return Number((dynamicPrice / sizeInMB).toFixed(8));
+        }
+      } catch (error) {
+        console.warn("Dynamic pricing calculation failed:", error);
+      }
+
+      try {
+        const pricePerMb = await paymentService.getDynamicPricePerMB(1.2);
+        if (Number.isFinite(pricePerMb) && pricePerMb > 0) {
+          return Number(pricePerMb.toFixed(8));
+        }
+      } catch (secondaryError) {
+        console.warn("Dynamic price lookup failed:", secondaryError);
+      }
+
+      throw new Error("Dynamic pricing unavailable");
+    }
+
+    return getManualPricePerMb();
   }
 
   // Use centralized file size formatting for consistency
@@ -1395,6 +1529,9 @@
             </h3>
             <p class="text-xs text-muted-foreground">
               Choose which protocol to use for uploading files
+            </p>
+            <p class="text-xs text-muted-foreground">
+              {pricingLabel}
             </p>
           </div>
         </div>

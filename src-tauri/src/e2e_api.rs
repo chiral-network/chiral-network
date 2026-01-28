@@ -1062,8 +1062,7 @@ async fn api_upload_generate(
             bittorrent_port: if protocol_upper == "BITTORRENT" {
                 let app_state = state.app.state::<crate::AppState>();
                 let bt = { app_state.bittorrent_handler.lock().await.as_ref().cloned() };
-                bt.map(|bt| bt.rqbit_session().tcp_listen_port())
-                    .flatten()
+                bt.map(|bt| bt.rqbit_session().tcp_listen_port()).flatten()
             } else {
                 None
             },
@@ -1313,9 +1312,26 @@ async fn api_download(
                 if protocol_upper_for_task == "WEBRTC" {
                         // In case the service was stopped after request but before task runs.
                         ensure_p2p_services_started(&app_handle_for_task).await?;
+                    let peer_id = meta_for_task
+                        .seeders
+                        .get(0)
+                        .cloned()
+                        .ok_or_else(|| {
+                            "No seeder peer_id available for WebRTC download".to_string()
+                        })?;
+                    tracing::info!(
+                        "E2E WebRTC download using peer_id={} file_hash={} file_name={} file_size={}",
+                        peer_id,
+                        meta_for_task.merkle_root,
+                        meta_for_task.file_name,
+                        meta_for_task.file_size
+                    );
                     if let Err(e) = crate::download_file_from_network(
                         app_handle_for_task.state::<crate::AppState>(),
+                        peer_id,
                         meta_for_task.merkle_root.clone(),
+                        meta_for_task.file_name.clone(),
+                        meta_for_task.file_size,
                         out_path_for_task.clone(),
                     )
                     .await

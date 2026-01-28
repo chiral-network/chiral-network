@@ -2333,6 +2333,7 @@
                     type="password"
                     bind:value={switcherPasswordInput}
                     placeholder={$t('placeholders.unlockPassword')}
+                    autofocus
                   />
                   {#if switcherPasswordError}
                     <p class="text-sm text-red-500">{switcherPasswordError}</p>
@@ -2384,6 +2385,7 @@
                     bind:value={loadKeystorePassword}
                     autocomplete="current-password"
                     placeholder={$t('placeholders.unlockPassword')}
+                    autofocus
                   />
                   <div class="flex items-center space-x-2">
                     <input type="checkbox" id="remember-password-modal" bind:checked={rememberKeystorePassword} />

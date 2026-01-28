@@ -21,6 +21,121 @@ use tracing::{debug, error};
 /// Current version of the event schema for backwards compatibility
 pub const EVENT_SCHEMA_VERSION: &str = "1.0.0";
 
+// ============================================================================
+// Search Events (DHT metadata search lifecycle)
+// ============================================================================
+
+/// Search lifecycle events - covers all stages of a DHT file search
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SearchEvent {
+    /// Search initiated
+    Started(SearchStartedEvent),
+
+    /// Basic metadata found in DHT
+    MetadataFound(MetadataFoundEvent),
+
+    /// Provider peers discovered
+    ProvidersFound(ProvidersFoundEvent),
+
+    /// General seeder info received (wallet, default price)
+    SeederGeneralInfo(SeederGeneralInfoEvent),
+
+    /// File-specific seeder info received (protocols, prices)
+    SeederFileInfo(SeederFileInfoEvent),
+
+    /// Search completed successfully
+    Complete(SearchCompleteEvent),
+
+    /// Search timed out with partial results
+    Timeout(SearchTimeoutEvent),
+}
+
+/// Event when a search is initiated
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchStartedEvent {
+    pub file_hash: String,
+    pub timestamp: u64,
+}
+
+/// Event when basic metadata is found in DHT
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataFoundEvent {
+    pub file_hash: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub created_at: u64,
+    pub mime_type: Option<String>,
+}
+
+/// Event when provider peers are discovered
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvidersFoundEvent {
+    pub file_hash: String,
+    pub providers: Vec<String>,
+    pub count: usize,
+}
+
+/// Event when general seeder info is received
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeederGeneralInfoEvent {
+    pub file_hash: String,
+    pub seeder_index: usize,
+    pub peer_id: String,
+    pub wallet_address: String,
+    pub default_price_per_mb: f64,
+}
+
+/// Event when file-specific seeder info is received
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeederFileInfoEvent {
+    pub file_hash: String,
+    pub seeder_index: usize,
+    pub peer_id: String,
+    pub price_per_mb: Option<f64>,
+    pub supported_protocols: Vec<String>,
+    pub protocol_details: serde_json::Value,
+}
+
+/// Event when search completes successfully
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchCompleteEvent {
+    pub file_hash: String,
+    pub total_seeders: usize,
+    pub duration_ms: u64,
+}
+
+/// Event when search times out with partial results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchTimeoutEvent {
+    pub file_hash: String,
+    pub partial_seeders: usize,
+    pub missing_count: usize,
+}
+
+// ============================================================================
+// App Event (Unified wrapper for all event types)
+// ============================================================================
+
+/// Unified app event that wraps all event types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "domain", rename_all = "snake_case")]
+pub enum AppEvent {
+    Transfer(TransferEvent),
+    Search(SearchEvent),
+}
+
+// ============================================================================
+// Transfer Events
+// ============================================================================
+
 /// Primary transfer lifecycle events - covers all stages of a file transfer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -71,6 +186,7 @@ pub enum TransferEvent {
 pub struct TransferQueuedEvent {
     pub transfer_id: String,
     pub file_hash: String,
+    pub protocol: String, // "WebRTC" | "BitTorrent" | "HTTP" | "FTP" | "ED2K"
     pub file_name: String,
     pub file_size: u64,
     pub output_path: String,
@@ -86,6 +202,7 @@ pub struct TransferQueuedEvent {
 pub struct TransferStartedEvent {
     pub transfer_id: String,
     pub file_hash: String,
+    pub protocol: String, // "WebRTC" | "BitTorrent" | "HTTP" | "FTP" | "ED2K"
     pub file_name: String,
     pub file_size: u64,
     pub total_chunks: u32,
@@ -154,6 +271,7 @@ pub struct ChunkFailedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TransferProgressEvent {
     pub transfer_id: String,
+    pub protocol: String, // "WebRTC" | "BitTorrent" | "HTTP" | "FTP" | "ED2K"
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
     pub completed_chunks: u32,
@@ -171,6 +289,7 @@ pub struct TransferProgressEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TransferPausedEvent {
     pub transfer_id: String,
+    pub protocol: String, // "WebRTC" | "BitTorrent" | "HTTP" | "FTP" | "ED2K"
     pub paused_at: u64,
     pub reason: PauseReason,
     pub can_resume: bool,
@@ -183,6 +302,7 @@ pub struct TransferPausedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TransferResumedEvent {
     pub transfer_id: String,
+    pub protocol: String, // "WebRTC" | "BitTorrent" | "HTTP" | "FTP" | "ED2K"
     pub resumed_at: u64,
     pub downloaded_bytes: u64,
     pub remaining_bytes: u64,
@@ -195,6 +315,7 @@ pub struct TransferResumedEvent {
 pub struct TransferCompletedEvent {
     pub transfer_id: String,
     pub file_hash: String,
+    pub protocol: String, // "WebRTC" | "BitTorrent" | "HTTP" | "FTP" | "ED2K"
     pub file_name: String,
     pub file_size: u64,
     pub output_path: String,
@@ -211,6 +332,7 @@ pub struct TransferCompletedEvent {
 pub struct TransferFailedEvent {
     pub transfer_id: String,
     pub file_hash: String,
+    pub protocol: String, // "WebRTC" | "BitTorrent" | "HTTP" | "FTP" | "ED2K"
     pub failed_at: u64,
     pub error: String,
     pub error_category: ErrorCategory,
@@ -224,6 +346,7 @@ pub struct TransferFailedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TransferCanceledEvent {
     pub transfer_id: String,
+    pub protocol: String, // "WebRTC" | "BitTorrent" | "HTTP" | "FTP" | "ED2K"
     pub canceled_at: u64,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
@@ -341,17 +464,33 @@ pub enum ErrorCategory {
 // Event Bus Implementation
 // ============================================================================
 
-/// The main event bus for emitting transfer events
+/// The main event bus for emitting all app events (transfers + searches)
 #[derive(Clone)]
-pub struct TransferEventBus {
+pub struct AppEventBus {
     app_handle: AppHandle,
 }
 
-impl TransferEventBus {
+/// Type alias for backwards compatibility
+pub type TransferEventBus = AppEventBus;
+
+impl AppEventBus {
     /// Create a new event bus with the given app handle
     pub fn new(app_handle: AppHandle) -> Self {
-        debug!("Initializing TransferEventBus");
+        debug!("Initializing AppEventBus");
         Self { app_handle }
+    }
+
+    /// Emit an app event to all listeners
+    pub fn emit_app(&self, event: AppEvent) {
+        match &event {
+            AppEvent::Transfer(transfer_event) => self.emit(transfer_event.clone()),
+            AppEvent::Search(search_event) => self.emit_search(search_event.clone()),
+        }
+
+        // Also emit to unified app:event channel
+        if let Err(e) = self.app_handle.emit("app:event", &event) {
+            error!("Failed to emit event to app:event: {}", e);
+        }
     }
 
     /// Emit a transfer event to all listeners
@@ -383,6 +522,32 @@ impl TransferEventBus {
         // Also emit to generic channel for listeners who want all events
         if let Err(e) = self.app_handle.emit("transfer:event", &event) {
             error!("Failed to emit event to transfer:event: {}", e);
+        }
+    }
+
+    /// Emit a search event to all listeners
+    pub fn emit_search(&self, event: SearchEvent) {
+        let event_type = match &event {
+            SearchEvent::Started(_) => "started",
+            SearchEvent::MetadataFound(_) => "metadata_found",
+            SearchEvent::ProvidersFound(_) => "providers_found",
+            SearchEvent::SeederGeneralInfo(_) => "seeder_general_info",
+            SearchEvent::SeederFileInfo(_) => "seeder_file_info",
+            SearchEvent::Complete(_) => "complete",
+            SearchEvent::Timeout(_) => "timeout",
+        };
+
+        debug!("Emitting search event: {}", event_type);
+
+        // Emit to specific typed channel
+        let typed_channel = format!("search:{}", event_type);
+        if let Err(e) = self.app_handle.emit(&typed_channel, &event) {
+            error!("Failed to emit event to {}: {}", typed_channel, e);
+        }
+
+        // Also emit to generic channel for listeners who want all search events
+        if let Err(e) = self.app_handle.emit("search:event", &event) {
+            error!("Failed to emit event to search:event: {}", e);
         }
     }
 
@@ -449,6 +614,45 @@ impl TransferEventBus {
     /// Helper to emit speed update event
     pub fn emit_speed_update(&self, event: SpeedUpdateEvent) {
         self.emit(TransferEvent::SpeedUpdate(event));
+    }
+
+    // =========================================================================
+    // Search Event Helpers
+    // =========================================================================
+
+    /// Helper to emit search started event
+    pub fn emit_search_started(&self, event: SearchStartedEvent) {
+        self.emit_search(SearchEvent::Started(event));
+    }
+
+    /// Helper to emit metadata found event
+    pub fn emit_metadata_found(&self, event: MetadataFoundEvent) {
+        self.emit_search(SearchEvent::MetadataFound(event));
+    }
+
+    /// Helper to emit providers found event
+    pub fn emit_providers_found(&self, event: ProvidersFoundEvent) {
+        self.emit_search(SearchEvent::ProvidersFound(event));
+    }
+
+    /// Helper to emit seeder general info event
+    pub fn emit_seeder_general_info(&self, event: SeederGeneralInfoEvent) {
+        self.emit_search(SearchEvent::SeederGeneralInfo(event));
+    }
+
+    /// Helper to emit seeder file info event
+    pub fn emit_seeder_file_info(&self, event: SeederFileInfoEvent) {
+        self.emit_search(SearchEvent::SeederFileInfo(event));
+    }
+
+    /// Helper to emit search complete event
+    pub fn emit_search_complete(&self, event: SearchCompleteEvent) {
+        self.emit_search(SearchEvent::Complete(event));
+    }
+
+    /// Helper to emit search timeout event
+    pub fn emit_search_timeout(&self, event: SearchTimeoutEvent) {
+        self.emit_search(SearchEvent::Timeout(event));
     }
 
     // =========================================================================
@@ -579,6 +783,7 @@ mod tests {
         let event = TransferEvent::Queued(TransferQueuedEvent {
             transfer_id: "test-123".to_string(),
             file_hash: "abc123".to_string(),
+            protocol: "WebRTC".to_string(),
             file_name: "test.txt".to_string(),
             file_size: 1024,
             output_path: "/tmp/test.txt".to_string(),
@@ -590,10 +795,11 @@ mod tests {
 
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: TransferEvent = serde_json::from_str(&json).unwrap();
-        
+
         match deserialized {
             TransferEvent::Queued(e) => {
                 assert_eq!(e.transfer_id, "test-123");
+                assert_eq!(e.protocol, "WebRTC");
                 assert_eq!(e.file_name, "test.txt");
             }
             _ => panic!("Wrong event type"),

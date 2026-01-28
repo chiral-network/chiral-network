@@ -466,6 +466,7 @@ impl FileTransferService {
                         bus.emit_started(TransferStartedEvent {
                             transfer_id: file_hash.clone(),
                             file_hash: file_hash.clone(),
+                            protocol: "WebRTC".to_string(),
                             file_name: output_path.clone(),
                             file_size: 0, // Unknown at this point
                             total_chunks: 0,
@@ -510,6 +511,7 @@ impl FileTransferService {
                                 bus.emit_completed(TransferCompletedEvent {
                                     transfer_id: file_hash.clone(),
                                     file_hash: file_hash.clone(),
+                                    protocol: "WebRTC".to_string(),
                                     file_name: output_path.clone(),
                                     file_size: 0, // Would need to track actual size
                                     output_path: output_path.clone(),
@@ -546,6 +548,7 @@ impl FileTransferService {
                                 bus.emit_failed(TransferFailedEvent {
                                     transfer_id: file_hash.clone(),
                                     file_hash: file_hash.clone(),
+                                    protocol: "WebRTC".to_string(),
                                     failed_at: current_timestamp_ms(),
                                     error: error_msg.clone(),
                                     error_category: ErrorCategory::Unknown,

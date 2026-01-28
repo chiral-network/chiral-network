@@ -41,7 +41,6 @@ The Chiral Network implements a multi-layered protocol stack combining blockchai
    Non-bootstrap peers continue to run the periodic bootstrap loop (1 s interval) while the node is up, ensuring they resync with the network if entries age out. The dedicated bootstrap node disables this interval, but it remains available so new peers can repeat steps 1–3 at any time.
 
 ##### Operational Notes
-
 - The bootstrap node exposes only the libp2p/DHT service (no extra REST endpoints) and listens on the same ports as any peer.
 - Today the network relies on a single bootstrap address; adding secondary bootstrap nodes is recommended to avoid a single point of failure.
 
@@ -177,146 +176,58 @@ Response (if not found):
 
 ### 3. File Transfer Protocol
 
-#### Minimal DHT Record
+#### File Metadata Exchange
 
-The DHT stores only essential file information. All protocol-specific details are obtained through the messaging protocol.
+```protobuf
+message FileMetadata {
+  string file_hash = 1;      // SHA-256 hash
+  uint64 file_size = 2;      // Total size in bytes
+  uint32 chunk_size = 3;     // Size of each chunk
+  uint32 total_chunks = 4;   // Number of chunks
+  string mime_type = 5;      // MIME type
+  bool encrypted = 6;        // Encryption status
+  repeated ChunkInfo chunks = 7;
+}
 
-```json
-{
-  "fileHash": "sha256_abc123def456...", // SHA-256 content hash (64 hex chars, no 0x prefix)
-  "fileName": "document.pdf", // Original filename
-  "fileSize": 1048576 // Total size in bytes
+message ChunkInfo {
+  uint32 index = 1;          // Chunk index
+  string hash = 2;           // Chunk hash
+  uint32 size = 3;           // Chunk size
+  repeated string nodes = 4; // Nodes storing chunk
 }
 ```
 
-#### Messaging Protocol
-
-File transfer uses a four-step query flow:
-
-##### Step 1: INFO_REQUEST
-
-Downloader requests transfer terms from a seeder.
+#### Chunk Transfer Protocol
 
 ```
-Request:
-{
-  type: "INFO_REQUEST",
-  file_hash: "sha256_abc123...",
-  request_id: u32,
-  sender_id: [u8; 20]
-}
+1. Request Chunk
+   → REQUEST_CHUNK {
+       file_hash: "sha256...",
+       chunk_index: 5,
+       offset: 0,
+       length: 262144
+     }
 
-Response:
-{
-  type: "INFO_RESPONSE",
-  file_hash: "sha256_abc123...",
-  content_protocol: "http" | "ftp" | "bittorrent" | "webrtc" | "ed2k" | "bitswap",
-  price_per_mb: "0.001",
-  wallet_address: "0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983",
-  supported_versions: [1, 2],
-  min_payment_increment_mb: 1,
-  request_id: u32
-}
+2. Receive Chunk
+   ← CHUNK_DATA {
+       file_hash: "sha256...",
+       chunk_index: 5,
+       data: [binary],
+       proof: [merkle_proof]
+     }
+
+3. Verify Chunk
+   - Hash verification
+   - Merkle proof validation
+   - Decrypt if needed
+
+4. Acknowledge
+   → CHUNK_ACK {
+       file_hash: "sha256...",
+       chunk_index: 5,
+       status: "verified"
+     }
 ```
-
-##### Step 2: PROTOCOL_SPECIFIC_REQUEST
-
-Downloader requests protocol-specific connection details.
-
-```
-Request:
-{
-  type: "PROTOCOL_SPECIFIC_REQUEST",
-  protocol: "http" | "ftp" | "bittorrent" | "webrtc" | "ed2k" | "bitswap",
-  file_hash: "sha256_abc123...",
-  info_requested: "connection_details",
-  request_id: u32
-}
-```
-
-##### Step 3: PROTOCOL_SPECIFIC_RESPONSE
-
-Seeder returns protocol-specific details.
-
-```
-// HTTP
-{
-  type: "PROTOCOL_SPECIFIC_RESPONSE",
-  protocol: "http",
-  endpoint: "http://192.168.1.100:8080/file/sha256_abc123...",
-  timeout: 30
-}
-
-// FTP
-{
-  type: "PROTOCOL_SPECIFIC_RESPONSE",
-  protocol: "ftp",
-  host: "ftp.example.com",
-  port: 21,
-  username: "anonymous",
-  path: "/pub/file.zip",
-  passive: true,
-  tls: true
-}
-
-// BitTorrent
-{
-  type: "PROTOCOL_SPECIFIC_RESPONSE",
-  protocol: "bittorrent",
-  info_hash: "abc123sha1...",
-  trackers: ["udp://tracker.example.com:6969/announce"],
-  magnet: "magnet:?xt=urn:btih:..."
-}
-
-// WebRTC
-{
-  type: "PROTOCOL_SPECIFIC_RESPONSE",
-  protocol: "webrtc",
-  signaling_url: "ws://signaling.example.com:8888",
-  ice_servers: [
-    { "urls": "stun:stun.l.google.com:19302" },
-    { "urls": "turn:turn.example.com:3478", "username": "...", "credential": "..." }
-  ]
-}
-
-// ed2k
-{
-  type: "PROTOCOL_SPECIFIC_RESPONSE",
-  protocol: "ed2k",
-  ed2k_link: "ed2k://|file|example.zip|12345678|..."
-}
-
-// BitSwap
-{
-  type: "PROTOCOL_SPECIFIC_RESPONSE",
-  protocol: "bitswap",
-  cids: ["bafybeifx...", "bafybeigy...", "bafybeihz..."],
-  peer_id: "12D3KooW...",
-  multiaddrs: ["/ip4/192.168.1.100/tcp/4001/p2p/12D3KooW..."]
-}
-```
-
-##### Step 4: Transfer
-
-After receiving protocol-specific details, the downloader initiates the transfer using the appropriate protocol and makes payments according to the terms received in INFO_RESPONSE.
-
-#### Transfer Protocol
-
-The actual file transfer protocol depends on the `content_protocol` returned in INFO_RESPONSE:
-
-- **HTTP/FTP**: Standard range-based downloads
-- **BitTorrent**: BitTorrent peer-wire protocol
-- **WebRTC**: WebRTC data channels
-- **ed2k**: eDonkey2000 chunk-based protocol
-- **BitSwap**: IPFS Bitswap protocol with CID-based block exchange
-
-Chunk verification is handled according to each protocol's native mechanism:
-
-- HTTP/FTP: SHA-256 hash verification
-- BitTorrent: SHA-1 piece hashes
-- ed2k: MD4 chunk hashes
-- BitSwap: CID verification
-- WebRTC: Application-defined
 
 #### Parallel Transfer Optimization
 
@@ -421,17 +332,34 @@ TransactionTypes:
 
 #### On-Stream Chunk Validation
 
-1. Requesters query DHT for file metadata (fileHash, fileName, fileSize).
-2. Requesters send INFO_REQUEST to seeders to obtain transfer terms.
-3. Requesters send PROTOCOL_SPECIFIC_REQUEST to obtain protocol-specific connection details.
-4. Transfer proceeds using the agreed protocol (HTTP, FTP, BitTorrent, WebRTC, ed2k, BitSwap).
-5. Chunk verification follows each protocol's native mechanism:
-   - HTTP/FTP: SHA-256 verification
-   - BitTorrent: SHA-1 piece hashes
-   - ed2k: MD4 verification
-   - BitSwap: CID verification
-6. Any failed verification aborts the transfer, blacklists the provider locally, and emits a reputation penalty signal.
-7. Providers that successfully deliver all requested chunks earn a positive reputation update.
+1) Requesters select providers via the DHT and local reputation cache, then stream chunks.
+2) For every chunk received, the requester hashes the ciphertext and compares it to the expected chunk hash in the manifest before attempting decryption.
+3) When a provider includes an Merkle path, the requester validates the chunk hash against the manifest’s Merkle root for end-to-end integrity.
+4) Any failed verification aborts the transfer, blacklists the provider locally, and emits a reputation penalty signal to interested peers.
+5) Providers that successfully deliver all requested chunks earn a positive reputation update and remain eligible for future download selection.
+
+
+#### Proof Generation
+
+```rust
+fn generate_proof(challenge: Challenge) -> Proof {
+    let mut proofs = Vec::new();
+
+    for index in challenge.chunk_indices {
+        let chunk = storage.get_chunk(challenge.file_hash, index);
+        let hash = sha256(chunk.data);
+        let merkle_proof = generate_merkle_proof(index);
+        proofs.push((hash, merkle_proof));
+    }
+
+    Proof {
+        file_hash: challenge.file_hash,
+        proofs,
+        timestamp: now(),
+        signature: sign(proofs)
+    }
+}
+```
 
 ### 6. Multi-Network Integration: Chiral and BitTorrent
 
@@ -446,17 +374,40 @@ The system does **not** merge the two networks. Instead, the `ProtocolManager` a
 
 This allows the Chiral client to source file pieces from a high-reputation Chiral peer and a public torrent swarm at the same time, with the `multi_source_download` engine assembling the final file from all incoming pieces.
 
-#### BitTorrent Integration via Messaging Protocol
+#### DHT Modifications for Torrent Discovery
 
-To enable Chiral peers to discover BitTorrent sources, the messaging protocol is used:
+To enable Chiral peers to discover torrent-based sources from each other, the Chiral DHT protocol is extended:
 
-1.  **DHT Lookup**: Client queries DHT for minimal file metadata (fileHash, fileName, fileSize).
-2.  **INFO_REQUEST**: Client sends INFO_REQUEST to seeders.
-3.  **INFO_RESPONSE**: Seeder indicates BitTorrent is available via `content_protocol: "bittorrent"`.
-4.  **PROTOCOL_SPECIFIC_REQUEST**: Client requests BitTorrent connection details.
-5.  **PROTOCOL_SPECIFIC_RESPONSE**: Seeder returns `info_hash`, `trackers`, and `magnet` link.
+1.  **Extended DHT Record**: The metadata record stored in the Chiral DHT is modified to include an optional `info_hash` field. This allows a Chiral peer to associate a file's Content ID (CID) with a corresponding BitTorrent info hash.
 
-This approach keeps DHT metadata minimal while allowing protocol-specific details to be discovered through the query flow.
+    ```protobuf
+    // Extended FileMetadata in Chiral DHT
+    message FileMetadata {
+      string file_hash = 1;      // SHA-256 hash (CID)
+      // ... other fields
+      optional string info_hash = 8; // BitTorrent info hash (SHA-1)
+    }
+    ```
+
+2.  **Dual Lookup Logic**: The DHT interface is expanded with new lookup functions:
+    *   `search_by_cid(cid: String)`: The standard lookup that resolves a file's CID to a list of Chiral peers.
+    *   `search_by_infohash(info_hash: String)`: A new function that allows finding Chiral peers who have registered a specific torrent info hash.
+
+3.  **Torrent Announcement**: A new DHT operation is added to allow a peer to advertise that it can serve a file via BitTorrent.
+
+    ```rust
+    // Pseudocode for announcing a torrent source
+    fn announce_torrent(cid: String, info_hash: String) {
+        // 1. Retrieve the existing metadata record for the CID.
+        let mut metadata = dht.get(cid);
+        // 2. Add or update the info_hash.
+        metadata.info_hash = Some(info_hash);
+        // 3. Store the updated record back into the DHT.
+        dht.put(cid, metadata);
+    }
+    ```
+
+These extensions enable a Chiral client to first discover a file via its CID, and then, from the returned metadata, discover that the file is *also* available on the public BitTorrent network via its info hash. This bridges the two networks, enabling the powerful multi-source downloading feature.
 
 ## Network Protocols
 
@@ -603,6 +554,7 @@ message FileResponse {
   string hash = 1;
   uint32 chunk_index = 2;
   bytes data = 3;
+  repeated bytes merkle_proof = 4;
 }
 ```
 
@@ -662,8 +614,8 @@ Super Nodes (High Bandwidth/Storage)
     │       ├── Edge Nodes
     │               │
     │               └── Client Nodes
-    │
-    │
+    │       
+    │       
     │
     └── Relay Nodes
             │

@@ -8,10 +8,16 @@
  * - Recording transactions for both parties
  */
 
-import { wallet, transactions, type Transaction } from "$lib/stores";
+import {
+  addTransactionWithPolling,
+  wallet,
+  transactions,
+  type Transaction,
+} from "$lib/stores";
 import { get } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
 import { reputationService } from "./reputationService";
+import { downloadHistoryService } from "./downloadHistoryService";
 
 // type FullNetworkStats = {
 //   network_difficulty: number
@@ -92,6 +98,7 @@ export interface DownloadPayment {
 export class PaymentService {
   private static initialized = false;
   private static processedPayments = new Set<string>(); // Track processed file hashes (for downloads)
+  private static pendingPayments = new Set<string>(); // Track in-flight download payments
   private static receivedPayments = new Set<string>(); // Track received payments (for uploads)
   private static pollingInterval: number | null = null;
   private static readonly POLL_INTERVAL_MS = 10000; // Poll every 10 seconds
@@ -236,7 +243,10 @@ export class PaymentService {
   }> {
     try {
       // Check if this file has already been paid for
-      if (this.processedPayments.has(fileHash)) {
+      if (
+        this.processedPayments.has(fileHash) ||
+        this.pendingPayments.has(fileHash)
+      ) {
         console.log("⚠️ Payment already processed for file:", fileHash);
         return {
           success: false,
@@ -353,25 +363,58 @@ export class PaymentService {
         amount: amount,
         to: seederAddress,
         from: currentWallet.address,
+        transaction_hash: transactionHash,
         txHash: transactionHash,
+        hash: transactionHash,
         date: new Date(),
         description: `Download: ${fileName}`,
-        status: "success",
+        status: "pending",
       };
 
       console.log("📝 Creating transaction:", newTransaction);
 
-      // Add transaction to history with persistence
-      transactions.update((txs) => {
-        const updated = [newTransaction, ...txs];
-        console.log("✅ Updated transactions array length:", updated.length);
-        saveTransactionsToStorage(updated);
-        return updated;
+      // Add transaction to history and start polling for updates
+      this.pendingPayments.add(fileHash);
+      console.log("✅ Marked file as payment pending:", fileHash);
+
+      downloadHistoryService.updatePaymentStatus(
+        fileHash,
+        "pending",
+        transactionHash,
+      );
+
+      void addTransactionWithPolling(newTransaction, (status) => {
+        if (status.status === "success") {
+          this.processedPayments.add(fileHash);
+          this.pendingPayments.delete(fileHash);
+          downloadHistoryService.updatePaymentStatus(
+            fileHash,
+            "completed",
+            transactionHash,
+          );
+        } else if (status.status === "failed") {
+          this.pendingPayments.delete(fileHash);
+          downloadHistoryService.updatePaymentStatus(
+            fileHash,
+            "not_sent",
+            transactionHash,
+          );
+        } else if (
+          status.status === "pending" ||
+          status.status === "submitted"
+        ) {
+          downloadHistoryService.updatePaymentStatus(
+            fileHash,
+            "pending",
+            transactionHash,
+          );
+        }
+        saveTransactionsToStorage(get(transactions));
+      }).catch((error) => {
+        console.error("Failed to poll transaction status:", error);
       });
 
-      // Mark this file as paid to prevent duplicate payments
-      this.processedPayments.add(fileHash);
-      console.log("✅ Marked file as paid:", fileHash);
+      saveTransactionsToStorage(get(transactions));
 
       // Publish reputation verdict for successful payment (downloader perspective)
       // Get our own peer ID first for the issuer_id

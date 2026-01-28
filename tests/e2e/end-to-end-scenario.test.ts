@@ -137,7 +137,13 @@ describe("End-to-End Scenario Tests", () => {
         }
         const result = await searchPromise;
         if (result) {
-          setTimeout(() => eventHelper.emit("found_file", result), 40);
+          setTimeout(() => eventHelper.emit("dht_metadata_found", {
+            fileHash: result.fileHash,
+            fileName: result.fileName,
+            fileSize: result.fileSize,
+            createdAt: result.createdAt,
+            mimeType: result.mimeType,
+          }), 40);
         }
         return result;
       });
@@ -335,7 +341,13 @@ describe("End-to-End Scenario Tests", () => {
         }
         const result = await searchPromise;
         if (result) {
-          setTimeout(() => eventHelper.emit("found_file", result), 40);
+          setTimeout(() => eventHelper.emit("dht_metadata_found", {
+            fileHash: result.fileHash,
+            fileName: result.fileName,
+            fileSize: result.fileSize,
+            createdAt: result.createdAt,
+            mimeType: result.mimeType,
+          }), 40);
         }
         return result;
       });
@@ -569,7 +581,13 @@ describe("End-to-End Scenario Tests", () => {
         }
         const result = await searchPromise;
         if (result) {
-          setTimeout(() => eventHelper.emit("found_file", result), 40);
+          setTimeout(() => eventHelper.emit("dht_metadata_found", {
+            fileHash: result.fileHash,
+            fileName: result.fileName,
+            fileSize: result.fileSize,
+            createdAt: result.createdAt,
+            mimeType: result.mimeType,
+          }), 40);
         }
         return result;
       });

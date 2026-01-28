@@ -393,6 +393,7 @@ impl HttpDownloadClient {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: config.transfer_id.clone(),
                         file_hash: file_hash.to_string(),
+                        protocol: "HTTP".to_string(),
                         failed_at: current_timestamp_ms(),
                         error: e.clone(),
                         error_category: ErrorCategory::Network,
@@ -438,6 +439,7 @@ impl HttpDownloadClient {
             bus.emit_started(TransferStartedEvent {
                 transfer_id: config.transfer_id.clone(),
                 file_hash: file_hash.to_string(),
+                protocol: "HTTP".to_string(),
                 file_name: config.file_name.clone(),
                 file_size: metadata.size,
                 total_chunks,
@@ -492,6 +494,7 @@ impl HttpDownloadClient {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: config.transfer_id.clone(),
                         file_hash: file_hash.to_string(),
+                        protocol: "HTTP".to_string(),
                         failed_at: current_timestamp_ms(),
                         error: e.clone(),
                         error_category: ErrorCategory::Network,
@@ -534,6 +537,7 @@ impl HttpDownloadClient {
                 bus.emit_failed(TransferFailedEvent {
                     transfer_id: config.transfer_id.clone(),
                     file_hash: file_hash.to_string(),
+                    protocol: "HTTP".to_string(),
                     failed_at: current_timestamp_ms(),
                     error: e.clone(),
                     error_category: ErrorCategory::Filesystem,
@@ -579,6 +583,7 @@ impl HttpDownloadClient {
             bus.emit_completed(TransferCompletedEvent {
                 transfer_id: config.transfer_id.clone(),
                 file_hash: file_hash.to_string(),
+                protocol: "HTTP".to_string(),
                 file_name: config.file_name.clone(),
                 file_size: metadata.size,
                 output_path: output_path.to_string_lossy().to_string(),
@@ -788,6 +793,7 @@ impl HttpDownloadClient {
 
                                             bus.emit_progress(TransferProgressEvent {
                                                 transfer_id: config.transfer_id.clone(),
+                                                protocol: "HTTP".to_string(),
                                                 downloaded_bytes: new_bytes,
                                                 total_bytes: file_size,
                                                 completed_chunks: new_chunks as u32,
@@ -1380,6 +1386,7 @@ impl HttpDownloadClient {
                 bus.emit_completed(TransferCompletedEvent {
                     transfer_id: config.transfer_id.clone(),
                     file_hash: file_hash.to_string(),
+                    protocol: "HTTP".to_string(),
                     file_name: config.file_name.clone(),
                     file_size: total_size,
                     output_path: output_path.to_string_lossy().to_string(),
@@ -1423,6 +1430,7 @@ impl HttpDownloadClient {
         if let Some(ref bus) = event_bus {
             bus.emit_resumed(TransferResumedEvent {
                 transfer_id: config.transfer_id.clone(),
+                protocol: "HTTP".to_string(),
                 resumed_at: current_timestamp_ms(),
                 downloaded_bytes: bytes_already_downloaded,
                 remaining_bytes,
@@ -1454,6 +1462,7 @@ impl HttpDownloadClient {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: config.transfer_id.clone(),
                         file_hash: file_hash.to_string(),
+                        protocol: "HTTP".to_string(),
                         failed_at: current_timestamp_ms(),
                         error: error_msg.clone(),
                         error_category: ErrorCategory::Filesystem,
@@ -1498,6 +1507,7 @@ impl HttpDownloadClient {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: config.transfer_id.clone(),
                         file_hash: file_hash.to_string(),
+                        protocol: "HTTP".to_string(),
                         failed_at: current_timestamp_ms(),
                         error: e.clone(),
                         error_category: ErrorCategory::Network,
@@ -1528,6 +1538,7 @@ impl HttpDownloadClient {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: config.transfer_id.clone(),
                         file_hash: file_hash.to_string(),
+                        protocol: "HTTP".to_string(),
                         failed_at: current_timestamp_ms(),
                         error: error_msg.clone(),
                         error_category: ErrorCategory::Filesystem,
@@ -1547,6 +1558,7 @@ impl HttpDownloadClient {
                 bus.emit_failed(TransferFailedEvent {
                     transfer_id: config.transfer_id.clone(),
                     file_hash: file_hash.to_string(),
+                    protocol: "HTTP".to_string(),
                     failed_at: current_timestamp_ms(),
                     error: error_msg.clone(),
                     error_category: ErrorCategory::Filesystem,
@@ -1593,6 +1605,7 @@ impl HttpDownloadClient {
             bus.emit_completed(TransferCompletedEvent {
                 transfer_id: config.transfer_id.clone(),
                 file_hash: file_hash.to_string(),
+                protocol: "HTTP".to_string(),
                 file_name: config.file_name.clone(),
                 file_size: total_size,
                 output_path: output_path.to_string_lossy().to_string(),

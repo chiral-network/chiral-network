@@ -1991,7 +1991,7 @@
     "warnings": {
       "forcedMode": "Ha habilitado manualmente el modo cliente puro en Configuración. No puede compartir archivos ni actuar como servidor DHT. Blockchain usa modo de sincronización ligera (descarga mínima).",
       "forcedModeMining": "Ha habilitado manualmente el modo cliente puro en Configuración. Blockchain sincroniza solo los últimos ~100 bloques en lugar de sincronización completa (~10,000 bloques). Minería disponible pero usa almacenamiento mínimo.",
-      "natDetected": "AutoNAT detectó que está detrás de NAT o un firewall restrictivo. Puede descargar archivos pero no puede compartirlos con otros pares.",
+      "natDetected": "AutoNAT detectó que está detrás de NAT o un firewall restrictivo. Puede descargar archivos pero no puede compartirlos directamente con otros pares. Los archivos se guardan localmente y pueden compartirse a través de servidores de retransmisión.",
       "natDetectedMining": "AutoNAT detectó que está detrás de NAT o un firewall restrictivo. Blockchain sincroniza solo los últimos ~100 bloques para reducir requisitos de ancho de banda/almacenamiento. Minería disponible con almacenamiento reducido.",
       "settingsForced": "⚠️ Modo cliente forzado: No podrá compartir archivos ni actuar como servidor DHT. Blockchain usa sincronización parcial (solo últimos ~100 bloques) en lugar de sincronización completa (~10,000 bloques). Minería disponible con almacenamiento reducido. Requiere reinicio de DHT.",
       "serverModeDisabled": "ℹ️ El modo servidor está deshabilitado cuando el modo cliente está forzado."
@@ -2011,7 +2011,7 @@
       },
       "help": {
         "forced": "Para habilitar compartir, deshabilite \"Forzar Modo Solo Cliente\" en Configuración → Desarrolladores → Modo Cliente DHT.",
-        "nat": "Sus archivos aún se guardarán localmente, pero no se compartirán con la red. Para habilitar compartir, configure reenvío de puertos o use una VPN con IP pública.",
+        "nat": "Para habilitar el intercambio directo entre pares: 1) Active UPnP en Configuración → Red (si su router lo admite), 2) Configure manualmente el reenvío de puertos en su router, o 3) Use una VPN con IP pública. El intercambio basado en retransmisión aún puede funcionar.",
         "default": "Verifique su configuración de red o configuración de AutoNAT.",
         "forcedMining": "Para habilitar sincronización blockchain completa (10,000 bloques), deshabilite \"Forzar Modo Solo Cliente\" en Configuración → Desarrolladores.",
         "natMining": "Los nodos completos sincronizan ~10,000 bloques. Para actualizar, configure reenvío de puertos o use una VPN con IP pública para ser públicamente accesible.",

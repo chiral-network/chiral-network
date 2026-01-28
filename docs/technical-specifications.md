@@ -112,42 +112,47 @@ Chunk Format:
 
 ### File Metadata Structure
 
-The system uses a minimal DHT record for file discovery. Protocol-specific details are obtained through the messaging protocol.
+The system uses two primary JSON structures for metadata, which are derived directly from the Rust code.
 
 #### 1. DHT Record Specification
 
-This is the public record stored on the network for file discovery. It contains only essential information.
+This is the public record stored on the network for file discovery. It corresponds to the `FileMetadata` struct in `dht.rs`.
 
 ```json
 {
-  "fileHash": "string (SHA-256 content hash, 64 hex chars)",
-  "fileName": "string (Original filename)",
-  "fileSize": "u64 (Total size in bytes)"
+  "fileHash": "string (The Merkle Root of the file, used as the unique identifier)",
+  "fileName": "string",
+  "fileSize": "u64 (Total size of the original file in bytes)",
+  "seeders": ["string (A list of PeerIDs that are hosting the file); this is populated through get_seeders_for_file function, seeders should not be stored in the record on the DHT network"],
+  "createdAt": "u64 (Unix timestamp of creation)",
+  "mimeType": "string | null",
+  "isEncrypted": "boolean",
+  "encryptionMethod": "string | null (e.g., 'AES-256-GCM')",
+  "keyFingerprint": "string | null",
+  "version": "u32 | null (For file versioning)"
 }
 ```
 
-Note: The seeder list is obtained via `get_seeders_for_file()` function, not stored in the DHT record.
+#### 2. File Manifest Specification
 
-#### 2. File Manifest (Client-Side)
-
-This is a client-side structure generated upon upload. It is not stored in DHT but is exchanged over the content channel or kept local. It contains all information needed to reassemble and decrypt the file.
+This is a client-side structure, generated upon upload and required for download. It contains all information needed to reassemble and decrypt the file from its constituent chunks. It corresponds to the `FileManifest` struct in `manager.rs`.
 
 ```json
 {
-  "fileHash": "string (hex)",
-  "fileName": "string",
-  "fileSize": "u64",
+  "merkleRoot": "string (hex)",
   "chunks": [
     {
-      "index": "u32",
-      "hash": "string (hex, SHA-256 of unencrypted chunk)",
-      "size": "usize"
+      "index": "u32 (The sequential order of the chunk)",
+      "hash": "string (hex, The SHA-256 hash of the original, unencrypted chunk data)",
+      "size": "usize (The size of the original chunk in bytes)",
+      "encryptedHash": "string (hex, The hash of the encrypted chunk)",
+      "encryptedSize": "usize (The size of the encrypted chunk in bytes)"
     }
   ],
   "encryptedKeyBundle": {
-    "ephemeralPublicKey": "Vec<u8>",
-    "nonce": "Vec<u8>",
-    "encryptedKey": "Vec<u8>"
+    "ephemeralPublicKey": "Vec<u8> (The ephemeral public key from the Diffie-Hellman exchange)",
+    "nonce": "Vec<u8> (The nonce used for encrypting the AES key)",
+    "encryptedKey": "Vec<u8> (The AES file key, encrypted)"
   }
 }
 ```

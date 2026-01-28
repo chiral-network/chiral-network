@@ -1,26 +1,33 @@
-use crate::connection_retry::{ConnectionManager, ConnectionState, RetryConfig, WebRtcRetryContext, };
+use crate::bandwidth::BandwidthController;
+use crate::connection_retry::{
+    ConnectionManager, ConnectionState, RetryConfig, WebRtcRetryContext,
+};
 use crate::encryption::{decrypt_aes_key, encrypt_aes_key, EncryptedAesKeyBundle, FileEncryption};
 use crate::file_transfer::FileTransferService;
 use crate::keystore::Keystore;
-use crate::bandwidth::BandwidthController;
 use crate::manager::{ChunkInfo, FileManifest};
 use crate::multi_source_download::MultiSourceDownloadService;
 use crate::payment_checkpoint::PaymentCheckpointService;
+use crate::transfer_events::{
+    current_timestamp_ms, ErrorCategory, SourceSummary, SourceType, TransferCompletedEvent,
+    TransferEventBus, TransferFailedEvent, TransferProgressEvent,
+};
 use aes_gcm::aead::Aead;
 use aes_gcm::{AeadCore, KeyInit};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio_util::bytes::Bytes;
-use tauri::Emitter;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use tauri::Emitter;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
+use tokio_util::bytes::Bytes;
 use tracing::{debug, error, info, warn};
 use webrtc::api::APIBuilder;
-use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
+use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
@@ -30,7 +37,6 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-use indicatif::{ProgressBar, ProgressStyle};
 
 lazy_static::lazy_static! {
     /// Global map of progress bars for active downloads, keyed by file hash
@@ -43,6 +49,13 @@ lazy_static::lazy_static! {
     /// This lets the download initiator (GUI/E2E API) control the final save location,
     /// while the assembler lives in this library crate (no access to binary AppState).
     static ref REQUESTED_WEBRTC_DOWNLOAD_OUTPUT_PATHS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+
+    /// Requested transfer IDs for WebRTC downloads (file_hash -> transfer_id).
+    /// This enables TransferEventBus progress emission with a stable transfer_id.
+    static ref REQUESTED_WEBRTC_DOWNLOAD_TRANSFER_IDS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+
+    /// Requested start time for WebRTC downloads (file_hash -> Instant).
+    static ref REQUESTED_WEBRTC_DOWNLOAD_START_TIMES: Mutex<HashMap<String, Instant>> = Mutex::new(HashMap::new());
 }
 
 /// Record the desired output path for a given WebRTC file hash.
@@ -56,8 +69,40 @@ pub async fn set_requested_download_output_path(file_hash: String, output_path: 
     }
 }
 
+/// Record the transfer ID for a given WebRTC file hash.
+pub async fn set_requested_download_transfer_id(file_hash: String, transfer_id: String) {
+    let mut map = REQUESTED_WEBRTC_DOWNLOAD_TRANSFER_IDS.lock().await;
+    map.insert(file_hash, transfer_id);
+}
+
+/// Record the start time for a given WebRTC file hash.
+pub async fn set_requested_download_start_time(file_hash: String) {
+    let mut map = REQUESTED_WEBRTC_DOWNLOAD_START_TIMES.lock().await;
+    map.insert(file_hash, Instant::now());
+}
+
 async fn take_requested_download_output_path(file_hash: &str) -> Option<String> {
     let mut map = REQUESTED_WEBRTC_DOWNLOAD_OUTPUT_PATHS.lock().await;
+    map.remove(file_hash)
+}
+
+async fn get_requested_download_transfer_id(file_hash: &str) -> Option<String> {
+    let map = REQUESTED_WEBRTC_DOWNLOAD_TRANSFER_IDS.lock().await;
+    map.get(file_hash).cloned()
+}
+
+async fn get_requested_download_start_time(file_hash: &str) -> Option<Instant> {
+    let map = REQUESTED_WEBRTC_DOWNLOAD_START_TIMES.lock().await;
+    map.get(file_hash).cloned()
+}
+
+async fn remove_requested_download_transfer_id(file_hash: &str) -> Option<String> {
+    let mut map = REQUESTED_WEBRTC_DOWNLOAD_TRANSFER_IDS.lock().await;
+    map.remove(file_hash)
+}
+
+async fn remove_requested_download_start_time(file_hash: &str) -> Option<Instant> {
+    let mut map = REQUESTED_WEBRTC_DOWNLOAD_START_TIMES.lock().await;
     map.remove(file_hash)
 }
 
@@ -103,8 +148,8 @@ fn encode_chunk_frame(chunk: &FileChunk) -> Result<Vec<u8>, String> {
         hasher.update(&chunk.data);
         format!("{:x}", hasher.finalize())
     };
-    let checksum_vec =
-        hex::decode(&checksum_hex).map_err(|e| format!("Invalid checksum hex for framing: {}", e))?;
+    let checksum_vec = hex::decode(&checksum_hex)
+        .map_err(|e| format!("Invalid checksum hex for framing: {}", e))?;
     if checksum_vec.len() != 32 {
         return Err(format!(
             "Invalid checksum length for chunk framing (expected 32 bytes, got {})",
@@ -129,7 +174,13 @@ fn encode_chunk_frame(chunk: &FileChunk) -> Result<Vec<u8>, String> {
     }
 
     let mut out = Vec::with_capacity(
-        4 + 1 + 1 + 4 + 4 + 2 + 32 + 32
+        4 + 1
+            + 1
+            + 4
+            + 4
+            + 2
+            + 32
+            + 32
             + if flags & CHUNK_FRAME_FLAG_KEY_BUNDLE != 0 {
                 4 + key_bundle_json.len()
             } else {
@@ -261,7 +312,7 @@ const MAX_RETRY_DELAY_MS: u64 = 15000;
 
 /// Creates a WebRTC configuration with STUN and TURN servers for NAT traversal.
 /// Without ICE servers, WebRTC connections will fail for users behind NAT (majority of users).
-/// 
+///
 /// TURN servers are required for symmetric NAT (common in universities/corporate networks).
 fn create_rtc_configuration() -> RTCConfiguration {
     RTCConfiguration {
@@ -338,6 +389,13 @@ pub struct TransferProgress {
     pub chunks_transferred: u32,
     pub total_chunks: u32,
     pub percentage: f32,
+}
+
+struct AssembledDownload {
+    file_name: String,
+    file_size: u64,
+    output_path: String,
+    total_chunks: u32,
 }
 
 pub struct PeerConnection {
@@ -579,7 +637,7 @@ impl WebRTCService {
         let (event_tx, event_rx) = mpsc::channel(1000); // Increased capacity for high-throughput transfers
         let connections = Arc::new(Mutex::new(HashMap::new()));
         let active_private_key = Arc::new(Mutex::new(None));
-        
+
         // Initialize connection manager with WebRTC-optimized retry config
         let connection_manager = Arc::new(ConnectionManager::new(RetryConfig::for_webrtc()));
 
@@ -629,12 +687,12 @@ impl WebRTCService {
         let mut key_guard = self.active_private_key.lock().await;
         *key_guard = private_key;
     }
-    
+
     /// Get connection statistics
     pub async fn get_connection_stats(&self) -> crate::connection_retry::ConnectionManagerStats {
         self.connection_manager.get_stats().await
     }
-    
+
     /// Manually trigger retry for a failed connection
     pub async fn retry_connection(&self, peer_id: &str) -> Result<(), String> {
         self.cmd_tx
@@ -689,12 +747,17 @@ impl WebRTCService {
                     Self::handle_ice_candidate(&peer_id, &candidate, &connections).await;
                 }
                 WebRTCCommand::SendFileRequest { peer_id, request } => {
-                    info!("📤 Sending file request to peer {} for file {}", peer_id, request.file_hash);
+                    info!(
+                        "📤 Sending file request to peer {} for file {}",
+                        peer_id, request.file_hash
+                    );
                     // Send the file request over the data channel to the peer
                     Self::send_file_request_to_peer(&peer_id, &request, &connections).await;
                 }
                 WebRTCCommand::SendFileChunk { peer_id, chunk } => {
-                    if let Err(e) = Self::handle_send_chunk(&peer_id, &chunk, &connections, &bandwidth).await {
+                    if let Err(e) =
+                        Self::handle_send_chunk(&peer_id, &chunk, &connections, &bandwidth).await
+                    {
                         error!("Failed to send file chunk to {}: {}", peer_id, e);
                     }
                 }
@@ -713,7 +776,8 @@ impl WebRTCService {
                     .await;
                 }
                 WebRTCCommand::CloseConnection { peer_id } => {
-                    Self::handle_close_connection(&peer_id, &connections, &connection_manager).await;
+                    Self::handle_close_connection(&peer_id, &connections, &connection_manager)
+                        .await;
                 }
                 WebRTCCommand::RetryConnection { peer_id, offer } => {
                     let Some(app_handle) = app_handle.as_ref() else {
@@ -739,7 +803,7 @@ impl WebRTCService {
             }
         }
     }
-    
+
     /// Handle connection establishment with retry tracking
     async fn handle_establish_connection_with_retry(
         app_handle: &tauri::AppHandle,
@@ -774,7 +838,7 @@ impl WebRTCService {
             payment_checkpoint,
         )
         .await;
-        
+
         match result {
             Ok(()) => {
                 tracker.record_success();
@@ -787,7 +851,7 @@ impl WebRTCService {
                 let attempts = tracker.consecutive_failures;
                 let config = tracker.config.clone();
                 connection_manager.update(tracker).await;
-                
+
                 if state == ConnectionState::Failed {
                     // All retries exhausted
                     let _ = event_tx
@@ -812,7 +876,7 @@ impl WebRTCService {
             }
         }
     }
-    
+
     /// Handle retry of a failed connection
     async fn handle_retry_connection(
         app_handle: &tauri::AppHandle,
@@ -829,7 +893,7 @@ impl WebRTCService {
         payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
         let tracker = connection_manager.get_or_create(peer_id).await;
-        
+
         // Check if we should retry
         if !tracker.is_ready_to_retry() {
             if let Some(wait_time) = tracker.time_until_retry() {
@@ -840,7 +904,7 @@ impl WebRTCService {
                 return;
             }
         }
-        
+
         // Get stored offer from connection if not provided
         let offer = if let Some(o) = offer_sdp {
             o.to_string()
@@ -864,8 +928,12 @@ impl WebRTCService {
                 return;
             }
         };
-        
-        info!("Retrying connection to peer {} (attempt {})", peer_id, tracker.consecutive_failures + 1);
+
+        info!(
+            "Retrying connection to peer {} (attempt {})",
+            peer_id,
+            tracker.consecutive_failures + 1
+        );
 
         Self::handle_establish_connection_with_retry(
             app_handle,
@@ -883,7 +951,7 @@ impl WebRTCService {
         )
         .await;
     }
-    
+
     /// Internal connection establishment (without retry tracking)
     async fn handle_establish_connection_internal(
         app_handle: &tauri::AppHandle,
@@ -913,7 +981,7 @@ impl WebRTCService {
             payment_checkpoint,
         )
         .await;
-        
+
         // Check if connection was established by looking at the connection state
         let conns = connections.lock().await;
         if let Some(conn) = conns.get(peer_id) {
@@ -963,7 +1031,7 @@ impl WebRTCService {
 
         // Create data channel with configuration for larger messages
         let mut dc_config = RTCDataChannelInit::default();
-        dc_config.ordered = Some(true);  // Ensure ordered delivery for file chunks
+        dc_config.ordered = Some(true); // Ensure ordered delivery for file chunks
 
         let data_channel = match peer_connection
             .create_data_channel("file-transfer", Some(dc_config))
@@ -1042,8 +1110,11 @@ impl WebRTCService {
                 if let Some(candidate) = candidate {
                     // Log the candidate type for debugging NAT traversal
                     let candidate_type = candidate.typ.to_string();
-                    info!("ICE candidate generated for {}: type={}", peer_id, candidate_type);
-                    
+                    info!(
+                        "ICE candidate generated for {}: type={}",
+                        peer_id, candidate_type
+                    );
+
                     if let Ok(candidate_str) =
                         serde_json::to_string(&candidate.to_json().unwrap_or_default())
                     {
@@ -1080,7 +1151,10 @@ impl WebRTCService {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
                         _ => {
-                            info!("WebRTC peer connection state: {:?} for peer: {}", state, peer_id);
+                            info!(
+                                "WebRTC peer connection state: {:?} for peer: {}",
+                                state, peer_id
+                            );
                         }
                     }
                 })
@@ -1189,7 +1263,7 @@ impl WebRTCService {
         let mut conns = connections.lock().await;
         let mut retry_ctx = WebRtcRetryContext::new(peer_id.to_string(), false);
         retry_ctx.last_offer = Some(offer_sdp.to_string());
-        
+
         let connection = PeerConnection {
             peer_id: peer_id.to_string(),
             is_connected: false, // Will be set to true when connected
@@ -1237,14 +1311,18 @@ impl WebRTCService {
                     Ok(answer) => answer,
                     Err(e) => {
                         error!("Failed to parse answer SDP: {}", e);
-                        connection_manager.record_failure(peer_id, format!("Invalid answer SDP: {}", e)).await;
+                        connection_manager
+                            .record_failure(peer_id, format!("Invalid answer SDP: {}", e))
+                            .await;
                         return;
                     }
                 };
 
                 if let Err(e) = pc.set_remote_description(answer).await {
                     error!("Failed to set remote description: {}", e);
-                    connection_manager.record_failure(peer_id, format!("Failed to set remote description: {}", e)).await;
+                    connection_manager
+                        .record_failure(peer_id, format!("Failed to set remote description: {}", e))
+                        .await;
                 } else {
                     // Answer was set successfully - connection is progressing
                     debug!("Successfully set remote description for peer {}", peer_id);
@@ -1284,7 +1362,10 @@ impl WebRTCService {
     ) {
         use webrtc::data_channel::data_channel_state::RTCDataChannelState;
 
-        info!("Sending file request to peer {} for file {}", peer_id, request.file_hash);
+        info!(
+            "Sending file request to peer {} for file {}",
+            peer_id, request.file_hash
+        );
 
         // Wait for data channel to open (with timeout)
         let start = Instant::now();
@@ -1298,7 +1379,8 @@ impl WebRTCService {
                     if state == RTCDataChannelState::Open {
                         break dc.clone();
                     }
-                    if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing {
+                    if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing
+                    {
                         error!("Data channel is closed or closing for peer {}", peer_id);
                         return;
                     }
@@ -1306,9 +1388,15 @@ impl WebRTCService {
                 // Data channel not yet available or not open - check timeout
                 if start.elapsed() > timeout {
                     if connection.data_channel.is_none() {
-                        error!("Timeout waiting for data channel to be assigned for peer {}", peer_id);
+                        error!(
+                            "Timeout waiting for data channel to be assigned for peer {}",
+                            peer_id
+                        );
                     } else {
-                        error!("Timeout waiting for data channel to open for peer {}", peer_id);
+                        error!(
+                            "Timeout waiting for data channel to open for peer {}",
+                            peer_id
+                        );
                     }
                     return;
                 }
@@ -1323,7 +1411,10 @@ impl WebRTCService {
         // Serialize request and send over data channel
         match serde_json::to_string(request) {
             Ok(request_json) => {
-                info!("📨 Sending file request JSON to peer {}: {}", peer_id, request_json);
+                info!(
+                    "📨 Sending file request JSON to peer {}: {}",
+                    peer_id, request_json
+                );
                 if let Err(e) = dc.send_text(request_json).await {
                     error!("Failed to send file request over data channel: {}", e);
                 } else {
@@ -1376,7 +1467,10 @@ impl WebRTCService {
             let payment_checkpoint = payment_checkpoint.clone();
 
             tokio::spawn(async move {
-                info!("🚀 Spawned file transfer task for {} to peer {}", request.file_hash, peer_id);
+                info!(
+                    "🚀 Spawned file transfer task for {} to peer {}",
+                    request.file_hash, peer_id
+                );
                 match Self::start_file_transfer(
                     &peer_id,
                     &request,
@@ -1390,10 +1484,16 @@ impl WebRTCService {
                 .await
                 {
                     Ok(_) => {
-                        info!("✅ File transfer completed successfully for {} to peer {}", request.file_hash, peer_id);
+                        info!(
+                            "✅ File transfer completed successfully for {} to peer {}",
+                            request.file_hash, peer_id
+                        );
                     }
                     Err(e) => {
-                        error!("❌ File transfer failed for {} to peer {}: {}", request.file_hash, peer_id, e);
+                        error!(
+                            "❌ File transfer failed for {} to peer {}: {}",
+                            request.file_hash, peer_id, e
+                        );
                         let _ = event_tx
                             .send(WebRTCEvent::TransferFailed {
                                 peer_id: peer_id.clone(),
@@ -1429,7 +1529,7 @@ impl WebRTCService {
                     );
                 }
             }
-            
+
             let _ = event_tx
                 .send(WebRTCEvent::TransferFailed {
                     peer_id: peer_id.to_string(),
@@ -1446,9 +1546,15 @@ impl WebRTCService {
         connections: &Arc<Mutex<HashMap<String, PeerConnection>>>,
         bandwidth: &Arc<BandwidthController>,
     ) -> Result<(), String> {
-        debug!("📤 handle_send_chunk: chunk {} for peer {}, acquiring bandwidth", chunk.chunk_index, peer_id);
+        debug!(
+            "📤 handle_send_chunk: chunk {} for peer {}, acquiring bandwidth",
+            chunk.chunk_index, peer_id
+        );
         bandwidth.acquire_upload(chunk.data.len()).await;
-        debug!("📤 handle_send_chunk: bandwidth acquired for chunk {}", chunk.chunk_index);
+        debug!(
+            "📤 handle_send_chunk: bandwidth acquired for chunk {}",
+            chunk.chunk_index
+        );
 
         // Wait for data channel to open (with timeout)
         use webrtc::data_channel::data_channel_state::RTCDataChannelState;
@@ -1462,27 +1568,43 @@ impl WebRTCService {
                     let state = dc.ready_state();
                     if state == RTCDataChannelState::Open {
                         if start.elapsed().as_millis() > 100 {
-                            info!("📡 Data channel ready after {}ms for peer {}", start.elapsed().as_millis(), peer_id);
+                            info!(
+                                "📡 Data channel ready after {}ms for peer {}",
+                                start.elapsed().as_millis(),
+                                peer_id
+                            );
                         }
                         break dc.clone();
                     }
-                    if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing {
+                    if state == RTCDataChannelState::Closed || state == RTCDataChannelState::Closing
+                    {
                         error!("Data channel is closed or closing for peer {}", peer_id);
                         return Err(format!("Data channel closed for peer {}", peer_id));
                     }
                 } else {
                     // Log waiting for data channel (but only occasionally)
-                    if start.elapsed().as_millis() % 1000 < 100 && start.elapsed().as_millis() > 100 {
-                        debug!("⏳ Waiting for data channel to be assigned for peer {} ({}ms elapsed)", peer_id, start.elapsed().as_millis());
+                    if start.elapsed().as_millis() % 1000 < 100 && start.elapsed().as_millis() > 100
+                    {
+                        debug!(
+                            "⏳ Waiting for data channel to be assigned for peer {} ({}ms elapsed)",
+                            peer_id,
+                            start.elapsed().as_millis()
+                        );
                     }
                 }
                 // Data channel not yet available or not open - check timeout
                 if start.elapsed() > timeout {
                     if connection.data_channel.is_none() {
-                        error!("Timeout waiting for data channel to be assigned for peer {}", peer_id);
+                        error!(
+                            "Timeout waiting for data channel to be assigned for peer {}",
+                            peer_id
+                        );
                         return Err(format!("Data channel never assigned for peer {}", peer_id));
                     } else {
-                        error!("Timeout waiting for data channel to open for peer {}", peer_id);
+                        error!(
+                            "Timeout waiting for data channel to open for peer {}",
+                            peer_id
+                        );
                         return Err(format!("Data channel timeout for peer {}", peer_id));
                     }
                 }
@@ -1500,9 +1622,12 @@ impl WebRTCService {
             Ok(frame) => frame,
             Err(e) => {
                 // Fallback to JSON only if framing fails for unexpected inputs.
-                warn!("Chunk framing failed; falling back to JSON send_text: {}", e);
-                let chunk_json =
-                    serde_json::to_string(chunk).map_err(|e| format!("Failed to serialize chunk: {}", e))?;
+                warn!(
+                    "Chunk framing failed; falling back to JSON send_text: {}",
+                    e
+                );
+                let chunk_json = serde_json::to_string(chunk)
+                    .map_err(|e| format!("Failed to serialize chunk: {}", e))?;
                 // Check buffer before sending - wait if buffer is too full
                 let max_buffered: usize = 2 * 1024 * 1024; // 2MB max buffer
                 let start_wait = Instant::now();
@@ -1598,7 +1723,11 @@ impl WebRTCService {
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
         payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
-        debug!("📩 Data channel message received from peer {}: {} bytes", peer_id, msg.data.len());
+        debug!(
+            "📩 Data channel message received from peer {}: {} bytes",
+            peer_id,
+            msg.data.len()
+        );
 
         // First, try to decode as a binary-framed FileChunk (preferred, avoids JSON overhead).
         match decode_chunk_frame(&msg.data) {
@@ -1655,7 +1784,7 @@ impl WebRTCService {
             // Log first 500 chars of message for debugging
             let preview = if text.len() > 500 { &text[..500] } else { text };
             debug!("📝 Message preview from {}: {}", peer_id, preview);
-            
+
             // Try to parse as FileChunk first (most common)
             if let Ok(chunk) = serde_json::from_str::<FileChunk>(text) {
                 // Create or update progress bar
@@ -1868,7 +1997,8 @@ impl WebRTCService {
                         let mut conns = connections.lock().await;
                         if let Some(connection) = conns.get_mut(peer_id) {
                             // Record this chunk as ACKed
-                            let acked = connection.acked_chunks
+                            let acked = connection
+                                .acked_chunks
                                 .entry(ack.file_hash.clone())
                                 .or_insert_with(std::collections::HashSet::new);
                             acked.insert(ack.chunk_index);
@@ -1880,19 +2010,27 @@ impl WebRTCService {
                                 }
                             }
 
-                            info!("Received ACK for chunk {} of file {} from peer {}",
-                                  ack.chunk_index, ack.file_hash, peer_id);
+                            info!(
+                                "Received ACK for chunk {} of file {} from peer {}",
+                                ack.chunk_index, ack.file_hash, peer_id
+                            );
                         }
                     }
                 }
             } else {
                 // None of the parsing attempts succeeded - log for debugging
-                warn!("⚠️ Failed to parse data channel message from peer {}. Message preview: {}", 
-                      peer_id, 
-                      if text.len() > 200 { &text[..200] } else { text });
+                warn!(
+                    "⚠️ Failed to parse data channel message from peer {}. Message preview: {}",
+                    peer_id,
+                    if text.len() > 200 { &text[..200] } else { text }
+                );
             }
         } else {
-            warn!("⚠️ Received non-UTF8 data from peer {} ({} bytes)", peer_id, msg.data.len());
+            warn!(
+                "⚠️ Received non-UTF8 data from peer {} ({} bytes)",
+                peer_id,
+                msg.data.len()
+            );
         }
     }
 
@@ -1912,45 +2050,66 @@ impl WebRTCService {
         use webrtc::data_channel::data_channel_state::RTCDataChannelState;
         let start = Instant::now();
         let timeout = Duration::from_secs(10);
-        
+
         loop {
             let dc_state = {
                 let conns = connections.lock().await;
                 if let Some(connection) = conns.get(peer_id) {
                     connection.data_channel.as_ref().map(|dc| dc.ready_state())
                 } else {
-                    return Err(format!("Peer {} not found in connections at start of file transfer", peer_id));
+                    return Err(format!(
+                        "Peer {} not found in connections at start of file transfer",
+                        peer_id
+                    ));
                 }
             };
-            
+
             match dc_state {
                 Some(RTCDataChannelState::Open) => {
-                    info!("✅ Data channel ready for file transfer to peer {}", peer_id);
+                    info!(
+                        "✅ Data channel ready for file transfer to peer {}",
+                        peer_id
+                    );
                     break;
                 }
                 Some(RTCDataChannelState::Closed) | Some(RTCDataChannelState::Closing) => {
-                    error!("❌ Data channel closed/closing for peer {} before file transfer started", peer_id);
+                    error!(
+                        "❌ Data channel closed/closing for peer {} before file transfer started",
+                        peer_id
+                    );
                     return Err(format!("Data channel closed for peer {}", peer_id));
                 }
                 Some(state) => {
                     if start.elapsed() > timeout {
-                        error!("❌ Timeout waiting for data channel to open (state: {:?}) for peer {}", state, peer_id);
+                        error!(
+                            "❌ Timeout waiting for data channel to open (state: {:?}) for peer {}",
+                            state, peer_id
+                        );
                         return Err(format!("Data channel timeout (state: {:?})", state));
                     }
-                    debug!("⏳ Waiting for data channel to open (state: {:?}) for peer {}", state, peer_id);
+                    debug!(
+                        "⏳ Waiting for data channel to open (state: {:?}) for peer {}",
+                        state, peer_id
+                    );
                 }
                 None => {
                     if start.elapsed() > timeout {
-                        error!("❌ Timeout waiting for data channel to be assigned for peer {}", peer_id);
+                        error!(
+                            "❌ Timeout waiting for data channel to be assigned for peer {}",
+                            peer_id
+                        );
                         return Err("Data channel not assigned".to_string());
                     }
-                    debug!("⏳ Waiting for data channel to be assigned for peer {}", peer_id);
+                    debug!(
+                        "⏳ Waiting for data channel to be assigned for peer {}",
+                        peer_id
+                    );
                 }
             }
-            
+
             sleep(Duration::from_millis(50)).await;
         }
-        
+
         // Get file data from local storage
         let file_data = match file_transfer_service
             .get_file_data(&request.file_hash)
@@ -1985,15 +2144,18 @@ impl WebRTCService {
             let session_id = format!("{}_{}", request.file_hash, peer_id);
             let file_size = file_data.len() as u64;
 
-            checkpoint_service.init_session(
-                session_id.clone(),
-                request.file_hash.clone(),
-                file_size,
-                "seeder_address".to_string(), // TODO: Get from request or config
-                peer_id.to_string(),
-                0.001, // TODO: Get price from request or config
-                "exponential".to_string(),
-            ).await.map_err(|e| format!("Failed to init checkpoint: {}", e))?;
+            checkpoint_service
+                .init_session(
+                    session_id.clone(),
+                    request.file_hash.clone(),
+                    file_size,
+                    "seeder_address".to_string(), // TODO: Get from request or config
+                    peer_id.to_string(),
+                    0.001, // TODO: Get price from request or config
+                    "exponential".to_string(),
+                )
+                .await
+                .map_err(|e| format!("Failed to init checkpoint: {}", e))?;
 
             info!("✅ Payment checkpoint session initialized: {}", session_id);
         }
@@ -2006,10 +2168,16 @@ impl WebRTCService {
         // Initialize transfer tracking in connections
         {
             let mut conns = connections.lock().await;
-            info!("🔒 Acquired connections lock for transfer tracking, peer: {}", peer_id);
+            info!(
+                "🔒 Acquired connections lock for transfer tracking, peer: {}",
+                peer_id
+            );
             if let Some(connection) = conns.get_mut(peer_id) {
-                info!("📝 Initializing transfer tracking for peer {}, data_channel present: {}", 
-                      peer_id, connection.data_channel.is_some());
+                info!(
+                    "📝 Initializing transfer tracking for peer {}, data_channel present: {}",
+                    peer_id,
+                    connection.data_channel.is_some()
+                );
                 let transfer = ActiveTransfer {
                     file_hash: request.file_hash.clone(),
                     file_name: request.file_name.clone(),
@@ -2033,30 +2201,54 @@ impl WebRTCService {
         // Initialize pending ACK counter
         {
             let mut conns = connections.lock().await;
-            info!("🔒 Acquired connections lock for pending_acks init, peer: {}", peer_id);
+            info!(
+                "🔒 Acquired connections lock for pending_acks init, peer: {}",
+                peer_id
+            );
             if let Some(connection) = conns.get_mut(peer_id) {
-                info!("✅ Found peer {} in connections, initializing pending_acks", peer_id);
+                info!(
+                    "✅ Found peer {} in connections, initializing pending_acks",
+                    peer_id
+                );
                 connection.pending_acks.insert(request.file_hash.clone(), 0);
-                connection.acked_chunks.insert(request.file_hash.clone(), std::collections::HashSet::new());
+                connection
+                    .acked_chunks
+                    .insert(request.file_hash.clone(), std::collections::HashSet::new());
             } else {
-                error!("❌ Peer {} not found in connections when initializing pending_acks", peer_id);
+                error!(
+                    "❌ Peer {} not found in connections when initializing pending_acks",
+                    peer_id
+                );
                 return Err(format!("Peer {} not found in connections", peer_id));
             }
         }
 
-        info!("📦 Starting chunk loop for {} chunks to peer {}", total_chunks, peer_id);
+        info!(
+            "📦 Starting chunk loop for {} chunks to peer {}",
+            total_chunks, peer_id
+        );
 
         // Debug: log data channel state before starting loop
         {
             let conns = connections.lock().await;
             if let Some(connection) = conns.get(peer_id) {
                 if let Some(dc) = &connection.data_channel {
-                    info!("📡 Data channel state before loop: {:?} for peer {}", dc.ready_state(), peer_id);
+                    info!(
+                        "📡 Data channel state before loop: {:?} for peer {}",
+                        dc.ready_state(),
+                        peer_id
+                    );
                 } else {
-                    error!("⚠️ No data channel found for peer {} before starting loop!", peer_id);
+                    error!(
+                        "⚠️ No data channel found for peer {} before starting loop!",
+                        peer_id
+                    );
                 }
             } else {
-                error!("⚠️ Peer {} not in connections before starting loop!", peer_id);
+                error!(
+                    "⚠️ Peer {} not in connections before starting loop!",
+                    peer_id
+                );
             }
         }
 
@@ -2064,20 +2256,31 @@ impl WebRTCService {
         for chunk_index in 0..total_chunks {
             // Log EVERY chunk for first 100 to debug stall
             if chunk_index < 100 {
-                info!("🔁 LOOP: Starting chunk {} for peer {}", chunk_index, peer_id);
+                info!(
+                    "🔁 LOOP: Starting chunk {} for peer {}",
+                    chunk_index, peer_id
+                );
             }
 
             // Log first few chunks, last chunk, and every 50th chunk
             if chunk_index < 10 || chunk_index == total_chunks - 1 || chunk_index % 50 == 0 {
-                info!("📤 Processing chunk {}/{} for peer {}", chunk_index + 1, total_chunks, peer_id);
+                info!(
+                    "📤 Processing chunk {}/{} for peer {}",
+                    chunk_index + 1,
+                    total_chunks,
+                    peer_id
+                );
             }
 
             // Log every 20 chunks to track progress
             if chunk_index % 20 == 0 {
-                info!("📊 Transfer progress: chunk {}/{} ({}%) to peer {}",
-                    chunk_index, total_chunks,
+                info!(
+                    "📊 Transfer progress: chunk {}/{} ({}%) to peer {}",
+                    chunk_index,
+                    total_chunks,
                     (chunk_index as f32 / total_chunks as f32 * 100.0) as u32,
-                    peer_id);
+                    peer_id
+                );
             }
 
             // Check if should pause for payment checkpoint
@@ -2106,49 +2309,65 @@ impl WebRTCService {
             loop {
                 let pending_count = {
                     let conns = connections.lock().await;
-                    let count = conns.get(peer_id)
+                    let count = conns
+                        .get(peer_id)
                         .and_then(|c| c.pending_acks.get(&request.file_hash).copied())
                         .unwrap_or(0);
                     // Log if peer not found or file_hash not in pending_acks
                     if conns.get(peer_id).is_none() {
-                        error!("⚠️ Chunk {}: Peer {} NOT FOUND in connections during flow control!", chunk_index, peer_id);
+                        error!(
+                            "⚠️ Chunk {}: Peer {} NOT FOUND in connections during flow control!",
+                            chunk_index, peer_id
+                        );
                     }
                     count
                 };
-                
+
                 // Log pending count for first 10 chunks
                 if chunk_index < 10 || chunk_index % 100 == 0 {
-                    info!("🔄 Chunk {}: pending_count={}, MAX_PENDING_ACKS={}", chunk_index, pending_count, MAX_PENDING_ACKS);
+                    info!(
+                        "🔄 Chunk {}: pending_count={}, MAX_PENDING_ACKS={}",
+                        chunk_index, pending_count, MAX_PENDING_ACKS
+                    );
                 }
 
                 if pending_count < MAX_PENDING_ACKS {
                     break;
                 }
-                
+
                 // Log when we're actually waiting for ACKs
                 if chunk_index % 20 == 0 || pending_count >= MAX_PENDING_ACKS - 2 {
-                    warn!("⏳ Chunk {}: Waiting for ACKs (pending={}, max={})", chunk_index, pending_count, MAX_PENDING_ACKS);
+                    warn!(
+                        "⏳ Chunk {}: Waiting for ACKs (pending={}, max={})",
+                        chunk_index, pending_count, MAX_PENDING_ACKS
+                    );
                 }
 
                 // Timeout check
                 if wait_start.elapsed().as_millis() > ACK_WAIT_TIMEOUT_MS as u128 {
                     timeout_count += 1;
-                    warn!("ACK timeout #{} waiting for peer {} (pending: {}, chunk: {}/{})", 
-                          timeout_count, peer_id, pending_count, chunk_index, total_chunks);
-                    
+                    warn!(
+                        "ACK timeout #{} waiting for peer {} (pending: {}, chunk: {}/{})",
+                        timeout_count, peer_id, pending_count, chunk_index, total_chunks
+                    );
+
                     // After 3 consecutive timeouts, check if connection is still alive
                     if timeout_count >= 3 {
                         let dc_state = {
                             let conns = connections.lock().await;
-                            conns.get(peer_id)
+                            conns
+                                .get(peer_id)
                                 .and_then(|c| c.data_channel.as_ref())
                                 .map(|dc| dc.ready_state())
                         };
-                        
+
                         if let Some(state) = dc_state {
                             use webrtc::data_channel::data_channel_state::RTCDataChannelState;
                             if state != RTCDataChannelState::Open {
-                                error!("Data channel no longer open (state: {:?}), aborting transfer", state);
+                                error!(
+                                    "Data channel no longer open (state: {:?}), aborting transfer",
+                                    state
+                                );
                                 let _ = event_tx
                                     .send(WebRTCEvent::TransferFailed {
                                         peer_id: peer_id.to_string(),
@@ -2166,10 +2385,13 @@ impl WebRTCService {
                 // Wait a bit before checking again
                 sleep(Duration::from_millis(50)).await;
             }
-            
+
             // Log after flow control (for first 100 chunks)
             if chunk_index < 100 {
-                info!("🔓 FLOW_CONTROL_PASSED: chunk {} for peer {}", chunk_index, peer_id);
+                info!(
+                    "🔓 FLOW_CONTROL_PASSED: chunk {} for peer {}",
+                    chunk_index, peer_id
+                );
             }
 
             let start = (chunk_index as usize) * CHUNK_SIZE;
@@ -2237,7 +2459,10 @@ impl WebRTCService {
 
             // Send chunk via WebRTC data channel - abort transfer if send fails
             if let Err(e) = Self::handle_send_chunk(peer_id, &chunk, connections, bandwidth).await {
-                error!("Failed to send chunk {}/{} to peer {}: {}", chunk_index, total_chunks, peer_id, e);
+                error!(
+                    "Failed to send chunk {}/{} to peer {}: {}",
+                    chunk_index, total_chunks, peer_id, e
+                );
                 let _ = event_tx
                     .send(WebRTCEvent::TransferFailed {
                         peer_id: peer_id.to_string(),
@@ -2251,7 +2476,8 @@ impl WebRTCService {
             // Update payment checkpoint progress after sending chunk
             if let Some(checkpoint_service) = payment_checkpoint {
                 let session_id = format!("{}_{}", request.file_hash, peer_id);
-                let bytes_transferred = ((chunk_index as u64 + 1) * CHUNK_SIZE as u64).min(file_data.len() as u64);
+                let bytes_transferred =
+                    ((chunk_index as u64 + 1) * CHUNK_SIZE as u64).min(file_data.len() as u64);
 
                 checkpoint_service
                     .update_progress(&session_id, bytes_transferred)
@@ -2264,7 +2490,10 @@ impl WebRTCService {
             let progress_to_send = {
                 let mut conns = connections.lock().await;
                 if let Some(connection) = conns.get_mut(peer_id) {
-                    *connection.pending_acks.entry(request.file_hash.clone()).or_insert(0) += 1;
+                    *connection
+                        .pending_acks
+                        .entry(request.file_hash.clone())
+                        .or_insert(0) += 1;
 
                     if let Some(transfer) = connection.active_transfers.get_mut(&request.file_hash)
                     {
@@ -2287,11 +2516,14 @@ impl WebRTCService {
                     }
                 } else {
                     // This should never happen - peer not in connections after successful send
-                    error!("❌ CRITICAL: Peer {} disappeared from connections after sending chunk {}!", peer_id, chunk_index);
+                    error!(
+                        "❌ CRITICAL: Peer {} disappeared from connections after sending chunk {}!",
+                        peer_id, chunk_index
+                    );
                     None
                 }
             };
-            
+
             // Send progress event OUTSIDE the lock to avoid deadlock
             // Use try_send to avoid blocking if channel is full - progress events are not critical
             if let Some(progress) = progress_to_send {
@@ -2299,19 +2531,25 @@ impl WebRTCService {
                     peer_id: peer_id.to_string(),
                     progress,
                 }) {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(e) => {
                         // Channel full - skip this progress event, not critical
                         if chunk_index < 100 || chunk_index % 100 == 0 {
-                            warn!("📊 Progress event skipped for chunk {} (channel full): {}", chunk_index, e);
+                            warn!(
+                                "📊 Progress event skipped for chunk {} (channel full): {}",
+                                chunk_index, e
+                            );
                         }
                     }
                 }
             }
-            
+
             // Log completion of chunk processing (every 100 chunks to avoid spam)
             if chunk_index % 100 == 0 && chunk_index > 0 {
-                info!("✅ Chunk {} sent and tracked successfully for peer {}", chunk_index, peer_id);
+                info!(
+                    "✅ Chunk {} sent and tracked successfully for peer {}",
+                    chunk_index, peer_id
+                );
             }
 
             // Only yield to other tasks every 10 chunks (no artificial delays)
@@ -2412,14 +2650,15 @@ impl WebRTCService {
 
         // 3. Verify SHA-256 hash if multi-source service is available
         if let Some(service) = multi_source_service {
-            if service.verify_chunk_for_download(
-                &chunk.file_hash,
-                chunk.chunk_index,
-                &final_chunk_data,
-                peer_id,
-            )
-            .await
-            .is_err()
+            if service
+                .verify_chunk_for_download(
+                    &chunk.file_hash,
+                    chunk.chunk_index,
+                    &final_chunk_data,
+                    peer_id,
+                )
+                .await
+                .is_err()
             {
                 warn!(
                     "WebRTC chunk {} hash verification failed for file {}",
@@ -2439,9 +2678,11 @@ impl WebRTCService {
         // Get data channel reference before locking connections
         let dc_for_ack = {
             let conns = connections.lock().await;
-            conns.get(peer_id)
-                .and_then(|c| c.data_channel.clone())
+            conns.get(peer_id).and_then(|c| c.data_channel.clone())
         };
+
+        let transfer_id = get_requested_download_transfer_id(&chunk.file_hash).await;
+        let start_time = get_requested_download_start_time(&chunk.file_hash).await;
 
         let mut conns = connections.lock().await;
         if let Some(connection) = conns.get_mut(peer_id) {
@@ -2452,22 +2693,46 @@ impl WebRTCService {
                 .or_insert_with(HashMap::new);
             chunks.insert(chunk.chunk_index, chunk.clone());
 
-            // Emit progress to frontend
+            // Emit progress event
             if let Some(total_chunks) = chunks.values().next().map(|c| c.total_chunks) {
                 let progress_percentage = (chunks.len() as f32 / total_chunks as f32) * 100.0;
                 let bytes_received = chunks.len() as u64 * CHUNK_SIZE as u64;
                 let estimated_total_size = total_chunks as u64 * CHUNK_SIZE as u64;
+                let (download_speed_bps, eta_seconds) = if let Some(start_time) = start_time {
+                    let elapsed_secs = start_time.elapsed().as_secs_f64();
+                    if elapsed_secs > 0.0 {
+                        let speed = bytes_received as f64 / elapsed_secs;
+                        let remaining = estimated_total_size.saturating_sub(bytes_received);
+                        let eta = if speed > 0.0 && remaining > 0 {
+                            Some((remaining as f64 / speed) as u32)
+                        } else {
+                            None
+                        };
+                        (speed, eta)
+                    } else {
+                        (0.0, None)
+                    }
+                } else {
+                    (0.0, None)
+                };
 
                 if let Some(app_handle) = app_handle {
-                    if let Err(e) = app_handle.emit("webrtc_download_progress", serde_json::json!({
-                        "fileHash": chunk.file_hash,
-                        "progress": progress_percentage,
-                        "chunksReceived": chunks.len(),
-                        "totalChunks": total_chunks,
-                        "bytesReceived": bytes_received,
-                        "totalBytes": estimated_total_size,
-                    })) {
-                        warn!("Failed to emit progress event: {}", e);
+                    if let Some(transfer_id) = transfer_id.as_ref() {
+                        let transfer_event_bus = TransferEventBus::new(app_handle.clone());
+                        transfer_event_bus.emit_progress(TransferProgressEvent {
+                            transfer_id: transfer_id.clone(),
+                            protocol: "WEBRTC".to_string(),
+                            downloaded_bytes: bytes_received,
+                            total_bytes: estimated_total_size,
+                            completed_chunks: chunks.len() as u32,
+                            total_chunks,
+                            progress_percentage: progress_percentage as f64,
+                            download_speed_bps,
+                            upload_speed_bps: 0.0,
+                            eta_seconds,
+                            active_sources: 1,
+                            timestamp: current_timestamp_ms(),
+                        });
                     }
                 }
 
@@ -2478,7 +2743,7 @@ impl WebRTCService {
                     }
 
                     // Assemble file
-                    Self::assemble_file_from_chunks(
+                    let assemble_result = Self::assemble_file_from_chunks(
                         &chunk.file_hash,
                         chunks,
                         file_transfer_service,
@@ -2487,6 +2752,61 @@ impl WebRTCService {
                         app_handle,
                     )
                     .await;
+
+                    if let Some(app_handle) = app_handle {
+                        if let Some(transfer_id) = transfer_id.as_ref() {
+                            let transfer_event_bus = TransferEventBus::new(app_handle.clone());
+                            match assemble_result {
+                                Ok(assembled) => {
+                                    let duration_seconds =
+                                        start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                                    let average_speed_bps = if duration_seconds > 0 {
+                                        assembled.file_size as f64 / duration_seconds as f64
+                                    } else {
+                                        0.0
+                                    };
+                                    let sources_used = vec![SourceSummary {
+                                        source_id: peer_id.to_string(),
+                                        source_type: SourceType::WebRtc,
+                                        chunks_provided: assembled.total_chunks,
+                                        bytes_provided: assembled.file_size,
+                                        average_speed_bps,
+                                        connection_duration_seconds: duration_seconds,
+                                    }];
+
+                                    transfer_event_bus.emit_completed(TransferCompletedEvent {
+                                        transfer_id: transfer_id.clone(),
+                                        file_hash: chunk.file_hash.clone(),
+                                        protocol: "WEBRTC".to_string(),
+                                        file_name: assembled.file_name,
+                                        file_size: assembled.file_size,
+                                        output_path: assembled.output_path,
+                                        completed_at: current_timestamp_ms(),
+                                        duration_seconds,
+                                        average_speed_bps,
+                                        total_chunks: assembled.total_chunks,
+                                        sources_used,
+                                    });
+                                }
+                                Err(error) => {
+                                    transfer_event_bus.emit_failed(TransferFailedEvent {
+                                        transfer_id: transfer_id.clone(),
+                                        file_hash: chunk.file_hash.clone(),
+                                        protocol: "WEBRTC".to_string(),
+                                        failed_at: current_timestamp_ms(),
+                                        error,
+                                        error_category: ErrorCategory::Filesystem,
+                                        downloaded_bytes: bytes_received,
+                                        total_bytes: estimated_total_size,
+                                        retry_possible: true,
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    let _ = remove_requested_download_transfer_id(&chunk.file_hash).await;
+                    let _ = remove_requested_download_start_time(&chunk.file_hash).await;
                 }
             }
         }
@@ -2501,139 +2821,166 @@ impl WebRTCService {
             let ack_message = WebRTCMessage::ChunkAck(ack);
             if let Ok(ack_json) = serde_json::to_string(&ack_message) {
                 if let Err(e) = dc.send_text(ack_json).await {
-                    error!("❌ Failed to send ACK for chunk {}: {}", chunk.chunk_index, e);
+                    error!(
+                        "❌ Failed to send ACK for chunk {}: {}",
+                        chunk.chunk_index, e
+                    );
                 }
             }
         } else {
-            warn!("⚠️ No data channel available to send ACK for chunk {} to peer", chunk.chunk_index);
+            warn!(
+                "⚠️ No data channel available to send ACK for chunk {} to peer",
+                chunk.chunk_index
+            );
         }
     }
 
     async fn assemble_file_from_chunks(
-    file_hash: &str,
-    chunks: &HashMap<u32, FileChunk>,
-    _file_transfer_service: &Arc<FileTransferService>,
-    event_tx: &mpsc::Sender<WebRTCEvent>,
-    peer_id: &str,
-    app_handle: Option<&tauri::AppHandle>,
-    ) {
-    // Sort chunks by index
-    let mut sorted_chunks: Vec<_> = chunks.values().collect();
-    sorted_chunks.sort_by_key(|c| c.chunk_index);
+        file_hash: &str,
+        chunks: &HashMap<u32, FileChunk>,
+        _file_transfer_service: &Arc<FileTransferService>,
+        event_tx: &mpsc::Sender<WebRTCEvent>,
+        peer_id: &str,
+        app_handle: Option<&tauri::AppHandle>,
+    ) -> Result<AssembledDownload, String> {
+        // Sort chunks by index
+        let mut sorted_chunks: Vec<_> = chunks.values().collect();
+        sorted_chunks.sort_by_key(|c| c.chunk_index);
 
-    // Get file name from the first chunk
-    let raw_file_name = sorted_chunks
-        .first()
-        .map(|c| c.file_name.clone()) // Use file_name instead of file_hash
-        .unwrap_or_else(|| format!("downloaded_{}", file_hash));
+        // Get file name from the first chunk
+        let raw_file_name = sorted_chunks
+            .first()
+            .map(|c| c.file_name.clone()) // Use file_name instead of file_hash
+            .unwrap_or_else(|| format!("downloaded_{}", file_hash));
 
-    // Ensure we only use a safe basename (avoid path traversal / separators).
-    let file_name = std::path::Path::new(&raw_file_name)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("downloaded_{}", file_hash));
+        // Ensure we only use a safe basename (avoid path traversal / separators).
+        let file_name = std::path::Path::new(&raw_file_name)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("downloaded_{}", file_hash));
 
-    // Compute final size without concatenating into a giant Vec<u8>.
-    let file_size: usize = sorted_chunks.iter().map(|c| c.data.len()).sum();
+        // Compute final size without concatenating into a giant Vec<u8>.
+        let file_size: u64 = sorted_chunks.iter().map(|c| c.data.len() as u64).sum();
+        let total_chunks = sorted_chunks
+            .first()
+            .map(|c| c.total_chunks)
+            .unwrap_or_else(|| chunks.len() as u32);
 
-    // Choose output path:
-    // - If the caller (GUI / E2E API) requested a specific output_path, honor it.
-    // - Otherwise, fall back to the configured download directory from settings.
-    let requested_output_path: Option<std::path::PathBuf> =
-        take_requested_download_output_path(file_hash)
-            .await
-            .map(std::path::PathBuf::from);
+        // Choose output path:
+        // - If the caller (GUI / E2E API) requested a specific output_path, honor it.
+        // - Otherwise, fall back to the configured download directory from settings.
+        let requested_output_path: Option<std::path::PathBuf> =
+            take_requested_download_output_path(file_hash)
+                .await
+                .map(std::path::PathBuf::from);
 
-    let output_path: std::path::PathBuf = if let Some(p) = requested_output_path {
-        // If the requested path is an existing directory, write the file inside it.
-        if p.exists() && p.is_dir() {
-            p.join(&file_name)
-        } else {
-            p
-        }
-    } else {
-        // Resolve download directory (same single source of truth as the frontend command).
-        let storage_path = match crate::download_paths::get_download_directory_opt(app_handle) {
-            Ok(p) => p,
-            Err(e) => {
-                error!("Failed to resolve download directory: {}", e);
-                return;
+        let output_path: std::path::PathBuf = if let Some(p) = requested_output_path {
+            // If the requested path is an existing directory, write the file inside it.
+            if p.exists() && p.is_dir() {
+                p.join(&file_name)
+            } else {
+                p
             }
+        } else {
+            // Resolve download directory (same single source of truth as the frontend command).
+            let storage_path = match crate::download_paths::get_download_directory_opt(app_handle) {
+                Ok(p) => p,
+                Err(e) => {
+                    let message = format!("Failed to resolve download directory: {}", e);
+                    error!("{}", message);
+                    return Err(message);
+                }
+            };
+
+            // Ensure directory exists
+            if let Err(e) = crate::download_paths::ensure_directory_exists(&storage_path).await {
+                let message = format!(
+                    "Failed to ensure download directory exists ({}): {}",
+                    storage_path, e
+                );
+                error!("{}", message);
+                return Err(message);
+            }
+
+            std::path::Path::new(&storage_path).join(&file_name)
         };
 
-        // Ensure directory exists
-        if let Err(e) = crate::download_paths::ensure_directory_exists(&storage_path).await {
-            error!("Failed to ensure download directory exists ({}): {}", storage_path, e);
-            return;
+        // High-signal diagnostic: shows whether we honored a requested output path or fell back.
+        if output_path
+            .to_string_lossy()
+            .contains("chiral-e2e-downloads")
+        {
+            info!(
+                "📦 WebRTC assembling into E2E output path: {:?}",
+                output_path
+            );
+        } else {
+            info!(
+                "📦 WebRTC assembling into default output path: {:?}",
+                output_path
+            );
         }
 
-        std::path::Path::new(&storage_path).join(&file_name)
-    };
-
-    // High-signal diagnostic: shows whether we honored a requested output path or fell back.
-    if output_path.to_string_lossy().contains("chiral-e2e-downloads") {
-        info!("📦 WebRTC assembling into E2E output path: {:?}", output_path);
-    } else {
-        info!("📦 WebRTC assembling into default output path: {:?}", output_path);
-    }
-
-    // Ensure output parent directory exists (covers requested output paths too).
-    if let Some(parent) = output_path.parent() {
-        let parent_str = parent.to_string_lossy().to_string();
-        if let Err(e) = crate::download_paths::ensure_directory_exists(&parent_str).await {
-            error!("Failed to ensure output directory exists ({}): {}", parent_str, e);
-            return;
+        // Ensure output parent directory exists (covers requested output paths too).
+        if let Some(parent) = output_path.parent() {
+            let parent_str = parent.to_string_lossy().to_string();
+            if let Err(e) = crate::download_paths::ensure_directory_exists(&parent_str).await {
+                let message = format!(
+                    "Failed to ensure output directory exists ({}): {}",
+                    parent_str, e
+                );
+                error!("{}", message);
+                return Err(message);
+            }
         }
-    }
 
-    // Stream chunks to disk in order (avoid IPC + JSON serialization of raw bytes).
-    use tokio::io::AsyncWriteExt;
-    let file = match tokio::fs::File::create(&output_path).await {
-        Ok(f) => f,
-        Err(e) => {
-            error!("Failed to create output file {:?}: {}", output_path, e);
-            return;
+        // Stream chunks to disk in order (avoid IPC + JSON serialization of raw bytes).
+        use tokio::io::AsyncWriteExt;
+        let file = match tokio::fs::File::create(&output_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                let message = format!("Failed to create output file {:?}: {}", output_path, e);
+                error!("{}", message);
+                return Err(message);
+            }
+        };
+        let mut writer = tokio::io::BufWriter::with_capacity(1024 * 1024, file); // 1MB buffer
+        for chunk in &sorted_chunks {
+            if let Err(e) = writer.write_all(&chunk.data).await {
+                let message = format!(
+                    "Failed to write chunk {} to {:?}: {}",
+                    chunk.chunk_index, output_path, e
+                );
+                error!("{}", message);
+                return Err(message);
+            }
         }
-    };
-    let mut writer = tokio::io::BufWriter::with_capacity(1024 * 1024, file); // 1MB buffer
-    for chunk in &sorted_chunks {
-        if let Err(e) = writer.write_all(&chunk.data).await {
-            error!("Failed to write chunk {} to {:?}: {}", chunk.chunk_index, output_path, e);
-            return;
+        if let Err(e) = writer.flush().await {
+            let message = format!("Failed to flush output file {:?}: {}", output_path, e);
+            error!("{}", message);
+            return Err(message);
         }
-    }
-    if let Err(e) = writer.flush().await {
-        error!("Failed to flush output file {:?}: {}", output_path, e);
-        return;
-    }
 
-    // NOTE: We do NOT call store_file_data here because:
-    // 1. That function is for uploading/seeding files, not downloads
-    // 2. It creates hash-named files + .meta files in storage
-    // 3. The frontend handles saving the file with proper name via webrtc_download_complete event
+        // NOTE: We do NOT call store_file_data here because:
+        // 1. That function is for uploading/seeding files, not downloads
+        // 2. It creates hash-named files + .meta files in storage
 
-    // Emit event to frontend with final output path (no huge byte array over IPC).
-    if let Some(app_handle) = app_handle {
-        if let Err(e) = app_handle.emit("webrtc_download_complete", serde_json::json!({
-            "fileHash": file_hash,
-            "fileName": file_name,
-            "fileSize": file_size,
-            "outputPath": output_path.to_string_lossy().to_string(),
-        })) {
-            error!("Failed to emit webrtc_download_complete event: {}", e);
-        }
-    }
+        // Mapping cleanup happens via take_requested_download_output_path().
 
-    // Mapping cleanup happens via take_requested_download_output_path().
-
-    let _ = event_tx
-        .send(WebRTCEvent::TransferCompleted {
-            peer_id: peer_id.to_string(),
-            file_hash: file_hash.to_string(),
+        let _ = event_tx
+            .send(WebRTCEvent::TransferCompleted {
+                peer_id: peer_id.to_string(),
+                file_hash: file_hash.to_string(),
+            })
+            .await;
+        Ok(AssembledDownload {
+            file_name,
+            file_size,
+            output_path: output_path.to_string_lossy().to_string(),
+            total_chunks,
         })
-        .await;
-}
+    }
 
     fn calculate_chunk_checksum(data: &[u8]) -> String {
         let mut hasher = Sha256::default();
@@ -2648,7 +2995,10 @@ impl WebRTCService {
         {
             let mut conns = self.connections.lock().await;
             if let Some(old_conn) = conns.remove(&peer_id) {
-                info!("🔄 Closing existing WebRTC connection to peer {} before creating new offer", peer_id);
+                info!(
+                    "🔄 Closing existing WebRTC connection to peer {} before creating new offer",
+                    peer_id
+                );
                 if let Some(old_pc) = old_conn.peer_connection {
                     if let Err(e) = old_pc.close().await {
                         warn!("Error closing old peer connection: {}", e);
@@ -2675,7 +3025,7 @@ impl WebRTCService {
 
         // Create data channel with configuration for larger messages
         let mut dc_config = RTCDataChannelInit::default();
-        dc_config.ordered = Some(true);  // Ensure ordered delivery for file chunks
+        dc_config.ordered = Some(true); // Ensure ordered delivery for file chunks
 
         let data_channel = match peer_connection
             .create_data_channel("file-transfer", Some(dc_config))
@@ -2749,7 +3099,10 @@ impl WebRTCService {
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
-                    info!("🧊 ICE candidate generated for peer {}: {}", peer_id, candidate.address);
+                    info!(
+                        "🧊 ICE candidate generated for peer {}: {}",
+                        peer_id, candidate.address
+                    );
                     if let Ok(candidate_str) =
                         serde_json::to_string(&candidate.to_json().unwrap_or_default())
                     {
@@ -2787,7 +3140,10 @@ impl WebRTCService {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
                         _ => {
-                            info!("WebRTC peer connection state: {:?} for peer: {}", state, peer_id);
+                            info!(
+                                "WebRTC peer connection state: {:?} for peer: {}",
+                                state, peer_id
+                            );
                         }
                     }
                 })
@@ -2843,24 +3199,37 @@ impl WebRTCService {
         }
 
         // Wait for ICE gathering to complete (with timeout)
-        info!("⏳ Waiting for ICE gathering to complete for peer {}...", peer_id);
+        info!(
+            "⏳ Waiting for ICE gathering to complete for peer {}...",
+            peer_id
+        );
         let ice_timeout = tokio::time::Duration::from_secs(10);
         match tokio::time::timeout(ice_timeout, ice_complete_rx.recv()).await {
             Ok(Some(())) => {
-                info!("✅ ICE gathering completed successfully for peer {}", peer_id);
+                info!(
+                    "✅ ICE gathering completed successfully for peer {}",
+                    peer_id
+                );
             }
             Ok(None) => {
-                warn!("ICE gathering channel closed unexpectedly for peer {}", peer_id);
+                warn!(
+                    "ICE gathering channel closed unexpectedly for peer {}",
+                    peer_id
+                );
             }
             Err(_) => {
-                warn!("⚠️  ICE gathering timeout ({}s) for peer {}, proceeding anyway", ice_timeout.as_secs(), peer_id);
+                warn!(
+                    "⚠️  ICE gathering timeout ({}s) for peer {}, proceeding anyway",
+                    ice_timeout.as_secs(),
+                    peer_id
+                );
             }
         }
 
         // Store connection with retry context (this is an outbound connection)
         let mut conns = self.connections.lock().await;
         let retry_ctx = WebRtcRetryContext::new(peer_id.clone(), true);
-        
+
         let connection = PeerConnection {
             peer_id: peer_id.clone(),
             is_connected: false,
@@ -2915,7 +3284,10 @@ impl WebRTCService {
         {
             let mut conns = self.connections.lock().await;
             if let Some(old_conn) = conns.remove(&peer_id) {
-                info!("🔄 Closing existing WebRTC connection to peer {} before establishing new one", peer_id);
+                info!(
+                    "🔄 Closing existing WebRTC connection to peer {} before establishing new one",
+                    peer_id
+                );
                 if let Some(old_pc) = old_conn.peer_connection {
                     if let Err(e) = old_pc.close().await {
                         warn!("Error closing old peer connection: {}", e);
@@ -2956,7 +3328,10 @@ impl WebRTCService {
         info!("Setting up on_data_channel callback for peer: {}", peer_id);
 
         peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
-            info!("✅ CALLBACK FIRED! Received data channel from offerer: {}", data_channel.label());
+            info!(
+                "✅ CALLBACK FIRED! Received data channel from offerer: {}",
+                data_channel.label()
+            );
 
             let event_tx = event_tx_for_dc.clone();
             let peer_id = peer_id_for_dc.clone();
@@ -3008,13 +3383,22 @@ impl WebRTCService {
             let data_channel_clone = data_channel.clone();
 
             tokio::spawn(async move {
-                info!("🔍 Attempting to store data channel for peer {}", peer_id_clone);
+                info!(
+                    "🔍 Attempting to store data channel for peer {}",
+                    peer_id_clone
+                );
                 let mut conns = connections_clone.lock().await;
                 if let Some(connection) = conns.get_mut(&peer_id_clone) {
                     connection.data_channel = Some(data_channel_clone);
-                    info!("✅ Successfully stored received data channel for peer {}", peer_id_clone);
+                    info!(
+                        "✅ Successfully stored received data channel for peer {}",
+                        peer_id_clone
+                    );
                 } else {
-                    error!("❌ FAILED to store data channel - peer {} not found in connections map!", peer_id_clone);
+                    error!(
+                        "❌ FAILED to store data channel - peer {} not found in connections map!",
+                        peer_id_clone
+                    );
                 }
             });
 
@@ -3038,7 +3422,10 @@ impl WebRTCService {
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
-                    info!("🧊 ICE candidate generated for peer {}: {}", peer_id, candidate.address);
+                    info!(
+                        "🧊 ICE candidate generated for peer {}: {}",
+                        peer_id, candidate.address
+                    );
                     if let Ok(candidate_str) =
                         serde_json::to_string(&candidate.to_json().unwrap_or_default())
                     {
@@ -3076,7 +3463,10 @@ impl WebRTCService {
                             info!("WebRTC connection closed with peer: {}", peer_id);
                         }
                         _ => {
-                            info!("WebRTC peer connection state: {:?} for peer: {}", state, peer_id);
+                            info!(
+                                "WebRTC peer connection state: {:?} for peer: {}",
+                                state, peer_id
+                            );
                         }
                     }
                 })
@@ -3118,11 +3508,14 @@ impl WebRTCService {
 
         // Store connection BEFORE set_remote_description so on_data_channel callback can find it
         // (data_channel will be set via on_data_channel callback when it fires during set_remote_description)
-        info!("Storing peer connection in map BEFORE set_remote_description for peer: {}", peer_id);
+        info!(
+            "Storing peer connection in map BEFORE set_remote_description for peer: {}",
+            peer_id
+        );
         let mut conns = self.connections.lock().await;
         let mut retry_ctx = WebRtcRetryContext::new(peer_id.clone(), false);
         retry_ctx.last_offer = Some(offer.clone());
-        
+
         let connection = PeerConnection {
             peer_id: peer_id.clone(),
             is_connected: false, // Will be set to true when connected
@@ -3137,7 +3530,10 @@ impl WebRTCService {
             retry_context: Some(retry_ctx),
         };
         conns.insert(peer_id.clone(), connection);
-        info!("✅ Peer {} stored in connections map, now calling set_remote_description", peer_id);
+        info!(
+            "✅ Peer {} stored in connections map, now calling set_remote_description",
+            peer_id
+        );
         drop(conns); // Release lock before calling set_remote_description
 
         // Set remote description from offer
@@ -3170,17 +3566,30 @@ impl WebRTCService {
         }
 
         // Wait for ICE gathering to complete (with timeout)
-        info!("⏳ Waiting for ICE gathering to complete for peer {}...", peer_id);
+        info!(
+            "⏳ Waiting for ICE gathering to complete for peer {}...",
+            peer_id
+        );
         let ice_timeout = tokio::time::Duration::from_secs(10);
         match tokio::time::timeout(ice_timeout, ice_complete_rx.recv()).await {
             Ok(Some(())) => {
-                info!("✅ ICE gathering completed successfully for peer {}", peer_id);
+                info!(
+                    "✅ ICE gathering completed successfully for peer {}",
+                    peer_id
+                );
             }
             Ok(None) => {
-                warn!("ICE gathering channel closed unexpectedly for peer {}", peer_id);
+                warn!(
+                    "ICE gathering channel closed unexpectedly for peer {}",
+                    peer_id
+                );
             }
             Err(_) => {
-                warn!("⚠️  ICE gathering timeout ({}s) for peer {}, proceeding anyway", ice_timeout.as_secs(), peer_id);
+                warn!(
+                    "⚠️  ICE gathering timeout ({}s) for peer {}, proceeding anyway",
+                    ice_timeout.as_secs(),
+                    peer_id
+                );
             }
         }
 
@@ -3206,11 +3615,7 @@ impl WebRTCService {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn send_data(
-        &self,
-        peer_id: &str,
-        data: Vec<u8>,
-    ) -> Result<(), String> {
+    pub async fn send_data(&self, peer_id: &str, data: Vec<u8>) -> Result<(), String> {
         let conns = self.connections.lock().await;
         if let Some(connection) = conns.get(peer_id) {
             if let Some(dc) = &connection.data_channel {
@@ -3269,7 +3674,7 @@ impl WebRTCService {
     /// Check if there's an existing open WebRTC connection with data channel to a peer
     pub async fn has_open_connection(&self, peer_id: &str) -> bool {
         use webrtc::data_channel::data_channel_state::RTCDataChannelState;
-        
+
         let conns = self.connections.lock().await;
         if let Some(conn) = conns.get(peer_id) {
             if let Some(dc) = &conn.data_channel {

@@ -36,15 +36,18 @@
       const filename = `chiral-ftp-test-${timestamp}.tar.gz`;
       const outputPath = await join(downloadsPath, filename);
 
-      await invoke('start_ftp_download', {
+      const response = await invoke<{ transferId: string; outputPath: string }>(
+        'start_ftp_download',
+        {
         url: 'ftp://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz',
         outputPath: outputPath,
         username: null,
         password: null
-      });
+        }
+      );
 
       ftpTestStatus = 'success';
-      ftpTestMessage = `✅ Success! Saved: ${outputPath} (~1 MB)`;
+      ftpTestMessage = `✅ Success! Saved: ${response.outputPath} (~1 MB)`;
       showToast('FTP test successful!', 'success');
     } catch (error) {
       ftpTestStatus = 'error';

@@ -1,19 +1,20 @@
 use crate::analytics::AnalyticsService;
 use crate::bittorrent_handler::BitTorrentHandler;
-use crate::dht::{DhtService, models::FileMetadata, WebRTCOfferRequest};
+use crate::chunk_verification::{normalize_sha256_hex, verify_chunk_hash};
+use crate::dht::{models::FileMetadata, DhtService, WebRTCOfferRequest};
 use crate::download_source::{
     BitTorrentSourceInfo, DownloadSource, Ed2kSourceInfo as DownloadEd2kSourceInfo,
     FtpSourceInfo as DownloadFtpSourceInfo,
 };
 use crate::ed2k_client::{Ed2kClient, Ed2kConfig, ED2K_CHUNK_SIZE};
+use crate::ftp_downloader::{FtpCredentials, FtpDownloader};
 use crate::manager::{ChunkManager, FileManifest};
 use crate::transfer_events::{
-    TransferEventBus, TransferStartedEvent, SourceConnectedEvent, SourceDisconnectedEvent,
-    ChunkCompletedEvent, ChunkFailedEvent, TransferProgressEvent, TransferCompletedEvent,
-    TransferFailedEvent, SourceInfo, SourceType, SourceSummary, DisconnectReason, ErrorCategory,
-    current_timestamp_ms, calculate_progress,
+    calculate_progress, current_timestamp_ms, ChunkCompletedEvent, ChunkFailedEvent,
+    DisconnectReason, ErrorCategory, SourceConnectedEvent, SourceDisconnectedEvent, SourceInfo,
+    SourceSummary, SourceType, TransferCompletedEvent, TransferEventBus, TransferFailedEvent,
+    TransferProgressEvent, TransferStartedEvent,
 };
-use crate::ftp_downloader::{FtpCredentials, FtpDownloader};
 use crate::webrtc_service::{WebRTCFileRequest, WebRTCService};
 use md4::Md4;
 use serde::{Deserialize, Serialize};
@@ -117,36 +118,15 @@ pub type PeerAssignment = SourceAssignment;
 pub type PeerStatus = SourceStatus;
 
 /// Normalize and validate SHA-256 hash format (64 hex characters, lowercase)
+#[deprecated(note = "Use chunk_verification::normalize_sha256_hex instead")]
 pub fn normalized_sha256_hex(hash: &str) -> Option<String> {
-    let trimmed = hash.trim();
-    if trimmed.len() != 64 {
-        return None;
-    }
-
-    if trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(trimmed.to_ascii_lowercase())
-    } else {
-        None
-    }
+    normalize_sha256_hex(hash)
 }
 
 /// Verify chunk integrity by comparing SHA-256 hash of data with expected hash from ChunkInfo
 /// Returns Ok(()) if hash matches, Err((expected, actual)) if mismatch
 pub fn verify_chunk_integrity(chunk: &ChunkInfo, data: &[u8]) -> Result<(), (String, String)> {
-    let expected = match normalized_sha256_hex(&chunk.hash) {
-        Some(value) => value,
-        None => return Ok(()),
-    };
-
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let actual = hex::encode(hasher.finalize());
-
-    if actual != expected {
-        return Err((chunk.hash.clone(), actual));
-    }
-
-    Ok(())
+    verify_chunk_hash(&chunk.hash, data).map_err(|e| (e.expected, e.actual))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,7 +343,7 @@ impl MultiSourceDownloadService {
             if let Some(chunk_info) = download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
                 if let Err((expected, actual)) = verify_chunk_integrity(chunk_info, data) {
                     drop(downloads);
-                    
+
                     // Mark chunk as failed
                     {
                         let mut downloads = self.active_downloads.write().await;
@@ -371,14 +351,12 @@ impl MultiSourceDownloadService {
                             download.failed_chunks.push_back(chunk_id);
                         }
                     }
-                    
+
                     // Emit ChunkFailed event
-                    let error_msg = format!(
-                        "Chunk hash mismatch: expected {}, got {}",
-                        expected, actual
-                    );
+                    let error_msg =
+                        format!("Chunk hash mismatch: expected {}, got {}", expected, actual);
                     let current_timestamp = current_timestamp_ms();
-                    
+
                     self.transfer_event_bus.emit_chunk_failed(ChunkFailedEvent {
                         transfer_id: file_hash.to_string(),
                         chunk_id,
@@ -390,7 +368,7 @@ impl MultiSourceDownloadService {
                         will_retry: true,
                         next_retry_at: None,
                     });
-                    
+
                     return Err(());
                 }
                 Ok(())
@@ -462,7 +440,8 @@ impl MultiSourceDownloadService {
 
         // Poll cache for up to 35 seconds until metadata arrives via events
         let mut metadata = None;
-        for _ in 0..350 {  // 350 * 100ms = 35s
+        for _ in 0..350 {
+            // 350 * 100ms = 35s
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             if let Some(meta) = self.dht_service.get_cached_metadata(&file_hash).await {
                 metadata = Some(meta);
@@ -608,7 +587,10 @@ impl MultiSourceDownloadService {
         match self.load_existing_chunks_into_download(&file_hash).await {
             Ok(loaded_count) => {
                 if loaded_count > 0 {
-                    info!("Resumed download with {} existing chunks loaded from disk", loaded_count);
+                    info!(
+                        "Resumed download with {} existing chunks loaded from disk",
+                        loaded_count
+                    );
 
                     // Emit progress update for loaded chunks
                     let downloads = self.active_downloads.read().await;
@@ -618,22 +600,24 @@ impl MultiSourceDownloadService {
                         let progress = (completed_chunks as f64 / total_chunks as f64) * 100.0;
 
                         // Emit progress event
-                        self.transfer_event_bus.emit_progress(TransferProgressEvent {
-                            transfer_id: file_hash.clone(),
-                            downloaded_bytes: (completed_chunks as u64) * 256 * 1024, // Approximate based on chunk size
-                            total_bytes: (total_chunks as u64) * 256 * 1024,
-                            completed_chunks,
-                            total_chunks,
-                            progress_percentage: progress,
-                            download_speed_bps: 0.0, // No speed for resumed chunks
-                            upload_speed_bps: 0.0,
-                            eta_seconds: None,
-                            active_sources: 0,
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs(),
-                        });
+                        self.transfer_event_bus
+                            .emit_progress(TransferProgressEvent {
+                                transfer_id: file_hash.clone(),
+                                protocol: "WebRTC".to_string(),
+                                downloaded_bytes: (completed_chunks as u64) * 256 * 1024, // Approximate based on chunk size
+                                total_bytes: (total_chunks as u64) * 256 * 1024,
+                                completed_chunks,
+                                total_chunks,
+                                progress_percentage: progress,
+                                download_speed_bps: 0.0, // No speed for resumed chunks
+                                upload_speed_bps: 0.0,
+                                eta_seconds: None,
+                                active_sources: 0,
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            });
 
                         // Check if download is already complete
                         if completed_chunks >= total_chunks {
@@ -645,7 +629,10 @@ impl MultiSourceDownloadService {
                 }
             }
             Err(e) => {
-                warn!("Failed to load existing chunks for download {}: {}", file_hash, e);
+                warn!(
+                    "Failed to load existing chunks for download {}: {}",
+                    file_hash, e
+                );
                 // Continue with download anyway
             }
         }
@@ -655,38 +642,50 @@ impl MultiSourceDownloadService {
             .await?;
 
         // Emit download started event via TransferEventBus
-        let available_source_infos: Vec<SourceInfo> = selected_sources.iter().map(|s| {
-            let (source_type, address) = match s {
-                DownloadSource::P2p(info) => (SourceType::P2p, info.peer_id.clone()),
-                DownloadSource::Http(info) => (SourceType::Http, info.url.clone()),
-                DownloadSource::Ftp(info) => (SourceType::Ftp, info.url.clone()),
-                DownloadSource::BitTorrent(info) => (SourceType::BitTorrent, info.magnet_uri.clone()),
-                DownloadSource::Ed2k(info) => (SourceType::P2p, info.server_url.clone()),
-            };
-            SourceInfo {
-                id: s.identifier(),
-                source_type,
-                address,
-                reputation: None,
-                estimated_speed_bps: None,
-                latency_ms: None,
-                location: None,
-            }
-        }).collect();
+        let available_source_infos: Vec<SourceInfo> = selected_sources
+            .iter()
+            .map(|s| {
+                let (source_type, address) = match s {
+                    DownloadSource::P2p(info) => (SourceType::P2p, info.peer_id.clone()),
+                    DownloadSource::Http(info) => (SourceType::Http, info.url.clone()),
+                    DownloadSource::Ftp(info) => (SourceType::Ftp, info.url.clone()),
+                    DownloadSource::BitTorrent(info) => {
+                        (SourceType::BitTorrent, info.magnet_uri.clone())
+                    }
+                    DownloadSource::Ed2k(info) => (SourceType::P2p, info.server_url.clone()),
+                };
+                SourceInfo {
+                    id: s.identifier(),
+                    source_type,
+                    address,
+                    reputation: None,
+                    estimated_speed_bps: None,
+                    latency_ms: None,
+                    location: None,
+                }
+            })
+            .collect();
 
-        let selected_source_ids: Vec<String> = selected_sources.iter().map(|s| s.identifier()).collect();
+        let selected_source_ids: Vec<String> =
+            selected_sources.iter().map(|s| s.identifier()).collect();
 
-        self.transfer_event_bus.emit_started_with_analytics(TransferStartedEvent {
-            transfer_id: file_hash.clone(),
-            file_hash: file_hash.clone(),
-            file_name: metadata.file_name.clone(),
-            file_size: metadata.file_size,
-            total_chunks,
-            chunk_size,
-            started_at: current_timestamp_ms(),
-            available_sources: available_source_infos,
-            selected_sources: selected_source_ids,
-        }, &self.analytics_service).await;
+        self.transfer_event_bus
+            .emit_started_with_analytics(
+                TransferStartedEvent {
+                    transfer_id: file_hash.clone(),
+                    file_hash: file_hash.clone(),
+                    protocol: "WebRTC".to_string(),
+                    file_name: metadata.file_name.clone(),
+                    file_size: metadata.file_size,
+                    total_chunks,
+                    chunk_size,
+                    started_at: current_timestamp_ms(),
+                    available_sources: available_source_infos,
+                    selected_sources: selected_source_ids,
+                },
+                &self.analytics_service,
+            )
+            .await;
 
         // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::DownloadStarted {
@@ -705,7 +704,7 @@ impl MultiSourceDownloadService {
     fn extract_chunk_hashes_from_manifest(manifest_json: &str) -> Result<Vec<String>, String> {
         let manifest: FileManifest = serde_json::from_str(manifest_json)
             .map_err(|e| format!("Failed to parse manifest JSON: {}", e))?;
-        
+
         // Create a vector with enough capacity for all chunks
         let mut hashes = Vec::new();
         for chunk in &manifest.chunks {
@@ -715,7 +714,7 @@ impl MultiSourceDownloadService {
             }
             hashes[chunk.index as usize] = chunk.hash.clone();
         }
-        
+
         Ok(hashes)
     }
 
@@ -729,11 +728,17 @@ impl MultiSourceDownloadService {
         let chunk_hashes = if let Some(manifest_json) = &metadata.manifest {
             match Self::extract_chunk_hashes_from_manifest(manifest_json) {
                 Ok(hashes) => {
-                    debug!("Successfully extracted {} chunk hashes from manifest", hashes.len());
+                    debug!(
+                        "Successfully extracted {} chunk hashes from manifest",
+                        hashes.len()
+                    );
                     hashes
                 }
                 Err(e) => {
-                    warn!("Failed to parse manifest for file {}: {}. Using placeholder hashes.", metadata.merkle_root, e);
+                    warn!(
+                        "Failed to parse manifest for file {}: {}. Using placeholder hashes.",
+                        metadata.merkle_root, e
+                    );
                     Vec::new()
                 }
             }
@@ -746,7 +751,9 @@ impl MultiSourceDownloadService {
             let size = remaining.min(chunk_size);
 
             // Use actual hash from manifest if available, otherwise fallback to placeholder
-            let hash = if chunk_id < chunk_hashes.len() as u32 && !chunk_hashes[chunk_id as usize].is_empty() {
+            let hash = if chunk_id < chunk_hashes.len() as u32
+                && !chunk_hashes[chunk_id as usize].is_empty()
+            {
                 chunk_hashes[chunk_id as usize].clone()
             } else {
                 // Fallback to placeholder hash for backward compatibility
@@ -809,7 +816,8 @@ impl MultiSourceDownloadService {
         let download = downloads.get(file_hash).ok_or("Download not found")?;
 
         // Assign chunks to sources using round-robin strategy
-        let chunk_assignments = self.assign_chunks_to_sources(&download.chunks, &sources, &download.completed_chunks);
+        let chunk_assignments =
+            self.assign_chunks_to_sources(&download.chunks, &sources, &download.completed_chunks);
         drop(downloads);
 
         // Start connecting to sources
@@ -868,8 +876,8 @@ impl MultiSourceDownloadService {
             let mut assigned = false;
             for _ in 0..sources.len() {
                 if let Some((_, chunks)) = assignments.get_mut(source_index) {
-                if chunks.len() < MAX_CHUNKS_PER_PEER {
-                    chunks.push(chunk.chunk_id);
+                    if chunks.len() < MAX_CHUNKS_PER_PEER {
+                        chunks.push(chunk.chunk_id);
                         assigned = true;
                         break;
                     }
@@ -940,7 +948,7 @@ impl MultiSourceDownloadService {
             let mut downloads = self.active_downloads.write().await;
             if let Some(download) = downloads.get_mut(file_hash) {
                 let p2p_source = DownloadSource::P2p(crate::download_source::P2pSourceInfo {
-                        peer_id: peer_id.clone(),
+                    peer_id: peer_id.clone(),
                     multiaddr: None,
                     reputation: None,
                     supports_encryption: false,
@@ -1081,7 +1089,8 @@ impl MultiSourceDownloadService {
                 // Store connection in pool for reuse
                 {
                     let mut connections = self.ftp_connections.lock().await;
-                    connections.entry(ftp_url_id.clone())
+                    connections
+                        .entry(ftp_url_id.clone())
                         .or_insert_with(Vec::new)
                         .push(ftp_stream);
                 }
@@ -1232,32 +1241,45 @@ impl MultiSourceDownloadService {
                     let download_result = {
                         let ftp_stream = {
                             let mut connections_guard = connections.lock().await;
-                            let pool = connections_guard.entry(ftp_url.clone()).or_insert_with(Vec::new);
-                            
+                            let pool = connections_guard
+                                .entry(ftp_url.clone())
+                                .or_insert_with(Vec::new);
+
                             if let Some(stream) = pool.pop() {
                                 drop(connections_guard);
                                 stream
                             } else {
                                 drop(connections_guard);
-                                
+
                                 // Create new connection
-                                let url = Url::parse(&ftp_url).map_err(|e| format!("Invalid FTP URL: {}", e))?;
-                                let credentials = if let Some(username) = &ftp_info_for_task.username {
-                                    let password = ftp_info_for_task.encrypted_password.as_deref().unwrap_or("anonymous@chiral.network");
-                                    Some(FtpCredentials::new(username.clone(), password.to_string()))
-                                } else {
-                                    None
-                                };
-                                
+                                let url = Url::parse(&ftp_url)
+                                    .map_err(|e| format!("Invalid FTP URL: {}", e))?;
+                                let credentials =
+                                    if let Some(username) = &ftp_info_for_task.username {
+                                        let password = ftp_info_for_task
+                                            .encrypted_password
+                                            .as_deref()
+                                            .unwrap_or("anonymous@chiral.network");
+                                        Some(FtpCredentials::new(
+                                            username.clone(),
+                                            password.to_string(),
+                                        ))
+                                    } else {
+                                        None
+                                    };
+
                                 match downloader.connect_and_login(&url, credentials).await {
                                     Ok(stream) => stream,
                                     Err(e) => {
-                                        return Err(format!("Failed to create FTP connection: {}", e));
+                                        return Err(format!(
+                                            "Failed to create FTP connection: {}",
+                                            e
+                                        ));
                                     }
                                 }
                             }
                         };
-                        
+
                         // Hard timeout + blocking isolation:
                         // move the stream into the downloader so we can enforce a timeout even if the data socket hangs.
                         match downloader
@@ -1316,8 +1338,7 @@ impl MultiSourceDownloadService {
 
                                 {
                                     let mut downloads_guard = downloads.write().await;
-                                    if let Some(download) = downloads_guard.get_mut(&file_hash)
-                                    {
+                                    if let Some(download) = downloads_guard.get_mut(&file_hash) {
                                         download.failed_chunks.push_back(chunk.chunk_id);
                                     }
                                 }
@@ -1340,12 +1361,12 @@ impl MultiSourceDownloadService {
                                     peer_id: ftp_url.clone(),
                                     error: error_msg.clone(),
                                 });
-                                
+
                                 // Trigger retry
                                 let _ = command_tx.send(MultiSourceCommand::RetryFailedChunks {
                                     file_hash: file_hash.clone(),
                                 });
-                                
+
                                 return Ok(());
                             }
 
@@ -1383,12 +1404,12 @@ impl MultiSourceDownloadService {
                                     peer_id: ftp_url.clone(),
                                     error: error_msg,
                                 });
-                                
+
                                 // Trigger retry
                                 let _ = command_tx.send(MultiSourceCommand::RetryFailedChunks {
                                     file_hash: file_hash.clone(),
                                 });
-                                
+
                                 return Ok(());
                             }
 
@@ -1417,7 +1438,7 @@ impl MultiSourceDownloadService {
                                         };
                                         assignment.last_activity = now;
                                     }
-                                    
+
                                     // Check if download is complete
                                     download.completed_chunks.len() == download.chunks.len()
                                 } else {
@@ -1448,11 +1469,17 @@ impl MultiSourceDownloadService {
                                     let _ = std::fs::create_dir_all(&file_dir);
                                 }
 
-                                let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id_for_disk));
-                                if let Err(e) = tokio::fs::write(&chunk_path, &data_for_disk).await {
-                                    warn!("Failed to write chunk {} to disk: {}", chunk_id_for_disk, e);
+                                let chunk_path =
+                                    file_dir.join(format!("chunk_{}.dat", chunk_id_for_disk));
+                                if let Err(e) = tokio::fs::write(&chunk_path, &data_for_disk).await
+                                {
+                                    warn!(
+                                        "Failed to write chunk {} to disk: {}",
+                                        chunk_id_for_disk, e
+                                    );
                                 } else {
-                                    let metadata_path = file_dir.join(format!("chunk_{}.meta", chunk_id_for_disk));
+                                    let metadata_path =
+                                        file_dir.join(format!("chunk_{}.meta", chunk_id_for_disk));
                                     let metadata = serde_json::json!({
                                         "chunk_id": chunk_id_for_disk,
                                         "size": data_for_disk.len(),
@@ -1462,19 +1489,25 @@ impl MultiSourceDownloadService {
                                             .as_secs(),
                                         "file_hash": file_hash_for_disk
                                     });
-                                    let _ = tokio::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap()).await;
+                                    let _ = tokio::fs::write(
+                                        &metadata_path,
+                                        serde_json::to_string_pretty(&metadata).unwrap(),
+                                    )
+                                    .await;
 
                                     // Also store in ChunkManager for deduplication (generate content hash)
                                     let mut hasher = Sha256::new();
                                     hasher.update(&data_for_disk);
                                     let content_hash = format!("{:x}", hasher.finalize());
-                                    let _ = chunk_manager_clone.save_chunk(&content_hash, &data_for_disk);
+                                    let _ = chunk_manager_clone
+                                        .save_chunk(&content_hash, &data_for_disk);
                                 }
                             });
 
                             // Calculate actual download duration
                             let completed_at = current_timestamp_ms();
-                            let download_duration_ms = completed_at.saturating_sub(download_start_ms);
+                            let download_duration_ms =
+                                completed_at.saturating_sub(download_start_ms);
 
                             // Emit chunk completed event via TransferEventBus
                             transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
@@ -1494,10 +1527,12 @@ impl MultiSourceDownloadService {
                                 chunk_id: chunk.chunk_id,
                                 peer_id: ftp_url.clone(),
                             });
-                            
+
                             // Check if download is complete and finalize
                             if is_complete {
-                                if let Err(e) = Self::finalize_download_static(&downloads, &file_hash).await {
+                                if let Err(e) =
+                                    Self::finalize_download_static(&downloads, &file_hash).await
+                                {
                                     error!("Failed to finalize FTP download: {}", e);
                                 }
                             }
@@ -1588,7 +1623,11 @@ impl MultiSourceDownloadService {
         http_info: crate::download_source::HttpSourceInfo,
         chunk_ids: Vec<u32>,
     ) -> Result<(), String> {
-        info!("Starting HTTP download for {} chunks from {}", chunk_ids.len(), http_info.url);
+        info!(
+            "Starting HTTP download for {} chunks from {}",
+            chunk_ids.len(),
+            http_info.url
+        );
 
         // For now, implement basic HTTP download support
         // In a full implementation, this would use the http_download.rs module
@@ -1601,7 +1640,8 @@ impl MultiSourceDownloadService {
             None => {
                 let error = format!("No active download found for file {}", file_hash);
                 error!("{}", error);
-                self.on_source_failed(file_hash, &http_info.url, error.clone()).await;
+                self.on_source_failed(file_hash, &http_info.url, error.clone())
+                    .await;
                 return Err(error);
             }
         };
@@ -1615,7 +1655,10 @@ impl MultiSourceDownloadService {
             let chunk_info = match download.chunks.iter().find(|c| c.chunk_id == chunk_id) {
                 Some(chunk) => chunk,
                 None => {
-                    warn!("Chunk {} not found in metadata for file {}", chunk_id, file_hash);
+                    warn!(
+                        "Chunk {} not found in metadata for file {}",
+                        chunk_id, file_hash
+                    );
                     continue;
                 }
             };
@@ -1641,17 +1684,22 @@ impl MultiSourceDownloadService {
                 Err(e) => {
                     let error = format!("HTTP request failed for chunk {}: {}", chunk_id, e);
                     warn!("{}", error);
-                    self.on_source_failed(file_hash, &http_info.url, error).await;
+                    self.on_source_failed(file_hash, &http_info.url, error)
+                        .await;
                     continue;
                 }
             };
 
             // Check for partial content response
             if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                let error = format!("HTTP server doesn't support range requests for chunk {} (status: {})",
-                    chunk_id, response.status());
+                let error = format!(
+                    "HTTP server doesn't support range requests for chunk {} (status: {})",
+                    chunk_id,
+                    response.status()
+                );
                 warn!("{}", error);
-                self.on_source_failed(file_hash, &http_info.url, error).await;
+                self.on_source_failed(file_hash, &http_info.url, error)
+                    .await;
                 continue;
             }
 
@@ -1659,9 +1707,11 @@ impl MultiSourceDownloadService {
             let chunk_data = match response.bytes().await {
                 Ok(data) => data.to_vec(),
                 Err(e) => {
-                    let error = format!("Failed to read HTTP response for chunk {}: {}", chunk_id, e);
+                    let error =
+                        format!("Failed to read HTTP response for chunk {}: {}", chunk_id, e);
                     warn!("{}", error);
-                    self.on_source_failed(file_hash, &http_info.url, error).await;
+                    self.on_source_failed(file_hash, &http_info.url, error)
+                        .await;
                     continue;
                 }
             };
@@ -1670,10 +1720,13 @@ impl MultiSourceDownloadService {
             if chunk_data.len() != chunk_info.size {
                 let error = format!(
                     "HTTP chunk {} size mismatch: expected {}, got {}",
-                    chunk_id, chunk_info.size, chunk_data.len()
+                    chunk_id,
+                    chunk_info.size,
+                    chunk_data.len()
                 );
                 warn!("{}", error);
-                self.on_source_failed(file_hash, &http_info.url, error).await;
+                self.on_source_failed(file_hash, &http_info.url, error)
+                    .await;
                 continue;
             }
 
@@ -1684,25 +1737,31 @@ impl MultiSourceDownloadService {
                     chunk_id, expected, actual
                 );
                 warn!("{}", error);
-                self.on_source_failed(file_hash, &http_info.url, error).await;
+                self.on_source_failed(file_hash, &http_info.url, error)
+                    .await;
                 continue;
             }
 
             // Chunk passed verification - store it
-            info!("HTTP chunk {} downloaded and verified successfully", chunk_id);
-            if let Err(e) = self.store_verified_chunk(
-                file_hash,
-                chunk_info,
-                chunk_data,
-                download_start_ms,
-                &http_info.url,
-                SourceType::Http,
-            )
-            .await
+            info!(
+                "HTTP chunk {} downloaded and verified successfully",
+                chunk_id
+            );
+            if let Err(e) = self
+                .store_verified_chunk(
+                    file_hash,
+                    chunk_info,
+                    chunk_data,
+                    download_start_ms,
+                    &http_info.url,
+                    SourceType::Http,
+                )
+                .await
             {
                 let error = format!("Failed to store HTTP chunk {}: {}", chunk_id, e);
                 error!("{}", error);
-                self.on_source_failed(file_hash, &http_info.url, error).await;
+                self.on_source_failed(file_hash, &http_info.url, error)
+                    .await;
             }
         }
 
@@ -1720,7 +1779,8 @@ impl MultiSourceDownloadService {
         source_type: SourceType,
     ) -> Result<(), String> {
         let mut downloads = self.active_downloads.write().await;
-        let download = downloads.get_mut(file_hash)
+        let download = downloads
+            .get_mut(file_hash)
             .ok_or_else(|| format!("Active download not found for file {}", file_hash))?;
 
         // Prepare data for disk storage (clone before moving into CompletedChunk)
@@ -1735,7 +1795,9 @@ impl MultiSourceDownloadService {
             source_id: source_id.to_string(),
             completed_at: std::time::Instant::now(),
         };
-        download.completed_chunks.insert(chunk_info.chunk_id, completed_chunk);
+        download
+            .completed_chunks
+            .insert(chunk_info.chunk_id, completed_chunk);
 
         // Get completion info before releasing the lock
         let is_complete = download.completed_chunks.len() == download.chunks.len();
@@ -1761,7 +1823,10 @@ impl MultiSourceDownloadService {
 
             let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id_for_disk));
             if let Err(e) = tokio::fs::write(&chunk_path, &data_for_disk).await {
-                warn!("Failed to write HTTP chunk {} to disk: {}", chunk_id_for_disk, e);
+                warn!(
+                    "Failed to write HTTP chunk {} to disk: {}",
+                    chunk_id_for_disk, e
+                );
             } else {
                 let metadata_path = file_dir.join(format!("chunk_{}.meta", chunk_id_for_disk));
                 let metadata = serde_json::json!({
@@ -1773,7 +1838,11 @@ impl MultiSourceDownloadService {
                         .as_secs(),
                     "file_hash": file_hash_for_disk
                 });
-                let _ = tokio::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap()).await;
+                let _ = tokio::fs::write(
+                    &metadata_path,
+                    serde_json::to_string_pretty(&metadata).unwrap(),
+                )
+                .await;
 
                 // Also store in ChunkManager for deduplication (generate content hash)
                 let mut hasher = Sha256::new();
@@ -1788,16 +1857,17 @@ impl MultiSourceDownloadService {
         let download_duration_ms = completed_at.saturating_sub(download_start_ms);
 
         // Emit chunk completed event via TransferEventBus
-        self.transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
-            transfer_id: file_hash.to_string(),
-            chunk_id: chunk_info.chunk_id,
-            chunk_size: chunk_info.size,
-            source_id: source_id.to_string(),
-            source_type,
-            completed_at,
-            download_duration_ms,
-            verified: true,
-        });
+        self.transfer_event_bus
+            .emit_chunk_completed(ChunkCompletedEvent {
+                transfer_id: file_hash.to_string(),
+                chunk_id: chunk_info.chunk_id,
+                chunk_size: chunk_info.size,
+                source_id: source_id.to_string(),
+                source_type,
+                completed_at,
+                download_duration_ms,
+                verified: true,
+            });
 
         // Also emit legacy internal event for backwards compatibility
         if let Err(e) = self.event_tx.send(MultiSourceEvent::ChunkCompleted {
@@ -1951,10 +2021,7 @@ impl MultiSourceDownloadService {
         let state_path = downloads_dir.join(format!("{}.state", file_hash));
         if state_path.exists() {
             if let Err(e) = tokio::fs::remove_file(&state_path).await {
-                warn!(
-                    "Failed to remove persisted state for {}: {}",
-                    file_hash, e
-                );
+                warn!("Failed to remove persisted state for {}: {}", file_hash, e);
             }
         }
 
@@ -1988,7 +2055,10 @@ impl MultiSourceDownloadService {
                     SourceAssignment::new(bt_source, chunk_ids.clone()),
                 );
             } else {
-                return Err(format!("Download {} not found for BitTorrent source", file_hash));
+                return Err(format!(
+                    "Download {} not found for BitTorrent source",
+                    file_hash
+                ));
             }
         }
 
@@ -2009,7 +2079,10 @@ impl MultiSourceDownloadService {
         };
 
         if let Err(e) = tokio::fs::create_dir_all(&output_folder).await {
-            let err = format!("Failed to create BitTorrent output dir {:?}: {}", output_folder, e);
+            let err = format!(
+                "Failed to create BitTorrent output dir {:?}: {}",
+                output_folder, e
+            );
             self.on_source_failed(file_hash, &bt_info.magnet_uri, err.clone())
                 .await;
             return Err(err);
@@ -2034,8 +2107,7 @@ impl MultiSourceDownloadService {
         {
             let mut downloads = self.active_downloads.write().await;
             if let Some(download) = downloads.get_mut(file_hash) {
-                if let Some(assignment) = download.source_assignments.get_mut(&bt_info.magnet_uri)
-                {
+                if let Some(assignment) = download.source_assignments.get_mut(&bt_info.magnet_uri) {
                     assignment.status = SourceStatus::Downloading;
                     assignment.connected_at = Some(current_timestamp_ms());
                 }
@@ -2371,7 +2443,7 @@ impl MultiSourceDownloadService {
                                 let mut hasher = Md4::new();
                                 hasher.update(&ed2k_chunk_data);
                                 let computed_hash = hex::encode(hasher.finalize());
-                                
+
                                 if !computed_hash.eq_ignore_ascii_case(&expected_chunk_hash) {
                                     warn!(
                                         "Ed2k chunk {} hash verification failed: expected {}, got {}",
@@ -2405,35 +2477,42 @@ impl MultiSourceDownloadService {
                                             );
 
                                             if end <= ed2k_chunk_data.len() {
-                                                let chunk_data = ed2k_chunk_data[start..end].to_vec();
+                                                let chunk_data =
+                                                    ed2k_chunk_data[start..end].to_vec();
 
                                                 // Verify SHA-256 hash for the extracted chunk
-                                                if let Err((expected, actual)) = verify_chunk_integrity(chunk_info, &chunk_data) {
+                                                if let Err((expected, actual)) =
+                                                    verify_chunk_integrity(chunk_info, &chunk_data)
+                                                {
                                                     warn!(
                                                         "ED2K chunk {} hash verification failed: expected {}, got {}",
                                                         chunk_info.chunk_id, expected, actual
                                                     );
-                                                    download.failed_chunks.push_back(chunk_info.chunk_id);
-                                                    
+                                                    download
+                                                        .failed_chunks
+                                                        .push_back(chunk_info.chunk_id);
+
                                                     // Emit ChunkFailed event
                                                     let error_msg = format!(
                                                         "Chunk hash mismatch: expected {}, got {}",
                                                         expected, actual
                                                     );
                                                     let current_timestamp = current_timestamp_ms();
-                                                    
-                                                    transfer_event_bus_clone.emit_chunk_failed(ChunkFailedEvent {
-                                                        transfer_id: file_hash_inner.clone(),
-                                                        chunk_id: chunk_info.chunk_id,
-                                                        source_id: server_url_clone.clone(),
-                                                        source_type: SourceType::P2p,
-                                                        failed_at: current_timestamp,
-                                                        error: error_msg,
-                                                        retry_count: 0,
-                                                        will_retry: true,
-                                                        next_retry_at: None,
-                                                    });
-                                                    
+
+                                                    transfer_event_bus_clone.emit_chunk_failed(
+                                                        ChunkFailedEvent {
+                                                            transfer_id: file_hash_inner.clone(),
+                                                            chunk_id: chunk_info.chunk_id,
+                                                            source_id: server_url_clone.clone(),
+                                                            source_type: SourceType::P2p,
+                                                            failed_at: current_timestamp,
+                                                            error: error_msg,
+                                                            retry_count: 0,
+                                                            will_retry: true,
+                                                            next_retry_at: None,
+                                                        },
+                                                    );
+
                                                     continue; // Skip this chunk
                                                 }
 
@@ -2448,8 +2527,9 @@ impl MultiSourceDownloadService {
                                                     .completed_chunks
                                                     .insert(chunk_info.chunk_id, completed_chunk);
 
-                                                extracted_chunks.push((chunk_info.clone(), chunk_data));
-                                                
+                                                extracted_chunks
+                                                    .push((chunk_info.clone(), chunk_data));
+
                                                 info!(
                                                     "Ed2k chunk {} extracted and verified from ed2k chunk {} (offset {})",
                                                     chunk_info.chunk_id, ed2k_chunk_id, offset_within_ed2k
@@ -2459,7 +2539,9 @@ impl MultiSourceDownloadService {
                                                     "Cannot extract chunk {} from ed2k chunk {}: offset {} + size {} exceeds ed2k chunk size {}",
                                                     chunk_info.chunk_id, ed2k_chunk_id, start, chunk_info.size, ed2k_chunk_data.len()
                                                 );
-                                                download.failed_chunks.push_back(chunk_info.chunk_id);
+                                                download
+                                                    .failed_chunks
+                                                    .push_back(chunk_info.chunk_id);
                                             }
                                         }
                                         download.completed_chunks.len() == download.chunks.len()
@@ -2467,35 +2549,38 @@ impl MultiSourceDownloadService {
                                         false
                                     }
                                 };
-                                
+
                                 // Emit events and store chunks to disk
                                 for (chunk_info, chunk_data) in extracted_chunks {
                                     let completed_at = current_timestamp_ms();
-                                    let download_duration_ms = completed_at.saturating_sub(download_start_ms);
-                                    
-                                    transfer_event_bus_clone.emit_chunk_completed(ChunkCompletedEvent {
-                                        transfer_id: file_hash_inner.clone(),
-                                        chunk_id: chunk_info.chunk_id,
-                                        chunk_size: chunk_info.size,
-                                        source_id: server_url_clone.clone(),
-                                        source_type: SourceType::P2p,
-                                        completed_at,
-                                        download_duration_ms,
-                                        verified: true,
-                                    });
-                                    
+                                    let download_duration_ms =
+                                        completed_at.saturating_sub(download_start_ms);
+
+                                    transfer_event_bus_clone.emit_chunk_completed(
+                                        ChunkCompletedEvent {
+                                            transfer_id: file_hash_inner.clone(),
+                                            chunk_id: chunk_info.chunk_id,
+                                            chunk_size: chunk_info.size,
+                                            source_id: server_url_clone.clone(),
+                                            source_type: SourceType::P2p,
+                                            completed_at,
+                                            download_duration_ms,
+                                            verified: true,
+                                        },
+                                    );
+
                                     let _ = event_tx_clone.send(MultiSourceEvent::ChunkCompleted {
                                         file_hash: file_hash_inner.clone(),
                                         chunk_id: chunk_info.chunk_id,
                                         peer_id: server_url_clone.clone(),
                                     });
-                                    
+
                                     // Store chunk to disk
                                     let data_for_disk = chunk_data;
                                     let file_hash_for_disk = file_hash_inner.clone();
                                     let chunk_id_for_disk = chunk_info.chunk_id;
                                     let chunk_manager_for_disk = chunk_manager_clone.clone();
-                                    
+
                                     tokio::spawn(async move {
                                         let chunks_dir = std::path::Path::new("./chunks");
                                         if !chunks_dir.exists() {
@@ -2507,11 +2592,18 @@ impl MultiSourceDownloadService {
                                             let _ = std::fs::create_dir_all(&file_dir);
                                         }
 
-                                        let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id_for_disk));
-                                        if let Err(e) = tokio::fs::write(&chunk_path, &data_for_disk).await {
-                                            warn!("Failed to write ED2K chunk {} to disk: {}", chunk_id_for_disk, e);
+                                        let chunk_path = file_dir
+                                            .join(format!("chunk_{}.dat", chunk_id_for_disk));
+                                        if let Err(e) =
+                                            tokio::fs::write(&chunk_path, &data_for_disk).await
+                                        {
+                                            warn!(
+                                                "Failed to write ED2K chunk {} to disk: {}",
+                                                chunk_id_for_disk, e
+                                            );
                                         } else {
-                                            let metadata_path = file_dir.join(format!("chunk_{}.meta", chunk_id_for_disk));
+                                            let metadata_path = file_dir
+                                                .join(format!("chunk_{}.meta", chunk_id_for_disk));
                                             let metadata = serde_json::json!({
                                                 "chunk_id": chunk_id_for_disk,
                                                 "size": data_for_disk.len(),
@@ -2522,19 +2614,29 @@ impl MultiSourceDownloadService {
                                                 "file_hash": file_hash_for_disk,
                                                 "source_type": "ed2k"
                                             });
-                                            let _ = tokio::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap()).await;
+                                            let _ = tokio::fs::write(
+                                                &metadata_path,
+                                                serde_json::to_string_pretty(&metadata).unwrap(),
+                                            )
+                                            .await;
 
                                             // Store in ChunkManager for deduplication
                                             let mut hasher = Sha256::new();
                                             hasher.update(&data_for_disk);
                                             let content_hash = format!("{:x}", hasher.finalize());
-                                            let _ = chunk_manager_for_disk.save_chunk(&content_hash, &data_for_disk);
+                                            let _ = chunk_manager_for_disk
+                                                .save_chunk(&content_hash, &data_for_disk);
                                         }
                                     });
                                 }
-                                
+
                                 if is_complete {
-                                    if let Err(e) = Self::finalize_download_static(&active_downloads_clone, &file_hash_inner).await {
+                                    if let Err(e) = Self::finalize_download_static(
+                                        &active_downloads_clone,
+                                        &file_hash_inner,
+                                    )
+                                    .await
+                                    {
                                         error!("Failed to finalize ED2K download: {}", e);
                                     }
                                 }
@@ -2846,7 +2948,10 @@ impl MultiSourceDownloadService {
 
         // Fallback: derive a hash from file hash and chunk ID
         // This should ideally never be reached if ED2K metadata is properly provided
-        warn!("Using fallback ED2K hash derivation for chunk {} of file {}", ed2k_chunk_id, file_hash);
+        warn!(
+            "Using fallback ED2K hash derivation for chunk {} of file {}",
+            ed2k_chunk_id, file_hash
+        );
         let mut hasher = Md4::new();
         hasher.update(file_hash.as_bytes());
         hasher.update(&ed2k_chunk_id.to_le_bytes());
@@ -2953,7 +3058,10 @@ impl MultiSourceDownloadService {
 
                 Ok(matches)
             } else {
-                Err(format!("No chunk info found for chunk_id {} in file {}", chunk_id, file_hash))
+                Err(format!(
+                    "No chunk info found for chunk_id {} in file {}",
+                    chunk_id, file_hash
+                ))
             }
         } else {
             Err(format!("No active download found for file {}", file_hash))
@@ -3006,9 +3114,12 @@ impl MultiSourceDownloadService {
             "file_hash": file_hash
         });
 
-        tokio::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap())
-            .await
-            .map_err(|e| format!("Failed to write chunk metadata {}: {}", chunk_id, e))?;
+        tokio::fs::write(
+            &metadata_path,
+            serde_json::to_string_pretty(&metadata).unwrap(),
+        )
+        .await
+        .map_err(|e| format!("Failed to write chunk metadata {}: {}", chunk_id, e))?;
 
         Ok(())
     }
@@ -3016,16 +3127,17 @@ impl MultiSourceDownloadService {
     /// Report chunk completion progress
     async fn report_chunk_complete(&self, file_hash: &str, chunk_id: u32) -> Result<(), String> {
         // Emit chunk completed event via TransferEventBus
-        self.transfer_event_bus.emit_chunk_completed(ChunkCompletedEvent {
-            transfer_id: file_hash.to_string(),
-            chunk_id,
-            chunk_size: 0, // Size unknown at this point
-            source_id: "ed2k".to_string(),
-            source_type: SourceType::P2p,
-            completed_at: current_timestamp_ms(),
-            download_duration_ms: 0,
-            verified: true,
-        });
+        self.transfer_event_bus
+            .emit_chunk_completed(ChunkCompletedEvent {
+                transfer_id: file_hash.to_string(),
+                chunk_id,
+                chunk_size: 0, // Size unknown at this point
+                source_id: "ed2k".to_string(),
+                source_type: SourceType::P2p,
+                completed_at: current_timestamp_ms(),
+                download_duration_ms: 0,
+                verified: true,
+            });
 
         // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::ChunkCompleted {
@@ -3067,22 +3179,23 @@ impl MultiSourceDownloadService {
         }
 
         // Emit event via TransferEventBus
-        self.transfer_event_bus.emit_source_connected(SourceConnectedEvent {
-            transfer_id: file_hash.to_string(),
-            source_id: source_id.to_string(),
-            source_type: source_type.clone(),
-            source_info: SourceInfo {
-                id: source_id.to_string(),
-                source_type,
-                address: source_id.to_string(),
-                reputation: None,
-                estimated_speed_bps: None,
-                latency_ms: None,
-                location: None,
-            },
-            connected_at: now_ms,
-            assigned_chunks: chunk_ids.iter().map(|&id| id).collect(),
-        });
+        self.transfer_event_bus
+            .emit_source_connected(SourceConnectedEvent {
+                transfer_id: file_hash.to_string(),
+                source_id: source_id.to_string(),
+                source_type: source_type.clone(),
+                source_info: SourceInfo {
+                    id: source_id.to_string(),
+                    source_type,
+                    address: source_id.to_string(),
+                    reputation: None,
+                    estimated_speed_bps: None,
+                    latency_ms: None,
+                    location: None,
+                },
+                connected_at: now_ms,
+                assigned_chunks: chunk_ids.iter().map(|&id| id).collect(),
+            });
 
         // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::PeerConnected {
@@ -3137,7 +3250,10 @@ impl MultiSourceDownloadService {
         // Determine disconnect reason from error message
         let disconnect_reason = if error.contains("timeout") || error.contains("Timeout") {
             DisconnectReason::Timeout
-        } else if error.contains("network") || error.contains("Network") || error.contains("connection") {
+        } else if error.contains("network")
+            || error.contains("Network")
+            || error.contains("connection")
+        {
             DisconnectReason::NetworkError
         } else if error.contains("unavailable") || error.contains("not found") {
             DisconnectReason::SourceUnavailable
@@ -3148,15 +3264,16 @@ impl MultiSourceDownloadService {
         };
 
         // Emit event via TransferEventBus
-        self.transfer_event_bus.emit_source_disconnected(SourceDisconnectedEvent {
-            transfer_id: file_hash.to_string(),
-            source_id: source_id.to_string(),
-            source_type,
-            disconnected_at: now_ms,
-            reason: disconnect_reason,
-            chunks_completed,
-            will_retry: !reassign_chunks.is_empty(),
-        });
+        self.transfer_event_bus
+            .emit_source_disconnected(SourceDisconnectedEvent {
+                transfer_id: file_hash.to_string(),
+                source_id: source_id.to_string(),
+                source_type,
+                disconnected_at: now_ms,
+                reason: disconnect_reason,
+                chunks_completed,
+                will_retry: !reassign_chunks.is_empty(),
+            });
 
         // Also emit legacy internal event for backwards compatibility
         let _ = self.event_tx.send(MultiSourceEvent::PeerFailed {
@@ -3292,10 +3409,7 @@ impl MultiSourceDownloadService {
                                 .cancel_torrent(&info_hash, false)
                                 .await
                             {
-                                warn!(
-                                    "Failed to cancel BitTorrent download {}: {}",
-                                    info_hash, e
-                                );
+                                warn!("Failed to cancel BitTorrent download {}: {}", info_hash, e);
                             }
                         }
                     }
@@ -3370,7 +3484,8 @@ impl MultiSourceDownloadService {
 
         // Fallback: if no FTP source exists, keep the previous behavior of reassigning chunks
         // to connected sources (best-effort). This supports P2P/HTTP flows that may poll queues elsewhere.
-        let available_peer_ids: Vec<String> = available_sources.iter().map(|(id, _)| id.clone()).collect();
+        let available_peer_ids: Vec<String> =
+            available_sources.iter().map(|(id, _)| id.clone()).collect();
         for (index, chunk_id) in failed_chunks.iter().enumerate() {
             let peer_index = index % available_peer_ids.len();
             let peer_id = &available_peer_ids[peer_index];
@@ -3456,56 +3571,65 @@ impl MultiSourceDownloadService {
                             download.file_metadata.file_size,
                             download.output_path.clone(),
                         );
-                        
+
                         // Calculate source statistics from completed chunks
                         let now_secs = current_timestamp_ms() / 1000;
-                        let sources: Vec<SourceSummary> = download.source_assignments.iter().map(|(source_id, assignment)| {
-                            let source_type = match &assignment.source {
-                                DownloadSource::P2p(_) => SourceType::P2p,
-                                DownloadSource::Http(_) => SourceType::Http,
-                                DownloadSource::Ftp(_) => SourceType::Ftp,
-                                DownloadSource::BitTorrent(_) => SourceType::BitTorrent,
-                                DownloadSource::Ed2k(_) => SourceType::P2p,
-                            };
-                            
-                            // Count chunks and bytes provided by this source
-                            let mut chunks_provided = 0u32;
-                            let mut bytes_provided = 0u64;
-                            for completed_chunk in download.completed_chunks.values() {
-                                if completed_chunk.source_id == *source_id {
-                                    chunks_provided += 1;
-                                    // Find chunk size from chunks metadata
-                                    if let Some(chunk_info) = download.chunks.iter().find(|c| c.chunk_id == completed_chunk.chunk_id) {
-                                        bytes_provided += chunk_info.size as u64;
+                        let sources: Vec<SourceSummary> = download
+                            .source_assignments
+                            .iter()
+                            .map(|(source_id, assignment)| {
+                                let source_type = match &assignment.source {
+                                    DownloadSource::P2p(_) => SourceType::P2p,
+                                    DownloadSource::Http(_) => SourceType::Http,
+                                    DownloadSource::Ftp(_) => SourceType::Ftp,
+                                    DownloadSource::BitTorrent(_) => SourceType::BitTorrent,
+                                    DownloadSource::Ed2k(_) => SourceType::P2p,
+                                };
+
+                                // Count chunks and bytes provided by this source
+                                let mut chunks_provided = 0u32;
+                                let mut bytes_provided = 0u64;
+                                for completed_chunk in download.completed_chunks.values() {
+                                    if completed_chunk.source_id == *source_id {
+                                        chunks_provided += 1;
+                                        // Find chunk size from chunks metadata
+                                        if let Some(chunk_info) = download
+                                            .chunks
+                                            .iter()
+                                            .find(|c| c.chunk_id == completed_chunk.chunk_id)
+                                        {
+                                            bytes_provided += chunk_info.size as u64;
+                                        }
                                     }
                                 }
-                            }
-                            
-                            // Calculate connection duration
-                            let connection_duration_seconds = if let Some(connected_at_ms) = assignment.connected_at {
-                                let connected_at_secs = connected_at_ms / 1000;
-                                now_secs.saturating_sub(connected_at_secs)
-                    } else {
-                                0
-                            };
-                            
-                            // Calculate average speed
-                            let average_speed_bps = if connection_duration_seconds > 0 {
-                                bytes_provided as f64 / connection_duration_seconds as f64
-                            } else {
-                                0.0
-                            };
-                            
-                            SourceSummary {
-                                source_id: source_id.clone(),
-                                source_type,
-                                chunks_provided,
-                                bytes_provided,
-                                average_speed_bps,
-                                connection_duration_seconds,
-                            }
-                        }).collect();
-                        
+
+                                // Calculate connection duration
+                                let connection_duration_seconds =
+                                    if let Some(connected_at_ms) = assignment.connected_at {
+                                        let connected_at_secs = connected_at_ms / 1000;
+                                        now_secs.saturating_sub(connected_at_secs)
+                                    } else {
+                                        0
+                                    };
+
+                                // Calculate average speed
+                                let average_speed_bps = if connection_duration_seconds > 0 {
+                                    bytes_provided as f64 / connection_duration_seconds as f64
+                                } else {
+                                    0.0
+                                };
+
+                                SourceSummary {
+                                    source_id: source_id.clone(),
+                                    source_type,
+                                    chunks_provided,
+                                    bytes_provided,
+                                    average_speed_bps,
+                                    connection_duration_seconds,
+                                }
+                            })
+                            .collect();
+
                         (Some(progress), Some(info), sources)
                     } else {
                         (None, None, Vec::new())
@@ -3527,16 +3651,22 @@ impl MultiSourceDownloadService {
                         if let Err(e) = Self::finalize_download_static(&downloads, &file_hash).await
                         {
                             // Emit failed event via TransferEventBus with analytics
-                            transfer_event_bus.emit_failed_with_analytics(TransferFailedEvent {
-                                transfer_id: file_hash.clone(),
-                                file_hash: file_hash.clone(),
-                                failed_at: current_timestamp_ms(),
-                                error: format!("Failed to finalize download: {}", e),
-                                error_category: ErrorCategory::Filesystem,
-                                downloaded_bytes: progress.downloaded_size,
-                                total_bytes: progress.total_size,
-                                retry_possible: false,
-                            }, &analytics_service).await;
+                            transfer_event_bus
+                                .emit_failed_with_analytics(
+                                    TransferFailedEvent {
+                                        transfer_id: file_hash.clone(),
+                                        file_hash: file_hash.clone(),
+                                        protocol: "WebRTC".to_string(),
+                                        failed_at: current_timestamp_ms(),
+                                        error: format!("Failed to finalize download: {}", e),
+                                        error_category: ErrorCategory::Filesystem,
+                                        downloaded_bytes: progress.downloaded_size,
+                                        total_bytes: progress.total_size,
+                                        retry_possible: false,
+                                    },
+                                    &analytics_service,
+                                )
+                                .await;
                             // Also emit legacy internal event
                             let _ = event_tx.send(MultiSourceEvent::DownloadFailed {
                                 file_hash: file_hash.clone(),
@@ -3544,18 +3674,24 @@ impl MultiSourceDownloadService {
                             });
                         } else {
                             // Emit completed event via TransferEventBus with analytics
-                            transfer_event_bus.emit_completed_with_analytics(TransferCompletedEvent {
-                                transfer_id: file_hash.clone(),
-                                file_hash: file_hash.clone(),
-                                file_name,
-                                file_size,
-                                output_path,
-                                completed_at: current_timestamp_ms(),
-                                duration_seconds: duration.as_secs(),
-                                average_speed_bps: avg_speed,
-                                total_chunks: progress.total_chunks,
-                                sources_used,
-                            }, &analytics_service).await;
+                            transfer_event_bus
+                                .emit_completed_with_analytics(
+                                    TransferCompletedEvent {
+                                        transfer_id: file_hash.clone(),
+                                        file_hash: file_hash.clone(),
+                                        protocol: "WebRTC".to_string(),
+                                        file_name,
+                                        file_size,
+                                        output_path,
+                                        completed_at: current_timestamp_ms(),
+                                        duration_seconds: duration.as_secs(),
+                                        average_speed_bps: avg_speed,
+                                        total_chunks: progress.total_chunks,
+                                        sources_used,
+                                    },
+                                    &analytics_service,
+                                )
+                                .await;
                             // Also emit legacy internal event
                             let _ = event_tx.send(MultiSourceEvent::DownloadCompleted {
                                 file_hash: file_hash.clone(),
@@ -3568,19 +3704,28 @@ impl MultiSourceDownloadService {
                     }
 
                     // Emit progress update via TransferEventBus with analytics
-                    transfer_event_bus.emit_progress_with_analytics(TransferProgressEvent {
-                        transfer_id: file_hash.clone(),
-                        downloaded_bytes: progress.downloaded_size,
-                        total_bytes: progress.total_size,
-                        completed_chunks: progress.completed_chunks,
-                        total_chunks: progress.total_chunks,
-                        progress_percentage: calculate_progress(progress.downloaded_size, progress.total_size),
-                        download_speed_bps: progress.download_speed_bps,
-                        upload_speed_bps: 0.0,
-                        eta_seconds: progress.eta_seconds,
-                        active_sources: progress.active_sources,
-                        timestamp: current_timestamp_ms(),
-                    }, &analytics_service).await;
+                    transfer_event_bus
+                        .emit_progress_with_analytics(
+                            TransferProgressEvent {
+                                transfer_id: file_hash.clone(),
+                                protocol: "WebRTC".to_string(),
+                                downloaded_bytes: progress.downloaded_size,
+                                total_bytes: progress.total_size,
+                                completed_chunks: progress.completed_chunks,
+                                total_chunks: progress.total_chunks,
+                                progress_percentage: calculate_progress(
+                                    progress.downloaded_size,
+                                    progress.total_size,
+                                ),
+                                download_speed_bps: progress.download_speed_bps,
+                                upload_speed_bps: 0.0,
+                                eta_seconds: progress.eta_seconds,
+                                active_sources: progress.active_sources,
+                                timestamp: current_timestamp_ms(),
+                            },
+                            &analytics_service,
+                        )
+                        .await;
 
                     // Also emit legacy internal event
                     let _ = event_tx.send(MultiSourceEvent::ProgressUpdate {
@@ -3686,8 +3831,8 @@ impl MultiSourceDownloadService {
                     .map_err(|e| format!("Failed to create output directory: {}", e))?;
             }
 
-            use tokio::io::{AsyncSeekExt, AsyncWriteExt};
             use std::io::SeekFrom;
+            use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
             let mut file = tokio::fs::File::create(output_path)
                 .await
@@ -3699,9 +3844,12 @@ impl MultiSourceDownloadService {
                 .map_err(|e| format!("Failed to set output file size: {}", e))?;
 
             for chunk_info in &download.chunks {
-                let completed_chunk = download.completed_chunks.get(&chunk_info.chunk_id).ok_or_else(|| {
-                    format!("Missing chunk {} during finalization", chunk_info.chunk_id)
-                })?;
+                let completed_chunk = download
+                    .completed_chunks
+                    .get(&chunk_info.chunk_id)
+                    .ok_or_else(|| {
+                        format!("Missing chunk {} during finalization", chunk_info.chunk_id)
+                    })?;
 
                 file.seek(SeekFrom::Start(chunk_info.offset))
                     .await
@@ -3875,7 +4023,11 @@ impl MultiSourceDownloadService {
     }
 
     /// Load a chunk from disk storage with validation
-    pub async fn load_chunk_from_disk(&self, file_hash: &str, chunk_id: u32) -> Result<Vec<u8>, String> {
+    pub async fn load_chunk_from_disk(
+        &self,
+        file_hash: &str,
+        chunk_id: u32,
+    ) -> Result<Vec<u8>, String> {
         let chunks_dir = std::path::Path::new("./chunks");
         let file_dir = chunks_dir.join(file_hash);
         let chunk_path = file_dir.join(format!("chunk_{}.dat", chunk_id));
@@ -3883,7 +4035,10 @@ impl MultiSourceDownloadService {
 
         // Check if files exist
         if !chunk_path.exists() || !metadata_path.exists() {
-            return Err(format!("Chunk {} not found on disk for file {}", chunk_id, file_hash));
+            return Err(format!(
+                "Chunk {} not found on disk for file {}",
+                chunk_id, file_hash
+            ));
         }
 
         // Read metadata first
@@ -3895,19 +4050,28 @@ impl MultiSourceDownloadService {
             .map_err(|e| format!("Failed to parse chunk metadata: {}", e))?;
 
         // Validate metadata
-        let expected_file_hash = metadata["file_hash"].as_str()
+        let expected_file_hash = metadata["file_hash"]
+            .as_str()
             .ok_or("Missing file_hash in metadata")?;
-        let expected_chunk_id = metadata["chunk_id"].as_u64()
+        let expected_chunk_id = metadata["chunk_id"]
+            .as_u64()
             .ok_or("Missing chunk_id in metadata")? as u32;
-        let expected_size = metadata["size"].as_u64()
+        let expected_size = metadata["size"]
+            .as_u64()
             .ok_or("Missing size in metadata")? as usize;
 
         if expected_file_hash != file_hash {
-            return Err(format!("File hash mismatch in metadata: expected {}, got {}", file_hash, expected_file_hash));
+            return Err(format!(
+                "File hash mismatch in metadata: expected {}, got {}",
+                file_hash, expected_file_hash
+            ));
         }
 
         if expected_chunk_id != chunk_id {
-            return Err(format!("Chunk ID mismatch in metadata: expected {}, got {}", chunk_id, expected_chunk_id));
+            return Err(format!(
+                "Chunk ID mismatch in metadata: expected {}, got {}",
+                chunk_id, expected_chunk_id
+            ));
         }
 
         // Read chunk data
@@ -3917,7 +4081,11 @@ impl MultiSourceDownloadService {
 
         // Validate size
         if chunk_data.len() != expected_size {
-            return Err(format!("Chunk size mismatch: expected {}, got {}", expected_size, chunk_data.len()));
+            return Err(format!(
+                "Chunk size mismatch: expected {}, got {}",
+                expected_size,
+                chunk_data.len()
+            ));
         }
 
         // Get the expected chunk info to validate hash
@@ -3929,7 +4097,10 @@ impl MultiSourceDownloadService {
                 hasher.update(&chunk_data);
                 let actual_hash = format!("{:x}", hasher.finalize());
                 if actual_hash != chunk_info.hash {
-                    return Err(format!("Chunk hash mismatch: expected {}, got {}", chunk_info.hash, actual_hash));
+                    return Err(format!(
+                        "Chunk hash mismatch: expected {}, got {}",
+                        chunk_info.hash, actual_hash
+                    ));
                 }
             }
         }
@@ -3951,12 +4122,19 @@ impl MultiSourceDownloadService {
             .await
             .map_err(|e| format!("Failed to read chunks directory: {}", e))?;
 
-        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+        while let Some(entry) = dir_entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
             let file_name_owned = entry.file_name().to_string_lossy().to_string();
 
             // Look for metadata files
             if file_name_owned.ends_with(".meta") && file_name_owned.starts_with("chunk_") {
-                if let Some(chunk_id_str) = file_name_owned.strip_prefix("chunk_").and_then(|s| s.strip_suffix(".meta")) {
+                if let Some(chunk_id_str) = file_name_owned
+                    .strip_prefix("chunk_")
+                    .and_then(|s| s.strip_suffix(".meta"))
+                {
                     if let Ok(chunk_id) = chunk_id_str.parse::<u32>() {
                         // Verify the corresponding .dat file exists
                         let dat_path = file_dir.join(format!("chunk_{}.dat", chunk_id));
@@ -3974,7 +4152,10 @@ impl MultiSourceDownloadService {
     }
 
     /// Load all existing chunks for a file and add them to the active download
-    pub async fn load_existing_chunks_into_download(&self, file_hash: &str) -> Result<usize, String> {
+    pub async fn load_existing_chunks_into_download(
+        &self,
+        file_hash: &str,
+    ) -> Result<usize, String> {
         let existing_chunks = self.scan_existing_chunks(file_hash).await?;
 
         if existing_chunks.is_empty() {
@@ -3982,7 +4163,8 @@ impl MultiSourceDownloadService {
         }
 
         let mut downloads = self.active_downloads.write().await;
-        let download = downloads.get_mut(file_hash)
+        let download = downloads
+            .get_mut(file_hash)
             .ok_or_else(|| format!("Active download not found for file {}", file_hash))?;
 
         let mut loaded_count = 0;
@@ -4029,16 +4211,18 @@ impl MultiSourceDownloadService {
 
         let max_age_seconds = max_age_days.map(|days| days * 24 * 60 * 60);
 
-        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+        while let Some(entry) = dir_entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
             let file_dir = entry.path();
             if !file_dir.is_dir() {
                 continue;
             }
 
             // Check if this file hash is still being downloaded
-            let file_name = file_dir.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let file_name = file_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             let downloads = self.active_downloads.read().await;
             let is_active_download = downloads.contains_key(file_name);
@@ -4056,7 +4240,11 @@ impl MultiSourceDownloadService {
             // If all chunks are cleaned up, remove the directory
             if let Ok(mut file_dir_entries) = tokio::fs::read_dir(&file_dir).await {
                 let mut has_files = false;
-                while let Some(entry) = file_dir_entries.next_entry().await.map_err(|e| format!("Failed to read file dir entry: {}", e))? {
+                while let Some(entry) = file_dir_entries
+                    .next_entry()
+                    .await
+                    .map_err(|e| format!("Failed to read file dir entry: {}", e))?
+                {
                     has_files = true;
                     break;
                 }
@@ -4071,7 +4259,11 @@ impl MultiSourceDownloadService {
     }
 
     /// Clean up chunks for a specific file
-    async fn cleanup_file_chunks(&self, file_dir: &std::path::Path, max_age_seconds: Option<u64>) -> Result<usize, String> {
+    async fn cleanup_file_chunks(
+        &self,
+        file_dir: &std::path::Path,
+        max_age_seconds: Option<u64>,
+    ) -> Result<usize, String> {
         let mut cleaned_count = 0;
         let mut dir_entries = tokio::fs::read_dir(file_dir)
             .await
@@ -4082,7 +4274,11 @@ impl MultiSourceDownloadService {
             .unwrap_or_default()
             .as_secs();
 
-        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read file dir entry: {}", e))? {
+        while let Some(entry) = dir_entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read file dir entry: {}", e))?
+        {
             let file_name_owned = entry.file_name().to_string_lossy().to_string();
 
             // Only process metadata files for cleanup decisions
@@ -4143,8 +4339,8 @@ impl MultiSourceDownloadService {
             .await
             .map_err(|e| format!("Failed to read metadata: {}", e))?;
 
-        let _: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Invalid metadata JSON: {}", e))?;
+        let _: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| format!("Invalid metadata JSON: {}", e))?;
 
         Ok(())
     }
@@ -4156,7 +4352,8 @@ impl MultiSourceDownloadService {
             return Ok(0);
         }
 
-        let mut content_hashes: std::collections::HashMap<String, std::path::PathBuf> = std::collections::HashMap::new();
+        let mut content_hashes: std::collections::HashMap<String, std::path::PathBuf> =
+            std::collections::HashMap::new();
         let mut duplicates = Vec::new();
 
         // Scan all chunk files and collect content hashes
@@ -4164,7 +4361,11 @@ impl MultiSourceDownloadService {
             .await
             .map_err(|e| format!("Failed to read chunks directory: {}", e))?;
 
-        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+        while let Some(entry) = dir_entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
             let file_dir = entry.path();
             if !file_dir.is_dir() {
                 continue;
@@ -4174,7 +4375,11 @@ impl MultiSourceDownloadService {
                 .await
                 .map_err(|e| format!("Failed to read file directory: {}", e))?;
 
-            while let Some(chunk_entry) = file_dir_entries.next_entry().await.map_err(|e| format!("Failed to read chunk entry: {}", e))? {
+            while let Some(chunk_entry) = file_dir_entries
+                .next_entry()
+                .await
+                .map_err(|e| format!("Failed to read chunk entry: {}", e))?
+            {
                 let file_name = chunk_entry.file_name().to_string_lossy().to_string();
 
                 if file_name.ends_with(".dat") {
@@ -4208,7 +4413,11 @@ impl MultiSourceDownloadService {
         for (duplicate_path, _original_path) in duplicates {
             // Remove the duplicate .dat file
             if let Err(e) = tokio::fs::remove_file(&duplicate_path).await {
-                warn!("Failed to remove duplicate chunk {}: {}", duplicate_path.display(), e);
+                warn!(
+                    "Failed to remove duplicate chunk {}: {}",
+                    duplicate_path.display(),
+                    e
+                );
             } else {
                 removed_count += 1;
             }
@@ -4279,12 +4488,18 @@ impl MultiSourceDownloadService {
             .await
             .map_err(|e| format!("Failed to read downloads directory: {}", e))?;
 
-        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+        while let Some(entry) = dir_entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
             let file_name_owned = entry.file_name().to_string_lossy().to_string();
 
             if file_name_owned.ends_with(".state") {
                 let state_path = entry.path();
-                let file_hash = file_name_owned.strip_suffix(".state").unwrap_or(&file_name_owned);
+                let file_hash = file_name_owned
+                    .strip_suffix(".state")
+                    .unwrap_or(&file_name_owned);
 
                 match self.load_download_state(&state_path, file_hash).await {
                     Ok(_) => {
@@ -4304,7 +4519,11 @@ impl MultiSourceDownloadService {
     }
 
     /// Load a specific download state from file
-    async fn load_download_state(&self, state_path: &std::path::Path, file_hash: &str) -> Result<(), String> {
+    async fn load_download_state(
+        &self,
+        state_path: &std::path::Path,
+        file_hash: &str,
+    ) -> Result<(), String> {
         let state_content = tokio::fs::read_to_string(state_path)
             .await
             .map_err(|e| format!("Failed to read state file: {}", e))?;
@@ -4345,7 +4564,10 @@ impl MultiSourceDownloadService {
                     completed_chunks.insert(chunk_id, completed_chunk);
                 }
                 Err(e) => {
-                    warn!("Failed to load persisted chunk {} for {}: {}", chunk_id, file_hash, e);
+                    warn!(
+                        "Failed to load persisted chunk {} for {}: {}",
+                        chunk_id, file_hash, e
+                    );
                     // Continue without this chunk
                 }
             }
@@ -4396,7 +4618,8 @@ impl MultiSourceDownloadService {
         }
 
         let downloads = self.active_downloads.read().await;
-        let active_file_hashes: std::collections::HashSet<String> = downloads.keys().cloned().collect();
+        let active_file_hashes: std::collections::HashSet<String> =
+            downloads.keys().cloned().collect();
         drop(downloads);
 
         let mut cleaned_count = 0;
@@ -4404,7 +4627,11 @@ impl MultiSourceDownloadService {
             .await
             .map_err(|e| format!("Failed to read downloads directory: {}", e))?;
 
-        while let Some(entry) = dir_entries.next_entry().await.map_err(|e| format!("Failed to read directory entry: {}", e))? {
+        while let Some(entry) = dir_entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
             let file_name_owned = entry.file_name().to_string_lossy().to_string();
 
             if file_name_owned.ends_with(".state") {
@@ -4418,7 +4645,11 @@ impl MultiSourceDownloadService {
                                 debug!("Removed old download state file for {}", file_hash);
                             }
                             Err(e) => {
-                                warn!("Failed to remove old download state file {}: {}", state_path.display(), e);
+                                warn!(
+                                    "Failed to remove old download state file {}: {}",
+                                    state_path.display(),
+                                    e
+                                );
                             }
                         }
                     }
