@@ -2691,10 +2691,13 @@
         </div>
 
       </div>
+    <!-- Relay TAB -->
     {:else if activeTab === 'relay'}
       <div class="space-y-6">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        </div>
+        <Card class="p-6">
+          <h3 class="text-lg font-semibold mb-2">Relay</h3>
+          <p class="text-muted-foreground text-sm">Relay controls coming soon.</p>
+        </Card>
       </div>
     {/if}
 
