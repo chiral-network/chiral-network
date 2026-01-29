@@ -2008,59 +2008,56 @@
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           
-          <!-- Left Column: Hole Punching & Geo -->
-          <div class="space-y-6">
-            <!-- Hole Punching (DCUtR) -->
-            <Card class="p-6">
-              <div class="flex items-center justify-between mb-4">
-                  <h3 class="text-lg font-semibold">Hole Punching (DCUtR)</h3>
-                {#if dhtHealth}
-                    <Badge variant={dhtHealth.dcutrEnabled ? 'default' : 'secondary'} class={dhtHealth.dcutrEnabled ? 'bg-blue-100 text-blue-800 hover:bg-blue-200' : ''}>
-                        {dhtHealth.dcutrEnabled ? 'Enabled' : 'Disabled'}
-                    </Badge>
-                {/if}
-            </div>
-            
-            {#if dhtHealth}
-              <div class="grid grid-cols-3 gap-4 text-center mb-4">
-                 <div class="p-2 bg-muted/20 rounded-lg">
-                    <div class="text-2xl font-bold">{dhtHealth.dcutrHolePunchAttempts || 0}</div>
-                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Attempts</div>
-                 </div>
-                 <div class="p-2 bg-green-50/50 dark:bg-green-900/10 rounded-lg">
-                    <div class="text-2xl font-bold text-green-600 dark:text-green-400">{dhtHealth.dcutrHolePunchSuccesses || 0}</div>
-                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Success</div>
-                 </div>
-                 <div class="p-2 bg-red-50/50 dark:bg-red-900/10 rounded-lg">
-                    <div class="text-2xl font-bold text-red-600 dark:text-red-400">{dhtHealth.dcutrHolePunchFailures || 0}</div>
-                    <div class="text-xs text-muted-foreground uppercase tracking-wider">Failed</div>
-                 </div>
-              </div>
-
-              <div class="space-y-3 pt-3 border-t">
-                 <div class="flex justify-between text-sm">
-                    <span class="text-muted-foreground">Success Rate</span>
-                    <span class="font-medium">
-                        {dhtHealth.dcutrHolePunchAttempts > 0 
-                            ? ((dhtHealth.dcutrHolePunchSuccesses / dhtHealth.dcutrHolePunchAttempts) * 100).toFixed(1) 
-                            : '0.0'}%
-                    </span>
-                 </div>
-                 <div class="flex justify-between text-sm">
-                    <span class="text-muted-foreground">Last Success</span>
-                    <span class="font-mono text-xs">{formatNatTimestamp(dhtHealth.lastDcutrSuccess)}</span>
-                 </div>
-              </div>
-            {:else}
-              <div class="py-8 text-center">
-                 <p class="text-sm text-muted-foreground">DHT not connected.</p>
-              </div>
-            {/if}
-          </Card>
-
-            <!-- Geographic Distribution -->
-            <GeoDistributionCard />
+          <!-- Hole Punching (DCUtR) -->
+          <Card class="p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold">Hole Punching (DCUtR)</h3>
+              {#if dhtHealth}
+                  <Badge variant={dhtHealth.dcutrEnabled ? 'default' : 'secondary'} class={dhtHealth.dcutrEnabled ? 'bg-blue-100 text-blue-800 hover:bg-blue-200' : ''}>
+                      {dhtHealth.dcutrEnabled ? 'Enabled' : 'Disabled'}
+                  </Badge>
+              {/if}
           </div>
+          
+          {#if dhtHealth}
+            <div class="grid grid-cols-3 gap-4 text-center mb-4">
+               <div class="p-2 bg-muted/20 rounded-lg">
+                  <div class="text-2xl font-bold">{dhtHealth.dcutrHolePunchAttempts || 0}</div>
+                  <div class="text-xs text-muted-foreground uppercase tracking-wider">Attempts</div>
+               </div>
+               <div class="p-2 bg-green-50/50 dark:bg-green-900/10 rounded-lg">
+                  <div class="text-2xl font-bold text-green-600 dark:text-green-400">{dhtHealth.dcutrHolePunchSuccesses || 0}</div>
+                  <div class="text-xs text-muted-foreground uppercase tracking-wider">Success</div>
+               </div>
+               <div class="p-2 bg-red-50/50 dark:bg-red-900/10 rounded-lg">
+                  <div class="text-2xl font-bold text-red-600 dark:text-red-400">{dhtHealth.dcutrHolePunchFailures || 0}</div>
+                  <div class="text-xs text-muted-foreground uppercase tracking-wider">Failed</div>
+               </div>
+            </div>
+
+            <div class="space-y-3 pt-3 border-t">
+               <div class="flex justify-between text-sm">
+                  <span class="text-muted-foreground">Success Rate</span>
+                  <span class="font-medium">
+                      {dhtHealth.dcutrHolePunchAttempts > 0 
+                          ? ((dhtHealth.dcutrHolePunchSuccesses / dhtHealth.dcutrHolePunchAttempts) * 100).toFixed(1) 
+                          : '0.0'}%
+                  </span>
+               </div>
+               <div class="flex justify-between text-sm">
+                  <span class="text-muted-foreground">Last Success</span>
+                  <span class="font-mono text-xs">{formatNatTimestamp(dhtHealth.lastDcutrSuccess)}</span>
+               </div>
+            </div>
+          {:else}
+            <div class="py-8 text-center">
+               <p class="text-sm text-muted-foreground">DHT not connected.</p>
+            </div>
+          {/if}
+        </Card>
+
+          <!-- Geographic Distribution -->
+          <GeoDistributionCard />
 
         </div>
       </div>
