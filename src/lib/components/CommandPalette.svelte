@@ -3,7 +3,7 @@
   import { t } from 'svelte-i18n';
   import { 
     Download, Upload, Wallet, Globe, BarChart3, Settings, Cpu,
-    Star, Server, Database, Search, ArrowRight
+    Star, Server, Database, Search, ArrowRight, Droplet
   } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   import { getContext } from 'svelte';
@@ -69,6 +69,13 @@
       category: 'navigation',
       action: () => performNavigation('network', '/network'),
       shortcut: 'Ctrl+N'
+    },
+    {
+      id: 'nav:chiraldrop',
+      labelKey: 'commandPalette.actions.goToChiralDrop',
+      icon: Droplet,
+      category: 'navigation',
+      action: () => performNavigation('chiraldrop', '/chiraldrop')
     },
     {
       id: 'nav:mining',

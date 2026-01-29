@@ -7,6 +7,7 @@
 
 // Modules unique to the binary
 pub mod blockchain_listener;
+pub mod chiraldrop;
 pub mod commands {
     pub mod auth;
     pub mod bootstrap;
@@ -4720,16 +4721,28 @@ async fn test_ftp_connection(
 
     // Connect based on FTPS setting
     if use_ftps {
-        use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
+        use suppaftp::{RustlsConnector, RustlsFtpStream};
+        use std::sync::Arc;
 
-        // Create TLS connector
-        let tls_connector = NativeTlsConnector::from(
-            native_tls::TlsConnector::new()
-                .map_err(|e| format!("Failed to create TLS connector: {}", e))?,
-        );
+        // Create TLS connector with rustls
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        for cert in rustls_native_certs::load_native_certs()
+            .map_err(|e| format!("Failed to load native root certificates: {}", e))?
+        {
+            root_cert_store
+                .add(&rustls::Certificate(cert.0))
+                .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
+        }
+        
+        let tls_config = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+
+        let tls_connector = RustlsConnector::from(Arc::new(tls_config));
 
         // Connect to FTPS server
-        let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
+        let mut ftp_stream = RustlsFtpStream::connect_secure_implicit(
             format!("{}:{}", host, port),
             tls_connector,
             host,
@@ -4834,16 +4847,28 @@ async fn upload_to_external_ftp(
 
     // Upload based on FTPS setting
     if use_ftps {
-        use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
+        use suppaftp::{RustlsConnector, RustlsFtpStream};
+        use std::sync::Arc;
 
-        // Create TLS connector
-        let tls_connector = NativeTlsConnector::from(
-            native_tls::TlsConnector::new()
-                .map_err(|e| format!("Failed to create TLS connector: {}", e))?,
-        );
+        // Create TLS connector with rustls
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        for cert in rustls_native_certs::load_native_certs()
+            .map_err(|e| format!("Failed to load native root certificates: {}", e))?
+        {
+            root_cert_store
+                .add(&rustls::Certificate(cert.0))
+                .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
+        }
+        
+        let tls_config = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+
+        let tls_connector = RustlsConnector::from(Arc::new(tls_config));
 
         // Connect to FTPS server
-        let mut ftp_stream = NativeTlsFtpStream::connect_secure_implicit(
+        let mut ftp_stream = RustlsFtpStream::connect_secure_implicit(
             format!("{}:{}", host, port),
             tls_connector,
             host,
@@ -9378,6 +9403,7 @@ fn main() {
             // FTP server for serving uploaded files (created earlier for protocol manager)
             ftp_server: ftp_server_arc,
         })
+        .manage(chiraldrop::ChiralDropState::new())
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
             import_chiral_account,
@@ -9647,7 +9673,14 @@ fn main() {
             get_blockstore_stats,
             clear_blockstore,
             cleanup_old_blockstore_files,
-            auto_cleanup_blockstore
+            auto_cleanup_blockstore,
+            // ChiralDrop commands
+            chiraldrop::generate_alias,
+            chiraldrop::discover_nearby_users,
+            chiraldrop::send_chiraldrop_file,
+            chiraldrop::accept_chiraldrop_transfer,
+            chiraldrop::decline_chiraldrop_transfer,
+            chiraldrop::check_chiraldrop_notifications
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
