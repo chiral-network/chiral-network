@@ -479,13 +479,30 @@
         isSearching = false;
       } else {
         latestStatus = 'not_found';
+        
+        // Get DHT health to provide better diagnostics
+        const health = await dhtService.getHealth();
+        const peerCount = health?.peerCount || 0;
+        
+        let errorMessage = 'File not found in the network.';
+        if (peerCount < 3) {
+          errorMessage += ` Low peer count (${peerCount} peers connected). Try waiting for more connections or restart DHT.`;
+        } else {
+          errorMessage += ' If you just uploaded this file, wait 60-90 seconds for DHT propagation, then search again.';
+        }
+        
         dhtSearchHistory.updateEntry(entry.id, {
           status: 'not_found',
           metadata: undefined,
-          errorMessage: 'File not found in the network. This may be due to network connectivity issues or the file not being fully propagated yet.',
+          errorMessage,
           elapsedMs: elapsed,
         });
-        pushMessage('File not found. If you just uploaded this file, try waiting a few minutes for it to propagate through the network, or check your network connectivity.', 'warning', 8000);
+        
+        if (peerCount < 3) {
+          pushMessage(`File not found. Low peer count (${peerCount}). Check Network tab for connectivity issues.`, 'warning', 8000);
+        } else {
+          pushMessage('File not found. If recently uploaded, wait 60-90 seconds for DHT propagation and try again. Ensure both devices are connected to the same network.', 'warning', 10000);
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : tr('download.search.status.unknownError');
