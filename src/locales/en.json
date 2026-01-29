@@ -526,13 +526,16 @@
     "analytics": "Analytics",
     "reputation": "Reputation",
     "blockchain": "Blockchain",
+    "chiraldrop": "ChiralDrop",
     "account": "Account",
     "settings": "Settings",
+    "more": "More",
     "connected": "Connected",
     "disconnected": "Disconnected",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
     "closeSidebarMenu": "Close sidebar menu",
+    "closeMenu": "Close menu",
     "blockchainUnavailable": "Blockchain is unavailable. Please start the Chiral node from the",
     "networkPageLink": "Network page"
   },
@@ -577,6 +580,10 @@
     "clearCache": "Clear Cache",
     "clearing": "Clearing...",
     "cleared": "✓ Cleared!"
+  },
+  "chiraldrop": {
+    "title": "ChiralDrop",
+    "subtitle": "Fast and secure file sharing"
   },
   "account": {
     "title": "Account",
@@ -840,6 +847,7 @@
     "edit": "Edit",
     "resetDefaults": "Reset to Defaults",
     "lockWallet": "Lock Wallet",
+    "logout": "Logout",
     "verifying": "Verifying...",
     "confirm": "Confirm"
   },
