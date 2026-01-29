@@ -335,7 +335,7 @@ pub struct StreamingDownloadSession {
     pub created_at: std::time::SystemTime,
 }
 
-struct AppState {
+pub struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,

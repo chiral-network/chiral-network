@@ -232,7 +232,7 @@ async fn update_bitmap_add_chunk(
     }
 
     // Read existing bitmap JSON
-    let mut bitmap_json = if bitmap_path.exists() {
+    let bitmap_json = if bitmap_path.exists() {
         match fs::read_to_string(&bitmap_path).await {
             Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
                 Ok(val) => val,
