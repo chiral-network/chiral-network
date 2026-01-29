@@ -66,14 +66,24 @@ const NOUNS: &[&str] = &[
 ];
 
 #[tauri::command]
-pub async fn generate_alias(state: State<'_, ChiralDropState>) -> Result<String, String> {
-    let mut rng = rand::thread_rng();
+pub async fn generate_alias(
+    state: State<'_, ChiralDropState>,
+    app_state: State<'_, AppState>,
+) -> Result<String, String> {
+    // Generate deterministic alias based on our own peer_id for consistency
+    let dht_guard = app_state.dht.lock().await;
     
-    let adjective = ADJECTIVES[rng.gen_range(0..ADJECTIVES.len())];
-    let noun = NOUNS[rng.gen_range(0..NOUNS.len())];
-    let number = rng.gen_range(100..999);
-    
-    let alias = format!("{}{}{}", adjective, noun, number);
+    let alias = if let Some(dht) = dht_guard.as_ref() {
+        let local_peer_id = dht.get_peer_id().await;
+        generate_alias_for_peer(&local_peer_id)
+    } else {
+        // Fallback to random if DHT not available
+        let mut rng = rand::thread_rng();
+        let adjective = ADJECTIVES[rng.gen_range(0..ADJECTIVES.len())];
+        let noun = NOUNS[rng.gen_range(0..NOUNS.len())];
+        let number = rng.gen_range(100..999);
+        format!("{}{}{}", adjective, noun, number)
+    };
     
     if let Ok(mut current) = state.current_alias.lock() {
         *current = alias.clone();
@@ -92,11 +102,17 @@ pub async fn discover_nearby_users(
     
     if let Some(dht) = dht_guard.as_ref() {
         let peer_ids = dht.get_connected_peers().await;
+        let local_peer_id = dht.get_peer_id().await;
         
-        //Generate unique aliases for each peer
+        //Generate unique aliases for each peer, excluding self
         let mut users = Vec::new();
         
         for peer_id in &peer_ids {
+            // Skip local peer
+            if peer_id == &local_peer_id {
+                continue;
+            }
+            
             // Generate a deterministic but unique alias based on peer_id
             let alias = generate_alias_for_peer(peer_id);
             users.push(NearbyUser {
@@ -211,11 +227,23 @@ pub async fn send_chiraldrop_file(
     let notification_json = serde_json::to_vec(&notification)
         .map_err(|e| format!("Failed to serialize notification: {}", e))?;
     
+    // Use base key for simple polling (will overwrite previous notification, which is acceptable)
     let notification_key = format!("chiraldrop:{}", recipient_peer_id);
     
     let dht_guard = app_state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
-        dht.put_dht_value(notification_key, notification_json).await?;
+        println!(
+            "ChiralDrop: Sending notification for file '{}' (hash: {}) to peer {} with key '{}'",
+            file_name, &file_hash[..8], &recipient_peer_id[..16], notification_key
+        );
+        
+        match dht.put_dht_value(notification_key.clone(), notification_json).await {
+            Ok(_) => println!("ChiralDrop: Notification successfully published to DHT"),
+            Err(e) => {
+                eprintln!("ChiralDrop: Failed to publish notification: {}", e);
+                return Err(format!("Failed to send notification: {}", e));
+            }
+        }
     }
     
     println!(
@@ -235,19 +263,32 @@ pub async fn check_chiraldrop_notifications(
     
     if let Some(dht) = dht_guard.as_ref() {
         let local_peer_id = dht.get_peer_id().await;
-        let notification_key = format!("chiraldrop:{}", local_peer_id);
+        let notification_prefix = format!("chiraldrop:{}", local_peer_id);
         
-        if let Some(notification_data) = dht.get_dht_value(notification_key).await? {
+        println!("ChiralDrop: Checking for notifications with prefix: {}", notification_prefix);
+        
+        // For now, check the base key (without file hash)
+        // TODO: Implement prefix search to get all notifications for this peer
+        let mut notifications = Vec::new();
+        
+        // Check base notification key pattern
+        if let Some(notification_data) = dht.get_dht_value(notification_prefix.clone()).await? {
+            println!("ChiralDrop: Found notification data ({} bytes)", notification_data.len());
             match serde_json::from_slice::<ChiralDropNotification>(&notification_data) {
-                Ok(notification) => Ok(vec![notification]),
+                Ok(notification) => {
+                    println!("ChiralDrop: Received transfer request for file '{}' from {}", 
+                        notification.file_name, notification.sender_alias);
+                    notifications.push(notification);
+                },
                 Err(e) => {
-                    eprintln!("Failed to deserialize ChiralDrop notification: {}", e);
-                    Ok(vec![])
+                    eprintln!("ChiralDrop: Failed to deserialize notification: {}", e);
                 }
             }
         } else {
-            Ok(vec![])
+            // No notifications found - this is normal
         }
+        
+        Ok(notifications)
     } else {
         Err("DHT service not initialized".to_string())
     }
