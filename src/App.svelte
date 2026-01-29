@@ -9,7 +9,6 @@
     import SettingsPage from './pages/Settings.svelte'
     import MiningPage from './pages/Mining.svelte'
     import ReputationPage from './pages/Reputation.svelte'
-    import RelayPage from './pages/Relay.svelte'
     import Blockchain from './pages/Blockchain.svelte'
     import ChiralDropPage from './pages/ChiralDrop.svelte'
     import NotFound from './pages/NotFound.svelte'
@@ -1015,7 +1014,6 @@ $: canShowLockAction = !showFirstRunWizard;
       { id: "download", label: $t("nav.download"), icon: Download },
       { id: "mining", label: $t("nav.mining"), icon: Cpu },
       { id: "network", label: $t("nav.network"), icon: Globe },
-      { id: "relay", label: $t("nav.relay"), icon: Server },
       { id: "reputation", label: $t("nav.reputation"), icon: Star },
       { id: "settings", label: $t("nav.settings"), icon: Settings },
       { id: "upload", label: $t("nav.upload"), icon: Upload },
@@ -1042,10 +1040,6 @@ $: canShowLockAction = !showFirstRunWizard;
     {
       path: "network",
       component: NetworkPage,
-    },
-    {
-      path: "relay",
-      component: RelayPage,
     },
     {
       path: "mining",
