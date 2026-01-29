@@ -2063,106 +2063,6 @@
           </div>
 
           <div class="space-y-6">
-            <!-- Relay Server Control -->
-            <Card class="p-6">
-              <div class="flex items-start justify-between mb-4">
-                <div class="flex items-center gap-3">
-                  <Server class="w-6 h-6 text-blue-600" />
-                  <div>
-                    <h3 class="text-lg font-semibold">{$t('relay.server.title')}</h3>
-                    <p class="text-sm text-muted-foreground">{$t('relay.server.subtitle')}</p>
-                  </div>
-                </div>
-                <div
-                  class="px-3 py-1 rounded-full text-xs font-semibold"
-                  class:bg-green-100={relayServerRunning}
-                  class:text-green-800={relayServerRunning}
-                  class:bg-gray-100={!relayServerRunning}
-                  class:text-gray-800={!relayServerRunning}
-                >
-                  {relayServerRunning ? $t('relay.server.running') : $t('relay.server.stopped')}
-                </div>
-              </div>
-
-              <div class="space-y-4">
-                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <p class="text-sm text-blue-900">
-                    {$t('relay.server.description')}
-                  </p>
-                  <ul class="mt-2 text-sm text-blue-800 space-y-1">
-                    <li>ƒ?› {$t('relay.server.benefit1')}</li>
-                    <li>ƒ?› {$t('relay.server.benefit2')}</li>
-                    <li>ƒ?› {$t('relay.server.benefit3')}</li>
-                  </ul>
-                </div>
-
-                <div class="space-y-2">
-                  <Label for="relay-alias">{$t('relay.server.aliasLabel')}</Label>
-                  <Input
-                    id="relay-alias"
-                    type="text"
-                    bind:value={relayServerAlias}
-                    on:blur={saveRelayServerAlias}
-                    placeholder={$t('relay.server.aliasPlaceholder')}
-                    maxlength="50"
-                    class="w-full"
-                  />
-                  <p class="text-xs text-muted-foreground">
-                    {$t('relay.server.aliasHint')}
-                  </p>
-                </div>
-
-                {#if dhtStatus === 'disconnected'}
-                  <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                    <p class="text-sm font-semibold text-yellow-900">
-                      {$t('relay.server.dhtNotRunning')}
-                    </p>
-                    <p class="text-xs text-yellow-700 mt-1">
-                      {$t('relay.server.dhtNotRunningHint')}
-                    </p>
-                  </div>
-                {/if}
-
-                <div class="flex items-center justify-between">
-                  <Button
-                    on:click={toggleRelayServer}
-                    disabled={relayServerToggling || dhtStatus === 'disconnected'}
-                    variant={relayServerEnabled ? 'destructive' : 'default'}
-                    class="w-full"
-                  >
-                    {#if relayServerToggling}
-                      {relayServerEnabled ? $t('relay.server.disabling') : $t('relay.server.enabling')}
-                    {:else if relayServerEnabled}
-                      <WifiOff class="w-4 h-4 mr-2" />
-                      {$t('relay.server.disable')}
-                    {:else}
-                      <Wifi class="w-4 h-4 mr-2" />
-                      {$t('relay.server.enable')}
-                    {/if}
-                  </Button>
-                </div>
-
-                {#if relayServerRunning}
-                  <div class="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <p class="text-sm font-semibold text-green-900">
-                      {$t('relay.server.activeMessage')}
-                    </p>
-                    {#if relayServerAlias.trim()}
-                      <div class="mt-2 flex items-center gap-2">
-                        <span class="text-xs text-green-700">{$t('relay.server.broadcastingAs')}</span>
-                        <span class="text-sm font-bold text-green-900 bg-green-100 px-2 py-1 rounded">
-                          {relayServerAlias}
-                        </span>
-                      </div>
-                    {/if}
-                    <p class="text-xs text-green-700 mt-2">
-                      {$t('relay.server.earningReputation')}
-                    </p>
-                  </div>
-                {/if}
-              </div>
-            </Card>
-
             <!-- Relay Status -->
             <Card class="p-6">
             <div class="flex items-start justify-between mb-4">
@@ -2694,12 +2594,108 @@
     <!-- Relay TAB -->
     {:else if activeTab === 'relay'}
       <div class="space-y-6">
-        <Card class="p-6">
-          <h3 class="text-lg font-semibold mb-2">Relay</h3>
-          <p class="text-muted-foreground text-sm">Relay controls coming soon.</p>
-        </Card>
+            <!-- Relay Server Control -->
+            <Card class="p-6">
+              <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center gap-3">
+                  <Server class="w-6 h-6 text-blue-600" />
+                  <div>
+                    <h3 class="text-lg font-semibold">{$t('relay.server.title')}</h3>
+                    <p class="text-sm text-muted-foreground">{$t('relay.server.subtitle')}</p>
+                  </div>
+                </div>
+                <div
+                  class="px-3 py-1 rounded-full text-xs font-semibold"
+                  class:bg-green-100={relayServerRunning}
+                  class:text-green-800={relayServerRunning}
+                  class:bg-gray-100={!relayServerRunning}
+                  class:text-gray-800={!relayServerRunning}
+                >
+                  {relayServerRunning ? $t('relay.server.running') : $t('relay.server.stopped')}
+                </div>
+              </div>
+
+              <div class="space-y-4">
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p class="text-sm text-blue-900">
+                    {$t('relay.server.description')}
+                  </p>
+                  <ul class="mt-2 text-sm text-blue-800 space-y-1">
+                    <li>’'?ƒ?§ {$t('relay.server.benefit1')}</li>
+                    <li>’'?ƒ?§ {$t('relay.server.benefit2')}</li>
+                    <li>’'?ƒ?§ {$t('relay.server.benefit3')}</li>
+                  </ul>
+                </div>
+
+                <div class="space-y-2">
+                  <Label for="relay-alias">{$t('relay.server.aliasLabel')}</Label>
+                  <Input
+                    id="relay-alias"
+                    type="text"
+                    bind:value={relayServerAlias}
+                    on:blur={saveRelayServerAlias}
+                    placeholder={$t('relay.server.aliasPlaceholder')}
+                    maxlength="50"
+                    class="w-full"
+                  />
+                  <p class="text-xs text-muted-foreground">
+                    {$t('relay.server.aliasHint')}
+                  </p>
+                </div>
+
+                {#if dhtStatus === 'disconnected'}
+                  <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                    <p class="text-sm font-semibold text-yellow-900">
+                      {$t('relay.server.dhtNotRunning')}
+                    </p>
+                    <p class="text-xs text-yellow-700 mt-1">
+                      {$t('relay.server.dhtNotRunningHint')}
+                    </p>
+                  </div>
+                {/if}
+
+                <div class="flex items-center justify-between">
+                  <Button
+                    on:click={toggleRelayServer}
+                    disabled={relayServerToggling || dhtStatus === 'disconnected'}
+                    variant={relayServerEnabled ? 'destructive' : 'default'}
+                    class="w-full"
+                  >
+                    {#if relayServerToggling}
+                      {relayServerEnabled ? $t('relay.server.disabling') : $t('relay.server.enabling')}
+                    {:else if relayServerEnabled}
+                      <WifiOff class="w-4 h-4 mr-2" />
+                      {$t('relay.server.disable')}
+                    {:else}
+                      <Wifi class="w-4 h-4 mr-2" />
+                      {$t('relay.server.enable')}
+                    {/if}
+                  </Button>
+                </div>
+
+                {#if relayServerRunning}
+                  <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <p class="text-sm font-semibold text-green-900">
+                      {$t('relay.server.activeMessage')}
+                    </p>
+                    {#if relayServerAlias.trim()}
+                      <div class="mt-2 flex items-center gap-2">
+                        <span class="text-xs text-green-700">{$t('relay.server.broadcastingAs')}</span>
+                        <span class="text-sm font-bold text-green-900 bg-green-100 px-2 py-1 rounded">
+                          {relayServerAlias}
+                        </span>
+                      </div>
+                    {/if}
+                    <p class="text-xs text-green-700 mt-2">
+                      {$t('relay.server.earningReputation')}
+                    </p>
+                  </div>
+                {/if}
+              </div>
+            </Card>
       </div>
     {/if}
 
   </div>
 </div>
+
