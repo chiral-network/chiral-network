@@ -37,6 +37,7 @@
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
   import { join } from '@tauri-apps/api/path'
+  import ChunkRecoveryPanel from '$lib/components/download/ChunkRecoveryPanel.svelte'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
@@ -862,6 +863,11 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
     // Smart Resume: Load and auto-resume interrupted downloads
     loadAndResumeDownloads()
+
+    // resolve dl dir for chunk recovery panel
+    invoke<string>('get_download_directory').then(dir => {
+      dlDir = dir
+    }).catch(() => {})
   })
 
   onDestroy(() => {
@@ -964,6 +970,10 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   let showPaymentModal = false
   let currentCheckpoint: PaymentCheckpointEvent | null = null
   let currentCheckpointFileName: string = ''
+
+  // chunk recovery state
+  let dlDir = ''
+  let chunkPanelCollapsed = false
 
   // File Preview state
   let showPreviewModal = false
@@ -2875,6 +2885,9 @@ async function loadAndResumeDownloads() {
       </div>
     </Card>
   {/if}
+
+  <!-- Chunk Recovery Panel -->
+  <ChunkRecoveryPanel {dlDir} bind:collapsed={chunkPanelCollapsed} />
 
   <!-- Unified Downloads List -->
   <Card class="p-6">
