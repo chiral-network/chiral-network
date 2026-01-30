@@ -1,7 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { writable, derived, get } from 'svelte/store'
 
-// chunk recovery state for p2p downloads
 export interface ChunkMeta {
   idx: number
   offset: number
@@ -64,12 +63,10 @@ export interface ChunkFetchReq {
   hash: string
 }
 
-// stores for reactive ui updates
 export const recoveryList = writable<RecoveryInfo[]>([])
 export const activeRecoveries = writable<Map<string, CoordinatorProgress>>(new Map())
 export const corruptionAlerts = writable<CorruptionReport[]>([])
 
-// scan for incomplete downloads
 export async function scanIncomplete(dlDir: string): Promise<RecoveryInfo[]> {
   try {
     const list = await invoke<RecoveryInfo[]>('p2p_chunk_scan', { dlDir })
@@ -81,7 +78,6 @@ export async function scanIncomplete(dlDir: string): Promise<RecoveryInfo[]> {
   }
 }
 
-// get state for specific download
 export async function getState(tmpPath: string): Promise<RecoveryInfo | null> {
   try {
     return await invoke<RecoveryInfo | null>('p2p_chunk_get_state', { tmpPath })
@@ -91,7 +87,6 @@ export async function getState(tmpPath: string): Promise<RecoveryInfo | null> {
   }
 }
 
-// verify all chunks
 export async function verifyChunks(tmpPath: string): Promise<VerifyResult> {
   try {
     return await invoke<VerifyResult>('p2p_chunk_verify', { tmpPath })
@@ -108,15 +103,13 @@ export async function verifyChunks(tmpPath: string): Promise<VerifyResult> {
   }
 }
 
-// check for corruption
 export async function checkCorruption(tmpPath: string): Promise<CorruptionReport> {
   try {
     const report = await invoke<CorruptionReport>('p2p_chunk_check_corruption', { tmpPath })
     if (report.corruption_detected) {
       corruptionAlerts.update(alerts => {
-        const exists = alerts.find(a => a.merkle_root === report.merkle_root)
-        if (!exists) return [...alerts, report]
-        return alerts
+        if (alerts.find(a => a.merkle_root === report.merkle_root)) return alerts
+        return [...alerts, report]
       })
     }
     return report
@@ -133,7 +126,6 @@ export async function checkCorruption(tmpPath: string): Promise<CorruptionReport
   }
 }
 
-// remove download state
 export async function removeState(tmpPath: string): Promise<void> {
   try {
     await invoke<void>('p2p_chunk_remove', { tmpPath })
@@ -142,7 +134,6 @@ export async function removeState(tmpPath: string): Promise<void> {
   }
 }
 
-// compute merkle root from hashes
 export async function computeMerkle(hashes: string[]): Promise<string> {
   try {
     return await invoke<string>('p2p_chunk_compute_merkle', { chunkHashes: hashes })
@@ -152,7 +143,6 @@ export async function computeMerkle(hashes: string[]): Promise<string> {
   }
 }
 
-// verify merkle root
 export async function verifyMerkle(root: string, hashes: string[]): Promise<boolean> {
   try {
     return await invoke<boolean>('p2p_chunk_verify_merkle', { merkleRoot: root, chunkHashes: hashes })
@@ -162,7 +152,6 @@ export async function verifyMerkle(root: string, hashes: string[]): Promise<bool
   }
 }
 
-// hash chunk data
 export async function hashChunk(data: Uint8Array): Promise<string> {
   try {
     return await invoke<string>('p2p_chunk_hash', { data: Array.from(data) })
@@ -172,7 +161,7 @@ export async function hashChunk(data: Uint8Array): Promise<string> {
   }
 }
 
-// startup recovery - scan and auto-resume
+// scans dl dir and returns incomplete downloads for recovery
 export async function startupRecovery(dlDir: string): Promise<RecoveryInfo[]> {
   try {
     const list = await invoke<RecoveryInfo[]>('p2p_chunk_startup_recovery', { dlDir })
@@ -184,7 +173,6 @@ export async function startupRecovery(dlDir: string): Promise<RecoveryInfo[]> {
   }
 }
 
-// create coordinator for multi-peer download
 export async function createCoordinator(tmpPath: string): Promise<CoordinatorProgress | null> {
   try {
     const progress = await invoke<CoordinatorProgress>('p2p_chunk_create_coordinator', { tmpPath })
@@ -199,7 +187,6 @@ export async function createCoordinator(tmpPath: string): Promise<CoordinatorPro
   }
 }
 
-// get pending chunks to fetch
 export async function assignPending(tmpPath: string): Promise<ChunkFetchReq[]> {
   try {
     return await invoke<ChunkFetchReq[]>('p2p_chunk_assign_pending', { tmpPath })
@@ -209,13 +196,12 @@ export async function assignPending(tmpPath: string): Promise<ChunkFetchReq[]> {
   }
 }
 
-// report chunk fetch result
 export async function reportResult(
   tmpPath: string,
   chunkIdx: number,
   success: boolean,
   bytes: number,
-  durationMs: number
+  durMs: number
 ): Promise<CoordinatorProgress | null> {
   try {
     const progress = await invoke<CoordinatorProgress>('p2p_chunk_report_result', {
@@ -223,7 +209,7 @@ export async function reportResult(
       chunkIdx,
       success,
       bytes,
-      durationMs
+      durationMs: durMs
     })
     activeRecoveries.update(m => {
       m.set(progress.merkle_root, progress)
@@ -236,7 +222,6 @@ export async function reportResult(
   }
 }
 
-// get current progress
 export async function getProgress(tmpPath: string): Promise<CoordinatorProgress | null> {
   try {
     const progress = await invoke<CoordinatorProgress>('p2p_chunk_get_progress', { tmpPath })
@@ -251,18 +236,13 @@ export async function getProgress(tmpPath: string): Promise<CoordinatorProgress 
   }
 }
 
-// clear corruption alert
 export function clearAlert(merkleRoot: string) {
   corruptionAlerts.update(alerts => alerts.filter(a => a.merkle_root !== merkleRoot))
 }
 
-// clear all alerts
 export function clearAllAlerts() {
   corruptionAlerts.set([])
 }
 
-// derived store for active recovery count
-export const activeRecoveryCount = derived(activeRecoveries, $m => $m.size)
-
-// derived store for total corruption alerts
-export const alertCount = derived(corruptionAlerts, $a => $a.length)
+export const activeRecoveryCnt = derived(activeRecoveries, $m => $m.size)
+export const alertCnt = derived(corruptionAlerts, $a => $a.length)
