@@ -45,6 +45,7 @@
     recoveryList,
     activeRecoveries,
     checkCorruption,
+    verifyChunks,
     type CorruptionReport
   } from '$lib/services/p2pChunkService'
 
@@ -556,6 +557,15 @@
                 }
                 return file;
             }));
+
+            // run merkle verification on completed chunk download
+            if (metadata.downloadPath) {
+              verifyChunks(metadata.downloadPath).then(res => {
+                if (!res.valid && res.failed_chunks.length > 0) {
+                  showToast(`${res.failed_chunks.length} chunks failed verification`, 'warning')
+                }
+              }).catch(() => {})
+            }
         });
 
         // Listen for DHT errors (like missing CIDs)
