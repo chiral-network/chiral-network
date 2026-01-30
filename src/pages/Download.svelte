@@ -38,7 +38,15 @@
   import { invoke } from '@tauri-apps/api/core'
   import { join } from '@tauri-apps/api/path'
   import ChunkRecoveryPanel from '$lib/components/download/ChunkRecoveryPanel.svelte'
-  import { startupRecovery, scanIncomplete } from '$lib/services/p2pChunkService'
+  import {
+    startupRecovery,
+    scanIncomplete,
+    corruptionAlerts,
+    recoveryList,
+    activeRecoveries,
+    checkCorruption,
+    type CorruptionReport
+  } from '$lib/services/p2pChunkService'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
@@ -819,6 +827,27 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   }
 });
 
+        // chunk corruption events from backend
+        const unlistenChunkCorruption = await listen('chunk_corruption_detected', (event) => {
+          const report = event.payload as CorruptionReport
+          if (report.corruption_detected) {
+            corruptionAlerts.update(alerts => {
+              if (alerts.find(a => a.merkle_root === report.merkle_root)) return alerts
+              return [...alerts, report]
+            })
+            const bad = report.corrupted_chunks.length + report.missing_chunks.length
+            showToast(`Corruption: ${bad} chunks affected`, 'warning')
+          }
+        })
+
+        // chunk recovery progress from backend
+        const unlistenChunkProgress = await listen('chunk_recovery_progress', (event) => {
+          const data = event.payload as { merkle_root: string; verified: number; total: number }
+          if (data.verified === data.total && data.total > 0) {
+            showToast('Chunk recovery complete', 'success')
+          }
+        })
+
         // Cleanup listeners on destroy
         return () => {
           unlistenProgress()
@@ -831,6 +860,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           unlistenWebRTCProgress()
           unlistenWebRTCComplete()
           unlistenTorrentEvent()
+          unlistenChunkCorruption()
+          unlistenChunkProgress()
         }
       } catch (error) {
         errorLogger.fileOperationError('Setup event listeners', error instanceof Error ? error.message : String(error));
