@@ -840,9 +840,34 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           }
         })
 
-        // chunk recovery progress from backend
+        // chunk recovery progress from backend - sync to files store
         const unlistenChunkProgress = await listen('chunk_recovery_progress', (event) => {
-          const data = event.payload as { merkle_root: string; verified: number; total: number }
+          const data = event.payload as {
+            merkle_root: string
+            verified: number
+            downloaded: number
+            total: number
+            active_peers: number
+            avg_speed: number
+            eta_secs: number
+          }
+          // sync coordinator progress into active file items
+          files.update(f => f.map(file => {
+            if (file.hash === data.merkle_root && file.status === 'downloading') {
+              const pct = data.total > 0 ? ((data.verified + data.downloaded) / data.total) * 100 : 0
+              const done = pct >= 100
+              return {
+                ...file,
+                progress: pct,
+                status: done ? 'completed' as const : 'downloading' as const,
+                speed: data.avg_speed > 0 ? `${toHumanReadableSize(data.avg_speed)}/s` : file.speed,
+                eta: data.eta_secs > 0 ? `${Math.floor(data.eta_secs / 60)}m ${data.eta_secs % 60}s` : file.eta,
+                totalChunks: data.total,
+                downloadedChunks: Array.from({ length: data.verified + data.downloaded }, (_, i) => i)
+              }
+            }
+            return file
+          }))
           if (data.verified === data.total && data.total > 0) {
             showToast('Chunk recovery complete', 'success')
           }
