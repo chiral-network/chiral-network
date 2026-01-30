@@ -3,7 +3,7 @@
   import Card from '$lib/components/ui/card.svelte'
   import Button from '$lib/components/ui/button.svelte'
   import Badge from '$lib/components/ui/badge.svelte'
-  import { RefreshCw, HardDrive, ChevronDown, ChevronUp, AlertTriangle, CheckCircle } from 'lucide-svelte'
+  import { RefreshCw, HardDrive, ChevronDown, ChevronUp, CheckCircle } from 'lucide-svelte'
   import ChunkRecoveryCard from './ChunkRecoveryCard.svelte'
   import CorruptionAlert from './CorruptionAlert.svelte'
   import {
@@ -11,14 +11,12 @@
     activeRecoveries,
     corruptionAlerts,
     scanIncomplete,
-    startupRecovery,
     verifyChunks,
     checkCorruption,
     removeState,
     createCoordinator,
     getProgress,
     clearAlert,
-    type RecoveryInfo,
     type CorruptionReport
   } from '$lib/services/p2pChunkService'
   import { showToast } from '$lib/toast'
@@ -55,18 +53,6 @@
       }
     } catch (e) {
       console.error('refresh failed:', e)
-    }
-    loading = false
-  }
-
-  async function doStartupRecovery() {
-    if (!dlDir) return
-    loading = true
-    try {
-      const list = await startupRecovery(dlDir)
-      showToast(`Found ${list.length} incomplete downloads`, 'info')
-    } catch (e) {
-      showToast('Recovery scan failed', 'error')
     }
     loading = false
   }
@@ -179,8 +165,8 @@
         {/if}
       </div>
       <div class="actions">
-        <Button size="sm" variant="ghost" on:click|stopPropagation={refresh} disabled={loading}>
-          <RefreshCw size={14} class:spin={loading} />
+        <Button size="sm" variant="ghost" on:click={(e) => { e.stopPropagation(); refresh() }} disabled={loading}>
+          <RefreshCw size={14} class={loading ? 'spin' : ''} />
         </Button>
         {#if collapsed}
           <ChevronDown size={16} />

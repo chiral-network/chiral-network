@@ -17,10 +17,6 @@
     ? ((recovery.verified + recovery.downloaded) / recovery.total_chunks) * 100
     : 0
 
-  $: verifiedPct = recovery.total_chunks > 0
-    ? (recovery.verified / recovery.total_chunks) * 100
-    : 0
-
   $: hasCorruption = recovery.failed > 0
   $: isComplete = recovery.verified === recovery.total_chunks && recovery.total_chunks > 0
 
@@ -53,7 +49,7 @@
     </div>
     <div class="badges">
       {#if isComplete}
-        <Badge variant="success"><CheckCircle size={12} /> Complete</Badge>
+        <Badge variant="outline" class="text-green-600 border-green-600"><CheckCircle size={12} /> Complete</Badge>
       {:else if hasCorruption}
         <Badge variant="destructive"><AlertTriangle size={12} /> Corrupted</Badge>
       {:else if isActive}

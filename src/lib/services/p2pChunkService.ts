@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { writable, derived, get } from 'svelte/store'
+import { writable, derived } from 'svelte/store'
 
 export interface ChunkMeta {
   idx: number

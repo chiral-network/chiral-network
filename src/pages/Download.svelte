@@ -40,11 +40,7 @@
   import ChunkRecoveryPanel from '$lib/components/download/ChunkRecoveryPanel.svelte'
   import {
     startupRecovery,
-    scanIncomplete,
     corruptionAlerts,
-    recoveryList,
-    activeRecoveries,
-    checkCorruption,
     verifyChunks,
     type CorruptionReport
   } from '$lib/services/p2pChunkService'
