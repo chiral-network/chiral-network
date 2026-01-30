@@ -38,6 +38,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { join } from '@tauri-apps/api/path'
   import ChunkRecoveryPanel from '$lib/components/download/ChunkRecoveryPanel.svelte'
+  import { startupRecovery, scanIncomplete } from '$lib/services/p2pChunkService'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
@@ -864,9 +865,15 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     // Smart Resume: Load and auto-resume interrupted downloads
     loadAndResumeDownloads()
 
-    // resolve dl dir for chunk recovery panel
-    invoke<string>('get_download_directory').then(dir => {
+    // resolve dl dir and run chunk recovery scan
+    invoke<string>('get_download_directory').then(async dir => {
       dlDir = dir
+      // auto-scan for incomplete chunk downloads on startup
+      try {
+        await startupRecovery(dir)
+      } catch (e) {
+        console.error('chunk startup scan failed:', e)
+      }
     }).catch(() => {})
   })
 
