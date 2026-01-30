@@ -50,7 +50,6 @@
     loading = true
     try {
       await scanIncomplete(dlDir)
-      // check corruption for each
       for (const r of $recoveryList) {
         await checkCorruption(r.tmp_path)
       }
@@ -72,8 +71,7 @@
     loading = false
   }
 
-  async function handleResume(e: CustomEvent<{ tmpPath: string }>) {
-    const { tmpPath } = e.detail
+  async function resumeByPath(tmpPath: string) {
     try {
       const progress = await createCoordinator(tmpPath)
       if (progress) {
@@ -85,6 +83,10 @@
     } catch (err) {
       showToast('Resume failed', 'error')
     }
+  }
+
+  async function handleResume(e: CustomEvent<{ tmpPath: string }>) {
+    await resumeByPath(e.detail.tmpPath)
   }
 
   function handlePause(e: CustomEvent<{ tmpPath: string }>) {
@@ -122,9 +124,7 @@
   }
 
   async function handleFix(e: CustomEvent<{ tmpPath: string }>) {
-    const { tmpPath } = e.detail
-    // re-download corrupted chunks by resuming
-    await handleResume({ detail: { tmpPath } } as CustomEvent<{ tmpPath: string }>)
+    await resumeByPath(e.detail.tmpPath)
   }
 
   function handleAlertDismiss(e: CustomEvent<{ merkleRoot: string }>) {
@@ -134,7 +134,7 @@
   async function handleAlertFix(e: CustomEvent<{ report: CorruptionReport }>) {
     const recovery = recoveries.find(r => r.merkle_root === e.detail.report.merkle_root)
     if (recovery) {
-      await handleResume({ detail: { tmpPath: recovery.tmp_path } } as CustomEvent<{ tmpPath: string }>)
+      await resumeByPath(recovery.tmp_path)
     }
     clearAlert(e.detail.report.merkle_root)
   }
