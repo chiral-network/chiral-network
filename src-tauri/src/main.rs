@@ -38,7 +38,8 @@ pub mod webhook_manager;
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source, ed2k_client,
     encryption, file_transfer, ftp_bookmarks, ftp_client, http_download, keystore, logger, manager,
-    multi_source_download, peer_selection, protocols, reputation, stream_auth, webrtc_service,
+    multi_source_download, p2p_chunk_network, peer_selection, protocols, reputation, stream_auth,
+    webrtc_service,
 };
 use headless::create_dht_config_from_args;
 
@@ -9671,7 +9672,21 @@ fn main() {
             get_blockstore_stats,
             clear_blockstore,
             cleanup_old_blockstore_files,
-            auto_cleanup_blockstore
+            auto_cleanup_blockstore,
+            // P2P chunk network commands
+            p2p_chunk_network::p2p_chunk_scan,
+            p2p_chunk_network::p2p_chunk_get_state,
+            p2p_chunk_network::p2p_chunk_verify,
+            p2p_chunk_network::p2p_chunk_remove,
+            p2p_chunk_network::p2p_chunk_compute_merkle,
+            p2p_chunk_network::p2p_chunk_verify_merkle,
+            p2p_chunk_network::p2p_chunk_hash,
+            p2p_chunk_network::p2p_chunk_startup_recovery,
+            p2p_chunk_network::p2p_chunk_check_corruption,
+            p2p_chunk_network::p2p_chunk_create_coordinator,
+            p2p_chunk_network::p2p_chunk_assign_pending,
+            p2p_chunk_network::p2p_chunk_report_result,
+            p2p_chunk_network::p2p_chunk_get_progress
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

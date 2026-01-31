@@ -37,6 +37,13 @@
   } from '$lib/stores/transferEventsStore'
   import { invoke } from '@tauri-apps/api/core'
   import { join } from '@tauri-apps/api/path'
+  import ChunkRecoveryPanel from '$lib/components/download/ChunkRecoveryPanel.svelte'
+  import {
+    startupRecovery,
+    corruptionAlerts,
+    verifyChunks,
+    type CorruptionReport
+  } from '$lib/services/p2pChunkService'
 
   const tr = (k: string, params?: Record<string, any>) => $t(k, params)
 
@@ -546,6 +553,15 @@
                 }
                 return file;
             }));
+
+            // run merkle verification on completed chunk download
+            if (metadata.downloadPath) {
+              verifyChunks(metadata.downloadPath).then(res => {
+                if (!res.valid && res.failed_chunks.length > 0) {
+                  showToast(`${res.failed_chunks.length} chunks failed verification`, 'warning')
+                }
+              }).catch(() => {})
+            }
         });
 
         // Listen for DHT errors (like missing CIDs)
@@ -817,6 +833,52 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   }
 });
 
+        // chunk corruption events from backend
+        const unlistenChunkCorruption = await listen('chunk_corruption_detected', (event) => {
+          const report = event.payload as CorruptionReport
+          if (report.corruption_detected) {
+            corruptionAlerts.update(alerts => {
+              if (alerts.find(a => a.merkle_root === report.merkle_root)) return alerts
+              return [...alerts, report]
+            })
+            const bad = report.corrupted_chunks.length + report.missing_chunks.length
+            showToast(`Corruption: ${bad} chunks affected`, 'warning')
+          }
+        })
+
+        // chunk recovery progress from backend - sync to files store
+        const unlistenChunkProgress = await listen('chunk_recovery_progress', (event) => {
+          const data = event.payload as {
+            merkle_root: string
+            verified: number
+            downloaded: number
+            total: number
+            active_peers: number
+            avg_speed: number
+            eta_secs: number
+          }
+          // sync coordinator progress into active file items
+          files.update(f => f.map(file => {
+            if (file.hash === data.merkle_root && file.status === 'downloading') {
+              const pct = data.total > 0 ? ((data.verified + data.downloaded) / data.total) * 100 : 0
+              const done = pct >= 100
+              return {
+                ...file,
+                progress: pct,
+                status: done ? 'completed' as const : 'downloading' as const,
+                speed: data.avg_speed > 0 ? `${toHumanReadableSize(data.avg_speed)}/s` : file.speed,
+                eta: data.eta_secs > 0 ? `${Math.floor(data.eta_secs / 60)}m ${data.eta_secs % 60}s` : file.eta,
+                totalChunks: data.total,
+                downloadedChunks: Array.from({ length: data.verified + data.downloaded }, (_, i) => i)
+              }
+            }
+            return file
+          }))
+          if (data.verified === data.total && data.total > 0) {
+            showToast('Chunk recovery complete', 'success')
+          }
+        })
+
         // Cleanup listeners on destroy
         return () => {
           unlistenProgress()
@@ -829,6 +891,8 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           unlistenWebRTCProgress()
           unlistenWebRTCComplete()
           unlistenTorrentEvent()
+          unlistenChunkCorruption()
+          unlistenChunkProgress()
         }
       } catch (error) {
         errorLogger.fileOperationError('Setup event listeners', error instanceof Error ? error.message : String(error));
@@ -862,6 +926,17 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
     // Smart Resume: Load and auto-resume interrupted downloads
     loadAndResumeDownloads()
+
+    // resolve dl dir and run chunk recovery scan
+    invoke<string>('get_download_directory').then(async dir => {
+      dlDir = dir
+      // auto-scan for incomplete chunk downloads on startup
+      try {
+        await startupRecovery(dir)
+      } catch (e) {
+        console.error('chunk startup scan failed:', e)
+      }
+    }).catch(() => {})
   })
 
   onDestroy(() => {
@@ -964,6 +1039,10 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
   let showPaymentModal = false
   let currentCheckpoint: PaymentCheckpointEvent | null = null
   let currentCheckpointFileName: string = ''
+
+  // chunk recovery state
+  let dlDir = ''
+  let chunkPanelCollapsed = false
 
   // File Preview state
   let showPreviewModal = false
@@ -2875,6 +2954,9 @@ async function loadAndResumeDownloads() {
       </div>
     </Card>
   {/if}
+
+  <!-- Chunk Recovery Panel -->
+  <ChunkRecoveryPanel {dlDir} bind:collapsed={chunkPanelCollapsed} />
 
   <!-- Unified Downloads List -->
   <Card class="p-6">
