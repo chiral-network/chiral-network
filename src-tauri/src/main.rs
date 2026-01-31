@@ -7,7 +7,6 @@
 
 // Modules unique to the binary
 pub mod blockchain_listener;
-pub mod chiraldrop;
 pub mod commands {
     pub mod auth;
     pub mod bootstrap;
@@ -335,7 +334,7 @@ pub struct StreamingDownloadSession {
     pub created_at: std::time::SystemTime,
 }
 
-pub struct AppState {
+struct AppState {
     geth: Mutex<GethProcess>,
     downloader: Arc<GethDownloader>,
     miner_address: Mutex<Option<String>>,
@@ -9403,7 +9402,6 @@ fn main() {
             // FTP server for serving uploaded files (created earlier for protocol manager)
             ftp_server: ftp_server_arc,
         })
-        .manage(chiraldrop::ChiralDropState::new())
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
             import_chiral_account,
@@ -9673,14 +9671,7 @@ fn main() {
             get_blockstore_stats,
             clear_blockstore,
             cleanup_old_blockstore_files,
-            auto_cleanup_blockstore,
-            // ChiralDrop commands
-            chiraldrop::generate_alias,
-            chiraldrop::discover_nearby_users,
-            chiraldrop::send_chiraldrop_file,
-            chiraldrop::accept_chiraldrop_transfer,
-            chiraldrop::decline_chiraldrop_transfer,
-            chiraldrop::check_chiraldrop_notifications
+            auto_cleanup_blockstore
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())

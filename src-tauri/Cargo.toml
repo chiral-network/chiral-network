@@ -23,7 +23,7 @@ serde_json = "1.0"
 tauri-plugin-process = "2.0"
 tauri-plugin-os = "2.0"
 tauri-plugin-shell = "2.0"
-tauri-plugin-dialog = "=2.4.0"
+tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 secp256k1 = { version = "0.24", features = ["serde", "rand-std", "recovery"] }
 rand = { version = "0.8", features = ["std_rng"] }
