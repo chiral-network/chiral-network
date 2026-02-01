@@ -17,15 +17,22 @@
     CheckCircle,
     AlertCircle,
     History,
-    Loader2
+    Loader2,
+    Link,
+    FileUp,
+    Plus,
+    Trash2
   } from 'lucide-svelte';
   import { networkConnected } from '$lib/stores';
-  import { showToast } from '$lib/toastStore';
+  import { toasts } from '$lib/toastStore';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
 
   // Types
+  type SearchMode = 'hash' | 'magnet' | 'torrent';
+  type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'cancelled' | 'failed';
+
   interface SearchResult {
     hash: string;
     fileName: string;
@@ -39,18 +46,22 @@
     hash: string;
     name: string;
     size: number;
-    status: 'queued' | 'downloading' | 'paused' | 'completed' | 'failed';
+    status: DownloadStatus;
     progress: number;
     speed: string;
     eta: string;
     seeders: number;
+    startedAt: Date;
+    completedAt?: Date;
   }
 
-  interface HistoryItem {
+  interface HistoryEntry {
+    id: string;
     hash: string;
     fileName: string;
-    searchedAt: number;
-    found: boolean;
+    fileSize: number;
+    completedAt: Date;
+    status: 'completed' | 'cancelled' | 'failed';
   }
 
   // File type detection
@@ -91,58 +102,150 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
+  // Format date
+  function formatDate(date: Date): string {
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(date);
+  }
+
   // State
+  let searchMode = $state<SearchMode>('hash');
   let searchQuery = $state('');
   let isSearching = $state(false);
   let searchResult = $state<SearchResult | null>(null);
   let searchError = $state<string | null>(null);
   let downloads = $state<DownloadItem[]>([]);
-  let searchHistory = $state<HistoryItem[]>([]);
-  let showHistory = $state(false);
+  let downloadHistory = $state<HistoryEntry[]>([]);
+  let showSearchHistory = $state(false);
+  let showDownloadHistory = $state(true);
 
-  // Load search history from localStorage
-  function loadHistory() {
+  // Persistence keys
+  const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
+  const ACTIVE_DOWNLOADS_KEY = 'chiral_active_downloads';
+
+  // Load download history from localStorage
+  function loadDownloadHistory() {
     try {
-      const stored = localStorage.getItem('download_search_history');
+      const stored = localStorage.getItem(DOWNLOAD_HISTORY_KEY);
       if (stored) {
-        searchHistory = JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        downloadHistory = parsed.map((h: any) => ({
+          ...h,
+          completedAt: new Date(h.completedAt)
+        }));
+      }
+
+      // Load active downloads
+      const activeStored = localStorage.getItem(ACTIVE_DOWNLOADS_KEY);
+      if (activeStored) {
+        const parsed = JSON.parse(activeStored);
+        downloads = parsed.map((d: any) => ({
+          ...d,
+          startedAt: new Date(d.startedAt),
+          completedAt: d.completedAt ? new Date(d.completedAt) : undefined
+        }));
       }
     } catch (e) {
-      console.error('Failed to load search history:', e);
+      console.error('Failed to load download history:', e);
     }
   }
 
-  function saveHistory() {
+  function saveDownloadHistory() {
     try {
-      localStorage.setItem('download_search_history', JSON.stringify(searchHistory.slice(0, 20)));
+      localStorage.setItem(DOWNLOAD_HISTORY_KEY, JSON.stringify(downloadHistory));
+      localStorage.setItem(ACTIVE_DOWNLOADS_KEY, JSON.stringify(downloads));
     } catch (e) {
-      console.error('Failed to save search history:', e);
+      console.error('Failed to save download history:', e);
     }
   }
 
-  function addToHistory(hash: string, fileName: string, found: boolean) {
-    const entry: HistoryItem = {
-      hash,
-      fileName,
-      searchedAt: Date.now(),
-      found
+  function addToDownloadHistory(download: DownloadItem) {
+    const entry: HistoryEntry = {
+      id: download.id,
+      hash: download.hash,
+      fileName: download.name,
+      fileSize: download.size,
+      completedAt: new Date(),
+      status: download.status as 'completed' | 'cancelled' | 'failed'
     };
-    // Remove duplicate if exists
-    searchHistory = searchHistory.filter(h => h.hash !== hash);
-    // Add to front
-    searchHistory = [entry, ...searchHistory].slice(0, 20);
-    saveHistory();
+    downloadHistory = [entry, ...downloadHistory].slice(0, 50);
+    saveDownloadHistory();
   }
 
-  // Search for file by hash
+  // Extract info hash from magnet link
+  function extractInfoHashFromMagnet(magnetLink: string): string | null {
+    const match = magnetLink.match(/urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
+    if (match) {
+      let hash = match[1];
+      // Convert Base32 to hex if needed
+      if (hash.length === 32) {
+        // Base32 decode would go here - for now just use as-is
+        return hash.toLowerCase();
+      }
+      return hash.toLowerCase();
+    }
+    return null;
+  }
+
+  // Extract name from magnet link
+  function extractNameFromMagnet(magnetLink: string): string {
+    const match = magnetLink.match(/dn=([^&]+)/);
+    if (match) {
+      return decodeURIComponent(match[1]);
+    }
+    return 'Unknown';
+  }
+
+  // Handle torrent file upload
+  async function handleTorrentFile() {
+    if (!isTauri) {
+      toasts.show('Torrent file upload requires the desktop app', 'error');
+      return;
+    }
+
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selectedPath = await open({
+        multiple: false,
+        filters: [{ name: 'Torrent Files', extensions: ['torrent'] }]
+      }) as string | null;
+
+      if (selectedPath) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const result = await invoke<{ infoHash: string; name: string; size: number }>('parse_torrent_file', {
+          filePath: selectedPath
+        });
+
+        if (result) {
+          searchResult = {
+            hash: result.infoHash,
+            fileName: result.name,
+            fileSize: result.size,
+            seeders: [],
+            createdAt: Date.now()
+          };
+          toasts.show(`Loaded torrent: ${result.name}`, 'success');
+        }
+      }
+    } catch (error) {
+      console.error('Failed to parse torrent file:', error);
+      toasts.show(`Failed to parse torrent file: ${error}`, 'error');
+    }
+  }
+
+  // Search for file
   async function searchFile() {
     if (!searchQuery.trim()) {
-      showToast('Please enter a file hash', 'error');
+      toasts.show('Please enter a search query', 'error');
       return;
     }
 
     if (!$networkConnected) {
-      showToast('Please connect to the network first', 'error');
+      toasts.show('Please connect to the network first', 'error');
       return;
     }
 
@@ -151,29 +254,52 @@
     searchError = null;
 
     try {
+      let fileHash = searchQuery.trim();
+      let fileName = 'Unknown';
+
+      // Handle magnet link
+      if (searchMode === 'magnet' || searchQuery.startsWith('magnet:')) {
+        const extractedHash = extractInfoHashFromMagnet(searchQuery);
+        if (!extractedHash) {
+          searchError = 'Invalid magnet link';
+          isSearching = false;
+          return;
+        }
+        fileHash = extractedHash;
+        fileName = extractNameFromMagnet(searchQuery);
+      }
+
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
-        const result = await invoke<SearchResult>('search_file', {
-          fileHash: searchQuery.trim()
+        const result = await invoke<SearchResult | null>('search_file', {
+          fileHash
         });
 
         if (result) {
           searchResult = result;
-          addToHistory(result.hash, result.fileName, true);
-          showToast(`Found: ${result.fileName}`, 'success');
+          toasts.show(`Found: ${result.fileName}`, 'success');
         } else {
-          searchError = 'File not found on the network';
-          addToHistory(searchQuery.trim(), 'Unknown', false);
+          // For magnet links, create a result even if not in DHT
+          if (searchMode === 'magnet' || searchQuery.startsWith('magnet:')) {
+            searchResult = {
+              hash: fileHash,
+              fileName,
+              fileSize: 0,
+              seeders: [],
+              createdAt: Date.now()
+            };
+            toasts.show(`Magnet link parsed: ${fileName}`, 'info');
+          } else {
+            searchError = 'File not found on the network';
+          }
         }
       } else {
-        // Web fallback - simulate search
         await new Promise(resolve => setTimeout(resolve, 1000));
         searchError = 'Search requires the desktop application';
       }
     } catch (error) {
       console.error('Search failed:', error);
       searchError = `Search failed: ${error}`;
-      addToHistory(searchQuery.trim(), 'Unknown', false);
     } finally {
       isSearching = false;
     }
@@ -182,13 +308,13 @@
   // Start download
   async function startDownload(result: SearchResult) {
     if (!isTauri) {
-      showToast('Download requires the desktop app', 'error');
+      toasts.show('Download requires the desktop app', 'error');
       return;
     }
 
     // Check if already downloading
-    if (downloads.some(d => d.hash === result.hash && d.status !== 'completed' && d.status !== 'failed')) {
-      showToast('This file is already being downloaded', 'warning');
+    if (downloads.some(d => d.hash === result.hash && !['completed', 'failed', 'cancelled'].includes(d.status))) {
+      toasts.show('This file is already being downloaded', 'warning');
       return;
     }
 
@@ -201,10 +327,12 @@
       progress: 0,
       speed: '0 B/s',
       eta: 'Calculating...',
-      seeders: result.seeders.length
+      seeders: result.seeders.length,
+      startedAt: new Date()
     };
 
     downloads = [...downloads, newDownload];
+    saveDownloadHistory();
 
     try {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -213,13 +341,14 @@
         fileName: result.fileName,
         seeders: result.seeders
       });
-      showToast(`Download started: ${result.fileName}`, 'info');
+      toasts.show(`Download started: ${result.fileName}`, 'info');
     } catch (error) {
       console.error('Download failed:', error);
       downloads = downloads.map(d =>
         d.id === newDownload.id ? { ...d, status: 'failed' as const } : d
       );
-      showToast(`Download failed: ${error}`, 'error');
+      saveDownloadHistory();
+      toasts.show(`Download failed: ${error}`, 'error');
     }
   }
 
@@ -235,59 +364,87 @@
       }
       return d;
     });
+    saveDownloadHistory();
   }
 
   // Cancel download
   function cancelDownload(downloadId: string) {
     const download = downloads.find(d => d.id === downloadId);
-    downloads = downloads.filter(d => d.id !== downloadId);
     if (download) {
-      showToast(`Cancelled: ${download.name}`, 'info');
+      download.status = 'cancelled';
+      addToDownloadHistory(download);
+      downloads = downloads.filter(d => d.id !== downloadId);
+      saveDownloadHistory();
+      toasts.show(`Cancelled: ${download.name}`, 'info');
     }
   }
 
-  // Clear completed downloads
-  function clearCompleted() {
-    const completedCount = downloads.filter(d => d.status === 'completed').length;
-    downloads = downloads.filter(d => d.status !== 'completed');
-    if (completedCount > 0) {
-      showToast(`Cleared ${completedCount} completed download${completedCount > 1 ? 's' : ''}`, 'info');
+  // Move completed/failed downloads to history
+  function moveToHistory(downloadId: string) {
+    const download = downloads.find(d => d.id === downloadId);
+    if (download && ['completed', 'failed', 'cancelled'].includes(download.status)) {
+      addToDownloadHistory(download);
+      downloads = downloads.filter(d => d.id !== downloadId);
+      saveDownloadHistory();
     }
   }
 
-  // Handle history item click
-  function selectHistoryItem(item: HistoryItem) {
-    searchQuery = item.hash;
-    showHistory = false;
-    searchFile();
+  // Clear download history
+  function clearDownloadHistory() {
+    const count = downloadHistory.length;
+    downloadHistory = [];
+    saveDownloadHistory();
+    toasts.show(`Cleared ${count} item${count !== 1 ? 's' : ''} from history`, 'info');
+  }
+
+  // Get active downloads (not completed/failed/cancelled)
+  function getActiveDownloads(): DownloadItem[] {
+    return downloads.filter(d => !['completed', 'failed', 'cancelled'].includes(d.status));
+  }
+
+  // Get finished downloads
+  function getFinishedDownloads(): DownloadItem[] {
+    return downloads.filter(d => ['completed', 'failed', 'cancelled'].includes(d.status));
   }
 
   // Initialize
   $effect(() => {
-    loadHistory();
+    loadDownloadHistory();
   });
 
   // Get status color
-  function getStatusColor(status: DownloadItem['status']): string {
+  function getStatusColor(status: DownloadStatus): string {
     switch (status) {
       case 'downloading': return 'text-blue-500';
       case 'paused': return 'text-yellow-500';
       case 'completed': return 'text-green-500';
       case 'failed': return 'text-red-500';
+      case 'cancelled': return 'text-gray-500';
       case 'queued': return 'text-gray-500';
       default: return 'text-gray-500';
     }
   }
 
   // Get status icon
-  function getStatusIcon(status: DownloadItem['status']) {
+  function getStatusIcon(status: DownloadStatus) {
     switch (status) {
       case 'downloading': return Loader2;
       case 'paused': return Pause;
       case 'completed': return CheckCircle;
       case 'failed': return AlertCircle;
+      case 'cancelled': return X;
       case 'queued': return Clock;
       default: return Clock;
+    }
+  }
+
+  // Get status badge color
+  function getStatusBadgeColor(status: string): string {
+    switch (status) {
+      case 'completed': return 'bg-green-100 text-green-800';
+      case 'failed': return 'bg-red-100 text-red-800';
+      case 'cancelled': return 'bg-gray-100 text-gray-800';
+      default: return 'bg-gray-100 text-gray-800';
     }
   }
 </script>
@@ -313,83 +470,108 @@
     </div>
   {/if}
 
-  <!-- Search Section -->
+  <!-- Add New Download Section -->
   <div class="bg-white rounded-lg border border-gray-200 p-6">
-    <h2 class="text-lg font-semibold mb-4">Search by File Hash</h2>
-
-    <div class="relative">
-      <div class="flex gap-3">
-        <div class="flex-1 relative">
-          <input
-            type="text"
-            bind:value={searchQuery}
-            placeholder="Enter file hash (SHA-256)"
-            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
-            onkeydown={(e) => e.key === 'Enter' && searchFile()}
-            onfocus={() => showHistory = true}
-            onblur={() => setTimeout(() => showHistory = false, 200)}
-          />
-
-          <!-- Search History Dropdown -->
-          {#if showHistory && searchHistory.length > 0}
-            <div class="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-              <div class="p-2 border-b border-gray-100">
-                <div class="flex items-center gap-2 text-xs text-gray-500">
-                  <History class="w-3 h-3" />
-                  Recent Searches
-                </div>
-              </div>
-              {#each searchHistory as item}
-                <button
-                  class="w-full px-3 py-2 text-left hover:bg-gray-50 flex items-center justify-between"
-                  onmousedown={() => selectHistoryItem(item)}
-                >
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-mono truncate">{item.hash.slice(0, 16)}...{item.hash.slice(-8)}</p>
-                    <p class="text-xs text-gray-500">{item.fileName}</p>
-                  </div>
-                  <span class={item.found ? 'text-green-500' : 'text-red-500'}>
-                    {item.found ? 'Found' : 'Not found'}
-                  </span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <button
-          onclick={searchFile}
-          disabled={isSearching || !$networkConnected}
-          class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
-        >
-          {#if isSearching}
-            <Loader2 class="w-5 h-5 animate-spin" />
-            Searching...
-          {:else}
-            <Search class="w-5 h-5" />
-            Search
-          {/if}
-        </button>
-      </div>
+    <div class="flex items-center gap-2 mb-4">
+      <Plus class="w-5 h-5 text-gray-600" />
+      <h2 class="text-lg font-semibold">Add New Download</h2>
     </div>
 
-    <p class="text-xs text-gray-500 mt-2">
-      Enter a 64-character SHA-256 hash to search for files on the network
-    </p>
+    <!-- Search Mode Tabs -->
+    <div class="flex gap-2 mb-4">
+      <button
+        onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+      >
+        <Search class="w-4 h-4" />
+        Merkle Hash
+      </button>
+      <button
+        onclick={() => { searchMode = 'magnet'; searchQuery = ''; searchResult = null; searchError = null; }}
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+      >
+        <Link class="w-4 h-4" />
+        Magnet Link
+      </button>
+      <button
+        onclick={() => { searchMode = 'torrent'; searchQuery = ''; searchResult = null; searchError = null; }}
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+      >
+        <FileUp class="w-4 h-4" />
+        .torrent File
+      </button>
+    </div>
+
+    <!-- Search Input -->
+    {#if searchMode === 'torrent'}
+      <div class="text-center py-8 border-2 border-dashed border-gray-300 rounded-lg">
+        <FileUp class="w-12 h-12 mx-auto text-gray-400 mb-3" />
+        <p class="text-gray-600 mb-4">Upload a .torrent file to start downloading</p>
+        <button
+          onclick={handleTorrentFile}
+          disabled={!$networkConnected}
+          class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        >
+          Select .torrent File
+        </button>
+      </div>
+    {:else}
+      <div class="relative">
+        <div class="flex gap-3">
+          <div class="flex-1 relative">
+            <input
+              type="text"
+              bind:value={searchQuery}
+              placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
+              class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+              onkeydown={(e) => e.key === 'Enter' && searchFile()}
+              onfocus={() => showSearchHistory = true}
+              onblur={() => setTimeout(() => showSearchHistory = false, 200)}
+            />
+          </div>
+
+          <button
+            onclick={searchFile}
+            disabled={isSearching || !$networkConnected}
+            class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
+          >
+            {#if isSearching}
+              <Loader2 class="w-5 h-5 animate-spin" />
+              Searching...
+            {:else}
+              <Search class="w-5 h-5" />
+              Search
+            {/if}
+          </button>
+        </div>
+      </div>
+
+      <p class="text-xs text-gray-500 mt-2">
+        {#if searchMode === 'hash'}
+          Enter a 64-character SHA-256 Merkle root hash to search for files
+        {:else}
+          Paste a magnet link starting with "magnet:?xt=urn:btih:"
+        {/if}
+      </p>
+    {/if}
 
     <!-- Search Result -->
     {#if searchResult}
       <div class="mt-6 bg-gray-50 rounded-lg p-4 border border-gray-200">
         <div class="flex items-start gap-4">
-          <div class="flex items-center justify-center w-14 h-14 bg-white rounded-lg border border-gray-200">
+          <div class="flex items-center justify-center w-14 h-14 bg-white rounded-lg border border-gray-200 flex-shrink-0">
             <svelte:component this={getFileIcon(searchResult.fileName)} class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
           </div>
 
           <div class="flex-1 min-w-0">
             <h3 class="text-lg font-semibold truncate">{searchResult.fileName}</h3>
             <div class="flex items-center gap-4 text-sm text-gray-600 mt-1">
-              <span>{formatFileSize(searchResult.fileSize)}</span>
-              <span class="text-green-600">{searchResult.seeders.length} seeder{searchResult.seeders.length !== 1 ? 's' : ''}</span>
+              {#if searchResult.fileSize > 0}
+                <span>{formatFileSize(searchResult.fileSize)}</span>
+              {/if}
+              <span class="text-green-600">
+                {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''}` : 'Unknown seeders'}
+              </span>
             </div>
             <p class="text-xs text-gray-500 font-mono mt-2 truncate">
               {searchResult.hash}
@@ -399,7 +581,7 @@
           <button
             onclick={() => startDownload(searchResult!)}
             disabled={!isTauri}
-            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-all"
+            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-all flex-shrink-0"
           >
             <Download class="w-4 h-4" />
             Download
@@ -419,26 +601,21 @@
     {/if}
   </div>
 
-  <!-- Active Downloads -->
+  <!-- Download Tracker -->
   <div class="bg-white rounded-lg border border-gray-200 p-6">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold">Downloads</h2>
-
-      {#if downloads.some(d => d.status === 'completed')}
-        <button
-          onclick={clearCompleted}
-          class="text-sm text-gray-600 hover:text-gray-900"
-        >
-          Clear Completed
-        </button>
-      {/if}
+      <div class="flex items-center gap-2">
+        <Download class="w-5 h-5 text-gray-600" />
+        <h2 class="text-lg font-semibold">Download Tracker</h2>
+        <span class="text-sm text-gray-500">({getActiveDownloads().length} active)</span>
+      </div>
     </div>
 
     {#if downloads.length === 0}
       <div class="text-center py-12">
         <Download class="w-16 h-16 mx-auto text-gray-300 mb-4" />
-        <p class="text-gray-600">No active downloads</p>
-        <p class="text-sm text-gray-500 mt-1">Search for a file to start downloading</p>
+        <p class="text-gray-600">No downloads</p>
+        <p class="text-sm text-gray-500 mt-1">Search for a file or add a magnet link to start downloading</p>
       </div>
     {:else}
       <div class="space-y-4">
@@ -446,7 +623,7 @@
           <div class="border border-gray-200 rounded-lg p-4">
             <div class="flex items-center gap-4">
               <!-- File Icon -->
-              <div class="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-lg">
+              <div class="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-lg flex-shrink-0">
                 <svelte:component this={getFileIcon(download.name)} class="w-6 h-6 {getFileColor(download.name)}" />
               </div>
 
@@ -454,14 +631,15 @@
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
                   <p class="text-sm font-semibold truncate">{download.name}</p>
-                  <svelte:component
-                    this={getStatusIcon(download.status)}
-                    class="w-4 h-4 {getStatusColor(download.status)} {download.status === 'downloading' ? 'animate-spin' : ''}"
-                  />
+                  <span class="px-2 py-0.5 text-xs font-medium rounded capitalize {getStatusBadgeColor(download.status)}">
+                    {download.status}
+                  </span>
                 </div>
 
                 <div class="flex items-center gap-4 text-xs text-gray-500 mt-1">
-                  <span>{formatFileSize(download.size)}</span>
+                  {#if download.size > 0}
+                    <span>{formatFileSize(download.size)}</span>
+                  {/if}
                   {#if download.status === 'downloading'}
                     <span>{download.speed}</span>
                     <span>ETA: {download.eta}</span>
@@ -477,7 +655,7 @@
                     </div>
                     <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
                       <div
-                        class="h-full bg-blue-500 transition-all duration-300"
+                        class="h-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}"
                         style="width: {download.progress}%"
                       ></div>
                     </div>
@@ -486,7 +664,7 @@
               </div>
 
               <!-- Actions -->
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2 flex-shrink-0">
                 {#if download.status === 'downloading' || download.status === 'paused'}
                   <button
                     onclick={() => togglePause(download.id)}
@@ -499,9 +677,6 @@
                       <Play class="w-4 h-4 text-gray-600" />
                     {/if}
                   </button>
-                {/if}
-
-                {#if download.status !== 'completed'}
                   <button
                     onclick={() => cancelDownload(download.id)}
                     class="p-2 hover:bg-red-50 rounded-lg transition-colors"
@@ -509,12 +684,91 @@
                   >
                     <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
                   </button>
+                {:else if download.status === 'queued'}
+                  <button
+                    onclick={() => cancelDownload(download.id)}
+                    class="p-2 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Cancel"
+                  >
+                    <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                  </button>
+                {:else}
+                  <button
+                    onclick={() => moveToHistory(download.id)}
+                    class="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                    title="Move to history"
+                  >
+                    <History class="w-4 h-4 text-gray-400" />
+                  </button>
                 {/if}
               </div>
             </div>
           </div>
         {/each}
       </div>
+    {/if}
+  </div>
+
+  <!-- Download History -->
+  <div class="bg-white rounded-lg border border-gray-200">
+    <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+      <button
+        onclick={() => showDownloadHistory = !showDownloadHistory}
+        class="flex items-center gap-2 text-lg font-semibold text-gray-900"
+      >
+        <History class="w-5 h-5" />
+        Download History
+        <span class="text-sm font-normal text-gray-500">({downloadHistory.length})</span>
+      </button>
+
+      {#if downloadHistory.length > 0}
+        <button
+          onclick={clearDownloadHistory}
+          class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+        >
+          <Trash2 class="w-4 h-4" />
+          Clear All
+        </button>
+      {/if}
+    </div>
+
+    {#if showDownloadHistory}
+      {#if downloadHistory.length === 0}
+        <div class="p-8 text-center">
+          <History class="w-12 h-12 mx-auto text-gray-300 mb-3" />
+          <p class="text-gray-600">No download history</p>
+          <p class="text-sm text-gray-500 mt-1">Completed and finished downloads will appear here</p>
+        </div>
+      {:else}
+        <div class="divide-y divide-gray-100">
+          {#each downloadHistory as entry (entry.id)}
+            <div class="p-4 hover:bg-gray-50 transition-colors">
+              <div class="flex items-center gap-4">
+                <!-- File Icon -->
+                <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-lg flex-shrink-0">
+                  <svelte:component this={getFileIcon(entry.fileName)} class="w-5 h-5 {getFileColor(entry.fileName)}" />
+                </div>
+
+                <!-- File Info -->
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <p class="text-sm font-medium truncate text-gray-900">{entry.fileName}</p>
+                    <span class="px-2 py-0.5 text-xs font-medium rounded capitalize {getStatusBadgeColor(entry.status)}">
+                      {entry.status}
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-4 text-xs text-gray-500 mt-1">
+                    {#if entry.fileSize > 0}
+                      <span>{formatFileSize(entry.fileSize)}</span>
+                    {/if}
+                    <span>{formatDate(entry.completedAt)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </div>
 </div>
