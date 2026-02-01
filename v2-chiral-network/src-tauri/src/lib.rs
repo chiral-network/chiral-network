@@ -22,7 +22,7 @@ async fn start_dht(
         return Err("DHT already running".to_string());
     }
     
-    let dht = Arc::new(DhtService::new());
+    let dht = Arc::new(DhtService::new(state.file_transfer.clone()));
     let result = dht.start(app.clone()).await?;
     *dht_guard = Some(dht);
     
