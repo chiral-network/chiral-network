@@ -58,7 +58,7 @@ _Version 1.0 | January 2026_
 
 ### 1.1 What is Chiral Network?
 
-Chiral Network is a **decentralized peer-to-peer file sharing application** that combines blockchain technology with distributed hash table (DHT) based file storage. It implements a BitTorrent-like continuous seeding model where files are instantly available to the network, with a strong focus on privacy, security, and legitimate use cases.
+Chiral Network is a **decentralized peer-to-peer file sharing application** that combines blockchain technology with distributed hash table (DHT) based file discovery. It implements a BitTorrent-like continuous seeding model where files are instantly available to the network, with a strong focus on privacy, security, and legitimate use cases.
 
 ### 1.2 Key Innovation: Decoupled Architecture
 
@@ -148,7 +148,7 @@ All nodes are equal peers. There are no special roles:
 | Technology         | Purpose                                  |
 | ------------------ | ---------------------------------------- |
 | **libp2p v0.54**   | Full P2P networking stack (Rust backend) |
-| **Kademlia DHT**   | Distributed file metadata storage        |
+| **Kademlia DHT**   | File discovery with minimal records      |
 | **WebRTC**         | Direct peer-to-peer data channels        |
 | **Noise Protocol** | Cryptographic transport security         |
 
@@ -249,7 +249,7 @@ Tier 4: Blockchain Layer
 Tier 5: Storage Layer
 ├─ Local file cache
 ├─ Block store (chunk storage)
-└─ Metadata DHT records
+└─ Minimal DHT records (file discovery)
 ```
 
 ### 5.2 Service Responsibilities
@@ -282,11 +282,15 @@ interface IContentProtocol {
     identification: FileIdentification,
     progressUpdate: ProgressUpdate,
     outputPath?: string,
-  ): Promise<Uint8Array | void>;
+  ): Promise<DownloadResult>;
+  uploadFile(
+    options: UploadOptions,
+    progressUpdate: ProgressUpdate,
+  ): Promise<UploadResult>;
   startSeeding(
     filePathOrData: string | Uint8Array,
     progressUpdate: ProgressUpdate,
-  ): Promise<FileMetadata>;
+  ): Promise<UploadResult>;
   stopSeeding(identification: FileIdentification): Promise<boolean>;
   pauseDownload(identification: FileIdentification): Promise<boolean>;
   resumeDownload(identification: FileIdentification): Promise<boolean>;
@@ -296,18 +300,21 @@ interface IContentProtocol {
 
 ### 6.2 ProtocolManager Class
 
-The ProtocolManager orchestrates all protocol interactions:
+The ProtocolManager orchestrates protocol interactions and delegates to registered implementations:
 
-| Method                         | Description                        |
-| ------------------------------ | ---------------------------------- |
-| `constructor(initialProtocol)` | Register protocols and set active  |
-| `setProtocol(protocol)`        | Switch active protocol             |
-| `getProtocolImpl()`            | Get active protocol implementation |
-| `getPeersServing(..)`          | List available peers               |
-| `downloadFile(..)`             | Download via active protocol       |
-| `uploadFile(..)`               | Seed via active protocol           |
-| `stopSharing(..)`              | Stop seeding content               |
-| `cleanup()`                    | Clean shutdown of all protocols    |
+| Method                         | Description                                    |
+| ------------------------------ | ---------------------------------------------- |
+| `constructor(initialProtocol)` | Set active protocol                            |
+| `setProtocol(protocol)`        | Switch active protocol                         |
+| `getProtocolImpl(protocol?)`   | Get protocol implementation (active or chosen) |
+| `getPeersServing(..)`          | List available peers for a protocol            |
+| `downloadFile(..)`             | Download via protocol in identification        |
+| `uploadFile(..)`               | Upload/seed via requested protocol             |
+| `stopSharing(..)`              | Stop seeding content                           |
+| `pauseDownload(..)`            | Pause an in-progress download                  |
+| `resumeDownload(..)`           | Resume a paused download                       |
+| `cancelDownload(..)`           | Cancel an in-progress download                 |
+| `cleanup()`                    | Clean shutdown of all protocols                |
 
 ### 6.3 Default Protocol Selection
 
@@ -345,39 +352,70 @@ Browser Only                    → WebTorrent (only option)
 | **FIND_VALUE** | 10s     | 5       | Value lookup    |
 | **STORE**      | 10s     | 3       | Store key-value |
 
-### 7.3 File Metadata Structure
+### 7.3 Minimal DHT File Record
+
+For file metadata, the DHT is used only for basic file info retrieval and provider lookup. Each file hash key
+stores a minimal record so the UI can display basic file information while seeder
+identity, pricing, and protocol details are exchanged via GossipSub.
 
 ```typescript
-{
-  fileHash: string,           // SHA-256 Merkle root (CID)
-  fileName: string,
-  fileSize: number,           // bytes
-  seeders: string[],          // Seeder peer IDs
-  createdAt: number,          // Unix timestamp
-  mimeType?: string,
-  isEncrypted: boolean,
-  encryptionMethod?: string,  // e.g., 'AES-256-GCM'
-  keyFingerprint?: string,
-  version?: number
+export interface DhtFileRecord {
+  fileHash: string;
+  fileName: string;
+  fileSize: number; // bytes
+  createdAt: number; // Unix timestamp
+  mimeType?: string;
 }
 ```
 
-### 7.4 Protocol-Aware Seeder Information
+### 7.4 Seeder General Info (GossipSub)
+
+Seeder identity and pricing are broadcast on a per-seeder topic:
+`seeder/{peerId}`.
 
 ```typescript
-seeders: {
-  http: [
-    {
-      multiaddr: "/ip4/192.168.1.100/tcp/8080/p2p/12D3KooW...",
-      wallet: "0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983",
-      chunks: [0, 1, 2, ..., 15],
-      price_per_mb: 0.001
-    }
-  ],
-  webtorrent: [...],
-  bittorrent: [...],
-  ed2k: [...]
+export interface SeederGeneralInfo {
+  peerId: string;
+  walletAddress: string;
+  defaultPricePerMb: number;
+  timestamp: number;
 }
+```
+
+### 7.5 Seeder File Info (GossipSub)
+
+File-specific protocol support and pricing overrides are broadcast on:
+`seeder/{peerId}/file/{fileHash}`.
+
+```typescript
+export interface SeederFileInfo {
+  peerId: string;
+  fileHash: string;
+  pricePerMb?: number; // Overrides defaultPricePerMb if set
+  supportedProtocols: Protocol[];
+  protocolDetails: ProtocolDetails;
+  timestamp: number;
+}
+```
+
+### 7.6 Protocol Details Types
+
+Protocol detail payloads are defined per protocol and carried in
+`SeederFileInfo.protocolDetails`.
+
+```typescript
+import { Protocol } from "$lib/services/contentProtocols/types";
+
+export type ProtocolDetailsByProtocol = {
+  [Protocol.HTTP]: HttpProtocolDetails;
+  [Protocol.FTP]: FtpProtocolDetails;
+  [Protocol.ED2K]: Ed2kProtocolDetails;
+  [Protocol.BitTorrent]: BitTorrentProtocolDetails;
+  [Protocol.WebRTC]: WebRtcProtocolDetails;
+  [Protocol.UNKNOWN]: never;
+};
+
+export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 ```
 
 ---
@@ -560,17 +598,13 @@ Example Multi-Protocol Transfer:
    ↓
 2. Generate SHA-256 Hash (CID)
    ↓
-3. Chunk into 256 KB pieces
+3. Optional: Encrypt with AES-256-GCM
    ↓
-4. Optional: Encrypt with AES-256-GCM
+4. Publish minimal DHT record and announce seeder info via GossipSub
    ↓
-5. Build Merkle tree from chunk hashes
+5. Start serving via configured protocols
    ↓
-6. Publish metadata to DHT
-   ↓
-7. Start serving via configured protocols
-   ↓
-8. Continuous seeding (while online)
+6. Continuous seeding (while online)
 ```
 
 ### 10.2 Download Pipeline
@@ -580,19 +614,17 @@ Example Multi-Protocol Transfer:
    ↓
 2. Query DHT for metadata and seeders
    ↓
-3. Select protocol(s) based on availability
+3. Subscribe to GossipSub for seeder general + file info
    ↓
-4. Download chunks (possibly multi-source)
+4. Auto or Manually Select protocol(s) & Peers based on availability and pricing 
    ↓
-5. Verify chunk hashes
+5. Download chunks (possibly multi-source)
    ↓
 6. Optional: Decrypt chunks
    ↓
 7. Reassemble file
    ↓
-8. Verify against Merkle root
-   ↓
-9. Settlement: Pay seeders on blockchain
+8. Settlement: Pay seeders on blockchain
 ```
 
 ### 10.3 Chunk Structure
@@ -652,7 +684,7 @@ Merkle Tree Structure (built from original chunk hashes):
 - Files remain seeded while in "Shared Files" list
 - No upload step - files immediately available
 - Real-time seeder count displayed
-- Automatic DHT metadata refresh
+- Automatic DHT record refresh and GossipSub seeder announcements
 
 **Seed Management**:
 
@@ -725,8 +757,8 @@ Strategy borrowed from BitTorrent:
 
 | Parameter            | Value       | Description              |
 | -------------------- | ----------- | ------------------------ |
-| **Network ID**       | 98765       | Unique Chiral identifier |
-| **Chain ID**         | 98765       | EIP-155 identifier       |
+| **Network ID**       | 987654      | Unique Chiral identifier |
+| **Chain ID**         | 987654      | EIP-155 identifier       |
 | **Block Time**       | ~15 seconds | Target between blocks    |
 | **Gas Limit**        | 4,700,000   | Maximum gas per block    |
 | **Mining Algorithm** | Ethash      | ASIC-resistant PoW       |
@@ -792,9 +824,9 @@ Master Seed (BIP39 Mnemonic)
     │
     └── HD Wallet (BIP32/BIP44)
         │
-        ├── m/44'/98765'/0'/0/* (Wallet Keys)
-        ├── m/44'/98765'/1'/0/* (File Encryption Keys)
-        └── m/44'/98765'/2'/0/* (Identity Keys)
+        ├── m/44'/987654'/0'/0/* (Wallet Keys)
+        ├── m/44'/987654'/1'/0/* (File Encryption Keys)
+        └── m/44'/987654'/2'/0/* (Identity Keys)
 ```
 
 ### 14.3 Wallet Operations
@@ -1472,8 +1504,8 @@ npm run build
 
 | Parameter        | Value       |
 | ---------------- | ----------- |
-| Network ID       | 98765       |
-| Chain ID         | 98765       |
+| Network ID       | 987654      |
+| Chain ID         | 987654      |
 | Block Time       | ~15 seconds |
 | Gas Limit        | 4,700,000   |
 | Mining Algorithm | Ethash      |
@@ -1639,24 +1671,3 @@ npm run build
 
 _This document consolidates all design and technical documentation for the Chiral Network project into a single comprehensive reference._
 
-## Migration Plan: Download Page (2026-01-31)
-
-Goal: Deprecate FileMetadata in the Download search flow by emitting a single
-DownloadIntent payload from peer selection, then incrementally remove legacy
-selection logic.
-
-Phase 1: Boundary + payload
-
-- Define a DownloadIntent payload: fullMetadata, selectedPeer, selectedProtocol, price.
-- Update DownloadSearchSection to dispatch that intent on peer selection confirm.
-- Update Download.svelte to accept the intent and enqueue a FileItem.
-
-Phase 2: Minimal cleanup
-
-- Remove unused peer-selection service state tied to the FileMetadata flow.
-- Pass protocol enums directly into PeerSelectionModal.
-
-Phase 3: Debt follow-ups (optional)
-
-- Consolidate torrent/magnet flows after the intent path is stable.
-- Revisit history re-download protocol selection.

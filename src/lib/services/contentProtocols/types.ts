@@ -62,7 +62,6 @@ export interface DownloadResult {
 
 export interface IContentProtocol {
   getName(): Protocol;
-  getPeersServing(identification: FileIdentification): Promise<PeerInfo[]>;
   getContentFrom(
     peerId: string,
     identification: FileIdentification,

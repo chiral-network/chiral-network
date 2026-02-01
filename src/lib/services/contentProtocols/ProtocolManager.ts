@@ -41,14 +41,6 @@ export class ProtocolManager {
     return impl;
   }
 
-  async getPeersServing(
-    identification: FileIdentification,
-  ): Promise<PeerInfo[]> {
-    return await this.getProtocolImpl(identification.protocol).getPeersServing(
-      identification,
-    );
-  }
-
   async downloadFile(
     peerId: string,
     identification: FileIdentification,

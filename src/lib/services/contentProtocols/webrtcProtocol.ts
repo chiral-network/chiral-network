@@ -16,10 +16,6 @@ export class WebRTCProtocol implements IContentProtocol {
     return Protocol.WebRTC;
   }
 
-  async getPeersServing(_identification: FileIdentification) {
-    return [];
-  }
-
   async getContentFrom(
     peerId: string,
     identification: FileIdentification,

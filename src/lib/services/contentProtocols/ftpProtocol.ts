@@ -16,10 +16,6 @@ export class FtpProtocol implements IContentProtocol {
     return Protocol.FTP;
   }
 
-  async getPeersServing(_identification: FileIdentification) {
-    return [];
-  }
-
   async getContentFrom(
     _peerId: string,
     identification: FileIdentification,

@@ -15,11 +15,6 @@ export class HttpProtocol implements IContentProtocol {
   getName(): Protocol {
     return Protocol.HTTP;
   }
-
-  async getPeersServing(_identification: FileIdentification) {
-    return [];
-  }
-
   async getContentFrom(
     _peerId: string,
     identification: FileIdentification,

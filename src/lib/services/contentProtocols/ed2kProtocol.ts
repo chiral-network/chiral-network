@@ -15,10 +15,6 @@ export class Ed2kProtocol implements IContentProtocol {
     return Protocol.ED2K;
   }
 
-  async getPeersServing(_identification: FileIdentification) {
-    return [];
-  }
-
   async getContentFrom(
     _peerId: string,
     identification: FileIdentification,

@@ -14,11 +14,6 @@ export class BitTorrentProtocol implements IContentProtocol {
   getName(): Protocol {
     return Protocol.BitTorrent;
   }
-
-  async getPeersServing(_identification: FileIdentification) {
-    return [];
-  }
-
   async getContentFrom(
     _peerId: string,
     _identification: FileIdentification,
