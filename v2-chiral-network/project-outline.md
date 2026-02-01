@@ -10,6 +10,8 @@ Important: You should use the old version as a reference since we are trying to 
 
 2. Navbar: Upon logging into the wallet, the main page (and every other page in the application) should have a navbar which contains the following pages: Download, Upload, Account, Network, Settings. There should also be a logout button. There should also be a status to show Disconnect/Connected implemented as a small colored dot (red/green) and the word "Disconnected" or "Connected".
 
+3. 
+
 ## Frontend + Backend Implementation
 Important: You should use the old version as a reference since we are trying to rebuild it more efficiently. Fix any bad code and remove any useless code. Also, update any frontend as needed.
 
@@ -22,6 +24,8 @@ We can reuse the Bootstrap and anything that was made/hosted outside the program
     - Other data/statistics that are useful
     - the ability to see other users on the network.
 If I connect from a second device, I should be able to see other clients.
+
+2. ChiralDrop: Basically airdrop. Assign users an alias (changes everytime; Color + Animal combination) that allows others to identify the user. The first layer of the page should have a map where user icons pop up on a wave. Users will be able to click the icon of another user and transfer files. Upon receipt, a user can choose to accept or decline the file. We will also track the transaction history (uploads and downloads). Make sure the transaction history persists. 
 
 You can also reference the old implementation and determine what is useful and what is not and include it into the new implementation and refine it to be better.
 
