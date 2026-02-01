@@ -76,15 +76,17 @@ pub struct DhtService {
     is_running: Arc<Mutex<bool>>,
     local_peer_id: Arc<Mutex<Option<String>>>,
     command_sender: Arc<Mutex<Option<mpsc::UnboundedSender<SwarmCommand>>>>,
+    file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
 }
 
 impl DhtService {
-    pub fn new() -> Self {
+    pub fn new(file_transfer_service: Arc<Mutex<crate::file_transfer::FileTransferService>>) -> Self {
         Self {
             peers: Arc::new(Mutex::new(Vec::new())),
             is_running: Arc::new(Mutex::new(false)),
             local_peer_id: Arc::new(Mutex::new(None)),
             command_sender: Arc::new(Mutex::new(None)),
+            file_transfer_service: Some(file_transfer_service),
         }
     }
 
@@ -113,9 +115,10 @@ impl DhtService {
         // Spawn event loop
         let peers_clone = self.peers.clone();
         let is_running_clone = self.is_running.clone();
+        let file_transfer_clone = self.file_transfer_service.clone();
         
         tokio::spawn(async move {
-            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx).await;
+            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone).await;
         });
         
         Ok(format!("DHT started with peer ID: {}", peer_id))
@@ -246,6 +249,7 @@ async fn event_loop(
     is_running: Arc<Mutex<bool>>,
     app: tauri::AppHandle,
     mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
+    file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
 ) {
     loop {
         let running = *is_running.lock().await;
@@ -257,7 +261,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Listening on {:?}", address);
@@ -316,6 +320,7 @@ async fn handle_behaviour_event(
     peers: &Arc<Mutex<Vec<PeerInfo>>>,
     app: &tauri::AppHandle,
     swarm: &mut Swarm<DhtBehaviour>,
+    file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -398,16 +403,20 @@ async fn handle_behaviour_event(
                             println!("Received file transfer from {}: {}", peer, request.file_name);
                             let file_size = request.file_data.len();
 
-                            // Emit event to frontend for user to accept/decline
-                            let _ = app.emit("file-transfer-request", serde_json::json!({
-                                "transferId": request.transfer_id.clone(),
-                                "fromPeerId": peer.to_string(),
-                                "fileName": request.file_name.clone(),
-                                "fileSize": file_size
-                            }));
+                            // Store file data in FileTransferService for later acceptance
+                            if let Some(fts) = file_transfer_service {
+                                let fts_lock = fts.lock().await;
+                                let _ = fts_lock.receive_file_request(
+                                    app.clone(),
+                                    peer.to_string(),
+                                    request.file_name.clone(),
+                                    request.file_data.clone(),
+                                    request.transfer_id.clone()
+                                ).await;
+                            }
 
-                            // For now, auto-accept and save (in production, wait for user confirmation)
-                            // Send acceptance response
+                            // Auto-accept for now (response is required by protocol)
+                            // In a real implementation, we'd wait for user action and cache the channel
                             let response = FileTransferResponse {
                                 transfer_id: request.transfer_id.clone(),
                                 accepted: true,
@@ -415,14 +424,6 @@ async fn handle_behaviour_event(
                             };
                             if let Err(e) = swarm.behaviour_mut().file_transfer.send_response(channel, response) {
                                 println!("Failed to send file transfer response: {:?}", e);
-                            } else {
-                                println!("File transfer accepted, received {} bytes", file_size);
-                                let _ = app.emit("file-received", serde_json::json!({
-                                    "transferId": request.transfer_id,
-                                    "fromPeerId": peer.to_string(),
-                                    "fileName": request.file_name,
-                                    "fileSize": file_size
-                                }));
                             }
                         }
                         request_response::Message::Response { response, .. } => {
