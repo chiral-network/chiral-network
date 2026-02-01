@@ -1,10 +1,5 @@
 import { writable, derived, get } from 'svelte/store';
 import { generateAlias, aliasFromPeerId, type UserAlias } from './aliasService';
-import { saveHistoryToDht, loadHistoryFromDht, syncHistory } from './encryptedHistoryService';
-import { walletAccount } from './stores';
-import { logger } from './logger';
-
-const log = logger('ChiralDrop');
 
 // Transaction types
 export interface FileTransfer {
@@ -19,13 +14,6 @@ export interface FileTransfer {
   direction: 'incoming' | 'outgoing';
   timestamp: number;
   progress?: number;
-  // Pricing fields for paid transfers
-  priceWei?: string;
-  senderWallet?: string;
-  fileHash?: string;
-  paymentTxHash?: string;
-  balanceBefore?: string;
-  balanceAfter?: string;
 }
 
 export interface NearbyPeer {
@@ -36,32 +24,20 @@ export interface NearbyPeer {
   wavePhase: number; // For animation
 }
 
-// User's peer ID (set when connected to network)
-export const localPeerId = writable<string | null>(null);
+// Generate user's session alias (changes each session)
+const sessionAlias = generateAlias();
 
-// User's alias - derived from peer ID for consistency across clients
-// Falls back to a random alias if not connected
-const fallbackAlias = generateAlias();
-export const userAlias = derived(localPeerId, ($peerId) => {
-  if ($peerId) {
-    return aliasFromPeerId($peerId);
-  }
-  return fallbackAlias;
-});
-
-// Writable store for components that need to set the peer ID
-export function setLocalPeerId(peerId: string) {
-  localPeerId.set(peerId);
-}
+// Stores
+export const userAlias = writable<UserAlias>(sessionAlias);
 export const nearbyPeers = writable<NearbyPeer[]>([]);
 export const pendingTransfers = writable<FileTransfer[]>([]);
 export const transferHistory = writable<FileTransfer[]>([]);
 export const selectedPeer = writable<NearbyPeer | null>(null);
 
-// Load transaction history from localStorage (temporary cache)
+// Load transaction history from localStorage
 const HISTORY_STORAGE_KEY = 'chiraldrop_history';
 
-function loadHistoryFromLocal(): FileTransfer[] {
+function loadHistory(): FileTransfer[] {
   try {
     const stored = localStorage.getItem(HISTORY_STORAGE_KEY);
     if (stored) {
@@ -74,55 +50,25 @@ function loadHistoryFromLocal(): FileTransfer[] {
       }));
     }
   } catch (e) {
-    log.error('Failed to load transfer history from localStorage:', e);
+    console.error('Failed to load transfer history:', e);
   }
   return [];
 }
 
-function saveHistoryToLocal(history: FileTransfer[]) {
+function saveHistory(history: FileTransfer[]) {
   try {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
   } catch (e) {
-    log.error('Failed to save transfer history to localStorage:', e);
+    console.error('Failed to save transfer history:', e);
   }
 }
 
-// Initialize history from local storage first (fast)
-transferHistory.set(loadHistoryFromLocal());
+// Initialize history from storage
+transferHistory.set(loadHistory());
 
-// Subscribe to history changes and persist both locally and to DHT
-let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+// Subscribe to history changes and persist
 transferHistory.subscribe((history) => {
-  // Always save locally for quick access
-  saveHistoryToLocal(history);
-
-  // Debounce DHT saves to avoid excessive network traffic
-  if (saveTimeout) {
-    clearTimeout(saveTimeout);
-  }
-  saveTimeout = setTimeout(() => {
-    saveHistoryToDht(history).catch((err) => {
-      log.error('Failed to save history to DHT:', err);
-    });
-  }, 2000);
-});
-
-// When wallet connects, sync history from DHT
-walletAccount.subscribe(async (wallet) => {
-  if (wallet) {
-    log.info('Wallet connected, syncing history from DHT...');
-    try {
-      const localHistory = get(transferHistory);
-      const syncedHistory = await syncHistory(localHistory);
-      // Update store with synced history (merged local + DHT)
-      if (syncedHistory.length > 0) {
-        transferHistory.set(syncedHistory);
-      }
-      log.info('History synced:', syncedHistory.length, 'transfers');
-    } catch (err) {
-      log.error('Failed to sync history:', err);
-    }
-  }
+  saveHistory(history);
 });
 
 // Helper functions
@@ -147,51 +93,6 @@ export function updateTransferStatus(id: string, status: FileTransfer['status'],
       pendingTransfers.update((transfers) => transfers.filter((t) => t.id !== id));
     }
   }
-}
-
-export function updateTransferPayment(id: string, txHash: string) {
-  // Update in pending transfers
-  pendingTransfers.update((transfers) =>
-    transfers.map((t) => t.id === id ? { ...t, paymentTxHash: txHash } : t)
-  );
-  // Also update in history (transfer may have already moved there)
-  transferHistory.update((history) =>
-    history.map((t) => t.id === id ? { ...t, paymentTxHash: txHash } : t)
-  );
-}
-
-export function updateTransferByFileHash(
-  fileHash: string,
-  status: FileTransfer['status'],
-  txHash?: string,
-  balanceBefore?: string,
-  balanceAfter?: string,
-) {
-  // Find in pending by fileHash
-  const pending = get(pendingTransfers);
-  const transfer = pending.find((t) => t.fileHash === fileHash);
-  if (transfer) {
-    const updates: Partial<FileTransfer> = { status };
-    if (txHash) updates.paymentTxHash = txHash;
-    if (balanceBefore) updates.balanceBefore = balanceBefore;
-    if (balanceAfter) updates.balanceAfter = balanceAfter;
-    pendingTransfers.update((transfers) =>
-      transfers.map((t) => t.fileHash === fileHash ? { ...t, ...updates } : t)
-    );
-    if (status === 'completed' || status === 'failed') {
-      transferHistory.update((history) => [{ ...transfer, ...updates }, ...history]);
-      pendingTransfers.update((transfers) => transfers.filter((t) => t.fileHash !== fileHash));
-    }
-    return;
-  }
-  // Also check history (may already be there from acceptTransfer)
-  const historyUpdates: Partial<FileTransfer> = { status };
-  if (txHash) historyUpdates.paymentTxHash = txHash;
-  if (balanceBefore) historyUpdates.balanceBefore = balanceBefore;
-  if (balanceAfter) historyUpdates.balanceAfter = balanceAfter;
-  transferHistory.update((history) =>
-    history.map((t) => t.fileHash === fileHash ? { ...t, ...historyUpdates } : t)
-  );
 }
 
 export function acceptTransfer(id: string) {
@@ -261,21 +162,6 @@ export const outgoingPendingTransfers = derived(
 // Clear old history (keep last 100 entries)
 export function pruneHistory() {
   transferHistory.update((history) => history.slice(0, 100));
-}
-
-// Format wei price as CHR for display
-export function formatPriceWei(wei: string): string {
-  if (!wei || wei === '0') return 'Free';
-  try {
-    const weiNum = BigInt(wei);
-    const whole = weiNum / BigInt(1e18);
-    const frac = weiNum % BigInt(1e18);
-    if (frac === BigInt(0)) return `${whole} CHR`;
-    const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
-    return `${whole}.${fracStr} CHR`;
-  } catch {
-    return `${wei} wei`;
-  }
 }
 
 // Format file size for display
