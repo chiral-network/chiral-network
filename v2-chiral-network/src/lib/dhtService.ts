@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { peers, networkStats, networkConnected } from './stores';
 import type { PeerInfo } from './stores';
 
 class DhtService {
   private pollInterval: number | null = null;
+  private peerDiscoveryUnlisten: (() => void) | null = null;
 
   async start(): Promise<void> {
     try {
@@ -11,8 +13,24 @@ class DhtService {
       console.log('DHT started:', result);
       networkConnected.set(true);
       
+      // Listen for peer discovery events
+      this.peerDiscoveryUnlisten = await listen<PeerInfo[]>('peer-discovered', (event) => {
+        console.log('Peers discovered:', event.payload);
+        const formattedPeers = event.payload.map(peer => ({
+          ...peer,
+          lastSeen: peer.last_seen
+        }));
+        peers.set(formattedPeers);
+      });
+      
       // Start polling for network stats
       this.startPolling();
+      
+      // Get and log our peer ID
+      const peerId = await this.getPeerId();
+      if (peerId) {
+        console.log('Our Peer ID:', peerId);
+      }
     } catch (error) {
       console.error('Failed to start DHT:', error);
       throw error;
@@ -28,8 +46,34 @@ class DhtService {
       
       // Stop polling
       this.stopPolling();
+      
+      // Unlisten from peer discovery events
+      if (this.peerDiscoveryUnlisten) {
+        this.peerDiscoveryUnlisten();
+        this.peerDiscoveryUnlisten = null;
+      }
     } catch (error) {
       console.error('Failed to stop DHT:', error);
+      throw error;
+    }
+  }
+  
+  async getPeerId(): Promise<string | null> {
+    try {
+      return await invoke<string | null>('get_peer_id');
+    } catch (error) {
+      console.error('Failed to get peer ID:', error);
+      return null;
+    }
+  }
+  
+  async pingPeer(peerId: string): Promise<string> {
+    try {
+      const result = await invoke<string>('ping_peer', { peerId });
+      console.log('Ping result:', result);
+      return result;
+    } catch (error) {
+      console.error('Failed to ping peer:', error);
       throw error;
     }
   }
