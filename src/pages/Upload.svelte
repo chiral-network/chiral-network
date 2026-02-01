@@ -939,11 +939,16 @@
 
                 files.update((currentFiles) => [...currentFiles, newFile]);
                 addedCount++;
+                
+                // Show success with propagation timing info
+                const baseMessage = tr("toasts.upload.fileSuccess", {
+                  values: { name: file.name },
+                });
+                const propagationHint = " File will be searchable in 60-90 seconds after DHT propagation.";
                 showToast(
-                  tr("toasts.upload.fileSuccess", {
-                    values: { name: file.name },
-                  }),
+                  baseMessage + propagationHint,
                   "success",
+                  6000
                 );
               } catch (error) {
                 console.error(
@@ -1783,7 +1788,7 @@
   <!-- BitTorrent Seeding Section (Collapsible) - REMOVED: Now integrated as protocol option -->
 
   <Card
-    class="drop-zone relative p-6 transition-all duration-200 border-dashed {isClientMode
+    class="drop-zone relative p-6 transition-all duration-200 border-dashed {$settings.pureClientMode
       ? 'border-muted-foreground/15 bg-muted/30 opacity-60'
       : isDragging
       ? 'border-primary bg-primary/5'
@@ -1861,14 +1866,14 @@
             {#if isTauri}
               <button
                 class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-                disabled={isUploading || isClientMode}
+                disabled={isUploading || $settings.pureClientMode}
                 on:click={openFileDialog}
-                title={isClientMode ? "File sharing disabled in client-only mode" : ""}
+                title={$settings.pureClientMode ? "File sharing disabled - pure client mode is enabled in Settings" : ""}
               >
                 <Plus
                   class="h-5 w-5 mr-2 group-hover:rotate-90 transition-transform duration-300"
                 />
-                {isClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addFiles")}
+                {$settings.pureClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addFiles")}
               </button>
             {:else}
               <div class="text-center">
@@ -1927,12 +1932,12 @@
           {#if isTauri}
             <button
               class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={isUploading || isClientMode}
+              disabled={isUploading || $settings.pureClientMode}
               on:click={openFileDialog}
-              title={isClientMode ? "File sharing disabled in client-only mode" : ""}
+              title={$settings.pureClientMode ? "File sharing disabled - pure client mode enabled in Settings" : ""}
             >
               <Plus class="h-4 w-4 mr-2" />
-              {isClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addMoreFiles")}
+              {$settings.pureClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addMoreFiles")}
             </button>
           {:else}
             <div class="text-center">
@@ -1944,23 +1949,34 @@
         </div>
       </div>
 
-      <!-- Client Mode Warning for Shared Files -->
-      {#if isClientMode && $coalescedFiles.length > 0}
+      <!-- Client Mode Warning for Shared Files - Only show when FORCED -->
+      {#if clientModeReason === "forced" && $coalescedFiles.length > 0}
         <div class="mx-4 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
           <div class="flex items-start gap-2">
             <div class="text-amber-600 text-sm mt-0.5">⚠️</div>
             <div class="flex-1">
               <p class="text-sm font-medium text-amber-800">
-                Seeding Inactive in Client-Only Mode
+                Seeding Disabled - Pure Client Mode Active
               </p>
               <p class="text-xs text-amber-700 mt-1">
-                {#if clientModeReason === "forced"}
-                  Your files are saved locally but cannot be accessed by other peers because client-only mode is forced.
-                {:else if clientModeReason === "nat"}
-                  Your files are saved locally but cannot be accessed by other peers due to NAT/firewall restrictions.
-                {:else}
-                  Your files are saved locally but cannot be accessed by other peers while in client-only mode.
-                {/if}
+                Your files are saved locally but cannot be shared with the network because Pure Client Mode is enabled in Settings. Disable it to enable file sharing.
+              </p>
+            </div>
+          </div>
+        </div>
+      {/if}
+      
+      <!-- NAT Info Banner - Shows relay is active -->
+      {#if clientModeReason === "nat" && $coalescedFiles.length > 0}
+        <div class="mx-4 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <div class="flex items-start gap-2">
+            <div class="text-blue-600 text-sm mt-0.5">ℹ️</div>
+            <div class="flex-1">
+              <p class="text-sm font-medium text-blue-800">
+                Files Shared via Relay Servers
+              </p>
+              <p class="text-xs text-blue-700 mt-1">
+                Your files are being shared through relay servers because you're behind NAT. Other peers can still download from you. For faster direct connections, enable UPnP in Settings.
               </p>
             </div>
           </div>
