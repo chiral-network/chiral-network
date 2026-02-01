@@ -1,11 +1,14 @@
 mod dht;
+mod file_transfer;
 
 use dht::DhtService;
+use file_transfer::FileTransferService;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct AppState {
     pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
+    pub file_transfer: Arc<Mutex<FileTransferService>>,
 }
 
 #[tauri::command]
@@ -80,12 +83,49 @@ async fn ping_peer(
     peer_id: String,
 ) -> Result<String, String> {
     let dht_guard = state.dht.lock().await;
-    
+
     if let Some(dht) = dht_guard.as_ref() {
         dht.ping_peer(peer_id, app).await
     } else {
         Err("DHT not running".to_string())
     }
+}
+
+#[tauri::command]
+async fn send_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    file_name: String,
+    file_data: Vec<u8>,
+    transfer_id: String,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+
+    if dht_guard.is_none() {
+        return Err("DHT not running".to_string());
+    }
+
+    let file_transfer = state.file_transfer.lock().await;
+    file_transfer.send_file(app, peer_id, file_name, file_data, transfer_id).await
+}
+
+#[tauri::command]
+async fn accept_file_transfer(
+    state: tauri::State<'_, AppState>,
+    transfer_id: String,
+) -> Result<(), String> {
+    let file_transfer = state.file_transfer.lock().await;
+    file_transfer.accept_transfer(transfer_id).await
+}
+
+#[tauri::command]
+async fn decline_file_transfer(
+    state: tauri::State<'_, AppState>,
+    transfer_id: String,
+) -> Result<(), String> {
+    let file_transfer = state.file_transfer.lock().await;
+    file_transfer.decline_transfer(transfer_id).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -94,6 +134,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             dht: Arc::new(Mutex::new(None)),
+            file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
         })
         .invoke_handler(tauri::generate_handler![
             start_dht,
@@ -101,7 +142,10 @@ pub fn run() {
             get_dht_peers,
             get_network_stats,
             get_peer_id,
-            ping_peer
+            ping_peer,
+            send_file,
+            accept_file_transfer,
+            decline_file_transfer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
