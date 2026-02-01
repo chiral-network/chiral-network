@@ -12,12 +12,12 @@ function createToastStore() {
 
   return {
     subscribe,
-    show: (message: string, type: 'success' | 'error' | 'info' = 'info', duration = 3000) => {
+    show: (message: string, type: 'success' | 'error' | 'info' = 'info', duration = 5000) => {
       const id = nextId++;
       const toast: Toast = { id, message, type };
-      
+
       update(toasts => [...toasts, toast]);
-      
+
       setTimeout(() => {
         update(toasts => toasts.filter(t => t.id !== id));
       }, duration);
