@@ -93,7 +93,6 @@ async fn ping_peer(
 
 #[tauri::command]
 async fn send_file(
-    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     peer_id: String,
     file_name: String,
@@ -102,12 +101,11 @@ async fn send_file(
 ) -> Result<(), String> {
     let dht_guard = state.dht.lock().await;
 
-    if dht_guard.is_none() {
-        return Err("DHT not running".to_string());
+    if let Some(dht) = dht_guard.as_ref() {
+        dht.send_file(peer_id, transfer_id, file_name, file_data).await
+    } else {
+        Err("DHT not running".to_string())
     }
-
-    let file_transfer = state.file_transfer.lock().await;
-    file_transfer.send_file(app, peer_id, file_name, file_data, transfer_id).await
 }
 
 #[tauri::command]

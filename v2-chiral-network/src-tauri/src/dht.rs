@@ -20,8 +20,29 @@ pub struct PingRequest(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PingResponse(pub String);
 
+// File transfer protocol messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileTransferRequest {
+    pub transfer_id: String,
+    pub file_name: String,
+    pub file_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileTransferResponse {
+    pub transfer_id: String,
+    pub accepted: bool,
+    pub error: Option<String>,
+}
+
 enum SwarmCommand {
     SendPing(PeerId),
+    SendFile {
+        peer_id: PeerId,
+        transfer_id: String,
+        file_name: String,
+        file_data: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -47,6 +68,7 @@ struct DhtBehaviour {
     ping: ping::Behaviour,
     identify: identify::Behaviour,
     ping_protocol: request_response::cbor::Behaviour<PingRequest, PingResponse>,
+    file_transfer: request_response::cbor::Behaviour<FileTransferRequest, FileTransferResponse>,
 }
 
 pub struct DhtService {
@@ -140,6 +162,28 @@ impl DhtService {
             Err("DHT not running".to_string())
         }
     }
+
+    pub async fn send_file(
+        &self,
+        peer_id: String,
+        transfer_id: String,
+        file_name: String,
+        file_data: Vec<u8>,
+    ) -> Result<(), String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
+            tx.send(SwarmCommand::SendFile {
+                peer_id: peer_id_parsed,
+                transfer_id,
+                file_name,
+                file_data,
+            }).map_err(|e| e.to_string())?;
+            Ok(())
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
 }
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
@@ -164,13 +208,19 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         [(StreamProtocol::new("/chiral/ping/1.0.0"), request_response::ProtocolSupport::Full)],
         request_response::Config::default(),
     );
-    
+
+    let file_transfer = request_response::cbor::Behaviour::new(
+        [(StreamProtocol::new("/chiral/file-transfer/1.0.0"), request_response::ProtocolSupport::Full)],
+        request_response::Config::default(),
+    );
+
     let behaviour = DhtBehaviour {
         kad,
         mdns,
         ping,
         identify,
         ping_protocol,
+        file_transfer,
     };
     
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
@@ -237,6 +287,21 @@ async fn event_loop(
                         let request = PingRequest("PING".to_string());
                         let request_id = swarm.behaviour_mut().ping_protocol.send_request(&peer_id, request);
                         println!("Ping request sent with ID: {:?}", request_id);
+                    }
+                    SwarmCommand::SendFile { peer_id, transfer_id, file_name, file_data } => {
+                        println!("Sending file '{}' to peer {}", file_name, peer_id);
+                        let request = FileTransferRequest {
+                            transfer_id: transfer_id.clone(),
+                            file_name: file_name.clone(),
+                            file_data,
+                        };
+                        let request_id = swarm.behaviour_mut().file_transfer.send_request(&peer_id, request);
+                        println!("File transfer request sent with ID: {:?}", request_id);
+                        let _ = app.emit("file-transfer-started", serde_json::json!({
+                            "transferId": transfer_id,
+                            "peerId": peer_id.to_string(),
+                            "fileName": file_name
+                        }));
                     }
                 }
             }
@@ -323,6 +388,72 @@ async fn handle_behaviour_event(
         }
         DhtBehaviourEvent::Identify(event) => {
             println!("Identify event: {:?}", event);
+        }
+        DhtBehaviourEvent::FileTransfer(event) => {
+            use request_response::Event;
+            match event {
+                Event::Message { peer, message } => {
+                    match message {
+                        request_response::Message::Request { request, channel, .. } => {
+                            println!("Received file transfer from {}: {}", peer, request.file_name);
+                            let file_size = request.file_data.len();
+
+                            // Emit event to frontend for user to accept/decline
+                            let _ = app.emit("file-transfer-request", serde_json::json!({
+                                "transferId": request.transfer_id.clone(),
+                                "fromPeerId": peer.to_string(),
+                                "fileName": request.file_name.clone(),
+                                "fileSize": file_size
+                            }));
+
+                            // For now, auto-accept and save (in production, wait for user confirmation)
+                            // Send acceptance response
+                            let response = FileTransferResponse {
+                                transfer_id: request.transfer_id.clone(),
+                                accepted: true,
+                                error: None,
+                            };
+                            if let Err(e) = swarm.behaviour_mut().file_transfer.send_response(channel, response) {
+                                println!("Failed to send file transfer response: {:?}", e);
+                            } else {
+                                println!("File transfer accepted, received {} bytes", file_size);
+                                let _ = app.emit("file-received", serde_json::json!({
+                                    "transferId": request.transfer_id,
+                                    "fromPeerId": peer.to_string(),
+                                    "fileName": request.file_name,
+                                    "fileSize": file_size
+                                }));
+                            }
+                        }
+                        request_response::Message::Response { response, .. } => {
+                            println!("Received file transfer response from {}: accepted={}", peer, response.accepted);
+                            if response.accepted {
+                                let _ = app.emit("file-transfer-complete", serde_json::json!({
+                                    "transferId": response.transfer_id,
+                                    "status": "completed"
+                                }));
+                            } else {
+                                let _ = app.emit("file-transfer-complete", serde_json::json!({
+                                    "transferId": response.transfer_id,
+                                    "status": "declined",
+                                    "error": response.error
+                                }));
+                            }
+                        }
+                    }
+                }
+                Event::OutboundFailure { peer, error, .. } => {
+                    println!("File transfer failed to {:?}: {:?}", peer, error);
+                    let _ = app.emit("file-transfer-failed", serde_json::json!({
+                        "peerId": peer.to_string(),
+                        "error": format!("{:?}", error)
+                    }));
+                }
+                Event::InboundFailure { peer, error, .. } => {
+                    println!("Inbound file transfer failed from {:?}: {:?}", peer, error);
+                }
+                _ => {}
+            }
         }
         _ => {}
     }
