@@ -32,13 +32,13 @@
         
         <div class="flex gap-1">
           {#each navItems as item}
-            <a
-              href={item.path}
+            <button
+              onclick={() => goto(item.path)}
               class="flex items-center gap-2 px-4 py-2 rounded-lg transition {currentPage === item.path ? 'bg-blue-50 text-blue-600' : 'text-gray-700 hover:bg-gray-100'}"
             >
               <svelte:component this={item.icon} class="w-4 h-4" />
               <span class="font-medium">{item.label}</span>
-            </a>
+            </button>
           {/each}
         </div>
       </div>
@@ -52,7 +52,7 @@
         </div>
         
         <button
-          on:click={handleLogout}
+          onclick={handleLogout}
           class="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition"
         >
           <LogOut class="w-4 h-4" />
