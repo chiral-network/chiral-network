@@ -24,11 +24,23 @@ export interface NearbyPeer {
   wavePhase: number; // For animation
 }
 
-// Generate user's session alias (changes each session)
-const sessionAlias = generateAlias();
+// User's peer ID (set when connected to network)
+export const localPeerId = writable<string | null>(null);
 
-// Stores
-export const userAlias = writable<UserAlias>(sessionAlias);
+// User's alias - derived from peer ID for consistency across clients
+// Falls back to a random alias if not connected
+const fallbackAlias = generateAlias();
+export const userAlias = derived(localPeerId, ($peerId) => {
+  if ($peerId) {
+    return aliasFromPeerId($peerId);
+  }
+  return fallbackAlias;
+});
+
+// Writable store for components that need to set the peer ID
+export function setLocalPeerId(peerId: string) {
+  localPeerId.set(peerId);
+}
 export const nearbyPeers = writable<NearbyPeer[]>([]);
 export const pendingTransfers = writable<FileTransfer[]>([]);
 export const transferHistory = writable<FileTransfer[]>([]);

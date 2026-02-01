@@ -8,6 +8,8 @@
     transferHistory,
     selectedPeer,
     incomingPendingTransfers,
+    localPeerId,
+    setLocalPeerId,
     addNearbyPeer,
     removeNearbyPeer,
     selectPeer,
@@ -23,6 +25,7 @@
   import { aliasFromPeerId } from '$lib/aliasService';
   import { peers } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
+  import { dhtService } from '$lib/dhtService';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -33,6 +36,8 @@
   let time = $state(0);
   let unlistenPeerDiscovered: (() => void) | null = null;
   let unlistenFileReceived: (() => void) | null = null;
+  let unlistenFileComplete: (() => void) | null = null;
+  let unlistenFileReceivedComplete: (() => void) | null = null;
 
   // Wave animation
   function animate() {
@@ -47,6 +52,18 @@
 
   onMount(async () => {
     animate();
+
+    // Get our local peer ID for consistent alias
+    if (isTauri) {
+      try {
+        const peerId = await dhtService.getPeerId();
+        if (peerId) {
+          setLocalPeerId(peerId);
+        }
+      } catch (error) {
+        console.warn('Failed to get local peer ID:', error);
+      }
+    }
 
     // Only set up Tauri listeners if in Tauri environment
     if (isTauri) {
@@ -73,7 +90,7 @@
             fileSize,
             fromPeerId,
             fromAlias,
-            toPeerId: '',
+            toPeerId: $localPeerId || '',
             toAlias,
             status: 'pending',
             direction: 'incoming',
@@ -81,6 +98,24 @@
           });
 
           toasts.show(`${fromAlias.displayName} wants to send you a file: ${fileName}`, 'info');
+        });
+
+        // Listen for file transfer completion (outgoing)
+        unlistenFileComplete = await listen<any>('file-transfer-complete', (event) => {
+          const { transferId, status } = event.payload;
+          if (status === 'completed') {
+            updateTransferStatus(transferId, 'completed');
+          } else if (status === 'declined') {
+            updateTransferStatus(transferId, 'declined');
+          }
+        });
+
+        // Listen for file received (incoming complete)
+        unlistenFileReceivedComplete = await listen<any>('file-received', (event) => {
+          const { transferId, fileName, fromPeerId } = event.payload;
+          const fromAlias = aliasFromPeerId(fromPeerId);
+          toasts.show(`Received file "${fileName}" from ${fromAlias.displayName}`, 'success');
+          updateTransferStatus(transferId, 'completed');
         });
       } catch (error) {
         console.warn('Failed to set up Tauri event listeners:', error);
@@ -103,6 +138,12 @@
     }
     if (unlistenFileReceived) {
       unlistenFileReceived();
+    }
+    if (unlistenFileComplete) {
+      unlistenFileComplete();
+    }
+    if (unlistenFileReceivedComplete) {
+      unlistenFileReceivedComplete();
     }
   });
 
@@ -136,7 +177,7 @@
       id: transferId,
       fileName: file.name,
       fileSize: file.size,
-      fromPeerId: '',
+      fromPeerId: $localPeerId || '',
       fromAlias,
       toPeerId: peer.peerId,
       toAlias,
