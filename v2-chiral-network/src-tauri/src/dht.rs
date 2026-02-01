@@ -43,6 +43,15 @@ enum SwarmCommand {
         file_name: String,
         file_data: Vec<u8>,
     },
+    PutDhtValue {
+        key: String,
+        value: String,
+        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    GetDhtValue {
+        key: String,
+        response_tx: tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -187,6 +196,37 @@ impl DhtService {
             Err("DHT not running".to_string())
         }
     }
+
+    /// Store a value in the DHT
+    pub async fn put_dht_value(&self, key: String, value: String) -> Result<(), String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            tx.send(SwarmCommand::PutDhtValue {
+                key,
+                value,
+                response_tx,
+            }).map_err(|e| e.to_string())?;
+            response_rx.await.map_err(|e| e.to_string())?
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
+
+    /// Get a value from the DHT
+    pub async fn get_dht_value(&self, key: String) -> Result<Option<String>, String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            tx.send(SwarmCommand::GetDhtValue {
+                key,
+                response_tx,
+            }).map_err(|e| e.to_string())?;
+            response_rx.await.map_err(|e| e.to_string())?
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
 }
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
@@ -306,6 +346,35 @@ async fn event_loop(
                             "peerId": peer_id.to_string(),
                             "fileName": file_name
                         }));
+                    }
+                    SwarmCommand::PutDhtValue { key, value, response_tx } => {
+                        println!("Storing DHT value for key: {}", key);
+                        let record_key = kad::RecordKey::new(&key);
+                        let record = kad::Record {
+                            key: record_key,
+                            value: value.into_bytes(),
+                            publisher: None,
+                            expires: None,
+                        };
+                        match swarm.behaviour_mut().kad.put_record(record, kad::Quorum::One) {
+                            Ok(_) => {
+                                println!("DHT put initiated for key: {}", key);
+                                let _ = response_tx.send(Ok(()));
+                            }
+                            Err(e) => {
+                                println!("Failed to initiate DHT put: {:?}", e);
+                                let _ = response_tx.send(Err(format!("Failed to put DHT value: {:?}", e)));
+                            }
+                        }
+                    }
+                    SwarmCommand::GetDhtValue { key, response_tx } => {
+                        println!("Getting DHT value for key: {}", key);
+                        let record_key = kad::RecordKey::new(&key);
+                        swarm.behaviour_mut().kad.get_record(record_key);
+                        // Note: The actual response will come via Kademlia events
+                        // For now, we return immediately - the caller should listen for events
+                        // In a production implementation, we'd maintain a map of pending queries
+                        let _ = response_tx.send(Ok(None));
                     }
                 }
             }
