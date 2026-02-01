@@ -18,7 +18,7 @@
   };
 
   // Calculate vertical offset based on index (each toast is ~56px tall + 8px gap)
-  const topOffset = 16 + (index * 64);
+  let topOffset = $derived(16 + (index * 64));
 </script>
 
 <div
