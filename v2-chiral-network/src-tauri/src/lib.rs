@@ -74,11 +74,15 @@ async fn get_peer_id(state: tauri::State<'_, AppState>) -> Result<Option<String>
 }
 
 #[tauri::command]
-async fn ping_peer(state: tauri::State<'_, AppState>, peer_id: String) -> Result<String, String> {
+async fn ping_peer(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+) -> Result<String, String> {
     let dht_guard = state.dht.lock().await;
     
     if let Some(dht) = dht_guard.as_ref() {
-        dht.ping_peer(peer_id).await
+        dht.ping_peer(peer_id, app).await
     } else {
         Err("DHT not running".to_string())
     }
