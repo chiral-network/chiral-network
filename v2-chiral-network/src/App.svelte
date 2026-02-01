@@ -7,6 +7,7 @@
   import WalletPage from './pages/Wallet.svelte';
   import DownloadPage from './pages/Download.svelte';
   import UploadPage from './pages/Upload.svelte';
+  import ChiralDropPage from './pages/ChiralDrop.svelte';
   import AccountPage from './pages/Account.svelte';
   import NetworkPage from './pages/Network.svelte';
   import SettingsPage from './pages/Settings.svelte';
@@ -21,6 +22,10 @@
     {
       path: '/upload',
       component: UploadPage
+    },
+    {
+      path: '/chiraldrop',
+      component: ChiralDropPage
     },
     {
       path: '/account',
