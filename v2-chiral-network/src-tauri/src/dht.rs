@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use libp2p::{
     kad, mdns, noise, ping,
     swarm::{NetworkBehaviour, SwarmEvent},
@@ -11,6 +11,11 @@ use futures::StreamExt;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
+use std::str::FromStr;
+
+enum SwarmCommand {
+    Ping(PeerId),
+}
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +45,7 @@ pub struct DhtService {
     peers: Arc<Mutex<Vec<PeerInfo>>>,
     is_running: Arc<Mutex<bool>>,
     local_peer_id: Arc<Mutex<Option<String>>>,
+    command_sender: Arc<Mutex<Option<mpsc::UnboundedSender<SwarmCommand>>>>,
 }
 
 impl DhtService {
@@ -48,6 +54,7 @@ impl DhtService {
             peers: Arc::new(Mutex::new(Vec::new())),
             is_running: Arc::new(Mutex::new(false)),
             local_peer_id: Arc::new(Mutex::new(None)),
+            command_sender: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -67,12 +74,18 @@ impl DhtService {
         
         *running = true;
         
+        // Create command channel
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let mut cmd_sender = self.command_sender.lock().await;
+        *cmd_sender = Some(cmd_tx);
+        drop(cmd_sender);
+        
         // Spawn event loop
         let peers_clone = self.peers.clone();
         let is_running_clone = self.is_running.clone();
         
         tokio::spawn(async move {
-            event_loop(swarm, peers_clone, is_running_clone, app).await;
+            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx).await;
         });
         
         Ok(format!("DHT started with peer ID: {}", peer_id))
@@ -108,9 +121,16 @@ impl DhtService {
         self.local_peer_id.lock().await.clone()
     }
     
-    pub async fn ping_peer(&self, peer_id: String) -> Result<String, String> {
-        println!("Attempting to ping peer: {}", peer_id);
-        Ok(format!("Ping sent to {}", peer_id))
+    pub async fn ping_peer(&self, peer_id: String, app: tauri::AppHandle) -> Result<String, String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
+            tx.send(SwarmCommand::Ping(peer_id_parsed)).map_err(|e| e.to_string())?;
+            let _ = app.emit("ping-sent", peer_id.clone());
+            Ok(format!("Ping sent to {}", peer_id))
+        } else {
+            Err("DHT not running".to_string())
+        }
     }
 }
 
@@ -161,6 +181,7 @@ async fn event_loop(
     peers: Arc<Mutex<Vec<PeerInfo>>>,
     is_running: Arc<Mutex<bool>>,
     app: tauri::AppHandle,
+    mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
 ) {
     loop {
         let running = *is_running.lock().await;
@@ -168,17 +189,29 @@ async fn event_loop(
             break;
         }
         
-        match swarm.select_next_some().await {
-            SwarmEvent::Behaviour(event) => {
-                handle_behaviour_event(event, &peers, &app).await;
+        tokio::select! {
+            event = swarm.select_next_some() => {
+                match event {
+                    SwarmEvent::Behaviour(event) => {
+                        handle_behaviour_event(event, &peers, &app).await;
+                    }
+                    SwarmEvent::NewListenAddr { address, .. } => {
+                        println!("Listening on {:?}", address);
+                    }
+                    SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                        println!("Connection established with {:?}", peer_id);
+                    }
+                    _ => {}
+                }
             }
-            SwarmEvent::NewListenAddr { address, .. } => {
-                println!("Listening on {:?}", address);
+            Some(cmd) = cmd_rx.recv() => {
+                match cmd {
+                    SwarmCommand::Ping(peer_id) => {
+                        println!("Sending ping to: {}", peer_id);
+                        // The ping protocol will automatically send pings
+                    }
+                }
             }
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                println!("Connection established with {:?}", peer_id);
-            }
-            _ => {}
         }
         
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -229,7 +262,15 @@ async fn handle_behaviour_event(
             }
         }
         DhtBehaviourEvent::Ping(event) => {
-            println!("Ping event: {:?}", event);
+            match event.result {
+                Ok(rtt) => {
+                    println!("Ping to {} succeeded: {:?}", event.peer, rtt);
+                    let _ = app.emit("pong-received", event.peer.to_string());
+                }
+                Err(e) => {
+                    println!("Ping to {} failed: {:?}", event.peer, e);
+                }
+            }
         }
         DhtBehaviourEvent::Identify(event) => {
             println!("Identify event: {:?}", event);

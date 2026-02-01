@@ -2,10 +2,14 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { peers, networkStats, networkConnected } from './stores';
 import type { PeerInfo } from './stores';
+import { toasts } from './toastStore';
 
 class DhtService {
   private pollInterval: number | null = null;
   private peerDiscoveryUnlisten: (() => void) | null = null;
+  private pingSentUnlisten: (() => void) | null = null;
+  private pingReceivedUnlisten: (() => void) | null = null;
+  private pongReceivedUnlisten: (() => void) | null = null;
 
   async start(): Promise<void> {
     try {
@@ -18,6 +22,19 @@ class DhtService {
         console.log('Peers discovered:', event.payload);
         // The payload already has the correct structure from Rust
         peers.set(event.payload);
+      });
+      
+      // Listen for ping events
+      this.pingSentUnlisten = await listen<string>('ping-sent', (event) => {
+        toasts.show('Ping sent to peer', 'success');
+      });
+      
+      this.pingReceivedUnlisten = await listen<string>('ping-received', (event) => {
+        toasts.show('Ping received from peer', 'info');
+      });
+      
+      this.pongReceivedUnlisten = await listen<string>('pong-received', (event) => {
+        toasts.show('Pong received from peer', 'success');
       });
       
       // Start polling for network stats
@@ -48,6 +65,21 @@ class DhtService {
       if (this.peerDiscoveryUnlisten) {
         this.peerDiscoveryUnlisten();
         this.peerDiscoveryUnlisten = null;
+      }
+      
+      if (this.pingSentUnlisten) {
+        this.pingSentUnlisten();
+        this.pingSentUnlisten = null;
+      }
+      
+      if (this.pingReceivedUnlisten) {
+        this.pingReceivedUnlisten();
+        this.pingReceivedUnlisten = null;
+      }
+      
+      if (this.pongReceivedUnlisten) {
+        this.pongReceivedUnlisten();
+        this.pongReceivedUnlisten = null;
       }
     } catch (error) {
       console.error('Failed to stop DHT:', error);
