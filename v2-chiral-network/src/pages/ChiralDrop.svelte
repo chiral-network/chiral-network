@@ -1,7 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
   import { Send, X, Check, History, User, FileIcon, Upload } from 'lucide-svelte';
   import {
     userAlias,
@@ -26,6 +24,9 @@
   import { peers } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
 
+  // Check if running in Tauri environment
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
   let showHistory = $state(false);
   let fileInput: HTMLInputElement;
   let animationFrame: number;
@@ -47,35 +48,44 @@
   onMount(async () => {
     animate();
 
-    // Listen for peer discovery events
-    unlistenPeerDiscovered = await listen<any[]>('peer-discovered', (event) => {
-      const discoveredPeers = event.payload;
-      discoveredPeers.forEach((peer: { id: string }) => {
-        addNearbyPeer(peer.id);
-      });
-    });
+    // Only set up Tauri listeners if in Tauri environment
+    if (isTauri) {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
 
-    // Listen for incoming file transfer requests
-    unlistenFileReceived = await listen<any>('file-transfer-request', (event) => {
-      const { fromPeerId, fileName, fileSize, transferId } = event.payload;
-      const fromAlias = aliasFromPeerId(fromPeerId);
-      const toAlias = $userAlias;
+        // Listen for peer discovery events
+        unlistenPeerDiscovered = await listen<any[]>('peer-discovered', (event) => {
+          const discoveredPeers = event.payload;
+          discoveredPeers.forEach((peer: { id: string }) => {
+            addNearbyPeer(peer.id);
+          });
+        });
 
-      addPendingTransfer({
-        id: transferId,
-        fileName,
-        fileSize,
-        fromPeerId,
-        fromAlias,
-        toPeerId: '', // Will be filled by backend
-        toAlias,
-        status: 'pending',
-        direction: 'incoming',
-        timestamp: Date.now()
-      });
+        // Listen for incoming file transfer requests
+        unlistenFileReceived = await listen<any>('file-transfer-request', (event) => {
+          const { fromPeerId, fileName, fileSize, transferId } = event.payload;
+          const fromAlias = aliasFromPeerId(fromPeerId);
+          const toAlias = $userAlias;
 
-      toasts.add(`${fromAlias.displayName} wants to send you a file: ${fileName}`, 'info');
-    });
+          addPendingTransfer({
+            id: transferId,
+            fileName,
+            fileSize,
+            fromPeerId,
+            fromAlias,
+            toPeerId: '',
+            toAlias,
+            status: 'pending',
+            direction: 'incoming',
+            timestamp: Date.now()
+          });
+
+          toasts.add(`${fromAlias.displayName} wants to send you a file: ${fileName}`, 'info');
+        });
+      } catch (error) {
+        console.warn('Failed to set up Tauri event listeners:', error);
+      }
+    }
 
     // Sync with existing peers from the network
     const currentPeers = $peers;
@@ -126,7 +136,7 @@
       id: transferId,
       fileName: file.name,
       fileSize: file.size,
-      fromPeerId: '', // Will be filled by backend
+      fromPeerId: '',
       fromAlias,
       toPeerId: peer.peerId,
       toAlias,
@@ -135,7 +145,16 @@
       timestamp: Date.now()
     });
 
+    if (!isTauri) {
+      toasts.add('File transfer requires the desktop app', 'error');
+      updateTransferStatus(transferId, 'failed');
+      selectPeer(null);
+      return;
+    }
+
     try {
+      const { invoke } = await import('@tauri-apps/api/core');
+
       // Read file as array buffer
       const buffer = await file.arrayBuffer();
       const bytes = Array.from(new Uint8Array(buffer));
@@ -160,7 +179,13 @@
   }
 
   async function handleAccept(transfer: FileTransfer) {
+    if (!isTauri) {
+      toasts.add('File transfer requires the desktop app', 'error');
+      return;
+    }
+
     try {
+      const { invoke } = await import('@tauri-apps/api/core');
       await invoke('accept_file_transfer', { transferId: transfer.id });
       acceptTransfer(transfer.id);
       toasts.add(`Accepted file from ${transfer.fromAlias.displayName}`, 'success');
@@ -171,7 +196,13 @@
   }
 
   async function handleDecline(transfer: FileTransfer) {
+    if (!isTauri) {
+      declineTransfer(transfer.id);
+      return;
+    }
+
     try {
+      const { invoke } = await import('@tauri-apps/api/core');
       await invoke('decline_file_transfer', { transferId: transfer.id });
       declineTransfer(transfer.id);
       toasts.add(`Declined file from ${transfer.fromAlias.displayName}`, 'info');
