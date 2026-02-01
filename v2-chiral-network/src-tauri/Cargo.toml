@@ -13,33 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "unstable"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
-libp2p = { version = "0.53", features = ["kad", "tcp", "noise", "yamux", "ping", "identify", "mdns", "macros", "tokio", "request-response", "cbor"] }
-futures = "0.3"
-dirs = "5.0"
-sha2 = "0.10"
-hex = "0.4"
-rfd = "0.15"
-reqwest = { version = "0.11", features = ["json", "stream"] }
-zip = "0.6"
-futures-util = "0.3"
-secp256k1 = { version = "0.29", features = ["recovery"] }
-tiny-keccak = { version = "2.0", features = ["keccak"] }
-rlp = "0.5"
-once_cell = "1.19"
-tracing = "0.1"
-
-# Encryption dependencies
-aes-gcm = "0.10"
-x25519-dalek = { version = "2.0", features = ["serde", "static_secrets"] }
-ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
-hkdf = "0.12"
-pbkdf2 = { version = "0.12", features = ["simple"] }
-rand = { version = "0.8", features = ["std_rng"] }
-base64 = "0.21"
-cbor4ii = { version = "0.3", features = ["use_alloc", "serde1"] }
-async-trait = "0.1"
