@@ -87,11 +87,10 @@
     
     {#if method === 'privateKey'}
       <div class="mb-6">
-        <label for="private-key-input" class="block text-sm font-medium text-gray-700 mb-2">
+        <label class="block text-sm font-medium text-gray-700 mb-2">
           Private Key
         </label>
         <input
-          id="private-key-input"
           type="password"
           bind:value={privateKeyInput}
           on:keydown={(e) => e.key === 'Enter' && handleLogin()}
@@ -104,16 +103,15 @@
       </div>
     {:else}
       <div class="mb-6">
-        <label for="mnemonic-input" class="block text-sm font-medium text-gray-700 mb-2">
+        <label class="block text-sm font-medium text-gray-700 mb-2">
           Recovery Phrase (12 words)
         </label>
         <textarea
-          id="mnemonic-input"
           bind:value={mnemonicInput}
           rows="3"
-          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          placeholder="Enter your 12-word recovery phrase"
-        ></textarea>
+          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
+          placeholder="Enter your 12-word recovery phrase separated by spaces"
+        />
         <p class="text-xs text-gray-500 mt-2">
           Enter all 12 words separated by spaces
         </p>
