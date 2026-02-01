@@ -207,7 +207,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Listening on {:?}", address);
@@ -250,6 +250,7 @@ async fn handle_behaviour_event(
     event: DhtBehaviourEvent,
     peers: &Arc<Mutex<Vec<PeerInfo>>>,
     app: &tauri::AppHandle,
+    swarm: &mut Swarm<DhtBehaviour>,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -298,7 +299,12 @@ async fn handle_behaviour_event(
                             println!("Received ping request from {}: {:?}", peer, request);
                             let _ = app.emit("ping-received", peer.to_string());
                             // Send pong response
-                            // Note: We can't access the behaviour here, response is sent automatically
+                            let response = PingResponse("PONG".to_string());
+                            if let Err(e) = swarm.behaviour_mut().ping_protocol.send_response(channel, response) {
+                                println!("Failed to send ping response: {:?}", e);
+                            } else {
+                                println!("Sent PONG response to {}", peer);
+                            }
                         }
                         request_response::Message::Response { response, .. } => {
                             println!("Received ping response from {}: {:?}", peer, response);
