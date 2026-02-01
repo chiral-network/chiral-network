@@ -1,7 +1,9 @@
 <script lang="ts">
   import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
   import { isAuthenticated } from '$lib/stores';
+  import { toasts } from '$lib/toastStore';
   import Navbar from '$lib/components/Navbar.svelte';
+  import Toast from '$lib/components/Toast.svelte';
   import WalletPage from './pages/Wallet.svelte';
   import DownloadPage from './pages/Download.svelte';
   import UploadPage from './pages/Upload.svelte';
@@ -73,6 +75,15 @@
 {:else}
   <Router routes={unauthenticatedRoutes} />
 {/if}
+
+<!-- Toast notifications -->
+{#each $toasts as toast (toast.id)}
+  <Toast
+    message={toast.message}
+    type={toast.type}
+    onClose={() => toasts.remove(toast.id)}
+  />
+{/each}
 
 <style>
 </style>
