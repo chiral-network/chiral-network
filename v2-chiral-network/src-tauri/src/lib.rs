@@ -62,6 +62,28 @@ async fn get_network_stats(state: tauri::State<'_, AppState>) -> Result<dht::Net
     }
 }
 
+#[tauri::command]
+async fn get_peer_id(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let dht_guard = state.dht.lock().await;
+    
+    if let Some(dht) = dht_guard.as_ref() {
+        Ok(dht.get_peer_id().await)
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn ping_peer(state: tauri::State<'_, AppState>, peer_id: String) -> Result<String, String> {
+    let dht_guard = state.dht.lock().await;
+    
+    if let Some(dht) = dht_guard.as_ref() {
+        dht.ping_peer(peer_id).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -73,7 +95,9 @@ pub fn run() {
             start_dht,
             stop_dht,
             get_dht_peers,
-            get_network_stats
+            get_network_stats,
+            get_peer_id,
+            ping_peer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
