@@ -13,13 +13,20 @@
     X,
     Plus,
     Copy,
-    RefreshCw
+    RefreshCw,
+    Globe,
+    Share2,
+    History,
+    Trash2
   } from 'lucide-svelte';
   import { networkConnected } from '$lib/stores';
-  import { showToast } from '$lib/toastStore';
+  import { toasts } from '$lib/toastStore';
 
   // Check if running in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+
+  // Protocol types
+  type Protocol = 'WebRTC' | 'BitTorrent';
 
   // File type detection
   function getFileIcon(fileName: string) {
@@ -50,6 +57,20 @@
     return 'text-gray-400';
   }
 
+  function getFileType(fileName: string): string {
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'Image';
+    if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm', 'flv', 'm4v'].includes(ext)) return 'Video';
+    if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return 'Audio';
+    if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return 'Archive';
+    if (['js', 'ts', 'html', 'css', 'py', 'java', 'cpp', 'c', 'php', 'rb', 'go', 'rs'].includes(ext)) return 'Code';
+    if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return 'Document';
+    if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return 'Spreadsheet';
+
+    return 'File';
+  }
+
   // Format file size
   function formatFileSize(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -59,21 +80,66 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
-  // State
-  let isDragging = $state(false);
-  let isUploading = $state(false);
-  let sharedFiles = $state<Array<{
+  // Format date
+  function formatDate(date: Date): string {
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(date);
+  }
+
+  // Shared file interface
+  interface SharedFile {
     id: string;
     name: string;
     size: number;
     hash: string;
+    protocol: Protocol;
+    fileType: string;
     seeders: number;
     uploadDate: Date;
-  }>>([]);
+    filePath: string;
+  }
+
+  // State
+  let isDragging = $state(false);
+  let isUploading = $state(false);
+  let selectedProtocol = $state<Protocol>('WebRTC');
+  let sharedFiles = $state<SharedFile[]>([]);
+  let showUploadHistory = $state(true);
 
   // Storage info
   let availableStorage = $state<number | null>(null);
   let isRefreshingStorage = $state(false);
+
+  // Persistence keys
+  const UPLOAD_HISTORY_KEY = 'chiral_upload_history';
+
+  // Load upload history from localStorage
+  function loadUploadHistory() {
+    try {
+      const stored = localStorage.getItem(UPLOAD_HISTORY_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        sharedFiles = parsed.map((f: any) => ({
+          ...f,
+          uploadDate: new Date(f.uploadDate)
+        }));
+      }
+    } catch (e) {
+      console.error('Failed to load upload history:', e);
+    }
+  }
+
+  function saveUploadHistory() {
+    try {
+      localStorage.setItem(UPLOAD_HISTORY_KEY, JSON.stringify(sharedFiles));
+    } catch (e) {
+      console.error('Failed to save upload history:', e);
+    }
+  }
 
   async function refreshStorage() {
     if (!isTauri || isRefreshingStorage) return;
@@ -90,25 +156,15 @@
     }
   }
 
-  // Generate a simple hash for demo purposes
-  function generateHash(): string {
-    const chars = 'abcdef0123456789';
-    let hash = '';
-    for (let i = 0; i < 64; i++) {
-      hash += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return hash;
-  }
-
   // Handle file selection
   async function openFileDialog() {
     if (!isTauri) {
-      showToast('File upload requires the desktop app', 'error');
+      toasts.show('File upload requires the desktop app', 'error');
       return;
     }
 
     if (!$networkConnected) {
-      showToast('Please connect to the network first', 'error');
+      toasts.show('Please connect to the network first', 'error');
       return;
     }
 
@@ -124,7 +180,7 @@
       }
     } catch (error) {
       console.error('File dialog error:', error);
-      showToast('Failed to open file dialog', 'error');
+      toasts.show('Failed to open file dialog', 'error');
     } finally {
       isUploading = false;
     }
@@ -145,26 +201,31 @@
           console.warn('Could not get file size:', e);
         }
 
-        // Publish to DHT
+        // Publish to DHT with selected protocol
         const result = await invoke<{ merkleRoot: string }>('publish_file', {
           filePath,
-          fileName
+          fileName,
+          protocol: selectedProtocol
         });
 
-        const newFile = {
+        const newFile: SharedFile = {
           id: `file-${Date.now()}-${Math.random()}`,
           name: fileName,
           size: fileSize,
-          hash: result.merkleRoot || generateHash(),
+          hash: result.merkleRoot,
+          protocol: selectedProtocol,
+          fileType: getFileType(fileName),
           seeders: 1,
-          uploadDate: new Date()
+          uploadDate: new Date(),
+          filePath
         };
 
         sharedFiles = [...sharedFiles, newFile];
-        showToast(`${fileName} is now being shared`, 'success');
+        saveUploadHistory();
+        toasts.show(`${fileName} is now being shared via ${selectedProtocol}`, 'success');
       } catch (error) {
         console.error('Failed to process file:', error);
-        showToast(`Failed to share file: ${error}`, 'error');
+        toasts.show(`Failed to share file: ${error}`, 'error');
       }
     }
   }
@@ -172,14 +233,22 @@
   function removeFile(id: string) {
     const file = sharedFiles.find(f => f.id === id);
     sharedFiles = sharedFiles.filter(f => f.id !== id);
+    saveUploadHistory();
     if (file) {
-      showToast(`Stopped sharing ${file.name}`, 'info');
+      toasts.show(`Stopped sharing ${file.name}`, 'info');
     }
+  }
+
+  function clearAllHistory() {
+    const count = sharedFiles.length;
+    sharedFiles = [];
+    saveUploadHistory();
+    toasts.show(`Cleared ${count} file${count !== 1 ? 's' : ''} from history`, 'info');
   }
 
   async function copyHash(hash: string) {
     await navigator.clipboard.writeText(hash);
-    showToast('Hash copied to clipboard', 'success');
+    toasts.show('Hash copied to clipboard', 'success');
   }
 
   // Drag and drop handlers
@@ -199,21 +268,27 @@
     isDragging = false;
 
     if (!isTauri) {
-      showToast('File upload requires the desktop app', 'error');
+      toasts.show('File upload requires the desktop app', 'error');
       return;
     }
 
     if (!$networkConnected) {
-      showToast('Please connect to the network first', 'error');
+      toasts.show('Please connect to the network first', 'error');
       return;
     }
 
     // Note: In Tauri, we need to use the onDragDropEvent API for proper file paths
-    showToast('Please use the Add Files button to select files', 'info');
+    toasts.show('Please use the Add Files button to select files', 'info');
+  }
+
+  // Get protocol badge color
+  function getProtocolColor(protocol: Protocol): string {
+    return protocol === 'WebRTC' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800';
   }
 
   // Initialize
   $effect(() => {
+    loadUploadHistory();
     if (isTauri) {
       refreshStorage();
     }
@@ -265,6 +340,32 @@
     </div>
   {/if}
 
+  <!-- Protocol Selection -->
+  <div class="bg-white rounded-lg border border-gray-200 p-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm font-semibold text-gray-900">Upload Protocol</p>
+        <p class="text-xs text-gray-500 mt-1">Choose the protocol for file sharing</p>
+      </div>
+      <div class="flex gap-2">
+        <button
+          onclick={() => selectedProtocol = 'WebRTC'}
+          class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {selectedProtocol === 'WebRTC' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+        >
+          <Globe class="w-4 h-4" />
+          WebRTC
+        </button>
+        <button
+          onclick={() => selectedProtocol = 'BitTorrent'}
+          class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {selectedProtocol === 'BitTorrent' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+        >
+          <Share2 class="w-4 h-4" />
+          BitTorrent
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Drop Zone -->
   <div
     role="button"
@@ -274,105 +375,125 @@
     ondrop={handleDrop}
     class="relative border-2 border-dashed rounded-xl p-8 transition-all duration-200 {isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}"
   >
-    {#if sharedFiles.length === 0}
-      <!-- Empty State -->
-      <div class="text-center py-8">
-        <div class="mb-6">
-          {#if isDragging}
-            <Upload class="h-16 w-16 mx-auto text-blue-500" />
-          {:else}
-            <FolderOpen class="h-16 w-16 mx-auto text-gray-400" />
-          {/if}
-        </div>
-
-        <h3 class="text-2xl font-bold mb-3 {isDragging ? 'text-blue-600' : 'text-gray-900'}">
-          {isDragging ? 'Drop files here' : 'Share Files'}
-        </h3>
-
-        <p class="text-gray-600 mb-8 text-lg">
-          {#if isDragging}
-            Release to upload files
-          {:else}
-            Drag and drop files here, or click the button below
-          {/if}
-        </p>
-
-        <div class="flex justify-center gap-4 mb-8 opacity-60">
-          <Image class="h-8 w-8 text-blue-500" />
-          <Video class="h-8 w-8 text-purple-500" />
-          <Music class="h-8 w-8 text-green-500" />
-          <Archive class="h-8 w-8 text-orange-500" />
-          <Code class="h-8 w-8 text-red-500" />
-        </div>
-
-        {#if isTauri}
-          <button
-            onclick={openFileDialog}
-            disabled={isUploading || !$networkConnected}
-            class="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium text-white bg-blue-600 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-          >
-            <Plus class="w-5 h-5" />
-            {isUploading ? 'Uploading...' : 'Add Files'}
-          </button>
+    <div class="text-center py-8">
+      <div class="mb-6">
+        {#if isDragging}
+          <Upload class="h-16 w-16 mx-auto text-blue-500" />
         {:else}
-          <p class="text-sm text-gray-500">
-            File upload requires the desktop application
-          </p>
+          <FolderOpen class="h-16 w-16 mx-auto text-gray-400" />
         {/if}
-
-        <p class="text-xs text-gray-400 mt-4">
-          Supports images, videos, audio, documents, archives, and more
-        </p>
       </div>
-    {:else}
-      <!-- Shared Files List -->
-      <div class="space-y-4">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h2 class="text-lg font-semibold">Shared Files</h2>
-            <p class="text-sm text-gray-600">
-              {sharedFiles.length} {sharedFiles.length === 1 ? 'file' : 'files'} -
-              {formatFileSize(sharedFiles.reduce((sum, f) => sum + f.size, 0))} total
-            </p>
-          </div>
 
-          {#if isTauri}
-            <button
-              onclick={openFileDialog}
-              disabled={isUploading || !$networkConnected}
-              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-            >
-              <Plus class="w-4 h-4" />
-              Add More Files
-            </button>
-          {/if}
+      <h3 class="text-2xl font-bold mb-3 {isDragging ? 'text-blue-600' : 'text-gray-900'}">
+        {isDragging ? 'Drop files here' : 'Share Files'}
+      </h3>
+
+      <p class="text-gray-600 mb-4 text-lg">
+        {#if isDragging}
+          Release to upload files
+        {:else}
+          Drag and drop files here, or click the button below
+        {/if}
+      </p>
+
+      <p class="text-sm text-gray-500 mb-8">
+        Using <span class="font-semibold {selectedProtocol === 'WebRTC' ? 'text-blue-600' : 'text-green-600'}">{selectedProtocol}</span> protocol
+      </p>
+
+      <div class="flex justify-center gap-4 mb-8 opacity-60">
+        <Image class="h-8 w-8 text-blue-500" />
+        <Video class="h-8 w-8 text-purple-500" />
+        <Music class="h-8 w-8 text-green-500" />
+        <Archive class="h-8 w-8 text-orange-500" />
+        <Code class="h-8 w-8 text-red-500" />
+      </div>
+
+      {#if isTauri}
+        <button
+          onclick={openFileDialog}
+          disabled={isUploading || !$networkConnected}
+          class="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium text-white bg-blue-600 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        >
+          <Plus class="w-5 h-5" />
+          {isUploading ? 'Uploading...' : 'Add Files'}
+        </button>
+      {:else}
+        <p class="text-sm text-gray-500">
+          File upload requires the desktop application
+        </p>
+      {/if}
+
+      <p class="text-xs text-gray-400 mt-4">
+        Supports images, videos, audio, documents, archives, and more
+      </p>
+    </div>
+  </div>
+
+  <!-- Upload History -->
+  <div class="bg-white rounded-lg border border-gray-200">
+    <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+      <button
+        onclick={() => showUploadHistory = !showUploadHistory}
+        class="flex items-center gap-2 text-lg font-semibold text-gray-900"
+      >
+        <History class="w-5 h-5" />
+        Upload History
+        <span class="text-sm font-normal text-gray-500">({sharedFiles.length})</span>
+      </button>
+
+      {#if sharedFiles.length > 0}
+        <button
+          onclick={clearAllHistory}
+          class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+        >
+          <Trash2 class="w-4 h-4" />
+          Clear All
+        </button>
+      {/if}
+    </div>
+
+    {#if showUploadHistory}
+      {#if sharedFiles.length === 0}
+        <div class="p-8 text-center">
+          <History class="w-12 h-12 mx-auto text-gray-300 mb-3" />
+          <p class="text-gray-600">No upload history</p>
+          <p class="text-sm text-gray-500 mt-1">Files you share will appear here</p>
         </div>
-
-        <div class="space-y-3">
+      {:else}
+        <div class="divide-y divide-gray-100">
           {#each sharedFiles as file (file.id)}
-            <div class="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-md transition-all">
+            <div class="p-4 hover:bg-gray-50 transition-colors">
               <div class="flex items-center gap-4">
                 <!-- File Icon -->
-                <div class="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-lg">
+                <div class="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-lg flex-shrink-0">
                   <svelte:component this={getFileIcon(file.name)} class="w-6 h-6 {getFileColor(file.name)}" />
                 </div>
 
                 <!-- File Info -->
                 <div class="flex-1 min-w-0">
-                  <p class="text-sm font-semibold truncate text-gray-900">{file.name}</p>
-                  <div class="flex items-center gap-3 text-xs text-gray-500 mt-1">
-                    <span>{formatFileSize(file.size)}</span>
-                    <span>-</span>
-                    <span>{file.seeders} {file.seeders === 1 ? 'seeder' : 'seeders'}</span>
+                  <div class="flex items-center gap-2">
+                    <p class="text-sm font-semibold truncate text-gray-900">{file.name}</p>
+                    <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(file.protocol)}">
+                      {file.protocol}
+                    </span>
                   </div>
+
+                  <div class="flex items-center gap-4 text-xs text-gray-500 mt-1">
+                    <span>{formatFileSize(file.size)}</span>
+                    <span>{file.fileType}</span>
+                    <span>{formatDate(file.uploadDate)}</span>
+                    <span class="text-green-600">{file.seeders} seeder{file.seeders !== 1 ? 's' : ''}</span>
+                  </div>
+
                   <div class="flex items-center gap-2 mt-2">
+                    <span class="text-xs text-gray-500">Merkle Hash:</span>
                     <code class="bg-gray-100 px-2 py-0.5 rounded text-xs font-mono text-gray-600">
-                      {file.hash.slice(0, 8)}...{file.hash.slice(-6)}
+                      {file.hash.slice(0, 12)}...{file.hash.slice(-8)}
                     </code>
                     <button
                       onclick={() => copyHash(file.hash)}
-                      class="p-1 hover:bg-gray-100 rounded transition-colors"
-                      title="Copy hash"
+                      class="p-1 hover:bg-gray-200 rounded transition-colors"
+                      title="Copy full hash"
                     >
                       <Copy class="w-3 h-3 text-gray-400 hover:text-gray-600" />
                     </button>
@@ -382,8 +503,8 @@
                 <!-- Remove Button -->
                 <button
                   onclick={() => removeFile(file.id)}
-                  class="p-2 hover:bg-red-50 rounded-lg transition-colors"
-                  title="Stop sharing"
+                  class="p-2 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
+                  title="Remove from history"
                 >
                   <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
                 </button>
@@ -391,7 +512,7 @@
             </div>
           {/each}
         </div>
-      </div>
+      {/if}
     {/if}
   </div>
 </div>

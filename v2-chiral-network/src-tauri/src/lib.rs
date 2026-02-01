@@ -6,7 +6,6 @@ use file_transfer::FileTransferService;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 pub struct AppState {
     pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
@@ -205,13 +204,28 @@ struct PublishResult {
     merkle_root: String,
 }
 
+/// File metadata stored in DHT
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FileMetadata {
+    hash: String,
+    file_name: String,
+    file_size: u64,
+    protocol: String,
+    created_at: u64,
+    peer_id: String,
+}
+
 #[tauri::command]
 async fn publish_file(
+    state: tauri::State<'_, AppState>,
     file_path: String,
     file_name: String,
+    protocol: Option<String>,
 ) -> Result<PublishResult, String> {
     // Read file and compute hash
     let file_data = std::fs::read(&file_path).map_err(|e| e.to_string())?;
+    let file_size = file_data.len() as u64;
 
     // Compute SHA-256 hash
     use sha2::{Sha256, Digest};
@@ -220,9 +234,38 @@ async fn publish_file(
     let hash = hasher.finalize();
     let merkle_root = hex::encode(hash);
 
-    // In a real implementation, we would publish to DHT here
-    // For now, just return the hash
     println!("Publishing file: {} with hash: {}", file_name, merkle_root);
+
+    // Get DHT service and peer ID
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+
+        // Create file metadata
+        let metadata = FileMetadata {
+            hash: merkle_root.clone(),
+            file_name: file_name.clone(),
+            file_size,
+            protocol: protocol.unwrap_or_else(|| "WebRTC".to_string()),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            peer_id: peer_id.clone(),
+        };
+
+        // Serialize metadata to JSON
+        let metadata_json = serde_json::to_string(&metadata)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+
+        // Store metadata in DHT using the hash as key
+        let dht_key = format!("chiral_file_{}", merkle_root);
+        dht.put_dht_value(dht_key, metadata_json).await?;
+
+        println!("File metadata published to DHT: {}", merkle_root);
+    } else {
+        println!("DHT not running, file hash computed but not published to network");
+    }
 
     Ok(PublishResult { merkle_root })
 }
@@ -239,23 +282,242 @@ struct SearchResult {
 
 #[tauri::command]
 async fn search_file(
+    state: tauri::State<'_, AppState>,
     file_hash: String,
 ) -> Result<Option<SearchResult>, String> {
-    // In a real implementation, we would search the DHT
-    // For now, return None (file not found)
     println!("Searching for file: {}", file_hash);
-    Ok(None)
+
+    // Get DHT service
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        // Search for file metadata in DHT
+        let dht_key = format!("chiral_file_{}", file_hash);
+        match dht.get_dht_value(dht_key).await? {
+            Some(metadata_json) => {
+                // Parse metadata from JSON
+                let metadata: FileMetadata = serde_json::from_str(&metadata_json)
+                    .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
+
+                println!("Found file in DHT: {} ({})", metadata.file_name, metadata.hash);
+
+                // Build result with seeder info
+                let mut seeders = Vec::new();
+                if !metadata.peer_id.is_empty() {
+                    seeders.push(metadata.peer_id);
+                }
+
+                Ok(Some(SearchResult {
+                    hash: metadata.hash,
+                    file_name: metadata.file_name,
+                    file_size: metadata.file_size,
+                    seeders,
+                    created_at: metadata.created_at,
+                }))
+            }
+            None => {
+                println!("File not found in DHT: {}", file_hash);
+                Ok(None)
+            }
+        }
+    } else {
+        Err("DHT not running".to_string())
+    }
 }
 
 #[tauri::command]
 async fn start_download(
+    _state: tauri::State<'_, AppState>,
     file_hash: String,
     file_name: String,
     seeders: Vec<String>,
 ) -> Result<(), String> {
-    // In a real implementation, we would start downloading from seeders
-    println!("Starting download: {} from {} seeders", file_name, seeders.len());
+    // Log the download initiation
+    println!("Starting download: {} (hash: {}) from {} seeders", file_name, file_hash, seeders.len());
+
+    // In a full implementation, we would:
+    // 1. Connect to seeders via libp2p
+    // 2. Request file chunks using the file_transfer protocol
+    // 3. Reassemble and verify the file using the merkle hash
+    // 4. Emit progress events to the frontend
+
+    // For now, emit a placeholder event
+    // The actual file transfer will use the existing file_transfer protocol
     Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TorrentInfo {
+    info_hash: String,
+    name: String,
+    size: u64,
+}
+
+#[tauri::command]
+async fn parse_torrent_file(file_path: String) -> Result<TorrentInfo, String> {
+    use sha2::{Sha256, Digest};
+
+    // Read the torrent file
+    let torrent_data = std::fs::read(&file_path)
+        .map_err(|e| format!("Failed to read torrent file: {}", e))?;
+
+    let mut name = String::new();
+    let mut size: u64 = 0;
+
+    // Simple bencode parsing for torrent files
+    // Look for common patterns in torrent files
+
+    // Find "name" field: look for pattern like "4:name" followed by length:string
+    if let Some(name_pos) = find_bencode_key(&torrent_data, b"name") {
+        if let Some(extracted) = extract_bencode_string(&torrent_data[name_pos..]) {
+            name = extracted;
+        }
+    }
+
+    // Find "length" field for single-file torrents
+    if let Some(len_pos) = find_bencode_key(&torrent_data, b"length") {
+        if let Some(len) = extract_bencode_integer(&torrent_data[len_pos..]) {
+            size = len;
+        }
+    }
+
+    // For multi-file torrents, we'd need to sum up all file lengths
+    // This is a simplified implementation
+
+    // Compute info hash - find the info dictionary and hash it
+    // BitTorrent uses SHA-1, but we'll use SHA-256 for our purposes
+    let info_hash = if let Some(info_start) = find_info_dict(&torrent_data) {
+        // Find the end of the info dictionary
+        if let Some(info_end) = find_dict_end(&torrent_data[info_start..]) {
+            let info_bytes = &torrent_data[info_start..info_start + info_end];
+            let mut hasher = Sha256::new();
+            hasher.update(info_bytes);
+            hex::encode(hasher.finalize())
+        } else {
+            // Fallback: hash entire file
+            let mut hasher = Sha256::new();
+            hasher.update(&torrent_data);
+            hex::encode(hasher.finalize())
+        }
+    } else {
+        // Fallback: hash entire file
+        let mut hasher = Sha256::new();
+        hasher.update(&torrent_data);
+        hex::encode(hasher.finalize())
+    };
+
+    if name.is_empty() {
+        // Extract name from filename if not in torrent
+        name = std::path::Path::new(&file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+    }
+
+    Ok(TorrentInfo {
+        info_hash,
+        name,
+        size,
+    })
+}
+
+// Helper function to find a bencode key in data
+fn find_bencode_key(data: &[u8], key: &[u8]) -> Option<usize> {
+    let key_len = key.len();
+    let pattern = format!("{}:{}", key_len, String::from_utf8_lossy(key));
+    let pattern_bytes = pattern.as_bytes();
+
+    data.windows(pattern_bytes.len())
+        .position(|w| w == pattern_bytes)
+        .map(|p| p + pattern_bytes.len())
+}
+
+// Helper to extract a bencode string (format: length:string)
+fn extract_bencode_string(data: &[u8]) -> Option<String> {
+    // Find the length prefix
+    let colon_pos = data.iter().position(|&b| b == b':')?;
+    let len_str = std::str::from_utf8(&data[..colon_pos]).ok()?;
+    let len: usize = len_str.parse().ok()?;
+
+    if data.len() > colon_pos + 1 + len {
+        let start = colon_pos + 1;
+        let string_bytes = &data[start..start + len];
+        Some(String::from_utf8_lossy(string_bytes).to_string())
+    } else {
+        None
+    }
+}
+
+// Helper to extract a bencode integer (format: iNNNNe)
+fn extract_bencode_integer(data: &[u8]) -> Option<u64> {
+    if data.first() != Some(&b'i') {
+        return None;
+    }
+
+    let end_pos = data.iter().position(|&b| b == b'e')?;
+    let num_str = std::str::from_utf8(&data[1..end_pos]).ok()?;
+    num_str.parse().ok()
+}
+
+// Find the start of the info dictionary
+fn find_info_dict(data: &[u8]) -> Option<usize> {
+    // Look for "4:infod" pattern (info key followed by dictionary start)
+    let pattern = b"4:infod";
+    data.windows(pattern.len())
+        .position(|w| w == pattern)
+        .map(|p| p + 6) // Skip "4:info" to get to the 'd'
+}
+
+// Find the end of a dictionary starting at position 0
+fn find_dict_end(data: &[u8]) -> Option<usize> {
+    if data.first() != Some(&b'd') {
+        return None;
+    }
+
+    let mut depth = 0;
+    let mut i = 0;
+
+    while i < data.len() {
+        match data[i] {
+            b'd' | b'l' => {
+                depth += 1;
+                i += 1;
+            }
+            b'e' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            b'i' => {
+                // Integer: skip to 'e'
+                while i < data.len() && data[i] != b'e' {
+                    i += 1;
+                }
+                i += 1; // Skip 'e'
+            }
+            b'0'..=b'9' => {
+                // String: find length, skip string
+                let start = i;
+                while i < data.len() && data[i] != b':' {
+                    i += 1;
+                }
+                if let Ok(len_str) = std::str::from_utf8(&data[start..i]) {
+                    if let Ok(len) = len_str.parse::<usize>() {
+                        i += 1 + len; // Skip ':' and string content
+                    } else {
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+
+    None
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -282,7 +544,8 @@ pub fn run() {
             get_file_size,
             publish_file,
             search_file,
-            start_download
+            start_download,
+            parse_torrent_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
