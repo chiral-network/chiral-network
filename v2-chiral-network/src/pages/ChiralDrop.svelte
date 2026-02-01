@@ -28,7 +28,7 @@
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
   let showHistory = $state(false);
-  let fileInput: HTMLInputElement;
+  let fileInput = $state<HTMLInputElement>();
   let animationFrame: number;
   let time = $state(0);
   let unlistenPeerDiscovered: (() => void) | null = null;
@@ -80,7 +80,7 @@
             timestamp: Date.now()
           });
 
-          toasts.add(`${fromAlias.displayName} wants to send you a file: ${fileName}`, 'info');
+          toasts.show(`${fromAlias.displayName} wants to send you a file: ${fileName}`, 'info');
         });
       } catch (error) {
         console.warn('Failed to set up Tauri event listeners:', error);
@@ -146,7 +146,7 @@
     });
 
     if (!isTauri) {
-      toasts.add('File transfer requires the desktop app', 'error');
+      toasts.show('File transfer requires the desktop app', 'error');
       updateTransferStatus(transferId, 'failed');
       selectPeer(null);
       return;
@@ -168,11 +168,11 @@
       });
 
       updateTransferStatus(transferId, 'completed');
-      toasts.add(`File sent to ${toAlias.displayName}`, 'success');
+      toasts.show(`File sent to ${toAlias.displayName}`, 'success');
     } catch (error) {
       console.error('Failed to send file:', error);
       updateTransferStatus(transferId, 'failed');
-      toasts.add(`Failed to send file: ${error}`, 'error');
+      toasts.show(`Failed to send file: ${error}`, 'error');
     }
 
     selectPeer(null);
@@ -180,7 +180,7 @@
 
   async function handleAccept(transfer: FileTransfer) {
     if (!isTauri) {
-      toasts.add('File transfer requires the desktop app', 'error');
+      toasts.show('File transfer requires the desktop app', 'error');
       return;
     }
 
@@ -188,10 +188,10 @@
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('accept_file_transfer', { transferId: transfer.id });
       acceptTransfer(transfer.id);
-      toasts.add(`Accepted file from ${transfer.fromAlias.displayName}`, 'success');
+      toasts.show(`Accepted file from ${transfer.fromAlias.displayName}`, 'success');
     } catch (error) {
       console.error('Failed to accept transfer:', error);
-      toasts.add(`Failed to accept transfer: ${error}`, 'error');
+      toasts.show(`Failed to accept transfer: ${error}`, 'error');
     }
   }
 
@@ -205,7 +205,7 @@
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('decline_file_transfer', { transferId: transfer.id });
       declineTransfer(transfer.id);
-      toasts.add(`Declined file from ${transfer.fromAlias.displayName}`, 'info');
+      toasts.show(`Declined file from ${transfer.fromAlias.displayName}`, 'info');
     } catch (error) {
       console.error('Failed to decline transfer:', error);
     }
@@ -384,7 +384,7 @@
             </div>
           </div>
           <button
-            onclick={() => fileInput.click()}
+            onclick={() => fileInput?.click()}
             class="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
           >
             <Send class="w-4 h-4" />
