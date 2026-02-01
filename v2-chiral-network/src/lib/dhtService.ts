@@ -16,11 +16,8 @@ class DhtService {
       // Listen for peer discovery events
       this.peerDiscoveryUnlisten = await listen<PeerInfo[]>('peer-discovered', (event) => {
         console.log('Peers discovered:', event.payload);
-        const formattedPeers = event.payload.map(peer => ({
-          ...peer,
-          lastSeen: peer.last_seen
-        }));
-        peers.set(formattedPeers);
+        // The payload already has the correct structure from Rust
+        peers.set(event.payload);
       });
       
       // Start polling for network stats
