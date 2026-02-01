@@ -110,11 +110,12 @@ async fn send_file(
 
 #[tauri::command]
 async fn accept_file_transfer(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     transfer_id: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let file_transfer = state.file_transfer.lock().await;
-    file_transfer.accept_transfer(transfer_id).await
+    file_transfer.accept_transfer(app, transfer_id).await
 }
 
 #[tauri::command]
