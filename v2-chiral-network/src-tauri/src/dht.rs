@@ -198,9 +198,15 @@ async fn event_loop(
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Listening on {:?}", address);
                     }
-                    SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                    SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
                         let _ = app.emit("connection-established", peer_id.to_string());
+                        
+                        // If this is an incoming connection, notify that we're being pinged
+                        if endpoint.is_listener() {
+                            println!("Incoming connection from {}", peer_id);
+                            let _ = app.emit("ping-received", peer_id.to_string());
+                        }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                         if let Some(peer) = peer_id {
@@ -293,7 +299,9 @@ async fn handle_behaviour_event(
         DhtBehaviourEvent::Ping(event) => {
             match event.result {
                 Ok(rtt) => {
-                    println!("Ping to {} succeeded: {:?}", event.peer, rtt);
+                    println!("Ping exchange with {} succeeded: {:?}", event.peer, rtt);
+                    // Emit both events - this covers both sending and receiving pings
+                    let _ = app.emit("ping-received", event.peer.to_string());
                     let _ = app.emit("pong-received", event.peer.to_string());
                 }
                 Err(e) => {
