@@ -1,16 +1,78 @@
 <script lang="ts">
+  import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
+  import { isAuthenticated } from '$lib/stores';
+  import Navbar from '$lib/components/Navbar.svelte';
+  import WalletPage from './pages/Wallet.svelte';
+  import DownloadPage from './pages/Download.svelte';
+  import UploadPage from './pages/Upload.svelte';
+  import AccountPage from './pages/Account.svelte';
+  import NetworkPage from './pages/Network.svelte';
+  import SettingsPage from './pages/Settings.svelte';
+  
+  let currentPath = $state('/wallet');
+  
+  const authenticatedRoutes: RouteConfig[] = [
+    {
+      path: '/download',
+      component: DownloadPage
+    },
+    {
+      path: '/upload',
+      component: UploadPage
+    },
+    {
+      path: '/account',
+      component: AccountPage
+    },
+    {
+      path: '/network',
+      component: NetworkPage
+    },
+    {
+      path: '/settings',
+      component: SettingsPage
+    },
+    {
+      path: '/',
+      component: NetworkPage
+    }
+  ];
+  
+  const unauthenticatedRoutes: RouteConfig[] = [
+    {
+      path: '/wallet',
+      component: WalletPage
+    },
+    {
+      path: '/',
+      component: WalletPage
+    }
+  ];
+  
+  // Track current path for navbar highlighting
+  $effect(() => {
+    currentPath = window.location.pathname || '/';
+  });
+  
+  // Redirect to network page when authenticated
+  $effect(() => {
+    if ($isAuthenticated) {
+      const path = window.location.pathname;
+      if (path === '/wallet' || path === '/') {
+        goto('/network');
+      }
+    }
+  });
 </script>
 
-<main class="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-500 to-purple-600">
-  <div class="text-center">
-    <h1 class="text-6xl font-bold text-white mb-4">
-      Welcome to Chiral Network
-    </h1>
-    <p class="text-xl text-white/80">
-      Version 2.0
-    </p>
+{#if $isAuthenticated}
+  <div class="min-h-screen bg-gray-50">
+    <Navbar currentPage={currentPath} />
+    <Router routes={authenticatedRoutes} />
   </div>
-</main>
+{:else}
+  <Router routes={unauthenticatedRoutes} />
+{/if}
 
 <style>
 </style>
