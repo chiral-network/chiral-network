@@ -82,10 +82,11 @@
 {/if}
 
 <!-- Toast notifications -->
-{#each $toasts as toast (toast.id)}
+{#each $toasts as toast, index (toast.id)}
   <Toast
     message={toast.message}
     type={toast.type}
+    {index}
     onClose={() => toasts.remove(toast.id)}
   />
 {/each}
