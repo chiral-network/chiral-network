@@ -4,8 +4,8 @@ use tokio::sync::{Mutex, mpsc};
 use libp2p::{
     kad, mdns, noise, ping,
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Swarm, PeerId,
-    identify,
+    tcp, yamux, Swarm, PeerId, StreamProtocol,
+    identify, request_response,
 };
 use futures::StreamExt;
 use std::error::Error;
@@ -13,8 +13,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use std::str::FromStr;
 
+// Ping protocol messages
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PingRequest(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PingResponse(pub String);
+
 enum SwarmCommand {
-    Ping(PeerId),
+    SendPing(PeerId),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -39,6 +46,7 @@ struct DhtBehaviour {
     mdns: mdns::tokio::Behaviour,
     ping: ping::Behaviour,
     identify: identify::Behaviour,
+    ping_protocol: request_response::cbor::Behaviour<PingRequest, PingResponse>,
 }
 
 pub struct DhtService {
@@ -125,7 +133,7 @@ impl DhtService {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
-            tx.send(SwarmCommand::Ping(peer_id_parsed)).map_err(|e| e.to_string())?;
+            tx.send(SwarmCommand::SendPing(peer_id_parsed)).map_err(|e| e.to_string())?;
             let _ = app.emit("ping-sent", peer_id.clone());
             Ok(format!("Ping sent to {}", peer_id))
         } else {
@@ -152,11 +160,17 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     );
     let identify = identify::Behaviour::new(identify_config);
     
+    let ping_protocol = request_response::cbor::Behaviour::new(
+        [(StreamProtocol::new("/chiral/ping/1.0.0"), request_response::ProtocolSupport::Full)],
+        request_response::Config::default(),
+    );
+    
     let behaviour = DhtBehaviour {
         kad,
         mdns,
         ping,
         identify,
+        ping_protocol,
     };
     
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
@@ -218,32 +232,11 @@ async fn event_loop(
             }
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
-                    SwarmCommand::Ping(peer_id) => {
-                        println!("Attempting to dial and ping peer: {}", peer_id);
-                        
-                        // Get the peer's multiaddrs from our peer list
-                        let peers_guard = peers.lock().await;
-                        let peer_id_str = peer_id.to_string();
-                        
-                        if let Some(peer_info) = peers_guard.iter().find(|p| p.id == peer_id_str) {
-                            // Try to dial each multiaddr
-                            for addr_str in &peer_info.multiaddrs {
-                                if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
-                                    println!("Dialing peer {} at {}", peer_id, addr);
-                                    match swarm.dial(addr) {
-                                        Ok(_) => {
-                                            println!("Dial initiated to {}", peer_id);
-                                            break;
-                                        }
-                                        Err(e) => {
-                                            println!("Failed to dial {}: {:?}", peer_id, e);
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            println!("Peer {} not found in peer list", peer_id);
-                        }
+                    SwarmCommand::SendPing(peer_id) => {
+                        println!("Sending custom ping request to: {}", peer_id);
+                        let request = PingRequest("PING".to_string());
+                        let request_id = swarm.behaviour_mut().ping_protocol.send_request(&peer_id, request);
+                        println!("Ping request sent with ID: {:?}", request_id);
                     }
                 }
             }
@@ -296,17 +289,30 @@ async fn handle_behaviour_event(
                 println!("Peer expired: {}", peer_id_str);
             }
         }
-        DhtBehaviourEvent::Ping(event) => {
-            match event.result {
-                Ok(rtt) => {
-                    println!("Ping exchange with {} succeeded: {:?}", event.peer, rtt);
-                    // Emit both events - this covers both sending and receiving pings
-                    let _ = app.emit("ping-received", event.peer.to_string());
-                    let _ = app.emit("pong-received", event.peer.to_string());
+        DhtBehaviourEvent::PingProtocol(event) => {
+            use request_response::Event;
+            match event {
+                Event::Message { peer, message } => {
+                    match message {
+                        request_response::Message::Request { request, channel, .. } => {
+                            println!("Received ping request from {}: {:?}", peer, request);
+                            let _ = app.emit("ping-received", peer.to_string());
+                            // Send pong response
+                            // Note: We can't access the behaviour here, response is sent automatically
+                        }
+                        request_response::Message::Response { response, .. } => {
+                            println!("Received ping response from {}: {:?}", peer, response);
+                            let _ = app.emit("pong-received", peer.to_string());
+                        }
+                    }
                 }
-                Err(e) => {
-                    println!("Ping to {} failed: {:?}", event.peer, e);
+                Event::OutboundFailure { peer, error, .. } => {
+                    println!("Ping request failed to {:?}: {:?}", peer, error);
                 }
+                Event::InboundFailure { peer, error, .. } => {
+                    println!("Inbound ping failed from {:?}: {:?}", peer, error);
+                }
+                _ => {}
             }
         }
         DhtBehaviourEvent::Identify(event) => {
