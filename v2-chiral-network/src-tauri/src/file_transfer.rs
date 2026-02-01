@@ -133,17 +133,36 @@ impl FileTransferService {
         Ok(())
     }
 
-    pub async fn accept_transfer(&self, transfer_id: String) -> Result<(), String> {
+    pub async fn accept_transfer(&self, app: tauri::AppHandle, transfer_id: String) -> Result<String, String> {
         let mut incoming = self.pending_incoming.lock().await;
 
         if let Some(transfer) = incoming.get_mut(&transfer_id) {
             transfer.status = TransferStatus::Accepted;
 
-            // In a real implementation, save the file to disk
-            // For now, just mark as completed
+            // Get Downloads folder path
+            let downloads_dir = dirs::download_dir()
+                .ok_or_else(|| "Could not find Downloads folder".to_string())?;
+
+            // Create file path
+            let file_path = downloads_dir.join(&transfer.file_name);
+            
+            // Save file to disk
+            std::fs::write(&file_path, &transfer.file_data)
+                .map_err(|e| format!("Failed to save file: {}", e))?;
+
             transfer.status = TransferStatus::Completed;
 
-            Ok(())
+            let file_path_str = file_path.to_string_lossy().to_string();
+
+            // Emit file-received event with file path
+            let _ = app.emit("file-received", serde_json::json!({
+                "transferId": transfer_id,
+                "fileName": transfer.file_name,
+                "fromPeerId": transfer.peer_id,
+                "filePath": file_path_str
+            }));
+
+            Ok(file_path_str)
         } else {
             Err("Transfer not found".to_string())
         }
