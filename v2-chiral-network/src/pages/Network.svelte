@@ -1,16 +1,22 @@
 <script lang="ts">
   import { peers, networkStats, networkConnected } from '$lib/stores';
   import { dhtService } from '$lib/dhtService';
-  import { Play, Square } from 'lucide-svelte';
+  import { Play, Square, Radio } from 'lucide-svelte';
   
   let isConnecting = false;
   let error = '';
+  let localPeerId = '';
   
   async function connectToNetwork() {
     isConnecting = true;
     error = '';
     try {
       await dhtService.start();
+      // Get our peer ID
+      const peerId = await dhtService.getPeerId();
+      if (peerId) {
+        localPeerId = peerId;
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to connect';
       console.error('Failed to connect:', err);
@@ -22,9 +28,19 @@
   async function disconnectFromNetwork() {
     try {
       await dhtService.stop();
+      localPeerId = '';
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to disconnect';
       console.error('Failed to disconnect:', err);
+    }
+  }
+  
+  async function pingPeer(peerId: string) {
+    try {
+      const result = await dhtService.pingPeer(peerId);
+      console.log('✅ Ping successful:', result);
+    } catch (err) {
+      console.error('❌ Ping failed:', err);
     }
   }
   
@@ -50,6 +66,13 @@
         <div class="w-3 h-3 rounded-full {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
         <span class="font-medium">{$networkConnected ? 'Connected' : 'Disconnected'}</span>
       </div>
+      
+      {#if localPeerId}
+        <div class="mb-4 p-3 bg-gray-50 rounded border border-gray-200">
+          <div class="text-xs text-gray-500 mb-1">Your Peer ID:</div>
+          <div class="font-mono text-xs break-all">{localPeerId}</div>
+        </div>
+      {/if}
       
       {#if $networkConnected}
         <button
@@ -95,12 +118,24 @@
       <div class="space-y-2">
         {#each $peers as peer}
           <div class="p-3 bg-gray-50 rounded-lg border border-gray-200">
-            <div class="font-mono text-sm">{peer.id}</div>
-            {#if peer.address}
-              <div class="text-xs text-gray-500 mt-1">Address: {peer.address}</div>
-            {/if}
-            <div class="text-xs text-gray-500 mt-1">
-              Last seen: {formatDate(peer.lastSeen)}
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex-1 min-w-0">
+                <div class="font-mono text-sm break-all">{peer.id}</div>
+                {#if peer.address}
+                  <div class="text-xs text-gray-500 mt-1">Address: {peer.address}</div>
+                {/if}
+                <div class="text-xs text-gray-500 mt-1">
+                  Last seen: {formatDate(peer.lastSeen)}
+                </div>
+              </div>
+              <button
+                on:click={() => pingPeer(peer.id)}
+                class="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition shrink-0"
+                title="Ping this peer (check console)"
+              >
+                <Radio class="w-3 h-3" />
+                <span>Ping</span>
+              </button>
             </div>
           </div>
         {/each}
