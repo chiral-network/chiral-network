@@ -93,7 +93,6 @@
       return;
     }
 
-    // Dispatch download event - parent component handles protocol/peer selection
     download();
   }
 
@@ -164,7 +163,7 @@
               variant="ghost"
               size="icon"
               class="h-7 w-7"
-              on:click={copyFrom(metadata.fileHash)}
+              onclick={copyFrom(metadata.fileHash)}
             >
               <Copy class="h-3.5 w-3.5" />
               <span class="sr-only">Copy hash</span>
@@ -212,7 +211,7 @@
               <button
                 type="button"
                 class="w-full flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden hover:bg-muted/60 transition-colors cursor-pointer text-left"
-                on:click={() => showSeederInfo(seeder.address)}
+                onclick={() => showSeederInfo(seeder.address)}
                 title={seeder.details?.hasGeneralInfo ? 'Click to view seeder details' : 'Seeder info loading...'}
               >
                 <div class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
@@ -236,7 +235,7 @@
                   variant="ghost"
                   size="icon"
                   class="h-7 w-7"
-                  on:click={copyFrom(seeder.address)}
+                  onclick={copyFrom(seeder.address)}
                 >
                   <Copy class="h-3.5 w-3.5" />
                   <span class="sr-only">Copy seeder address</span>
@@ -282,7 +281,7 @@
       </div>
       <div class="flex items-center gap-2">
         <Button
-          on:click={handleDownload}
+          onclick={handleDownload}
           disabled={isBusy || (!canAfford && minOfferTotal !== null && minOfferTotal > 0 && !isSeeding)}
           class={!canAfford && minOfferTotal !== null && minOfferTotal > 0 && !isSeeding ? 'opacity-50 cursor-not-allowed' : ''}
         >
@@ -374,7 +373,7 @@
               variant="ghost"
               size="icon"
               class="h-7 w-7"
-              on:click={() => {
+              onclick={() => {
                 navigator.clipboard.writeText(selectedSeederDetails?.peerId || '');
                 showToast('Peer ID copied', 'success');
               }}
@@ -395,7 +394,7 @@
                   variant="ghost"
                   size="icon"
                   class="h-7 w-7"
-                  on:click={() => {
+                  onclick={() => {
                     navigator.clipboard.writeText(selectedSeederDetails?.walletAddress || '');
                     showToast('Wallet address copied', 'success');
                   }}
@@ -454,7 +453,7 @@
       </div>
 
       <div class="flex justify-end gap-2 mt-6">
-        <Button variant="outline" on:click={closeSeederDetailsModal}>
+        <Button variant="outline" onclick={closeSeederDetailsModal}>
           Close
         </Button>
       </div>

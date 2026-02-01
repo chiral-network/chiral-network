@@ -19,8 +19,8 @@
     RefreshCw,
     Lock,
     Key,
-     Copy,
-     Share2,
+    Copy,
+    Share2,
     Globe,
     Network,
     Server,
@@ -47,11 +47,13 @@
   import Input from "$lib/components/ui/input.svelte";
   import FTPUploadConfig from "$lib/components/upload/FTPUploadConfig.svelte";
   import { settings } from "$lib/stores";
-  import { paymentService } from '$lib/services/paymentService';
+  import { paymentService } from "$lib/services/paymentService";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { protocolManager, type Protocol } from "$lib/services/contentProtocols";
-  const tr = (k: string, params?: Record<string, any>): string =>
-    $t(k, params);
+  import {
+    protocolManager,
+    type Protocol,
+  } from "$lib/services/contentProtocols";
+  const tr = (k: string, params?: Record<string, any>): string => $t(k, params);
 
   // Check if running in Tauri environment
   const isTauri =
@@ -208,13 +210,13 @@
 
   // Ensure settings store always has a valid protocol (defensive fix)
   $: if (!$settings.selectedProtocol) {
-    settings.update(s => ({ ...s, selectedProtocol: "WebRTC" }));
+    settings.update((s) => ({ ...s, selectedProtocol: "WebRTC" }));
     selectedProtocol = "WebRTC";
   }
 
   // Sync selectedProtocol changes back to settings
   $: if (selectedProtocol && selectedProtocol !== $settings.selectedProtocol) {
-    settings.update(s => ({ ...s, selectedProtocol }));
+    settings.update((s) => ({ ...s, selectedProtocol }));
   }
 
   $: if (selectedProtocol) {
@@ -229,9 +231,9 @@
   let showEncryptionOptions = false;
 
   // FTP upload configuration state
-  let ftpUrl = '';
-  let ftpUsername = '';
-  let ftpPassword = '';
+  let ftpUrl = "";
+  let ftpUsername = "";
+  let ftpPassword = "";
   let ftpUseFTPS = false;
   let ftpPassiveMode = true;
   let ftpConfigLoaded = false;
@@ -355,7 +357,9 @@
       dynamicPricePerMb = Number(price.toFixed(8));
     } catch (error) {
       dynamicPriceError =
-        error instanceof Error ? error.message : "Failed to fetch dynamic price";
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch dynamic price";
     } finally {
       isFetchingDynamicPrice = false;
     }
@@ -488,7 +492,6 @@
     // Check if in client mode
     await checkClientMode();
 
-
     // Initialize WebRTC seeder to accept download requests
     try {
       const { SignalingService } = await import(
@@ -496,8 +499,8 @@
       );
 
       signalingService = new SignalingService({
-        preferDht: true,  // Prefer DHT for signaling in desktop app
-        persistPeers: false  // Don't persist peers to avoid stale peer IDs
+        preferDht: true, // Prefer DHT for signaling in desktop app
+        persistPeers: false, // Don't persist peers to avoid stale peer IDs
       });
 
       // Connect to signaling server
@@ -771,10 +774,7 @@
 
         // Check if in client mode
         if (isClientMode) {
-          showToast(
-            "File sharing is disabled in client-only mode",
-            "warning",
-          );
+          showToast("File sharing is disabled in client-only mode", "warning");
           return;
         }
 
@@ -867,10 +867,7 @@
 
               // Check if node is in pure-client mode (cannot seed files)
               if ($settings.pureClientMode) {
-                showToast(
-                  tr("toasts.upload.pureClientMode"),
-                  "error",
-                );
+                showToast(tr("toasts.upload.pureClientMode"), "error");
                 blockedCount++;
                 continue;
               }
@@ -939,17 +936,14 @@
 
                 files.update((currentFiles) => [...currentFiles, newFile]);
                 addedCount++;
-                
+
                 // Show success with propagation timing info
                 const baseMessage = tr("toasts.upload.fileSuccess", {
                   values: { name: file.name },
                 });
-                const propagationHint = " File will be searchable in 60-90 seconds after DHT propagation.";
-                showToast(
-                  baseMessage + propagationHint,
-                  "success",
-                  6000
-                );
+                const propagationHint =
+                  " File will be searchable in 60-90 seconds after DHT propagation.";
+                showToast(baseMessage + propagationHint, "success", 6000);
               } catch (error) {
                 console.error(
                   "Error uploading dropped file:",
@@ -1017,35 +1011,30 @@
     if (isTauri) {
       try {
         unlisten = await getCurrentWindow().onDragDropEvent((event) => {
-          if (event.payload.type === 'over') {
-             // User is dragging files over the window
+          if (event.payload.type === "over") {
+            // User is dragging files over the window
             isDragging = true;
-          } else if (event.payload.type === 'drop') {
-             // User dropped the files
+          } else if (event.payload.type === "drop") {
+            // User dropped the files
             isDragging = false;
-            
-             // event.payload.paths is an array of strings (absolute paths)
+
+            // event.payload.paths is an array of strings (absolute paths)
             const paths = event.payload.paths;
             if (paths && paths.length > 0) {
-               // No need to check other conditions. addFilesFromPaths checks those conditions.
+              // No need to check other conditions. addFilesFromPaths checks those conditions.
               addFilesFromPaths(paths);
             }
           } else {
-             // 'leave' or cancelled
+            // 'leave' or cancelled
             isDragging = false;
           }
         });
       } catch (err) {
         console.error("Failed to setup Tauri drag drop listener:", err);
       }
+    } else {
+      showToast(tr("upload.desktopOnly"), "error");
     }
-    else{
-        showToast(
-            tr("upload.desktopOnly"),
-            "error",
-          );
-      }
-
   });
 
   onDestroy(() => {
@@ -1200,7 +1189,11 @@
    * Keeps protocol-specific details out of the UI
    */
   async function addFilesFromPaths(paths: string[]) {
-    console.log("[UPLOAD] addFilesFromPaths called with", paths.length, "file(s)");
+    console.log(
+      "[UPLOAD] addFilesFromPaths called with",
+      paths.length,
+      "file(s)",
+    );
     console.log("[UPLOAD] Selected protocol:", selectedProtocol);
 
     // Timeout failsafe (increased to 60s for large files)
@@ -1213,9 +1206,9 @@
 
     try {
       // Import validation helper
-      const {
-        validateUploadPrerequisites,
-      } = await import("$lib/services/uploadService");
+      const { validateUploadPrerequisites } = await import(
+        "$lib/services/uploadService"
+      );
 
       // Validate prerequisites (replaces steps 1-2)
       const validation = await validateUploadPrerequisites();
@@ -1312,13 +1305,19 @@
           files.update((f) => {
             // Check if file already exists
             const existingIndex = f.findIndex(
-              (item) => item.hash === newFile.hash && item.protocol === selectedProtocol
+              (item) =>
+                item.hash === newFile.hash &&
+                item.protocol === selectedProtocol,
             );
 
             if (existingIndex !== -1) {
               // Update existing file
               const updated = { ...f[existingIndex], ...newFile };
-              return [...f.slice(0, existingIndex), updated, ...f.slice(existingIndex + 1)];
+              return [
+                ...f.slice(0, existingIndex),
+                updated,
+                ...f.slice(existingIndex + 1),
+              ];
             } else {
               // Add new file
               return [...f, newFile];
@@ -1327,7 +1326,7 @@
 
           showToast(
             tr("toasts.upload.fileSuccess", { values: { name: fileName } }),
-            "success"
+            "success",
           );
           addedCount++;
         } catch (error) {
@@ -1344,7 +1343,7 @@
                 error: String(error),
               },
             }),
-            "error"
+            "error",
           );
         }
       }
@@ -1369,7 +1368,8 @@
     if ($settings.useDynamicPricing) {
       const sizeInMB = sizeInBytes / (1024 * 1024);
       try {
-        const dynamicPrice = await paymentService.calculateDownloadCost(sizeInBytes);
+        const dynamicPrice =
+          await paymentService.calculateDownloadCost(sizeInBytes);
         if (Number.isFinite(dynamicPrice) && dynamicPrice > 0) {
           return Number((dynamicPrice / sizeInMB).toFixed(8));
         }
@@ -1400,7 +1400,7 @@
     { value: "WebRTC", label: "WebRTC" },
     { value: "BitTorrent", label: "BitTorrent" },
     { value: "ED2K", label: "ED2K" },
-    { value: "FTP", label: "FTP" }
+    { value: "FTP", label: "FTP" },
   ];
 
   async function handleCopy(hash: string) {
@@ -1433,35 +1433,33 @@
   {#if isClientMode}
     <Card class="p-4 bg-yellow-50 border-yellow-200">
       <div class="flex items-start gap-3">
-        <div class="text-yellow-600 mt-0.5">
-          ⚠️
-        </div>
+        <div class="text-yellow-600 mt-0.5">⚠️</div>
         <div class="flex-1 space-y-2">
           <p class="text-sm font-semibold text-yellow-800">
             {#if clientModeReason === "forced"}
-              {$t('pureClientMode.banner.title.forced')}
+              {$t("pureClientMode.banner.title.forced")}
             {:else if clientModeReason === "nat"}
-              {$t('pureClientMode.banner.title.nat')}
+              {$t("pureClientMode.banner.title.nat")}
             {:else}
-              {$t('pureClientMode.banner.title.default')}
+              {$t("pureClientMode.banner.title.default")}
             {/if}
           </p>
           <p class="text-sm text-yellow-700">
             {#if clientModeReason === "forced"}
-              {$t('pureClientMode.warnings.forcedMode')}
+              {$t("pureClientMode.warnings.forcedMode")}
             {:else if clientModeReason === "nat"}
-              {$t('pureClientMode.warnings.natDetected')}
+              {$t("pureClientMode.warnings.natDetected")}
             {:else}
-              {$t('pureClientMode.banner.description.default')}
+              {$t("pureClientMode.banner.description.default")}
             {/if}
           </p>
           <p class="text-xs text-yellow-600">
             {#if clientModeReason === "forced"}
-              {$t('pureClientMode.banner.help.forced')}
+              {$t("pureClientMode.banner.help.forced")}
             {:else if clientModeReason === "nat"}
-              {$t('pureClientMode.banner.help.nat')}
+              {$t("pureClientMode.banner.help.nat")}
             {:else}
-              {$t('pureClientMode.banner.help.default')}
+              {$t("pureClientMode.banner.help.default")}
             {/if}
           </p>
         </div>
@@ -1592,7 +1590,9 @@
       {#each Array.from(uploadProgress.entries()) as [filePath, progress]}
         <div class="space-y-1">
           <div class="flex justify-between text-sm">
-            <span class="truncate text-blue-700">{filePath.split(/[/\\]/).pop()}</span>
+            <span class="truncate text-blue-700"
+              >{filePath.split(/[/\\]/).pop()}</span
+            >
             <span class="text-blue-600">{progress.percent.toFixed(0)}%</span>
           </div>
           <div class="h-2 bg-blue-100 rounded-full overflow-hidden">
@@ -1712,17 +1712,17 @@
                     {#each recipientPublicKeys as item, index}
                       <li class="flex items-center gap-2">
                         <span class="flex flex-col gap-1">
-                            {#if editingRecipientIndex === index}
+                          {#if editingRecipientIndex === index}
                             <input
                               bind:value={item.name}
                               class="text-sm font-medium text-gray-800 border-none outline-none text-left px-2 py-1 rounded"
                               on:blur={() => (editingRecipientIndex = -1)}
                               on:keydown={(e) => {
-                              if (e.key === "Enter")
-                                editingRecipientIndex = -1;
+                                if (e.key === "Enter")
+                                  editingRecipientIndex = -1;
                               }}
                             />
-                            {:else}
+                          {:else}
                             <button
                               type="button"
                               class="text-sm font-medium text-gray-800 border-none outline-none text-left px-2 py-1 rounded underline"
@@ -1731,7 +1731,7 @@
                             >
                               {item.name}
                             </button>
-                            {/if}
+                          {/if}
                           <span class="flex items-center gap-2">
                             <code
                               class="font-mono text-sm bg-muted/50 px-2 py-1 rounded w-[36rem]"
@@ -1791,10 +1791,10 @@
     class="drop-zone relative p-6 transition-all duration-200 border-dashed {$settings.pureClientMode
       ? 'border-muted-foreground/15 bg-muted/30 opacity-60'
       : isDragging
-      ? 'border-primary bg-primary/5'
-      : isUploading
-        ? 'border-orange-500 bg-orange-500/5'
-        : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
+        ? 'border-primary bg-primary/5'
+        : isUploading
+          ? 'border-orange-500 bg-orange-500/5'
+          : 'border-muted-foreground/25 hover:border-muted-foreground/50'}"
   >
     <!-- Drag & Drop Indicator -->
     {#if $files.filter((f) => f.status === "seeding" || f.status === "uploaded").length === 0}
@@ -1868,12 +1868,18 @@
                 class="group inline-flex items-center justify-center h-12 rounded-xl px-6 text-sm font-medium bg-gradient-to-r from-primary to-primary/90 text-primary-foreground hover:from-primary/90 hover:to-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
                 disabled={isUploading || $settings.pureClientMode}
                 on:click={openFileDialog}
-                title={$settings.pureClientMode ? "File sharing disabled - pure client mode is enabled in Settings" : ""}
+                title={$settings.pureClientMode
+                  ? "File sharing disabled - pure client mode is enabled in Settings"
+                  : ""}
               >
                 <Plus
                   class="h-5 w-5 mr-2 group-hover:rotate-90 transition-transform duration-300"
                 />
-                {$settings.pureClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addFiles")}
+                {$settings.pureClientMode
+                  ? "Sharing Disabled"
+                  : isUploading
+                    ? $t("upload.uploading")
+                    : $t("upload.addFiles")}
               </button>
             {:else}
               <div class="text-center">
@@ -1934,10 +1940,16 @@
               class="inline-flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={isUploading || $settings.pureClientMode}
               on:click={openFileDialog}
-              title={$settings.pureClientMode ? "File sharing disabled - pure client mode enabled in Settings" : ""}
+              title={$settings.pureClientMode
+                ? "File sharing disabled - pure client mode enabled in Settings"
+                : ""}
             >
               <Plus class="h-4 w-4 mr-2" />
-              {$settings.pureClientMode ? "Sharing Disabled" : isUploading ? $t("upload.uploading") : $t("upload.addMoreFiles")}
+              {$settings.pureClientMode
+                ? "Sharing Disabled"
+                : isUploading
+                  ? $t("upload.uploading")
+                  : $t("upload.addMoreFiles")}
             </button>
           {:else}
             <div class="text-center">
@@ -1951,7 +1963,9 @@
 
       <!-- Client Mode Warning for Shared Files - Only show when FORCED -->
       {#if clientModeReason === "forced" && $coalescedFiles.length > 0}
-        <div class="mx-4 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+        <div
+          class="mx-4 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg"
+        >
           <div class="flex items-start gap-2">
             <div class="text-amber-600 text-sm mt-0.5">⚠️</div>
             <div class="flex-1">
@@ -1959,13 +1973,15 @@
                 Seeding Disabled - Pure Client Mode Active
               </p>
               <p class="text-xs text-amber-700 mt-1">
-                Your files are saved locally but cannot be shared with the network because Pure Client Mode is enabled in Settings. Disable it to enable file sharing.
+                Your files are saved locally but cannot be shared with the
+                network because Pure Client Mode is enabled in Settings. Disable
+                it to enable file sharing.
               </p>
             </div>
           </div>
         </div>
       {/if}
-      
+
       <!-- NAT Info Banner - Shows relay is active -->
       {#if clientModeReason === "nat" && $coalescedFiles.length > 0}
         <div class="mx-4 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
@@ -1976,7 +1992,9 @@
                 Files Shared via Relay Servers
               </p>
               <p class="text-xs text-blue-700 mt-1">
-                Your files are being shared through relay servers because you're behind NAT. Other peers can still download from you. For faster direct connections, enable UPnP in Settings.
+                Your files are being shared through relay servers because you're
+                behind NAT. Other peers can still download from you. For faster
+                direct connections, enable UPnP in Settings.
               </p>
             </div>
           </div>
@@ -2151,7 +2169,7 @@
                             </div>
                           {/if}
 
-                        <!-- Price and Actions -->
+                          <!-- Price and Actions -->
                         {/each}
                       </div>
 

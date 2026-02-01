@@ -868,13 +868,7 @@
   <Card>
     <div class="border-b">
       <DownloadSearchSection
-        on:download={(event) =>
-          handleSearchDownload(
-            event.detail.fullMetadata,
-            event.detail.selectedPeer,
-            event.detail.selectedProtocol,
-            event.detail.price,
-          )}
+        download={handleSearchDownload}
       />
     </div>
   </Card>

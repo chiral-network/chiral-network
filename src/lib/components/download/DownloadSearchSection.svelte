@@ -13,14 +13,13 @@
     AlertCircle,
     CheckCircle2,
   } from "lucide-svelte";
-  import { createEventDispatcher, onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { get } from "svelte/store";
   import { t } from "svelte-i18n";
   import { dhtService } from "$lib/dht";
   import type {
     CompleteFileMetadata,
     DhtFileRecord,
-    FileMetadata,
     SeederCompleteMetadata,
     SeederFileInfo,
     SeederGeneralInfo,
@@ -41,13 +40,18 @@
   import { PROTOCOL_BADGES, type ProgressiveSearchState } from "$lib/stores";
 
   type ToastType = "success" | "error" | "info" | "warning";
-  type DownloadIntent = {
-    fullMetadata: CompleteFileMetadata;
-    selectedPeer: string;
-    selectedProtocol: Protocol;
-    price: number;
-  };
 
+
+  const {
+    download,
+  }: {
+    download: (
+      fullMetadata: CompleteFileMetadata,
+      selectedPeer: string,
+      selectedProtocol: Protocol,
+      price: number,
+    ) => void;
+  } = $props();
   function deriveCompleteFileMetadata(
     state: ProgressiveSearchState,
   ): CompleteFileMetadata | null {
@@ -91,9 +95,6 @@
     return { dhtRecord, seederInfo };
   }
 
-  const dispatch = createEventDispatcher<{
-    download: DownloadIntent;
-  }>();
   const tr = (key: string, params?: Record<string, unknown>) =>
     (get(t) as any)(key, params);
 
@@ -151,7 +152,9 @@
     return Protocol.UNKNOWN;
   }
 
-  function normalizeProtocolDetails(details: unknown): ProtocolDetails | undefined {
+  function normalizeProtocolDetails(
+    details: unknown,
+  ): ProtocolDetails | undefined {
     if (!details || typeof details !== "object") return undefined;
 
     const normalized: Record<string, unknown> = {};
@@ -178,7 +181,10 @@
   });
 
   $effect(() => {
-    if (progressiveSearchState.status !== "idle" && !progressiveSearchState.basicMetadata) {
+    if (
+      progressiveSearchState.status !== "idle" &&
+      !progressiveSearchState.basicMetadata
+    ) {
       if (!warnedMissingMetadata) {
         showToast("Search status isn't idle but no fileHash", "warning");
         warnedMissingMetadata = true;
@@ -471,20 +477,20 @@
           if (pricePerMb !== null) {
             seeder.pricePerMb = pricePerMb;
           }
-          const normalizedProtocols = (supportedProtocols as unknown[] | undefined)
-            ?.map(normalizeProtocol)
-            .filter((protocol): protocol is Protocol => protocol !== null) ?? [];
+          const normalizedProtocols =
+            (supportedProtocols as unknown[] | undefined)
+              ?.map(normalizeProtocol)
+              .filter((protocol): protocol is Protocol => protocol !== null) ??
+            [];
           seeder.protocols = normalizedProtocols;
           seeder.protocolDetails = normalizeProtocolDetails(protocolDetails);
           seeder.hasFileInfo = true;
           if (DEV)
-          console.log(
-            `[DownloadSearchSection] seeder_file_info #${seederIndex}`,
-            { supportedProtocols, normalizedProtocols },
-          );
+            console.log(
+              `[DownloadSearchSection] seeder_file_info #${seederIndex}`,
+              { supportedProtocols, normalizedProtocols },
+            );
         }
-
-        
       }),
     );
 
@@ -603,11 +609,11 @@
             const metadata = (await invoke(
               "search_by_infohash",
               params,
-            )) as FileMetadata | null;
+            )) as DhtFileRecord;
             console.log("🔍 DHT search result:", metadata);
             if (metadata) {
               // Found the file! Show it instead of the placeholder
-              metadata.fileHash = metadata.merkleRoot || "";
+              metadata.fileHash = metadata.fileHash || "";
               latestStatus = "found";
               hasSearched = true;
               pushMessage(`Found file: ${metadata.fileName}`, "success");
@@ -645,10 +651,9 @@
               const metadata = (await invoke(
                 "search_by_infohash",
                 params,
-              )) as FileMetadata | null;
+              )) as DhtFileRecord | null;
               console.log("🔍 DHT search result:", metadata);
               if (metadata) {
-                metadata.fileHash = metadata.merkleRoot || "";
                 latestStatus = "found";
                 hasSearched = true;
                 pushMessage(`Found file: ${metadata.fileName}`, "success");
@@ -874,35 +879,46 @@
       if (searchCancelTimeoutId) {
         clearTimeout(searchCancelTimeoutId);
         pushMessage(
-          tr('download.search.status.foundNotification', { values: { name: metadata.fileName } }),
-          'success',
+          tr("download.search.status.foundNotification", {
+            values: { name: metadata.fileName },
+          }),
+          "success",
         );
         isSearching = false;
       } else {
-        latestStatus = 'not_found';
-        
+        latestStatus = "not_found";
+
         // Get DHT health to provide better diagnostics
         const health = await dhtService.getHealth();
         const peerCount = health?.peerCount || 0;
-        
-        let errorMessage = 'File not found in the network.';
+
+        let errorMessage = "File not found in the network.";
         if (peerCount < 3) {
           errorMessage += ` Low peer count (${peerCount} peers connected). Try waiting for more connections or restart DHT.`;
         } else {
-          errorMessage += ' If you just uploaded this file, wait 60-90 seconds for DHT propagation, then search again.';
+          errorMessage +=
+            " If you just uploaded this file, wait 60-90 seconds for DHT propagation, then search again.";
         }
-        
+
         dhtSearchHistory.updateEntry(entry.id, {
-          status: 'not_found',
+          status: "not_found",
           metadata: undefined,
           errorMessage,
           elapsedMs: elapsed,
         });
-        
+
         if (peerCount < 3) {
-          pushMessage(`File not found. Low peer count (${peerCount}). Check Network tab for connectivity issues.`, 'warning', 8000);
+          pushMessage(
+            `File not found. Low peer count (${peerCount}). Check Network tab for connectivity issues.`,
+            "warning",
+            8000,
+          );
         } else {
-          pushMessage('File not found. If recently uploaded, wait 60-90 seconds for DHT propagation and try again. Ensure both devices are connected to the same network.', 'warning', 10000);
+          pushMessage(
+            "File not found. If recently uploaded, wait 60-90 seconds for DHT propagation and try again. Ensure both devices are connected to the same network.",
+            "warning",
+            10000,
+          );
         }
       }
       searchCancelTimeoutId = setTimeout(() => {
@@ -1057,7 +1073,10 @@
     const selectedPeer = selectedPeerIds[0];
     const seederInfo = completeFileMetadata.seederInfo[selectedPeer];
     if (!seederInfo) {
-      pushMessage("Selected peer info is unavailable. Please try again.", "error");
+      pushMessage(
+        "Selected peer info is unavailable. Please try again.",
+        "error",
+      );
       return;
     }
 
@@ -1070,7 +1089,7 @@
       pricePerMb,
     });
 
-    dispatch("download", {
+    download({
       fullMetadata: completeFileMetadata,
       selectedPeer,
       selectedProtocol,

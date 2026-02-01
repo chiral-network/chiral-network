@@ -5,6 +5,7 @@ import { join } from "@tauri-apps/api/path";
 import { type ProtocolDetails } from "./types/protocols";
 //importing reputation store for the reputation based peer discovery
 import ReputationStore from "$lib/reputationStore";
+import type { Protocol } from "./services/contentProtocols";
 const __rep = ReputationStore.getInstance();
 
 export type NatReachabilityState = "unknown" | "public" | "private";
@@ -123,7 +124,7 @@ export interface SeederFileInfo {
   peerId: string;
   fileHash: string;
   pricePerMb?: number; // Overrides defaultPricePerMb if set
-  supportedProtocols: string[];
+  supportedProtocols: Protocol[];
   protocolDetails: ProtocolDetails;
   timestamp: number;
 }

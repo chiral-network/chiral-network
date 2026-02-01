@@ -268,9 +268,9 @@
             <Button
               variant="outline"
               size="sm"
-              class={`${selectedProtocol === proto ? `${PROTOCOL_BADGES[Protocol.WEBRTC]?.colorClass ?? 'bg-blue-100 text-blue-800'} border-transparent` : ''} ${selectedProtocol === proto ? 'ring-2 ring-primary/50 ring-offset-2 ring-offset-background shadow-sm' : 'hover:ring-1 hover:ring-foreground/20'} transition-shadow`}
+              class={`${selectedProtocol === proto ?  'bg-blue-100 text-blue-800 border-transparent' : ''} ${selectedProtocol === proto ? 'ring-2 ring-primary/50 ring-offset-2 ring-offset-background shadow-sm' : 'hover:ring-1 hover:ring-foreground/20'} transition-shadow`}
               aria-pressed={selectedProtocol === proto}
-              on:click={() => (selectedProtocol = proto)}
+              onclick={() => (selectedProtocol = proto)}
             >
               <Icon class="h-4 w-4 mr-2" />
               {badge.name}
@@ -290,7 +290,7 @@
           <Button
             variant={mode === 'auto' ? 'default' : 'outline'}
             size="sm"
-            on:click={() => { mode = 'auto'; peers = applyAutoSelection(peers); }}
+            onclick={() => { mode = 'auto'; peers = applyAutoSelection(peers); }}
           >
             <Zap class="h-4 w-4 mr-2" />
             Auto-select Peers (Recommended)
@@ -298,7 +298,7 @@
           <Button
             variant={mode === 'manual' ? 'default' : 'outline'}
             size="sm"
-            on:click={() => { mode = 'manual'; rebalancePercentages(); }}
+            onclick={() => { mode = 'manual'; rebalancePercentages(); }}
           >
             <Server class="h-4 w-4 mr-2" />
             Manual Peer Selection
@@ -469,12 +469,12 @@
       <div class="flex justify-end gap-3 pt-2">
         <Button
           variant="outline"
-          on:click={handleCancel}
+          onclick={handleCancel}
         >
           Cancel
         </Button>
         <Button
-          on:click={handleConfirm}
+          onclick={handleConfirm}
         >
           <Download class="h-4 w-4 mr-2" />
           {`Start Download (${selectedPeerCount} ${selectedPeerCount === 1 ? 'peer' : 'peers'})`}
