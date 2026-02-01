@@ -515,9 +515,11 @@ version = "2.0.0"
 dependencies = [
  "dirs 5.0.1",
  "futures",
+ "hex",
  "libp2p",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",

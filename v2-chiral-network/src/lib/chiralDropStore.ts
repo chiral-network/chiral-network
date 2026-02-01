@@ -1,5 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { generateAlias, aliasFromPeerId, type UserAlias } from './aliasService';
+import { saveHistoryToDht, loadHistoryFromDht, syncHistory } from './encryptedHistoryService';
+import { walletAccount } from './stores';
 
 // Transaction types
 export interface FileTransfer {
@@ -46,10 +48,10 @@ export const pendingTransfers = writable<FileTransfer[]>([]);
 export const transferHistory = writable<FileTransfer[]>([]);
 export const selectedPeer = writable<NearbyPeer | null>(null);
 
-// Load transaction history from localStorage
+// Load transaction history from localStorage (temporary cache)
 const HISTORY_STORAGE_KEY = 'chiraldrop_history';
 
-function loadHistory(): FileTransfer[] {
+function loadHistoryFromLocal(): FileTransfer[] {
   try {
     const stored = localStorage.getItem(HISTORY_STORAGE_KEY);
     if (stored) {
@@ -62,25 +64,55 @@ function loadHistory(): FileTransfer[] {
       }));
     }
   } catch (e) {
-    console.error('Failed to load transfer history:', e);
+    console.error('Failed to load transfer history from localStorage:', e);
   }
   return [];
 }
 
-function saveHistory(history: FileTransfer[]) {
+function saveHistoryToLocal(history: FileTransfer[]) {
   try {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
   } catch (e) {
-    console.error('Failed to save transfer history:', e);
+    console.error('Failed to save transfer history to localStorage:', e);
   }
 }
 
-// Initialize history from storage
-transferHistory.set(loadHistory());
+// Initialize history from local storage first (fast)
+transferHistory.set(loadHistoryFromLocal());
 
-// Subscribe to history changes and persist
+// Subscribe to history changes and persist both locally and to DHT
+let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 transferHistory.subscribe((history) => {
-  saveHistory(history);
+  // Always save locally for quick access
+  saveHistoryToLocal(history);
+
+  // Debounce DHT saves to avoid excessive network traffic
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+  }
+  saveTimeout = setTimeout(() => {
+    saveHistoryToDht(history).catch((err) => {
+      console.error('Failed to save history to DHT:', err);
+    });
+  }, 2000);
+});
+
+// When wallet connects, sync history from DHT
+walletAccount.subscribe(async (wallet) => {
+  if (wallet) {
+    console.log('Wallet connected, syncing history from DHT...');
+    try {
+      const localHistory = get(transferHistory);
+      const syncedHistory = await syncHistory(localHistory);
+      // Update store with synced history (merged local + DHT)
+      if (syncedHistory.length > 0) {
+        transferHistory.set(syncedHistory);
+      }
+      console.log('History synced:', syncedHistory.length, 'transfers');
+    } catch (err) {
+      console.error('Failed to sync history:', err);
+    }
+  }
 });
 
 // Helper functions
