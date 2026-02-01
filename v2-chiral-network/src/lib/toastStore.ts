@@ -29,3 +29,7 @@ function createToastStore() {
 }
 
 export const toasts = createToastStore();
+
+export function showToast(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info', duration = 5000) {
+  toasts.show(message, type === 'warning' ? 'info' : type, duration);
+}
