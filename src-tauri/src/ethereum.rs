@@ -7,15 +7,16 @@ use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::net::TcpStream;
-use std::time::Duration;
-use tokio::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
+use tokio::sync::Mutex;
 use url::Url;
 
 // ============================================================================
@@ -25,6 +26,290 @@ use url::Url;
 /// Block reward in Chiral - the amount awarded for mining a block.
 /// This is the single source of truth for block rewards throughout the codebase.
 pub const BLOCK_REWARD: f64 = 2.0;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GethDataCompatibilityStatus {
+    Ok,
+    Missing,
+    Mismatch,
+    Unknown,
+    Corrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GethDataCompatibility {
+    pub status: GethDataCompatibilityStatus,
+    pub expected_chain_id: u64,
+    pub expected_genesis_sha256: String,
+    pub detected_chain_id: Option<u64>,
+    pub detected_genesis_sha256: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GethDataMarker {
+    chain_id: u64,
+    genesis_sha256: String,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn resolve_genesis_path() -> Result<PathBuf, String> {
+    // Use the project directory as base for genesis.json
+    let project_dir = if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .ok_or("Failed to get project dir")?
+            .to_path_buf()
+    } else {
+        std::env::current_exe()
+            .map_err(|e| format!("Failed to get exe path: {}", e))?
+            .parent()
+            .ok_or("Failed to get parent dir")?
+            .parent()
+            .ok_or("Failed to get parent dir")?
+            .parent()
+            .ok_or("Failed to get parent dir")?
+            .to_path_buf()
+    };
+
+    // Resolve genesis.json path robustly across:
+    // - dev builds (repo root)
+    // - release/headless builds (binary under src-tauri/target/release/)
+    // - custom deployments (env override)
+    let genesis_candidates: Vec<PathBuf> = {
+        let mut v = Vec::new();
+        if let Ok(p) = std::env::var("CHIRAL_GENESIS_PATH") {
+            if !p.trim().is_empty() {
+                v.push(PathBuf::from(p.trim()));
+            }
+        }
+        v.push(project_dir.join("genesis.json"));
+        if let Some(parent) = project_dir.parent() {
+            v.push(parent.join("genesis.json"));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            v.push(cwd.join("genesis.json"));
+        }
+        v
+    };
+
+    genesis_candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "genesis.json not found. Tried: {}. You can override with CHIRAL_GENESIS_PATH=/path/to/genesis.json",
+                genesis_candidates
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+}
+
+fn expected_genesis_hash() -> Result<String, String> {
+    let genesis_path = resolve_genesis_path()?;
+    let bytes = std::fs::read(&genesis_path)
+        .map_err(|e| format!("Failed to read genesis.json ({}): {}", genesis_path.display(), e))?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn marker_path(data_path: &Path) -> PathBuf {
+    data_path.join(".chiral_network.json")
+}
+
+fn read_marker(data_path: &Path) -> Option<GethDataMarker> {
+    let path = marker_path(data_path);
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<GethDataMarker>(&content).ok()
+}
+
+fn write_marker(data_path: &Path, marker: &GethDataMarker) {
+    let path = marker_path(data_path);
+    if let Ok(content) = serde_json::to_string_pretty(marker) {
+        let _ = std::fs::write(path, content);
+    }
+}
+
+fn read_legacy_chain_id_marker(data_path: &Path) -> Option<u64> {
+    let chain_id_marker = data_path.join("geth").join(".chain_id");
+    let content = std::fs::read_to_string(chain_id_marker).ok()?;
+    content.trim().parse::<u64>().ok()
+}
+
+fn detect_corruption_from_logs(data_path: &Path) -> bool {
+    let log_path = data_path.join("geth.log");
+    if !log_path.exists() {
+        return false;
+    }
+
+    let Ok(file) = File::open(&log_path) else {
+        return false;
+    };
+    let reader = BufReader::new(file);
+    let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    let lines: Vec<String> = all_lines.iter().rev().take(80).cloned().collect();
+
+    for line in &lines {
+        if line.contains("database corruption")
+            || (line.contains("FATAL") && line.contains("chaindata"))
+            || (line.contains("corrupted") && line.contains("database"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn purge_geth_chain_data_preserve_keystore(data_path: &Path) -> Result<(), String> {
+    let keystore_dir = data_path.join("keystore");
+    let keystore_backup = data_path.join(".keystore_backup");
+    if keystore_dir.exists() {
+        if keystore_backup.exists() {
+            let _ = std::fs::remove_dir_all(&keystore_backup);
+        }
+        std::fs::rename(&keystore_dir, &keystore_backup)
+            .map_err(|e| format!("Failed to move keystore for backup: {}", e))?;
+    }
+
+    let geth_dir = data_path.join("geth");
+    if geth_dir.exists() {
+        std::fs::remove_dir_all(&geth_dir)
+            .map_err(|e| format!("Failed to remove geth chain data: {}", e))?;
+    }
+
+    if keystore_backup.exists() {
+        std::fs::rename(&keystore_backup, &keystore_dir)
+            .map_err(|e| format!("Failed to restore keystore: {}", e))?;
+    }
+
+    Ok(())
+}
+
+pub fn init_geth_datadir_with_current_genesis(
+    geth_path: &Path,
+    data_path: &Path,
+) -> Result<(), String> {
+    let genesis_path = resolve_genesis_path()?;
+    let expected_sha = expected_genesis_hash()?;
+
+    let init_output = Command::new(geth_path)
+        .arg("--datadir")
+        .arg(data_path)
+        .arg("init")
+        .arg(&genesis_path)
+        .output()
+        .map_err(|e| format!("Failed to initialize genesis: {}", e))?;
+
+    if !init_output.status.success() {
+        return Err(format!(
+            "Failed to init genesis: {}",
+            String::from_utf8_lossy(&init_output.stderr)
+        ));
+    }
+
+    let marker = GethDataMarker {
+        chain_id: *CHAIN_ID,
+        genesis_sha256: expected_sha,
+    };
+    write_marker(data_path, &marker);
+    Ok(())
+}
+
+pub fn check_geth_data_compatibility(data_path: &Path) -> Result<GethDataCompatibility, String> {
+    let expected_chain_id = *CHAIN_ID;
+    let expected_genesis_sha256 = expected_genesis_hash()?;
+
+    // Fresh install: nothing to validate.
+    if !data_path.join("geth").exists() {
+        return Ok(GethDataCompatibility {
+            status: GethDataCompatibilityStatus::Missing,
+            expected_chain_id,
+            expected_genesis_sha256,
+            detected_chain_id: None,
+            detected_genesis_sha256: None,
+            message: "No existing chain data found; initialization required.".to_string(),
+        });
+    }
+
+    if detect_corruption_from_logs(data_path) {
+        return Ok(GethDataCompatibility {
+            status: GethDataCompatibilityStatus::Corrupted,
+            expected_chain_id,
+            expected_genesis_sha256,
+            detected_chain_id: None,
+            detected_genesis_sha256: None,
+            message: "Existing chain data appears corrupted.".to_string(),
+        });
+    }
+
+    if let Some(marker) = read_marker(data_path) {
+        if marker.chain_id == expected_chain_id {
+            return Ok(GethDataCompatibility {
+                status: GethDataCompatibilityStatus::Ok,
+                expected_chain_id,
+                expected_genesis_sha256,
+                detected_chain_id: Some(marker.chain_id),
+                detected_genesis_sha256: Some(marker.genesis_sha256),
+                message: "Chain ID matches expected network.".to_string(),
+            });
+        }
+
+        return Ok(GethDataCompatibility {
+            status: GethDataCompatibilityStatus::Mismatch,
+            expected_chain_id,
+            expected_genesis_sha256,
+            detected_chain_id: Some(marker.chain_id),
+            detected_genesis_sha256: Some(marker.genesis_sha256),
+            message: format!(
+                "Existing chain data is for chain ID {}, expected {}.",
+                marker.chain_id, expected_chain_id
+            ),
+        });
+    }
+
+    // Legacy marker (chainId only).
+    if let Some(stored_chain_id) = read_legacy_chain_id_marker(data_path) {
+        if stored_chain_id != expected_chain_id {
+            return Ok(GethDataCompatibility {
+                status: GethDataCompatibilityStatus::Mismatch,
+                expected_chain_id,
+                expected_genesis_sha256,
+                detected_chain_id: Some(stored_chain_id),
+                detected_genesis_sha256: None,
+                message: format!(
+                    "Existing chain data is for chain ID {}, expected {}.",
+                    stored_chain_id, expected_chain_id
+                ),
+            });
+        }
+        return Ok(GethDataCompatibility {
+            status: GethDataCompatibilityStatus::Ok,
+            expected_chain_id,
+            expected_genesis_sha256,
+            detected_chain_id: Some(stored_chain_id),
+            detected_genesis_sha256: None,
+            message: "Chain ID matches expected network (legacy install).".to_string(),
+        });
+    }
+
+    Ok(GethDataCompatibility {
+        status: GethDataCompatibilityStatus::Unknown,
+        expected_chain_id,
+        expected_genesis_sha256,
+        detected_chain_id: None,
+        detected_genesis_sha256: None,
+        message: "Could not verify existing chain data fingerprint.".to_string(),
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
@@ -44,13 +329,11 @@ impl Default for NetworkConfig {
 }
 
 // Global configuration - reads from genesis.json or environment variables
-pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
-    NetworkConfig {
-        rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: *CHAIN_ID,
-        network_id: *NETWORK_ID,
-    }
+pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| NetworkConfig {
+    rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+    chain_id: *CHAIN_ID,
+    network_id: *NETWORK_ID,
 });
 
 // Shared HTTP client for all RPC calls
@@ -126,7 +409,9 @@ impl GethProcess {
         let port = url.port_or_known_default().unwrap_or(8545);
         let addr = format!("{host}:{port}");
         match addr.parse() {
-            Ok(sock_addr) => TcpStream::connect_timeout(&sock_addr, Duration::from_millis(500)).is_ok(),
+            Ok(sock_addr) => {
+                TcpStream::connect_timeout(&sock_addr, Duration::from_millis(500)).is_ok()
+            }
             Err(_) => false,
         }
     }
@@ -144,31 +429,46 @@ impl GethProcess {
         Ok(exe_dir.join(dir))
     }
 
-    /// Validate that existing Geth data directory has the correct chain ID
-    fn validate_chain_id(&self, data_path: &Path, expected_chain_id: u64) -> Result<(), String> {
-        // Create a marker file to track which chain ID this data directory was initialized with
-        let chain_id_marker = data_path.join("geth").join(".chain_id");
+    fn init_with_genesis(
+        &self,
+        geth_path: &Path,
+        data_path: &Path,
+        genesis_path: &Path,
+        expected_genesis_sha256: &str,
+    ) -> Result<(), String> {
+        let init_output = Command::new(geth_path)
+            .arg("--datadir")
+            .arg(data_path)
+            .arg("init")
+            .arg(genesis_path)
+            .output()
+            .map_err(|e| format!("Failed to initialize genesis: {}", e))?;
 
-        if chain_id_marker.exists() {
-            if let Ok(content) = std::fs::read_to_string(&chain_id_marker) {
-                if let Ok(stored_chain_id) = content.trim().parse::<u64>() {
-                    if stored_chain_id == expected_chain_id {
-                        return Ok(()); // Chain ID matches
-                    } else {
-                        return Err(format!("Existing blockchain data is for chain ID {}, but expected {}. Will reinitialize.", stored_chain_id, expected_chain_id));
-                    }
-                }
-            }
+        if !init_output.status.success() {
+            return Err(format!(
+                "Failed to init genesis: {}",
+                String::from_utf8_lossy(&init_output.stderr)
+            ));
         }
 
-        // If no marker file exists, we can't be sure about the chain ID
-        // To be safe, we'll assume it's wrong and force reinitialization
-        // This prevents the chain ID mismatch issue from happening again
-        Err(format!("Could not verify chain ID of existing blockchain data. Will reinitialize to ensure correctness."))
+        write_marker(
+            data_path,
+            &GethDataMarker {
+                chain_id: *CHAIN_ID,
+                genesis_sha256: expected_genesis_sha256.to_string(),
+            },
+        );
+
+        Ok(())
     }
 
-
-    pub fn start(&mut self, data_dir: &str, miner_address: Option<&str>, pure_client_mode: bool) -> Result<(), String> {
+    pub fn start(
+        &mut self,
+        data_dir: &str,
+        miner_address: Option<&str>,
+        pure_client_mode: bool,
+        network_id_override: Option<u64>,
+    ) -> Result<(), String> {
         // Check if we already have a tracked child process
         if self.child.is_some() {
             return Ok(()); // Already running, no need to start again
@@ -239,138 +539,23 @@ impl GethProcess {
             return Err("Geth binary not found. Please download it first.".to_string());
         }
 
-        // Use the project directory as base for genesis.json
-        let project_dir = if cfg!(debug_assertions) {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .ok_or("Failed to get project dir")?
-                .to_path_buf()
-        } else {
-            std::env::current_exe()
-                .map_err(|e| format!("Failed to get exe path: {}", e))?
-                .parent()
-                .ok_or("Failed to get parent dir")?
-                .parent()
-                .ok_or("Failed to get parent dir")?
-                .parent()
-                .ok_or("Failed to get parent dir")?
-                .to_path_buf()
-        };
-
-        // Resolve genesis.json path robustly across:
-        // - dev builds (repo root)
-        // - release/headless builds (binary under src-tauri/target/release/)
-        // - custom deployments (env override)
-        let genesis_candidates: Vec<PathBuf> = {
-            let mut v = Vec::new();
-            if let Ok(p) = std::env::var("CHIRAL_GENESIS_PATH") {
-                if !p.trim().is_empty() {
-                    v.push(PathBuf::from(p.trim()));
-                }
-            }
-            // Common locations
-            v.push(project_dir.join("genesis.json"));
-            if let Some(parent) = project_dir.parent() {
-                v.push(parent.join("genesis.json")); // repo root when project_dir == src-tauri
-            }
-            if let Ok(cwd) = std::env::current_dir() {
-                v.push(cwd.join("genesis.json"));
-            }
-            v
-        };
-
-        let genesis_path = genesis_candidates
-            .iter()
-            .find(|p| p.exists())
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "genesis.json not found. Tried: {}. You can override with CHIRAL_GENESIS_PATH=/path/to/genesis.json",
-                    genesis_candidates
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            })?;
+        let genesis_path = resolve_genesis_path()?;
 
         // Resolve data directory relative to the executable dir if it's relative
         let data_path = self.resolve_data_dir(data_dir)?;
 
-        // Check if we need to initialize or reinitialize blockchain
-        let needs_init = !data_path.join("geth").exists();
-        let mut needs_reinit = false;
+        // Check compatibility (do not auto-purge here; UI/command layer decides).
+        let compatibility = check_geth_data_compatibility(&data_path)?;
 
-        // Check if existing blockchain data has wrong chain ID
-        if !needs_init {
-            if let Err(chain_mismatch) = self.validate_chain_id(&data_path, *CHAIN_ID) {
-                eprintln!("⚠️  Chain ID mismatch detected: {}", chain_mismatch);
-                eprintln!("⚠️  Existing blockchain data is for wrong chain, will reinitialize...");
-                needs_reinit = true;
-            }
-        }
-
-        // Check for blockchain corruption by looking at recent logs
-        if !needs_init {
-            let log_path = data_path.join("geth.log");
-            if log_path.exists() {
-                // Read last 50 lines of log to check for corruption errors
-                if let Ok(file) = File::open(&log_path) {
-                    let reader = BufReader::new(file);
-                    let all_lines: Vec<String> = reader
-                        .lines()
-                        .filter_map(Result::ok)
-                        .collect();
-                    let lines: Vec<String> = all_lines.iter().rev().take(50).cloned().collect();
-
-                    // Look for signs of ACTUAL blockchain corruption (not normal operations)
-                    for line in &lines {
-                        if line.contains("database corruption")
-                            || line.contains("FATAL") && line.contains("chaindata")
-                            || line.contains("corrupted") && line.contains("database") {
-                            eprintln!("⚠️  Detected corrupted blockchain, will reinitialize...");
-                            needs_reinit = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Remove corrupted blockchain data if needed
-        if needs_reinit {
-            let geth_dir = data_path.join("geth");
-            if geth_dir.exists() {
-                eprintln!("Removing corrupted blockchain data...");
-                std::fs::remove_dir_all(&geth_dir)
-                    .map_err(|e| format!("Failed to remove corrupted blockchain: {}", e))?;
-            }
-        }
-
-        // Initialize with genesis if needed
-        if needs_init || needs_reinit {
+        // Initialize with genesis if needed (fresh install).
+        if matches!(compatibility.status, GethDataCompatibilityStatus::Missing) {
             eprintln!("Initializing blockchain with genesis block...");
-            let init_output = Command::new(&geth_path)
-                .arg("--datadir")
-                .arg(&data_path)
-                .arg("init")
-                .arg(&genesis_path)
-                .output()
-                .map_err(|e| format!("Failed to initialize genesis: {}", e))?;
-
-            if !init_output.status.success() {
-                return Err(format!(
-                    "Failed to init genesis: {}",
-                    String::from_utf8_lossy(&init_output.stderr)
-                ));
-            }
-
-            // Write a marker file to track which chain ID this data directory was initialized with
-            let chain_id_marker = data_path.join("geth").join(".chain_id");
-            if let Err(e) = std::fs::write(&chain_id_marker, CHAIN_ID.to_string()) {
-                eprintln!("Warning: Failed to write chain ID marker file: {}", e);
-            }
-
+            self.init_with_genesis(
+                &geth_path,
+                &data_path,
+                &genesis_path,
+                &compatibility.expected_genesis_sha256,
+            )?;
             eprintln!("✅ Blockchain initialized successfully with chain ID {}", *CHAIN_ID);
         }
 
@@ -378,7 +563,7 @@ impl GethProcess {
         // The health check is performed asynchronously, so we use the synchronous fallback here
         // and the async health-checked version will be used for reconnection attempts
         let bootstrap_enode = crate::geth_bootstrap::get_all_bootstrap_enode_string();
-        
+
         // Log bootstrap configuration
         let node_count = bootstrap_enode.matches("enode://").count();
         eprintln!("Starting Geth with {} bootstrap node(s)", node_count);
@@ -387,7 +572,11 @@ impl GethProcess {
         cmd.arg("--datadir")
             .arg(&data_path)
             .arg("--networkid")
-            .arg(NETWORK_CONFIG.network_id.to_string())
+            .arg(
+                network_id_override
+                    .unwrap_or(NETWORK_CONFIG.network_id)
+                    .to_string(),
+            )
             .arg("--bootnodes")
             .arg(bootstrap_enode)
             .arg("--http")
@@ -401,28 +590,17 @@ impl GethProcess {
             .arg("*")
             .arg("--syncmode")
             .arg("snap") // Always use snap mode (light mode doesn't work for private networks)
-            // Sync performance optimizations
-            .arg("--cache")
-            .arg("2048") // Increase cache to 2GB for faster sync (default is 1024)
-            .arg("--cache.database")
-            .arg("60") // 60% of cache for database
-            .arg("--cache.trie")
-            .arg("30") // 30% for trie cache
-            .arg("--cache.gc")
-            .arg("10") // 10% for garbage collection
             .arg("--maxpeers")
             .arg("100") // Increase peer connections for faster sync (was 50)
             // P2P discovery settings
             .arg("--port")
             .arg("30303") // P2P listening port
+            .arg("--ethash.dagsinmem")
+            .arg("0")
             // Network address configuration
             .arg("--nat")
             .arg("any")
             // Snapshot sync acceleration
-            .arg("--snapshot")
-            .arg("--state.scheme")
-            .arg("hash") // Use hash-based state scheme for better performance
-            // Enable transaction pool gossip to propagate transactions across network
             .arg("--txpool.globalslots")
             .arg("16384") // Increase tx pool size for network-wide transactions
             .arg("--txpool.globalqueue")
@@ -441,11 +619,12 @@ impl GethProcess {
             .arg("--miner.gasprice")
             .arg("0")
             // Recommend transactions for mining (include pending txs)
-            .arg("--miner.recommit")
-            .arg("500ms") // Re-create the mining block every 500ms to include new transactions faster
-            // Limit transaction lookup to reduce storage (partial blockchain sync)
+            // .arg("--miner.recommit")
+            // .arg("500ms") // Re-create the mining block every 500ms to include new transactions faster
+            //    Limit transaction lookup to reduce storage (partial blockchain sync)
             .arg("--txlookuplimit")
-            .arg(if pure_client_mode { "100" } else { "10000" }); // Pure-client: 100 blocks, Normal: 10000 blocks
+            .arg("0");
+        // .arg(if pure_client_mode { "100" } else { "10000" }); // Pure-client: 100 blocks, Normal: 10000 blocks
 
         // Add this line to set a shorter IPC path
         cmd.arg("--ipcpath").arg("/tmp/chiral-geth.ipc");
@@ -462,7 +641,8 @@ impl GethProcess {
             .open(&log_path)
             .map_err(|e| format!("Failed to create log file: {}", e))?;
 
-        let log_file_clone = log_file.try_clone()
+        let log_file_clone = log_file
+            .try_clone()
             .map_err(|e| format!("Failed to clone log file handle: {}", e))?;
 
         cmd.stdout(Stdio::from(log_file_clone))
@@ -490,7 +670,8 @@ impl GethProcess {
                     self.child = None;
                     return Err(format!(
                         "Geth process exited immediately with status: {}. Check logs at: {}",
-                        status, log_path.display()
+                        status,
+                        log_path.display()
                     ));
                 }
                 Ok(None) => {
@@ -509,15 +690,38 @@ impl GethProcess {
     pub fn stop(&mut self) -> Result<(), String> {
         // First try to kill the tracked child process
         if let Some(mut child) = self.child.take() {
-            // Try to kill the process
-            match child.kill() {
-                Ok(_) => {
-                    // Wait for the process to actually exit
-                    let _ = child.wait();
+            // IMPORTANT: Prefer a graceful shutdown (SIGTERM) so Geth can flush its DB.
+            // Child::kill() sends SIGKILL on Unix which can roll back recent data.
+            #[cfg(unix)]
+            {
+                let pid = child.id();
+                let _ = Command::new("kill")
+                    .arg("-15")
+                    .arg(pid.to_string())
+                    .output();
+
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_status)) => break,
+                        Ok(None) => {
+                            if Instant::now() >= deadline {
+                                let _ =
+                                    Command::new("kill").arg("-9").arg(pid.to_string()).output();
+                                let _ = child.wait();
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        Err(_) => break,
+                    }
                 }
-                Err(_) => {
-                    // Process was already dead or couldn't be killed
-                }
+            }
+
+            #[cfg(not(unix))]
+            {
+                let _ = child.kill();
+                let _ = child.wait();
             }
         }
 
@@ -548,7 +752,7 @@ impl GethProcess {
                 .output();
 
             // Give Geth time to gracefully shut down
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(std::time::Duration::from_secs(3));
         }
 
         Ok(())
@@ -560,7 +764,7 @@ impl GethProcess {
 // ============================================================================
 
 /// Start Geth with health-checked bootstrap nodes
-/// 
+///
 /// This function performs bootstrap node health checks before starting Geth,
 /// ensuring we connect to the most reliable nodes available.
 pub async fn start_geth_with_health_check(
@@ -570,12 +774,11 @@ pub async fn start_geth_with_health_check(
 ) -> Result<crate::geth_bootstrap::BootstrapHealthReport, String> {
     // First, perform health check on bootstrap nodes
     let health_report = crate::geth_bootstrap::check_all_bootstrap_nodes().await;
-    
+
     if !health_report.healthy {
         eprintln!(
             "Warning: Bootstrap health check failed - {} of {} nodes reachable",
-            health_report.reachable_nodes,
-            health_report.total_nodes
+            health_report.reachable_nodes, health_report.total_nodes
         );
         if let Some(ref recommendation) = health_report.recommendation {
             eprintln!("Recommendation: {}", recommendation);
@@ -583,13 +786,12 @@ pub async fn start_geth_with_health_check(
     } else {
         eprintln!(
             "Bootstrap health OK: {} of {} nodes reachable",
-            health_report.reachable_nodes,
-            health_report.total_nodes
+            health_report.reachable_nodes, health_report.total_nodes
         );
     }
-    
+
     // Start Geth (it will use the fallback bootstrap string if health check found issues)
-    geth.start(data_dir, miner_address, false)?; // Use normal snap sync mode
+    geth.start(data_dir, miner_address, false, None)?; // Use normal snap sync mode
 
     Ok(health_report)
 }
@@ -656,31 +858,30 @@ pub async fn get_peers() -> Result<Vec<serde_json::Value>, String> {
 }
 
 /// Reconnect to bootstrap nodes if peer count is low
-/// 
+///
 /// This function checks the current peer count and if it's below the threshold,
 /// attempts to add healthy bootstrap nodes as peers.
 pub async fn reconnect_to_bootstrap_if_needed(min_peers: u32) -> Result<u32, String> {
     let current_peers = get_peer_count().await.unwrap_or(0);
-    
+
     if current_peers >= min_peers {
         return Ok(current_peers);
     }
-    
+
     eprintln!(
         "Peer count ({}) below threshold ({}), attempting to reconnect to bootstrap nodes",
-        current_peers,
-        min_peers
+        current_peers, min_peers
     );
-    
+
     // Get healthy bootstrap nodes
     let healthy_enodes = crate::geth_bootstrap::get_healthy_bootstrap_enode_string().await;
-    
+
     let mut added = 0;
     for enode in healthy_enodes.split(',') {
         if enode.is_empty() {
             continue;
         }
-        
+
         match add_peer(enode).await {
             Ok(true) => {
                 eprintln!("Successfully added bootstrap peer");
@@ -694,17 +895,16 @@ pub async fn reconnect_to_bootstrap_if_needed(min_peers: u32) -> Result<u32, Str
             }
         }
     }
-    
+
     // Give peers time to connect
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    
+
     let new_peer_count = get_peer_count().await.unwrap_or(current_peers);
     eprintln!(
         "Peer count after reconnection attempt: {} (added {} bootstrap nodes)",
-        new_peer_count,
-        added
+        new_peer_count, added
     );
-    
+
     Ok(new_peer_count)
 }
 
@@ -823,8 +1023,13 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
 
     // Convert wei to ether (1 ether = 10^18 wei)
     let balance_ether = balance_wei as f64 / 1e18;
-    
-    tracing::debug!("💰 Balance for {}: {} (raw: {})", address, balance_ether, balance_hex);
+
+    tracing::debug!(
+        "💰 Balance for {}: {} (raw: {})",
+        address,
+        balance_ether,
+        balance_hex
+    );
 
     Ok(format!("{:.6}", balance_ether))
 }
@@ -1002,10 +1207,13 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         Ok(coinbase) => {
             tracing::info!("⛏️ Mining started! Rewards will go to: {}", coinbase);
             if coinbase.to_lowercase() != miner_address.to_lowercase() {
-                tracing::warn!("⚠️ WARNING: Coinbase {} does not match requested miner address {}!", 
-                    coinbase, miner_address);
+                tracing::warn!(
+                    "⚠️ WARNING: Coinbase {} does not match requested miner address {}!",
+                    coinbase,
+                    miner_address
+                );
             }
-        },
+        }
         Err(e) => tracing::warn!("Could not verify coinbase: {}", e),
     }
 
@@ -1107,7 +1315,7 @@ pub async fn get_sync_status() -> Result<SyncStatus, String> {
 
     // eth_syncing returns false if not syncing, or an object if syncing
     let result = &json_response["result"];
-    
+
     if result.is_boolean() && result.as_bool() == Some(false) {
         // Not syncing - fully synced
         let block_number = get_block_number().await?;
@@ -1123,9 +1331,15 @@ pub async fn get_sync_status() -> Result<SyncStatus, String> {
     }
 
     // Parse sync progress
-    let current_hex = result["currentBlock"].as_str().ok_or("Missing currentBlock")?;
-    let highest_hex = result["highestBlock"].as_str().ok_or("Missing highestBlock")?;
-    let starting_hex = result["startingBlock"].as_str().ok_or("Missing startingBlock")?;
+    let current_hex = result["currentBlock"]
+        .as_str()
+        .ok_or("Missing currentBlock")?;
+    let highest_hex = result["highestBlock"]
+        .as_str()
+        .ok_or("Missing highestBlock")?;
+    let starting_hex = result["startingBlock"]
+        .as_str()
+        .ok_or("Missing startingBlock")?;
 
     let current_block = u64::from_str_radix(current_hex.trim_start_matches("0x"), 16)
         .map_err(|e| format!("Invalid currentBlock: {}", e))?;
@@ -1327,6 +1541,38 @@ pub async fn get_hashrate() -> Result<String, String> {
 }
 
 pub async fn get_block_number() -> Result<u64, String> {
+    // Prefer eth_syncing.currentBlock when the node is still syncing.
+    // In snap sync, eth_blockNumber may lag (sometimes even returning 0) while
+    // eth_syncing reports real progress. This keeps UI/commands consistent.
+    let syncing_payload = json!({
+        "jsonrpc": "2.0",
+        "method": "eth_syncing",
+        "params": [],
+        "id": 1
+    });
+
+    if let Ok(syncing_response) = HTTP_CLIENT
+        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .json(&syncing_payload)
+        .send()
+        .await
+    {
+        if let Ok(syncing_json) = syncing_response.json::<serde_json::Value>().await {
+            if syncing_json.get("error").is_none() {
+                let result = &syncing_json["result"];
+                if result.is_object() {
+                    if let Some(current_hex) = result.get("currentBlock").and_then(|v| v.as_str()) {
+                        if let Ok(n) = u64::from_str_radix(current_hex.trim_start_matches("0x"), 16)
+                        {
+                            return Ok(n);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to the canonical head.
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_blockNumber",
@@ -1354,8 +1600,7 @@ pub async fn get_block_number() -> Result<u64, String> {
         .as_str()
         .ok_or("Invalid block number response")?;
 
-    // Convert hex to decimal
-    let block_number = u64::from_str_radix(&block_hex[2..], 16)
+    let block_number = u64::from_str_radix(block_hex.trim_start_matches("0x"), 16)
         .map_err(|e| format!("Failed to parse block number: {}", e))?;
 
     Ok(block_number)
@@ -1458,11 +1703,12 @@ pub async fn get_network_difficulty_as_u64() -> Result<u64, String> {
 }
 
 // Static storage for mining session data
-static MINING_SESSION_DATA: std::sync::Mutex<MiningSessionData> = std::sync::Mutex::new(MiningSessionData {
-    last_hash_rate: 0.0,
-    session_start: 0,
-    total_attempts: 0,
-});
+static MINING_SESSION_DATA: std::sync::Mutex<MiningSessionData> =
+    std::sync::Mutex::new(MiningSessionData {
+        last_hash_rate: 0.0,
+        session_start: 0,
+        total_attempts: 0,
+    });
 
 #[derive(Clone, Debug)]
 struct MiningSessionData {
@@ -1512,14 +1758,21 @@ fn parse_elapsed_time(time_str: &str) -> Result<f64, String> {
     if time_str.ends_with("ms") {
         // Convert milliseconds to seconds
         let ms_str = &time_str[..time_str.len() - 2];
-        ms_str.parse::<f64>().map(|ms| ms / 1000.0).map_err(|e| format!("Failed to parse milliseconds: {}", e))
+        ms_str
+            .parse::<f64>()
+            .map(|ms| ms / 1000.0)
+            .map_err(|e| format!("Failed to parse milliseconds: {}", e))
     } else if time_str.ends_with('s') {
         // Already in seconds
         let s_str = &time_str[..time_str.len() - 1];
-        s_str.parse::<f64>().map_err(|e| format!("Failed to parse seconds: {}", e))
+        s_str
+            .parse::<f64>()
+            .map_err(|e| format!("Failed to parse seconds: {}", e))
     } else {
         // Assume seconds if no unit
-        time_str.parse::<f64>().map_err(|e| format!("Failed to parse time: {}", e))
+        time_str
+            .parse::<f64>()
+            .map_err(|e| format!("Failed to parse time: {}", e))
     }
 }
 
@@ -1549,11 +1802,11 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
     // Try to get blocks mined from logs first
     let log_path = data_path.join("geth.log");
 
-            // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
-            if !log_path.exists() {
-                // Return 0 for blocks and hash rate - no simulation
-                return Ok((0, 0.0));
-            }
+    // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
+    if !log_path.exists() {
+        // Return 0 for blocks and hash rate - no simulation
+        return Ok((0, 0.0));
+    }
 
     let file = File::open(&log_path).map_err(|e| format!("Failed to open log file: {}", e))?;
     let reader = BufReader::new(file);
@@ -1583,8 +1836,10 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
 
         // Look for mining stats in logs - try multiple patterns
         // Geth may log hashrate in various formats
-        let has_hashrate_keyword = line.contains("hashrate") || line.contains("hash rate") || line.contains("Hashrate");
-        let has_mining_keyword = line.contains("Mining") || line.contains("mining") || line.contains("miner");
+        let has_hashrate_keyword =
+            line.contains("hashrate") || line.contains("hash rate") || line.contains("Hashrate");
+        let has_mining_keyword =
+            line.contains("Mining") || line.contains("mining") || line.contains("miner");
 
         if has_hashrate_keyword {
             // Try to extract hashrate if it's explicitly logged
@@ -1600,7 +1855,12 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
         }
 
         // Also look for lines with mining performance data
-        if has_mining_keyword && (line.contains("H/s") || line.contains("KH/s") || line.contains("MH/s") || line.contains("GH/s")) {
+        if has_mining_keyword
+            && (line.contains("H/s")
+                || line.contains("KH/s")
+                || line.contains("MH/s")
+                || line.contains("GH/s"))
+        {
             // Try to extract hash rate with units
             // Look for patterns like "123.45 MH/s" or "123.45MH/s"
             if let Some(hs_pos) = line.find("H/s") {
@@ -1610,10 +1870,15 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
                     let rate_str = &before_hs[last_space + 1..];
                     if let Ok(rate) = rate_str.parse::<f64>() {
                         // Convert based on units
-                        let multiplier = if line.contains("KH/s") { 1000.0 }
-                                       else if line.contains("MH/s") { 1_000_000.0 }
-                                       else if line.contains("GH/s") { 1_000_000_000.0 }
-                                       else { 1.0 }; // H/s
+                        let multiplier = if line.contains("KH/s") {
+                            1000.0
+                        } else if line.contains("MH/s") {
+                            1_000_000.0
+                        } else if line.contains("GH/s") {
+                            1_000_000_000.0
+                        } else {
+                            1.0
+                        }; // H/s
                         let actual_rate = rate * multiplier;
                         recent_hashrates.push(actual_rate);
                     }
@@ -1622,11 +1887,11 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
         }
     }
 
-            // If we found explicit hashrates in logs, use the average
-            if !recent_hashrates.is_empty() {
-                let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
-                return Ok((blocks_mined, avg_hashrate));
-            }
+    // If we found explicit hashrates in logs, use the average
+    if !recent_hashrates.is_empty() {
+        let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
+        return Ok((blocks_mined, avg_hashrate));
+    }
 
     // Try to estimate hash rate from recent mining activity
     // Look for recent blocks with elapsed time information
@@ -1637,7 +1902,8 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
             // Extract elapsed time for this block
             if let Some(elapsed_pos) = line.find("elapsed=") {
                 let elapsed_str = &line[elapsed_pos + 8..];
-                if let Some(end_pos) = elapsed_str.find(|c: char| c == ' ' || c == 's' || c == '\n') {
+                if let Some(end_pos) = elapsed_str.find(|c: char| c == ' ' || c == 's' || c == '\n')
+                {
                     let time_str = &elapsed_str[..end_pos];
                     if let Ok(elapsed_seconds) = parse_elapsed_time(time_str) {
                         // Also try to get difficulty if available
@@ -1659,15 +1925,15 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
         }
     }
 
-            // Update session data
-            let mut session_data = match MINING_SESSION_DATA.lock() {
-                Ok(data) => data.clone(),
-                Err(_) => MiningSessionData {
-                    last_hash_rate: 0.0,
-                    session_start: current_time,
-                    total_attempts: 0,
-                },
-            };
+    // Update session data
+    let mut session_data = match MINING_SESSION_DATA.lock() {
+        Ok(data) => data.clone(),
+        Err(_) => MiningSessionData {
+            last_hash_rate: 0.0,
+            session_start: current_time,
+            total_attempts: 0,
+        },
+    };
 
     // Initialize session start if not set
     if session_data.session_start == 0 {
@@ -1702,10 +1968,11 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
     let mining_operations = 0;
     for line in &lines {
         // Look for various mining activity indicators
-        if line.contains("Commit new sealing work") ||
-           line.contains("Generating DAG") ||
-           line.contains("mining") ||
-           (line.contains("miner") && line.contains("start")) {
+        if line.contains("Commit new sealing work")
+            || line.contains("Generating DAG")
+            || line.contains("mining")
+            || (line.contains("miner") && line.contains("start"))
+        {
             // Mining operation detected
         }
     }
@@ -1768,9 +2035,14 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
     Ok(all_lines[start..].to_vec())
 }
 
-pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str) -> Result<u64, String> {
-
-    println!("🔍 get_mined_blocks_count called for address: {}", miner_address);
+pub async fn get_mined_blocks_count(
+    app: &tauri::AppHandle,
+    miner_address: &str,
+) -> Result<u64, String> {
+    println!(
+        "🔍 get_mined_blocks_count called for address: {}",
+        miner_address
+    );
 
     // Get the current block number
     let block_number_payload = json!({
@@ -1807,7 +2079,8 @@ pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str)
     let normalized_miner = miner_address.to_lowercase();
 
     // Maintain cumulative count per address - only increases, never decreases
-    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
 
     // Incremental scanning: only scan blocks we haven't checked yet
     // Much more efficient than rescanning the same blocks repeatedly
@@ -1912,16 +2185,21 @@ pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str)
                 let new_total = existing_count + block_result;
                 counts.insert(miner_address.to_string(), new_total);
 
-                println!("🔍 Found 1 NEW block! (cumulative total: {}, scanned {} blocks)",
-                         new_total, scanned_blocks);
+                println!(
+                    "🔍 Found 1 NEW block! (cumulative total: {}, scanned {} blocks)",
+                    new_total, scanned_blocks
+                );
 
                 // Emit event to frontend for real-time UI updates
-                let _ = app.emit("mining_scan_progress", serde_json::json!({
-                    "address": miner_address,
-                    "blocks_found_in_batch": 1,
-                    "total_scanned": scanned_blocks,
-                    "timestamp": chrono::Utc::now().timestamp()
-                }));
+                let _ = app.emit(
+                    "mining_scan_progress",
+                    serde_json::json!({
+                        "address": miner_address,
+                        "blocks_found_in_batch": 1,
+                        "total_scanned": scanned_blocks,
+                        "timestamp": chrono::Utc::now().timestamp()
+                    }),
+                );
             }
 
             // Small delay between discoveries for better visual feedback
@@ -2340,13 +2618,11 @@ pub async fn calculate_accurate_totals(
                     .and_then(|t| t.as_str())
                     .unwrap_or("")
                     .to_lowercase();
-                let value_hex = tx
-                    .get("value")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0x0");
+                let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
 
                 // Parse value (Wei to Chiral: divide by 10^18)
-                if let Ok(value_wei) = u128::from_str_radix(&value_hex.trim_start_matches("0x"), 16) {
+                if let Ok(value_wei) = u128::from_str_radix(&value_hex.trim_start_matches("0x"), 16)
+                {
                     let value_chiral = value_wei as f64 / 1e18;
 
                     // Check if this is a received transaction
@@ -2468,7 +2744,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         .ok_or("Invalid block number response")?;
     let latest_block_number = u64::from_str_radix(&latest_block_number_hex[2..], 16)
         .map_err(|e| format!("Failed to parse block number: {}", e))?;
-    
+
     let latest_timestamp_hex = json_response["result"]["timestamp"]
         .as_str()
         .ok_or("Invalid timestamp response")?;
@@ -2478,7 +2754,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     // Calculate actual average block time from the last 100 blocks (or fewer if network is new)
     let lookback_blocks = 100.min(latest_block_number.saturating_sub(1));
     let mut actual_block_time = 15.0; // Default fallback
-    
+
     if lookback_blocks > 0 {
         let previous_block_number = latest_block_number.saturating_sub(lookback_blocks);
         let previous_block = json!({
@@ -2528,7 +2804,6 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     Ok(formatted)
 }
 
-
 pub async fn send_transaction(
     from_address: &str,
     to_address: &str,
@@ -2557,12 +2832,17 @@ pub async fn send_transaction(
             if count == 0 {
                 tracing::warn!("   ⚠️ NO PEERS CONNECTED - transaction will not propagate!");
             }
-        },
+        }
         Err(e) => tracing::error!("   Failed to get peer count: {}", e),
     }
 
-    let provider = Provider::<Http>::try_from(NETWORK_CONFIG.rpc_endpoint.as_str())
-        .map_err(|e| format!("Failed to connect to RPC ({}): {}", NETWORK_CONFIG.rpc_endpoint, e))?;
+    let provider =
+        Provider::<Http>::try_from(NETWORK_CONFIG.rpc_endpoint.as_str()).map_err(|e| {
+            format!(
+                "Failed to connect to RPC ({}): {}",
+                NETWORK_CONFIG.rpc_endpoint, e
+            )
+        })?;
 
     let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
@@ -2584,15 +2864,22 @@ pub async fn send_transaction(
         .get_transaction_count(from_addr, Some(BlockNumber::Latest.into()))
         .await
         .map_err(|e| format!("Failed to get confirmed nonce: {}", e))?;
-    
+
     let nonce = provider
         .get_transaction_count(from_addr, Some(BlockNumber::Pending.into()))
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
-    
-    tracing::info!("   Confirmed nonce: {}, Pending nonce: {}", confirmed_nonce, nonce);
+
+    tracing::info!(
+        "   Confirmed nonce: {}, Pending nonce: {}",
+        confirmed_nonce,
+        nonce
+    );
     if nonce > confirmed_nonce {
-        tracing::warn!("   ⚠️ There are {} pending transactions for this address!", nonce - confirmed_nonce);
+        tracing::warn!(
+            "   ⚠️ There are {} pending transactions for this address!",
+            nonce - confirmed_nonce
+        );
     }
 
     // Get the actual gas price to be used in the transaction
@@ -2606,7 +2893,7 @@ pub async fn send_transaction(
     let max_fee = base_fee * 2;
     let priority_fee = U256::from(1u64);
     let gas_limit = U256::from(21000u64);
-    
+
     let gas_price = provider
         .get_gas_price()
         .await
@@ -2616,9 +2903,17 @@ pub async fn send_transaction(
 
     // Check sender's balance
 
-    let sender_balance = provider.get_balance(from_addr, None).await.map_err(|e| format!("Failed to get sender balance: {}", e))?;
+    let sender_balance = provider
+        .get_balance(from_addr, None)
+        .await
+        .map_err(|e| format!("Failed to get sender balance: {}", e))?;
     tracing::info!("   Sender balance: {} wei", sender_balance);
-    tracing::info!("   Amount to send: {} wei, Gas cost: {} wei, Total needed: {} wei", amount_wei, gas_cost, total_cost);
+    tracing::info!(
+        "   Amount to send: {} wei, Gas cost: {} wei, Total needed: {} wei",
+        amount_wei,
+        gas_cost,
+        total_cost
+    );
 
     if sender_balance < total_cost {
         return Err(format!(
@@ -2626,7 +2921,13 @@ pub async fn send_transaction(
             sender_balance, total_cost, amount_wei, gas_cost
         ));
     }
-    tracing::info!("   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei, Gas price: {} wei", base_fee, max_fee, priority_fee, gas_price);
+    tracing::info!(
+        "   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei, Gas price: {} wei",
+        base_fee,
+        max_fee,
+        priority_fee,
+        gas_price
+    );
 
     let tx = TransactionRequest::new()
         .to(to)
@@ -2642,20 +2943,36 @@ pub async fn send_transaction(
 
     let tx_hash = format!("{:?}", pending_tx.tx_hash());
 
-    tracing::info!("✅ Transaction sent: {} from {} to {} amount {} CHIRAL", 
-        tx_hash, from_address, to_address, amount_chiral);
-    tracing::info!("   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000, Chain ID: {}", 
-        nonce, gas_price, NETWORK_CONFIG.chain_id);
-    
+    tracing::info!(
+        "✅ Transaction sent: {} from {} to {} amount {} CHIRAL",
+        tx_hash,
+        from_address,
+        to_address,
+        amount_chiral
+    );
+    tracing::info!(
+        "   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000, Chain ID: {}",
+        nonce,
+        gas_price,
+        NETWORK_CONFIG.chain_id
+    );
+
     // Verify the transaction was added to the local txpool
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
+
     // Check txpool status and content
     if let Ok(status) = get_txpool_status().await {
-        let pending_count = status.get("pending").and_then(|v| v.as_str()).unwrap_or("?");
+        let pending_count = status
+            .get("pending")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
         let queued_count = status.get("queued").and_then(|v| v.as_str()).unwrap_or("?");
-        tracing::info!("   TxPool Status: pending={}, queued={}", pending_count, queued_count);
-        
+        tracing::info!(
+            "   TxPool Status: pending={}, queued={}",
+            pending_count,
+            queued_count
+        );
+
         // If there are pending transactions, log their details
         if pending_count != "0x0" && pending_count != "?" {
             if let Ok(content) = get_txpool_content().await {
@@ -2666,10 +2983,21 @@ pub async fn send_transaction(
                             tracing::info!("      Address: {}", addr);
                             if let Some(nonces_obj) = nonces.as_object() {
                                 for (nonce, tx_data) in nonces_obj {
-                                    let hash = tx_data.get("hash").and_then(|h| h.as_str()).unwrap_or("?");
-                                    let to_addr = tx_data.get("to").and_then(|t| t.as_str()).unwrap_or("?");
-                                    let value = tx_data.get("value").and_then(|v| v.as_str()).unwrap_or("?");
-                                    tracing::info!("         Nonce {}: hash={}, to={}, value={}", nonce, hash, to_addr, value);
+                                    let hash =
+                                        tx_data.get("hash").and_then(|h| h.as_str()).unwrap_or("?");
+                                    let to_addr =
+                                        tx_data.get("to").and_then(|t| t.as_str()).unwrap_or("?");
+                                    let value = tx_data
+                                        .get("value")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("?");
+                                    tracing::info!(
+                                        "         Nonce {}: hash={}, to={}, value={}",
+                                        nonce,
+                                        hash,
+                                        to_addr,
+                                        value
+                                    );
                                 }
                             }
                         }
@@ -2678,7 +3006,7 @@ pub async fn send_transaction(
             }
         }
     }
-    
+
     // Log connected peers to verify network propagation
     match get_peer_info().await {
         Ok(peers) => {
@@ -2686,9 +3014,14 @@ pub async fn send_transaction(
                 if peers_array.is_empty() {
                     tracing::warn!("   ⚠️ NO PEERS - Transaction cannot propagate to other nodes!");
                 } else {
-                    tracing::info!("   Connected to {} peer(s) - transaction should propagate", peers_array.len());
-                    for peer in peers_array.iter().take(3) {  // Show first 3 peers
-                        let remote_addr = peer.get("network")
+                    tracing::info!(
+                        "   Connected to {} peer(s) - transaction should propagate",
+                        peers_array.len()
+                    );
+                    for peer in peers_array.iter().take(3) {
+                        // Show first 3 peers
+                        let remote_addr = peer
+                            .get("network")
                             .and_then(|n| n.get("remoteAddress"))
                             .and_then(|a| a.as_str())
                             .unwrap_or("?");
@@ -2696,10 +3029,10 @@ pub async fn send_transaction(
                     }
                 }
             }
-        },
+        }
         Err(e) => tracing::warn!("   Could not get peer info: {}", e),
     }
-    
+
     // Try to get the transaction back to verify it's in the pool
     match get_transaction_by_hash(tx_hash.clone()).await {
         Ok(Some(tx_data)) => {
@@ -2708,7 +3041,7 @@ pub async fn send_transaction(
             if let Some(block) = tx_data.get("blockNumber") {
                 if block.is_null() {
                     tracing::info!("   Transaction is PENDING (not yet mined)");
-                    
+
                     // Spawn a background task to monitor the transaction
                     let tx_hash_clone = tx_hash.clone();
                     let from_clone = from_address.to_string();
@@ -2716,58 +3049,82 @@ pub async fn send_transaction(
                     let amount_clone = amount_chiral;
                     tokio::spawn(async move {
                         tracing::info!("🔍 Monitoring transaction {} for mining...", tx_hash_clone);
-                        for attempt in 1..=60 {  // Monitor for up to 60 seconds
+                        for attempt in 1..=60 {
+                            // Monitor for up to 60 seconds
                             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                            
+
                             match get_transaction_receipt(tx_hash_clone.clone()).await {
                                 Ok(Some(receipt)) => {
-                                    let block_num = receipt.get("blockNumber")
+                                    let block_num = receipt
+                                        .get("blockNumber")
                                         .and_then(|b| b.as_str())
                                         .unwrap_or("?");
-                                    let status = receipt.get("status")
+                                    let status = receipt
+                                        .get("status")
                                         .and_then(|s| s.as_str())
                                         .unwrap_or("?");
-                                    let gas_used = receipt.get("gasUsed")
+                                    let gas_used = receipt
+                                        .get("gasUsed")
                                         .and_then(|g| g.as_str())
                                         .unwrap_or("?");
-                                    
+
                                     if status == "0x1" {
                                         tracing::info!("🎉 TRANSACTION MINED SUCCESSFULLY!");
                                         tracing::info!("   Hash: {}", tx_hash_clone);
                                         tracing::info!("   Block: {}", block_num);
-                                        tracing::info!("   From: {} -> To: {}", from_clone, to_clone);
+                                        tracing::info!(
+                                            "   From: {} -> To: {}",
+                                            from_clone,
+                                            to_clone
+                                        );
                                         tracing::info!("   Amount: {} CHIRAL", amount_clone);
                                         tracing::info!("   Gas Used: {}", gas_used);
                                         tracing::info!("   Status: SUCCESS ✅");
-                                        
+
                                         // Check balances after mining to verify transfer
                                         if let Ok(sender_balance) = get_balance(&from_clone).await {
-                                            tracing::info!("   Sender balance after: {} CHIRAL", sender_balance);
+                                            tracing::info!(
+                                                "   Sender balance after: {} CHIRAL",
+                                                sender_balance
+                                            );
                                         }
                                         if let Ok(receiver_balance) = get_balance(&to_clone).await {
-                                            tracing::info!("   Receiver balance after: {} CHIRAL", receiver_balance);
+                                            tracing::info!(
+                                                "   Receiver balance after: {} CHIRAL",
+                                                receiver_balance
+                                            );
                                         }
                                     } else {
                                         tracing::error!("❌ TRANSACTION MINED BUT FAILED!");
                                         tracing::error!("   Hash: {}", tx_hash_clone);
                                         tracing::error!("   Block: {}", block_num);
-                                        tracing::error!("   Status: {} (0x0 = failed, 0x1 = success)", status);
+                                        tracing::error!(
+                                            "   Status: {} (0x0 = failed, 0x1 = success)",
+                                            status
+                                        );
                                         tracing::error!("   Gas Used: {}", gas_used);
                                         tracing::error!("   Full receipt: {:?}", receipt);
                                     }
                                     return;
-                                },
+                                }
                                 Ok(None) => {
                                     if attempt % 10 == 0 {
-                                        tracing::info!("   Still waiting for tx {} to be mined... ({}s)", tx_hash_clone, attempt);
+                                        tracing::info!(
+                                            "   Still waiting for tx {} to be mined... ({}s)",
+                                            tx_hash_clone,
+                                            attempt
+                                        );
                                     }
-                                },
+                                }
                                 Err(e) => {
                                     tracing::warn!("   Error checking receipt: {}", e);
                                 }
                             }
                         }
-                        tracing::warn!("⚠️ Transaction {} still not mined after 60 seconds", tx_hash_clone);
+                        tracing::warn!(
+                            "⚠️ Transaction {} still not mined after 60 seconds",
+                            tx_hash_clone
+                        );
                     });
                 } else {
                     tracing::info!("   Transaction is in block: {}", block);
@@ -2778,16 +3135,19 @@ pub async fn send_transaction(
                             if status_str == "0x1" {
                                 tracing::info!("   ✅ Transaction SUCCEEDED");
                             } else {
-                                tracing::error!("   ❌ Transaction FAILED (status: {})", status_str);
+                                tracing::error!(
+                                    "   ❌ Transaction FAILED (status: {})",
+                                    status_str
+                                );
                             }
                         }
                     }
                 }
             }
-        },
+        }
         Ok(None) => {
             tracing::warn!("⚠️  Transaction NOT found in local txpool: {}", tx_hash);
-        },
+        }
         Err(e) => {
             tracing::error!("❌ Failed to verify transaction in txpool: {}", e);
         }
@@ -2983,8 +3343,15 @@ pub async fn get_peer_info() -> Result<serde_json::Value, String> {
     if let Some(peers_array) = peers.as_array() {
         tracing::info!("Connected peers: {}", peers_array.len());
         for peer in peers_array {
-            let name = peer.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-            let remote_addr = peer.get("network").and_then(|n| n.get("remoteAddress")).and_then(|a| a.as_str()).unwrap_or("?");
+            let name = peer
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown");
+            let remote_addr = peer
+                .get("network")
+                .and_then(|n| n.get("remoteAddress"))
+                .and_then(|a| a.as_str())
+                .unwrap_or("?");
             tracing::info!("  Peer: {} at {}", name, remote_addr);
         }
     }
@@ -2996,7 +3363,7 @@ pub async fn get_peer_info() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn debug_network_tx() -> Result<String, String> {
     let mut report = String::new();
-    
+
     // 1. Check peer count
     match get_peer_count().await {
         Ok(count) => {
@@ -3004,44 +3371,54 @@ pub async fn debug_network_tx() -> Result<String, String> {
             if count == 0 {
                 report.push_str("⚠️ WARNING: No peers connected! Transactions cannot propagate.\n");
             }
-        },
+        }
         Err(e) => report.push_str(&format!("Failed to get peer count: {}\n", e)),
     }
-    
+
     // 2. Check txpool
     match get_txpool_status().await {
         Ok(status) => {
-            let pending = status.get("pending").and_then(|v| v.as_str()).unwrap_or("?");
+            let pending = status
+                .get("pending")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             let queued = status.get("queued").and_then(|v| v.as_str()).unwrap_or("?");
             report.push_str(&format!("TxPool: pending={}, queued={}\n", pending, queued));
-        },
+        }
         Err(e) => report.push_str(&format!("Failed to get txpool: {}\n", e)),
     }
-    
+
     // 3. Check chain ID
     match get_chain_id().await {
         Ok(id) => report.push_str(&format!("Chain ID: {}\n", id)),
         Err(e) => report.push_str(&format!("Failed to get chain ID: {}\n", e)),
     }
-    
+
     // 4. Get peer details
     match get_peer_info().await {
         Ok(peers) => {
             if let Some(peers_array) = peers.as_array() {
-                report.push_str(&format!("Connected peers details ({}):\n", peers_array.len()));
+                report.push_str(&format!(
+                    "Connected peers details ({}):\n",
+                    peers_array.len()
+                ));
                 for peer in peers_array {
-                    let name = peer.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-                    let remote_addr = peer.get("network")
+                    let name = peer
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("unknown");
+                    let remote_addr = peer
+                        .get("network")
                         .and_then(|n| n.get("remoteAddress"))
                         .and_then(|a| a.as_str())
                         .unwrap_or("?");
                     report.push_str(&format!("  - {} at {}\n", name, remote_addr));
                 }
             }
-        },
+        }
         Err(e) => report.push_str(&format!("Failed to get peer info: {}\n", e)),
     }
-    
+
     tracing::info!("Network debug report:\n{}", report);
     Ok(report)
 }
@@ -3078,7 +3455,6 @@ pub async fn get_coinbase() -> Result<String, String> {
     Ok(coinbase.to_string())
 }
 
-
 // ============================================================================
 // Transaction History Scanning
 // ============================================================================
@@ -3088,7 +3464,7 @@ pub struct TransactionHistoryItem {
     pub hash: String,
     pub from: String,
     pub to: Option<String>,
-    pub value: String,  // Wei as string
+    pub value: String, // Wei as string
     pub block_number: u64,
     pub timestamp: u64,
     pub status: String,  // "success" or "failed"
@@ -3140,7 +3516,8 @@ pub async fn get_transaction_history(
         };
 
         // Get block timestamp
-        let timestamp = block.get("timestamp")
+        let timestamp = block
+            .get("timestamp")
             .and_then(|t| t.as_str())
             .and_then(|t| u64::from_str_radix(t.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
@@ -3153,26 +3530,31 @@ pub async fn get_transaction_history(
                     None => continue,
                 };
 
-                let tx_hash = tx_obj.get("hash")
+                let tx_hash = tx_obj
+                    .get("hash")
                     .and_then(|h| h.as_str())
                     .unwrap_or("")
                     .to_string();
 
-                let from = tx_obj.get("from")
+                let from = tx_obj
+                    .get("from")
                     .and_then(|f| f.as_str())
                     .unwrap_or("")
                     .to_lowercase();
 
-                let to = tx_obj.get("to")
+                let to = tx_obj
+                    .get("to")
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_lowercase());
 
-                let value = tx_obj.get("value")
+                let value = tx_obj
+                    .get("value")
                     .and_then(|v| v.as_str())
                     .unwrap_or("0x0")
                     .to_string();
 
-                let gas_price = tx_obj.get("gasPrice")
+                let gas_price = tx_obj
+                    .get("gasPrice")
                     .and_then(|g| g.as_str())
                     .map(|s| s.to_string());
 
@@ -3276,7 +3658,8 @@ pub async fn reset_incremental_scanning() {
     *last_scanned = 0;
 
     // Also reset cumulative counts
-    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
     let mut counts = CUMULATIVE_COUNTS.lock().await;
     counts.clear();
 }

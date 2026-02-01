@@ -45,7 +45,8 @@
         fileName,
         checkpointEvent.checkpointMb * 1024 * 1024, // Convert MB to bytes
         checkpointEvent.seederAddress,
-        checkpointEvent.seederPeerId
+        checkpointEvent.seederPeerId,
+        incrementalAmount
       );
 
       if (result.success && result.transactionHash) {
@@ -77,7 +78,8 @@
         fileName,
         estimatedRemainingMb * 1024 * 1024,
         checkpointEvent.seederAddress,
-        checkpointEvent.seederPeerId
+        checkpointEvent.seederPeerId,
+        estimatedRemainingCost
       );
 
       if (result.success && result.transactionHash) {

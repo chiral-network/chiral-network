@@ -133,12 +133,12 @@ impl HttpProtocolHandler {
         current_timestamp_ms()
     }
 
-    /// Generate a unique ID for tracking downloads
+    /// Generate a unique ID for tracking downloads (hash only, no protocol prefix)
     fn generate_id(url: &str) -> String {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         url.hash(&mut hasher);
-        format!("http-{:x}", hasher.finish())
+        format!("{:x}", hasher.finish())
     }
 
     /// Extract file name from URL
@@ -174,8 +174,9 @@ impl HttpProtocolHandler {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: download_id.clone(),
                         file_hash: download_id.clone(),
+                        protocol: "HTTP".to_string(),
                         failed_at: current_timestamp_ms(),
-                        error: format!("Failed to connect: {}", e),
+                        error:format!("Failed to connect: {}", e),
                         error_category: ErrorCategory::Network,
                         downloaded_bytes: 0,
                         total_bytes: 0,
@@ -226,6 +227,7 @@ impl HttpProtocolHandler {
             bus.emit_started(TransferStartedEvent {
                 transfer_id: download_id.clone(),
                 file_hash: download_id.clone(),
+                protocol: "HTTP".to_string(),
                 file_name: file_name.clone(),
                 file_size: total_bytes,
                 total_chunks: 1,
@@ -253,8 +255,9 @@ impl HttpProtocolHandler {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: download_id.clone(),
                         file_hash: download_id.clone(),
+                        protocol: "HTTP".to_string(),
                         failed_at: current_timestamp_ms(),
-                        error: format!("Download request failed: {}", e),
+                        error:format!("Download request failed: {}", e),
                         error_category: ErrorCategory::Network,
                         downloaded_bytes: 0,
                         total_bytes,
@@ -271,6 +274,7 @@ impl HttpProtocolHandler {
                 bus.emit_failed(TransferFailedEvent {
                     transfer_id: download_id.clone(),
                     file_hash: download_id.clone(),
+                    protocol: "HTTP".to_string(),
                     failed_at: current_timestamp_ms(),
                     error: error_msg.clone(),
                     error_category: ErrorCategory::Network,
@@ -290,8 +294,9 @@ impl HttpProtocolHandler {
                     bus.emit_failed(TransferFailedEvent {
                         transfer_id: download_id.clone(),
                         file_hash: download_id.clone(),
+                        protocol: "HTTP".to_string(),
                         failed_at: current_timestamp_ms(),
-                        error: format!("Failed to create file: {}", e),
+                        error:format!("Failed to create file: {}", e),
                         error_category: ErrorCategory::Filesystem,
                         downloaded_bytes: 0,
                         total_bytes,
@@ -321,6 +326,7 @@ impl HttpProtocolHandler {
                         if let Some(ref bus) = event_bus {
                             bus.emit_canceled(TransferCanceledEvent {
                                 transfer_id: download_id.clone(),
+                                protocol: "HTTP".to_string(),
                                 canceled_at: current_timestamp_ms(),
                                 downloaded_bytes,
                                 total_bytes,
@@ -339,6 +345,7 @@ impl HttpProtocolHandler {
                                     bus.emit_failed(TransferFailedEvent {
                                         transfer_id: download_id.clone(),
                                         file_hash: download_id.clone(),
+                                        protocol: "HTTP".to_string(),
                                         failed_at: current_timestamp_ms(),
                                         error: format!("Failed to write: {}", e),
                                         error_category: ErrorCategory::Filesystem,
@@ -395,6 +402,7 @@ impl HttpProtocolHandler {
 
                                     bus.emit_progress(TransferProgressEvent {
                                         transfer_id: download_id.clone(),
+                                        protocol: "HTTP".to_string(),
                                         downloaded_bytes,
                                         total_bytes,
                                         completed_chunks: 0,
@@ -418,6 +426,7 @@ impl HttpProtocolHandler {
                                 bus.emit_failed(TransferFailedEvent {
                                     transfer_id: download_id.clone(),
                                     file_hash: download_id.clone(),
+                                    protocol: "HTTP".to_string(),
                                     failed_at: current_timestamp_ms(),
                                     error: format!("Network error: {}", e),
                                     error_category: ErrorCategory::Network,
@@ -471,6 +480,7 @@ impl HttpProtocolHandler {
             bus.emit_completed(TransferCompletedEvent {
                 transfer_id: download_id.clone(),
                 file_hash: download_id.clone(),
+                protocol: "HTTP".to_string(),
                 file_name,
                 file_size: downloaded_bytes,
                 output_path: output_path.to_string_lossy().to_string(),
@@ -739,6 +749,7 @@ impl ProtocolHandler for HttpProtocolHandler {
 
                     event_bus.emit_paused(TransferPausedEvent {
                         transfer_id: identifier.to_string(),
+                        protocol: "HTTP".to_string(),
                         paused_at: current_timestamp_ms(),
                         reason: PauseReason::UserRequested,
                         can_resume: true,
@@ -783,6 +794,7 @@ impl ProtocolHandler for HttpProtocolHandler {
 
                     event_bus.emit_resumed(TransferResumedEvent {
                         transfer_id: identifier.to_string(),
+                        protocol: "HTTP".to_string(),
                         resumed_at: current_timestamp_ms(),
                         downloaded_bytes: state.downloaded_bytes,
                         remaining_bytes,
@@ -853,6 +865,7 @@ impl ProtocolHandler for HttpProtocolHandler {
             if let Some(ref bus) = self.event_bus {
                 bus.emit_canceled(TransferCanceledEvent {
                     transfer_id: identifier.to_string(),
+                    protocol: "HTTP".to_string(),
                     canceled_at: Self::now_ms(),
                     downloaded_bytes: 0, // Will be updated by download task
                     total_bytes: state.total_bytes,

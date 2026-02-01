@@ -54,7 +54,7 @@ futures = "0.3"
 futures-util = "0.3"
 sysinfo = "0.31"
 sys-locale = "0.3"
-libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "macros", "tokio", "request-response", "relay", "ping", "autonat", "dcutr", "upnp"] }
+libp2p = { version = "0.54", features = ["kad", "mdns", "noise", "tcp", "yamux", "identify", "macros", "tokio", "request-response", "relay", "ping", "autonat", "dcutr", "upnp", "gossipsub"] }
 if-addrs = "0.10"
 async-std = { version = "1.12", features = ["attributes"] }
 async-trait = "0.1"
@@ -78,7 +78,7 @@ tokio-socks = "0.5"
 # FTP client for FTP download support (sync API)
 # Using 5.3 for compatibility with connect_secure_implicit() method
 # Note: Using rustls 0.21 to avoid aws-lc-sys dependency which requires C compiler on Windows
-suppaftp = { version = "5.3", features = ["rustls", "secure", "deprecated"] }
+suppaftp = { version = "5.3", features = ["rustls", "secure", "deprecated", "native-tls"] }
 rustls = { version = "0.21", features = ["dangerous_configuration"] }
 rustls-native-certs = "0.6"
 

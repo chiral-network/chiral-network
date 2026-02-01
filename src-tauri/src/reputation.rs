@@ -677,10 +677,22 @@ impl ReputationDhtService {
         // Search for reputation events for this peer
         let search_key = format!("reputation:{}", peer_id);
         
-        // Use synchronous search with timeout to get actual results
+        // Trigger progressive search and poll cache
         let timeout_ms = 5000; // 5 second timeout
-        match dht_service.synchronous_search_metadata(search_key.clone(), timeout_ms).await {
-            Ok(Some(metadata)) => {
+        dht_service.search_metadata(search_key.clone(), timeout_ms).await.ok();
+
+        // Poll cache for up to 5 seconds until metadata arrives
+        let mut metadata_opt = None;
+        for _ in 0..50 {  // 50 * 100ms = 5s
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            if let Some(meta) = dht_service.get_cached_metadata(&search_key).await {
+                metadata_opt = Some(meta);
+                break;
+            }
+        }
+
+        match metadata_opt {
+            Some(metadata) => {
                 // Deserialize the reputation events from the file data
                 match serde_json::from_slice::<Vec<ReputationEvent>>(&metadata.file_data) {
                     Ok(events) => {
@@ -710,13 +722,9 @@ impl ReputationDhtService {
                     }
                 }
             }
-            Ok(None) => {
-                // No data found in DHT
+            None => {
+                // No data found in DHT after timeout
                 tracing::debug!("No reputation events found for peer {} in DHT", peer_id);
-                Ok(vec![])
-            }
-            Err(e) => {
-                tracing::warn!("DHT search failed for peer {}: {}", peer_id, e);
                 Ok(vec![])
             }
         }

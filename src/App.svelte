@@ -31,7 +31,8 @@ import { startGethMonitoring, gethStatus } from './lib/services/gethService';
     import { detectUserRegion } from '$lib/services/geolocation';
 import { lockAccount } from '$lib/services/accountLock';
 import { paymentService } from '$lib/services/paymentService';
-import { subscribeToTransferEvents, transferStore, unsubscribeFromTransferEvents } from '$lib/stores/transferEventsStore';
+import { transferStore } from '$lib/stores/transferEventsStore';
+import { transferService } from '$lib/services/transferService';
     import { showToast } from '$lib/toast';
 import { walletService } from '$lib/wallet';
 import { listen, type Event } from '@tauri-apps/api/event';
@@ -245,7 +246,6 @@ $: canShowLockAction = !showFirstRunWizard;
     let stopGethMonitoring: () => void = () => {};
     let unlistenSeederPayment: (() => void) | null = null;
     let unlistenTorrentPayment: (() => void) | null = null;
-    let transferEventsUnsubscribe: (() => void) | null = null;
     let unsubscribeGethStatus: (() => void) | null = null;
 
     unsubscribeScheduler = settings.subscribe(syncBandwidthScheduler);
@@ -263,10 +263,13 @@ $: canShowLockAction = !showFirstRunWizard;
       }, 2500);
 
       try {
-      // Subscribe to transfer events from backend (non-blocking)
-      subscribeToTransferEvents()
-        .then((unsub) => {
-          transferEventsUnsubscribe = unsub;
+      // Initialize TransferService which subscribes to ALL transfer events:
+      // - Unified transfer:event (FTP downloads)
+      // - Protocol-specific events (BitTorrent, WebRTC, Bitswap, HTTP, multi-source)
+      // This replaces the direct subscribeToTransferEvents() call and normalizes
+      // all protocol events into the unified transferStore.
+      transferService.initialize()
+        .then(() => {
           transferStoreUnsubscribe = transferStore.subscribe(($store) => {
 
           if (!$store || !$store.transfers) {
@@ -479,10 +482,18 @@ $: canShowLockAction = !showFirstRunWizard;
                   // Re-enable syncing and trigger a sync
                   walletService.setRestoringAccount(false);
                   
-                  // Now sync from blockchain
+                   // Now sync from blockchain
                   await walletService.refreshTransactions();
                   await walletService.refreshBalance();
                   walletService.startProgressiveLoading();
+
+                  // Ensure DHT SeederGeneralInfo has the wallet address (fixes GossipSub metadata on refresh)
+                  try {
+                    await invoke('update_wallet_address_for_services', { address });
+                  } catch (error) {
+                    const errorMsg = error instanceof Error ? error.message : String(error);
+                    diagnosticLogger.warn('ACCOUNT', 'Failed to sync wallet to DHT', { error: errorMsg });
+                  }
                 } catch (error) {
                   const errorMsg = error instanceof Error ? error.message : String(error);
                   diagnosticLogger.error('ACCOUNT', 'Failed to restore account from backend', { error: errorMsg });
@@ -509,11 +520,8 @@ $: canShowLockAction = !showFirstRunWizard;
             }
           }
 
-          // Show wizard if no account AND no keystore files exist
-          // (Don't rely on first-run flag since user may have cleared data)
-          if (!hasAccount && !hasKeystoreFiles) {
-            showAuthWizard.set(true);
-          }
+          // Always show wallet selector on startup
+          showAuthWizard.set(true);
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
           diagnosticLogger.warn('APP', 'Failed to check first-run status', { error: errorMsg });
@@ -592,6 +600,9 @@ $: canShowLockAction = !showFirstRunWizard;
           // Ensure selectedProtocol always has a valid default
           if (!parsed.selectedProtocol) {
             parsed.selectedProtocol = "WebRTC";
+          } else if (parsed.selectedProtocol === "BitSwap") {
+            // Backwards compatibility: older builds used "BitSwap"
+            parsed.selectedProtocol = "Bitswap";
           }
           settings.update(prev => ({ ...prev, ...parsed }));
         }
@@ -761,7 +772,8 @@ $: canShowLockAction = !showFirstRunWizard;
 
                 await invoke('start_geth_node', {
                   dataDir: './bin/geth-data',
-                  pureClientMode: isClientMode  // Combined: forced OR NAT-based
+                  pureClientMode: isClientMode,  // Combined: forced OR NAT-based
+                  allowStartAnyway: true,
                 });
 
                 // Update geth status
@@ -937,15 +949,12 @@ $: canShowLockAction = !showFirstRunWizard;
       if (unlistenTorrentPayment) {
         unlistenTorrentPayment();
       }
-      if (transferEventsUnsubscribe) {
-        transferEventsUnsubscribe();
-      }
+      // Clean up TransferService (unsubscribes from all transfer events)
+      transferService.cleanup().catch(console.error);
       if (transferStoreUnsubscribe) {
         transferStoreUnsubscribe();
         transferStoreUnsubscribe = null;
       }
-      // Also ensure transfer events are fully unsubscribed
-      unsubscribeFromTransferEvents();
       if (unsubscribeScheduler) {
         unsubscribeScheduler();
         unsubscribeScheduler = null;

@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import type { FileItem } from "../src/lib/stores";
+import type { DownloadHistoryInput } from "../src/lib/services/downloadHistoryService";
 
 // Mock localStorage with proper store management
 const createLocalStorageMock = () => {
   let store: Record<string, string> = {};
-  
+
   return {
     getItem: vi.fn((key: string) => store[key] || null),
     setItem: vi.fn((key: string, value: string) => {
@@ -39,15 +39,13 @@ import { downloadHistoryService } from "../src/lib/services/downloadHistoryServi
 
 describe("DownloadHistoryService", () => {
   const createMockFileItem = (
-    overrides?: Partial<FileItem>
-  ): FileItem => ({
+    overrides?: Partial<DownloadHistoryInput>,
+  ): DownloadHistoryInput => ({
     id: "file-123",
     hash: "abc123def456",
     name: "test-file.pdf",
     size: 1024000,
     status: "completed",
-    progress: 100,
-    speed: 0,
     downloadPath: "/downloads/test-file.pdf",
     price: 0.001,
     seederAddresses: ["0xSeeder1"],
@@ -58,10 +56,10 @@ describe("DownloadHistoryService", () => {
   beforeEach(() => {
     // Reset the internal store
     (localStorageMock as any)._reset();
-    
+
     // Clear the service
     downloadHistoryService.clearHistory();
-    
+
     // Reset all mock call counts
     vi.clearAllMocks();
   });
@@ -141,7 +139,7 @@ describe("DownloadHistoryService", () => {
 
       expect(localStorageMock.setItem).toHaveBeenCalledWith(
         "chiral.downloadHistory",
-        expect.any(String)
+        expect.any(String),
       );
 
       const store = (localStorageMock as any)._getStore();
@@ -168,7 +166,7 @@ describe("DownloadHistoryService", () => {
       it("should handle concurrent adds of same file hash", () => {
         // Simulates race condition if user clicks "download" multiple times rapidly
         const file = createMockFileItem({ hash: "same-hash" });
-        
+
         downloadHistoryService.addToHistory(file);
         downloadHistoryService.addToHistory(file);
         downloadHistoryService.addToHistory(file);
@@ -180,14 +178,14 @@ describe("DownloadHistoryService", () => {
 
       it("should handle file with both encrypted and isEncrypted properties", () => {
         // isEncrypted takes precedence when both fields exist
-        const file1 = createMockFileItem({ 
+        const file1 = createMockFileItem({
           hash: "enc1",
-          encrypted: true, 
-          isEncrypted: false // Conflicting! isEncrypted should win
+          encrypted: true,
+          isEncrypted: false, // Conflicting! isEncrypted should win
         } as any);
-        
+
         downloadHistoryService.addToHistory(file1);
-        
+
         const history = downloadHistoryService.getHistory();
         // isEncrypted takes precedence, so false wins
         expect(history[0].encrypted).toBe(false);
@@ -195,22 +193,29 @@ describe("DownloadHistoryService", () => {
 
       it("should preserve downloadDate when updating existing entry", () => {
         const originalDate = Date.now() - 1000;
-        
+
         // Manually insert entry with specific date
-        const file1 = createMockFileItem({ hash: "test-hash", name: "original.txt" });
+        const file1 = createMockFileItem({
+          hash: "test-hash",
+          name: "original.txt",
+        });
         downloadHistoryService.addToHistory(file1);
-        
+
         // Modify the date in localStorage to simulate old entry
         const history = downloadHistoryService.getHistory();
         history[0].downloadDate = originalDate;
-        (window.localStorage as any)._getStore()["chiral.downloadHistory"] = JSON.stringify(history);
-        
+        (window.localStorage as any)._getStore()["chiral.downloadHistory"] =
+          JSON.stringify(history);
+
         // Re-add same hash with different name
-        const file2 = createMockFileItem({ hash: "test-hash", name: "updated.txt" });
+        const file2 = createMockFileItem({
+          hash: "test-hash",
+          name: "updated.txt",
+        });
         downloadHistoryService.addToHistory(file2);
-        
+
         const updatedHistory = downloadHistoryService.getHistory();
-        
+
         // ⚠️ CRITICAL: Does the new entry get a NEW timestamp, or keep the old one?
         // Current implementation creates a new timestamp (Date.now())
         expect(updatedHistory[0].downloadDate).toBeGreaterThan(originalDate);
@@ -218,16 +223,15 @@ describe("DownloadHistoryService", () => {
 
       it("should handle file with null/undefined hash", () => {
         const file = createMockFileItem({ hash: undefined as any });
-        
+
         // Should this throw, or silently fail?
         expect(() => downloadHistoryService.addToHistory(file)).not.toThrow();
-        
+
         const history = downloadHistoryService.getHistory();
         // Depending on desired behavior, this could be 0 or 1
         expect(history).toHaveLength(1);
       });
     });
-
   });
 
   describe("getHistory", () => {
@@ -266,28 +270,28 @@ describe("DownloadHistoryService", () => {
           hash: "completed1",
           name: "document.pdf",
           status: "completed",
-        })
+        }),
       );
       downloadHistoryService.addToHistory(
         createMockFileItem({
           hash: "failed1",
           name: "video.mp4",
           status: "failed",
-        })
+        }),
       );
       downloadHistoryService.addToHistory(
         createMockFileItem({
           hash: "canceled1",
           name: "archive.zip",
           status: "canceled",
-        })
+        }),
       );
       downloadHistoryService.addToHistory(
         createMockFileItem({
           hash: "completed2",
           name: "photo.jpg",
           status: "completed",
-        })
+        }),
       );
     });
 
@@ -312,7 +316,7 @@ describe("DownloadHistoryService", () => {
     it("should filter by search query (name)", () => {
       const filtered = downloadHistoryService.getFilteredHistory(
         undefined,
-        "photo"
+        "photo",
       );
       expect(filtered).toHaveLength(1);
       expect(filtered[0].name).toBe("photo.jpg");
@@ -321,7 +325,7 @@ describe("DownloadHistoryService", () => {
     it("should filter by search query (hash)", () => {
       const filtered = downloadHistoryService.getFilteredHistory(
         undefined,
-        "completed1"
+        "completed1",
       );
       expect(filtered).toHaveLength(1);
       expect(filtered[0].hash).toBe("completed1");
@@ -330,7 +334,7 @@ describe("DownloadHistoryService", () => {
     it("should filter by both status and search query", () => {
       const filtered = downloadHistoryService.getFilteredHistory(
         "completed",
-        "document"
+        "document",
       );
       expect(filtered).toHaveLength(1);
       expect(filtered[0].name).toBe("document.pdf");
@@ -339,11 +343,11 @@ describe("DownloadHistoryService", () => {
     it("should be case-insensitive", () => {
       const filtered1 = downloadHistoryService.getFilteredHistory(
         undefined,
-        "DOCUMENT"
+        "DOCUMENT",
       );
       const filtered2 = downloadHistoryService.getFilteredHistory(
         undefined,
-        "document"
+        "document",
       );
       expect(filtered1).toEqual(filtered2);
     });
@@ -356,37 +360,43 @@ describe("DownloadHistoryService", () => {
     it("should handle whitespace-only search query", () => {
       const filtered = downloadHistoryService.getFilteredHistory(
         undefined,
-        "   "
+        "   ",
       );
       expect(filtered).toHaveLength(4);
     });
 
     describe("getFilteredHistory - missing edge cases", () => {
       // No outer beforeEach - each test sets up its own data
-      
+
       it("should handle search with regex special characters", () => {
         downloadHistoryService.clearHistory(); // Explicit cleanup
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "regex1", name: "file[1].txt" })
+          createMockFileItem({ hash: "regex1", name: "file[1].txt" }),
         );
-        
-        const filtered = downloadHistoryService.getFilteredHistory(undefined, "[1]");
+
+        const filtered = downloadHistoryService.getFilteredHistory(
+          undefined,
+          "[1]",
+        );
         expect(filtered).toHaveLength(1);
       });
 
       it("should handle search with unicode characters", () => {
         downloadHistoryService.clearHistory();
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "unicode1", name: "文件.txt" })
+          createMockFileItem({ hash: "unicode1", name: "文件.txt" }),
         );
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "unicode2", name: "Файл.txt" })
+          createMockFileItem({ hash: "unicode2", name: "Файл.txt" }),
         );
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "unicode3", name: "ملف.txt" })
+          createMockFileItem({ hash: "unicode3", name: "ملف.txt" }),
         );
-        
-        const filtered = downloadHistoryService.getFilteredHistory(undefined, "文件");
+
+        const filtered = downloadHistoryService.getFilteredHistory(
+          undefined,
+          "文件",
+        );
         expect(filtered).toHaveLength(1);
         expect(filtered[0].name).toBe("文件.txt");
       });
@@ -394,10 +404,17 @@ describe("DownloadHistoryService", () => {
       it("should return empty array when all filters exclude everything", () => {
         downloadHistoryService.clearHistory();
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "exclude1", status: "completed", name: "file.txt" })
+          createMockFileItem({
+            hash: "exclude1",
+            status: "completed",
+            name: "file.txt",
+          }),
         );
-        
-        const filtered = downloadHistoryService.getFilteredHistory("failed", "nonexistent");
+
+        const filtered = downloadHistoryService.getFilteredHistory(
+          "failed",
+          "nonexistent",
+        );
         expect(filtered).toHaveLength(0);
       });
     });
@@ -430,7 +447,7 @@ describe("DownloadHistoryService", () => {
       downloadHistoryService.addToHistory(createMockFileItem());
 
       expect(() =>
-        downloadHistoryService.removeFromHistory("non-existent")
+        downloadHistoryService.removeFromHistory("non-existent"),
       ).not.toThrow();
 
       expect(downloadHistoryService.getHistory()).toHaveLength(1);
@@ -463,13 +480,13 @@ describe("DownloadHistoryService", () => {
   describe("clearFailedDownloads", () => {
     it("should remove only failed downloads", () => {
       downloadHistoryService.addToHistory(
-        createMockFileItem({ hash: "completed", status: "completed" })
+        createMockFileItem({ hash: "completed", status: "completed" }),
       );
       downloadHistoryService.addToHistory(
-        createMockFileItem({ hash: "failed", status: "failed" })
+        createMockFileItem({ hash: "failed", status: "failed" }),
       );
       downloadHistoryService.addToHistory(
-        createMockFileItem({ hash: "canceled", status: "canceled" })
+        createMockFileItem({ hash: "canceled", status: "canceled" }),
       );
 
       downloadHistoryService.clearFailedDownloads();
@@ -483,10 +500,10 @@ describe("DownloadHistoryService", () => {
 
     it("should persist to localStorage", () => {
       downloadHistoryService.addToHistory(
-        createMockFileItem({ hash: "failed-item", status: "failed" })
+        createMockFileItem({ hash: "failed-item", status: "failed" }),
       );
       downloadHistoryService.addToHistory(
-        createMockFileItem({ hash: "completed-item", status: "completed" })
+        createMockFileItem({ hash: "completed-item", status: "completed" }),
       );
 
       downloadHistoryService.clearFailedDownloads();
@@ -501,21 +518,21 @@ describe("DownloadHistoryService", () => {
       it("should not affect completed/canceled downloads with similar hashes", () => {
         // Edge case: Hash collision or similar hashes
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "abc123", status: "completed" })
+          createMockFileItem({ hash: "abc123", status: "completed" }),
         );
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "abc123failed", status: "failed" })
+          createMockFileItem({ hash: "abc123failed", status: "failed" }),
         );
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "abc124", status: "canceled" })
+          createMockFileItem({ hash: "abc124", status: "canceled" }),
         );
 
         downloadHistoryService.clearFailedDownloads();
 
         const history = downloadHistoryService.getHistory();
         expect(history).toHaveLength(2);
-        expect(history.find(e => e.hash === "abc123")).toBeDefined();
-        expect(history.find(e => e.hash === "abc124")).toBeDefined();
+        expect(history.find((e) => e.hash === "abc123")).toBeDefined();
+        expect(history.find((e) => e.hash === "abc124")).toBeDefined();
       });
     });
   });
@@ -532,7 +549,7 @@ describe("DownloadHistoryService", () => {
           status: "completed",
           size: 1000,
           price: 0.001,
-        })
+        }),
       );
       downloadHistoryService.addToHistory(
         createMockFileItem({
@@ -540,7 +557,7 @@ describe("DownloadHistoryService", () => {
           status: "completed",
           size: 2000,
           price: 0.002,
-        })
+        }),
       );
       downloadHistoryService.addToHistory(
         createMockFileItem({
@@ -548,7 +565,7 @@ describe("DownloadHistoryService", () => {
           status: "failed",
           size: 500,
           price: 0.0005,
-        })
+        }),
       );
       downloadHistoryService.addToHistory(
         createMockFileItem({
@@ -556,7 +573,7 @@ describe("DownloadHistoryService", () => {
           status: "canceled",
           size: 300,
           price: undefined,
-        })
+        }),
       );
 
       const stats = downloadHistoryService.getStatistics();
@@ -586,7 +603,7 @@ describe("DownloadHistoryService", () => {
           status: "completed",
           size: 1000,
           price: undefined,
-        })
+        }),
       );
 
       const stats = downloadHistoryService.getStatistics();
@@ -596,13 +613,25 @@ describe("DownloadHistoryService", () => {
     describe("getStatistics - calculation accuracy", () => {
       it("should handle floating point precision for prices", () => {
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "float1", status: "completed", price: 0.1 })
+          createMockFileItem({
+            hash: "float1",
+            status: "completed",
+            price: 0.1,
+          }),
         );
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "float2", status: "completed", price: 0.2 })
+          createMockFileItem({
+            hash: "float2",
+            status: "completed",
+            price: 0.2,
+          }),
         );
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "float3", status: "completed", price: 0.3 })
+          createMockFileItem({
+            hash: "float3",
+            status: "completed",
+            price: 0.3,
+          }),
         );
 
         const stats = downloadHistoryService.getStatistics();
@@ -611,7 +640,11 @@ describe("DownloadHistoryService", () => {
 
       it("should handle negative sizes gracefully", () => {
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: "negative1", status: "completed", size: -1000 })
+          createMockFileItem({
+            hash: "negative1",
+            status: "completed",
+            size: -1000,
+          }),
         );
 
         const stats = downloadHistoryService.getStatistics();
@@ -620,20 +653,20 @@ describe("DownloadHistoryService", () => {
 
       it("should handle extremely large numbers (BigInt scenario)", () => {
         const largeSize = Number.MAX_SAFE_INTEGER;
-        
+
         downloadHistoryService.addToHistory(
-          createMockFileItem({ 
-            hash: "bigint1", 
-            status: "completed", 
-            size: largeSize 
-          })
+          createMockFileItem({
+            hash: "bigint1",
+            status: "completed",
+            size: largeSize,
+          }),
         );
         downloadHistoryService.addToHistory(
-          createMockFileItem({ 
-            hash: "bigint2", 
-            status: "completed", 
-            size: 1 
-          })
+          createMockFileItem({
+            hash: "bigint2",
+            status: "completed",
+            size: 1,
+          }),
         );
 
         const stats = downloadHistoryService.getStatistics();
@@ -656,10 +689,10 @@ describe("DownloadHistoryService", () => {
 
     it("should export all entries", () => {
       downloadHistoryService.addToHistory(
-        createMockFileItem({ hash: "hash1" })
+        createMockFileItem({ hash: "hash1" }),
       );
       downloadHistoryService.addToHistory(
-        createMockFileItem({ hash: "hash2" })
+        createMockFileItem({ hash: "hash2" }),
       );
 
       const exported = downloadHistoryService.exportHistory();
@@ -704,7 +737,7 @@ describe("DownloadHistoryService", () => {
 
     it("should merge with existing history", () => {
       downloadHistoryService.addToHistory(
-        createMockFileItem({ hash: "existing" })
+        createMockFileItem({ hash: "existing" }),
       );
 
       const exportData = JSON.stringify({
@@ -818,10 +851,10 @@ describe("DownloadHistoryService", () => {
         });
 
         const result = downloadHistoryService.importHistory(incompleteEntry);
-        
+
         expect(result.success).toBe(false); // Should reject invalid entries
         expect(result.error).toContain("Missing required fields");
-        
+
         const history = downloadHistoryService.getHistory();
         expect(history).toHaveLength(0); // No invalid entries added
       });
@@ -868,7 +901,7 @@ describe("DownloadHistoryService", () => {
         downloadHistoryService.importHistory(futureData);
 
         const history = downloadHistoryService.getHistory();
-        
+
         // Future entries should sort to top (newest first)
         expect(history[0].hash).toBe("future-hash");
       });
@@ -887,11 +920,13 @@ describe("DownloadHistoryService", () => {
           })),
         };
 
-        const result = downloadHistoryService.importHistory(JSON.stringify(massiveData));
+        const result = downloadHistoryService.importHistory(
+          JSON.stringify(massiveData),
+        );
 
         expect(result.success).toBe(true);
         expect(result.imported).toBeGreaterThan(0);
-        
+
         // Should be capped at MAX_HISTORY_ENTRIES (1000)
         const history = downloadHistoryService.getHistory();
         expect(history.length).toBeLessThanOrEqual(1000);
@@ -911,7 +946,7 @@ describe("DownloadHistoryService", () => {
           downloadDate: Date.now(),
         },
       ];
-      
+
       const store = (localStorageMock as any)._getStore();
       store["chiral.downloadHistory"] = JSON.stringify(existingData);
 
@@ -926,7 +961,7 @@ describe("DownloadHistoryService", () => {
       store["chiral.downloadHistory"] = "corrupted data{";
 
       expect(
-        () => new (downloadHistoryService.constructor as any)()
+        () => new (downloadHistoryService.constructor as any)(),
       ).not.toThrow();
     });
 
@@ -936,7 +971,7 @@ describe("DownloadHistoryService", () => {
           createMockFileItem({
             hash: `hash-${i}`,
             name: `file-${i}.txt`,
-          })
+          }),
         );
       }
 
@@ -998,13 +1033,13 @@ describe("DownloadHistoryService", () => {
   describe("critical edge cases", () => {
     it("should reject invalid status values", () => {
       const invalidStatuses = ["invalid", "in-progress", "", null, undefined];
-      
-      invalidStatuses.forEach(status => {
+
+      invalidStatuses.forEach((status) => {
         downloadHistoryService.clearHistory();
         downloadHistoryService.addToHistory(
-          createMockFileItem({ hash: `test-${status}`, status: status as any })
+          createMockFileItem({ hash: `test-${status}`, status: status as any }),
         );
-        
+
         const history = downloadHistoryService.getHistory();
         expect(history).toHaveLength(0);
       });
@@ -1020,10 +1055,10 @@ describe("DownloadHistoryService", () => {
       });
 
       const result = downloadHistoryService.importHistory(incompleteEntry);
-      
+
       expect(result.success).toBe(false); // Should reject invalid entries
       expect(result.error).toContain("Missing required fields");
-      
+
       const history = downloadHistoryService.getHistory();
       expect(history).toHaveLength(0); // No invalid entries added
     });
@@ -1031,33 +1066,31 @@ describe("DownloadHistoryService", () => {
     it("should handle localStorage quota exceeded", () => {
       const originalSetItem = window.localStorage.setItem;
       let callCount = 0;
-      
+
       vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
         if (callCount++ > 0) throw new DOMException("QuotaExceededError");
       });
 
       const file = createMockFileItem({ hash: "quota-test" });
-      
-      expect(() => 
-        downloadHistoryService.addToHistory(file)
-      ).not.toThrow();
-      
+
+      expect(() => downloadHistoryService.addToHistory(file)).not.toThrow();
+
       window.localStorage.setItem = originalSetItem;
     });
 
     it("should handle simultaneous async adds without data loss", async () => {
       downloadHistoryService.clearHistory();
-      
+
       const promises = Array.from({ length: 10 }, (_, i) =>
-        Promise.resolve().then(() => 
+        Promise.resolve().then(() =>
           downloadHistoryService.addToHistory(
-            createMockFileItem({ hash: `concurrent-${i}` })
-          )
-        )
+            createMockFileItem({ hash: `concurrent-${i}` }),
+          ),
+        ),
       );
-      
+
       await Promise.all(promises);
-      
+
       const history = downloadHistoryService.getHistory();
       expect(history.length).toBe(10);
     });
@@ -1065,15 +1098,13 @@ describe("DownloadHistoryService", () => {
     it("should reject entries with circular references in metadata", () => {
       const circular: any = { self: null };
       circular.self = circular;
-      
+
       const file = createMockFileItem({
         hash: "circular",
         manifest: circular as any,
       });
-      
-      expect(() => 
-        downloadHistoryService.addToHistory(file)
-      ).not.toThrow();
+
+      expect(() => downloadHistoryService.addToHistory(file)).not.toThrow();
     });
 
     it("should handle extremely large entry data", () => {
@@ -1082,11 +1113,11 @@ describe("DownloadHistoryService", () => {
         name: "x".repeat(100000),
         downloadPath: "y".repeat(100000),
       });
-      
-      expect(() => 
-        downloadHistoryService.addToHistory(massiveEntry)
+
+      expect(() =>
+        downloadHistoryService.addToHistory(massiveEntry),
       ).not.toThrow();
-      
+
       const history = downloadHistoryService.getHistory();
       expect(history.length).toBeGreaterThan(0);
     });

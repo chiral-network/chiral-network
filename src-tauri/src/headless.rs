@@ -337,6 +337,7 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
             &args.geth_data_dir,
             args.miner_address.as_deref(),
             args.pure_client_mode,
+            None,
         )?;
         if args.pure_client_mode {
             info!(

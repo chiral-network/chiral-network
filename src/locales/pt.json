@@ -587,6 +587,23 @@
     "testWallet": {
       "header": "Apenas para Testes",
       "button": "Criar Carteira de Teste"
+    },
+    "wizard": {
+      "existingWallets": "Suas Carteiras Salvas",
+      "loadingWallets": "Carregando carteiras...",
+      "enterPassword": "Digite a senha da carteira",
+      "unlockWallet": "Desbloquear Carteira",
+      "unlockSuccess": "Carteira desbloqueada com sucesso",
+      "orCreateImport": "Ou",
+      "walletName": "Nome da Carteira (opcional)",
+      "walletNamePlaceholder": "ex. Carteira Principal",
+      "passwordOptional": "Senha (opcional)",
+      "passwordPlaceholder": "Deixe vazio se não houver"
+    },
+    "errors": {
+      "loadKeystoreFailed": "Falha ao carregar carteiras salvas",
+      "passwordRequired": "Senha obrigatória",
+      "incorrectPassword": "Senha incorreta ou keystore corrompido"
     }
   },
   "transfer": {
@@ -1072,6 +1089,12 @@
     "off": "DESLIGADO",
     "refresh": "Atualizar",
     "clear": "Limpar",
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "Mining and RPC calls may pause for a few seconds while the node flushes data."
+      }
+    },
     "pools": {
       "solo": "Mineração Solo",
       "pool1": "ChiralPool #1",
@@ -1653,7 +1676,15 @@
     },
     "blocks": {
       "latest": "Blocos recentes",
-      "noBlocks": "Nenhum bloco encontrado"
+      "noBlocks": "Nenhum bloco encontrado",
+      "syncingTitle": "Sincronizando blocos...",
+      "syncingSubtitle": "Seu nó ainda está sincronizando. Blocos recentes podem não estar disponíveis até a sincronização terminar."
+    },
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "You can keep browsing other pages. This view will refresh automatically once the node stops/starts."
+      }
     },
     "sync": {
       "syncing": "Sincronizando",
@@ -1661,7 +1692,8 @@
       "highest": "Bloco mais alto",
       "remaining": "Restante",
       "eta": "ETA",
-      "complete": "Sincronização completa"
+      "complete": "Sincronização completa",
+      "inProgress": "Sincronização em andamento"
     },
     "search": {
       "title": "Pesquisar na blockchain",
@@ -1811,7 +1843,9 @@
       "messageSent": "Mensagem de teste enviada: {message}",
       "sendError": "Falha ao enviar mensagem: {error}",
       "gethInstalled": "Geth já está instalado",
-      "gethDownloadError": "Falha ao baixar o Geth: {error}"
+      "gethDownloadError": "Falha ao baixar o Geth: {error}",
+      "gethReinitSuccess": "Dados do blockchain reinicializados para a nova rede",
+      "gethReinitError": "Falha ao reinicializar os dados do blockchain: {error}"
     },
     "download": {
       "payment": {

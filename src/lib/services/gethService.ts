@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
-import { writable } from 'svelte/store';
+import { invoke } from "@tauri-apps/api/core";
+import { writable } from "svelte/store";
 
 export interface GethStatus {
   installed: boolean;
@@ -29,11 +29,26 @@ export interface SyncStatus {
 export const gethStatus = writable<"running" | "stopped">("stopped");
 export const gethSyncStatus = writable<SyncStatus | null>(null);
 
+export type GethTransition = "idle" | "starting" | "stopping";
+export const gethTransition = writable<GethTransition>("idle");
+
+export function markGethStarting(): void {
+  gethTransition.set("starting");
+}
+
+export function markGethStopping(): void {
+  gethTransition.set("stopping");
+}
+
+export function clearGethTransition(): void {
+  gethTransition.set("idle");
+}
+
 export async function getStatus(
   dataDir?: string,
-  logLines = 40
+  logLines = 40,
 ): Promise<GethStatus> {
-  return invoke<GethStatus>('get_geth_status', {
+  return invoke<GethStatus>("get_geth_status", {
     dataDir,
     logLines,
   });
@@ -67,6 +82,15 @@ export function startGethMonitoring(): () => void {
   updateGethStatus();
   updateSyncStatus();
 
+  // Auto-clear transition state when the underlying status changes.
+  const unsubscribeTransition = gethStatus.subscribe((status) => {
+    gethTransition.update((t) => {
+      if (t === "starting" && status === "running") return "idle";
+      if (t === "stopping" && status === "stopped") return "idle";
+      return t;
+    });
+  });
+
   // Check status every 5 seconds, sync status every 10 seconds
   const statusInterval = setInterval(updateGethStatus, 5000);
   const syncInterval = setInterval(updateSyncStatus, 10000);
@@ -75,5 +99,6 @@ export function startGethMonitoring(): () => void {
   return () => {
     clearInterval(statusInterval);
     clearInterval(syncInterval);
+    unsubscribeTransition();
   };
 }

@@ -1,6 +1,6 @@
 import { writable, derived } from "svelte/store";
 import { normalizeRegion, GEO_REGIONS, UNKNOWN_REGION_ID } from "$lib/geo";
-
+import { Protocol } from "./services/contentProtocols/types";
 // ============================================================================
 // Network Constants (fetched from backend)
 // ============================================================================
@@ -19,15 +19,7 @@ export interface FileItem {
   hash: string; // Content hash (Merkle root) for grouping
   protocolHash?: string; // Protocol-specific hash/link (magnet, ed2k, ftp url, etc.)
   size: number;
-  status:
-    | "downloading"
-    | "paused"
-    | "completed"
-    | "failed"
-    | "uploaded"
-    | "queued"
-    | "seeding"
-    | "canceled";
+  status: TransferStatus;
   progress?: number;
   uploadDate?: Date;
   owner?: string;
@@ -55,12 +47,18 @@ export interface FileItem {
   version?: number;
   isDownload?: boolean;
   isSeedingDownload?: boolean;
-  protocol?: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap"; // Protocol used for upload
+  protocol?: Protocol; // Protocol used for upload
   uploaderAddress?: string; // Wallet address of the uploader for payment
+
+  // Download-side payment terms (single payee model)
+  paymentPeerId?: string;
+  paymentPeerWalletAddress?: string;
+  paymentPricePerMb?: number;
+  estimatedPaymentTotal?: number;
 }
 
 export interface ProtocolEntry {
-  protocol: "WebRTC" | "BitTorrent" | "ED2K" | "FTP" | "Bitswap";
+  protocol: Protocol;
   hash: string; // Protocol-specific hash (Merkle, magnet, ed2k, etc.)
   fileItem: FileItem; // Reference to the original file item
   technicalInfo: {
@@ -316,7 +314,7 @@ export const coalescedFiles = derived(files, ($files): CoalescedFileItem[] => {
 
     // Create protocol entries
     const protocols: ProtocolEntry[] = fileItems.map((file) => ({
-      protocol: file.protocol || "WebRTC", // Default to WebRTC if not specified
+      protocol: file.protocol || Protocol.UNKNOWN, // Default to WebRTC if not specified
       hash: file.protocolHash || file.hash, // Use protocol-specific hash if available, otherwise content hash
       fileItem: file,
       technicalInfo: {
@@ -331,20 +329,20 @@ export const coalescedFiles = derived(files, ($files): CoalescedFileItem[] => {
     // Calculate aggregate stats
     const totalSeeders = protocols.reduce(
       (sum, p) => sum + (p.technicalInfo.seederCount || 0),
-      0
+      0,
     );
     const totalLeechers = protocols.reduce(
       (sum, p) => sum + (p.technicalInfo.leechers || 0),
-      0
+      0,
     );
     const totalPrice = protocols.reduce(
       (sum, p) => sum + p.technicalInfo.price,
-      0
+      0,
     );
     const averagePrice =
       protocols.length > 0 ? totalPrice / protocols.length : 0;
     const isSeeding = protocols.some(
-      (p) => p.technicalInfo.status === "seeding"
+      (p) => p.technicalInfo.status === "seeding",
     );
 
     coalescedItems.push({
@@ -368,7 +366,7 @@ export const coalescedFiles = derived(files, ($files): CoalescedFileItem[] => {
 
   // Sort by latest upload date (most recent first)
   coalescedItems.sort(
-    (a, b) => b.latestUploadDate.getTime() - a.latestUploadDate.getTime()
+    (a, b) => b.latestUploadDate.getTime() - a.latestUploadDate.getTime(),
   );
 
   return coalescedItems;
@@ -394,7 +392,7 @@ const initialPaginationState: TransactionPaginationState = storedPagination
     };
 
 export const transactionPagination = writable<TransactionPaginationState>(
-  initialPaginationState
+  initialPaginationState,
 );
 
 // Persist pagination state to localStorage
@@ -408,7 +406,7 @@ if (typeof window !== "undefined") {
         hasMore: state.hasMore,
         batchSize: state.batchSize,
         // Don't persist isLoading state
-      })
+      }),
     );
   });
 }
@@ -431,7 +429,7 @@ const initialMiningPaginationState: MiningPaginationState =
       };
 
 export const miningPagination = writable<MiningPaginationState>(
-  initialMiningPaginationState
+  initialMiningPaginationState,
 );
 
 // Persist mining pagination state to localStorage
@@ -445,7 +443,7 @@ if (typeof window !== "undefined") {
         hasMore: state.hasMore,
         batchSize: state.batchSize,
         // Don't persist isLoading state
-      })
+      }),
     );
   });
 }
@@ -504,7 +502,7 @@ export const peerGeoDistribution = derived(
     });
 
     const dominantRegion = buckets.find(
-      (bucket) => bucket.regionId !== UNKNOWN_REGION_ID && bucket.count > 0
+      (bucket) => bucket.regionId !== UNKNOWN_REGION_ID && bucket.count > 0,
     );
 
     return {
@@ -513,11 +511,10 @@ export const peerGeoDistribution = derived(
       dominantRegionId: dominantRegion ? dominantRegion.regionId : null,
       generatedAt: Date.now(),
     };
-  }
+  },
 );
 
 export const networkStats = writable<NetworkStats>(dummyNetworkStats);
-export const downloadQueue = writable<FileItem[]>([]);
 export const userLocation = writable<string>("US-East");
 export const etcAccount = writable<ETCAccount | null>(null);
 export const blacklist = writable<BlacklistEntry[]>(blacklistedPeers);
@@ -582,33 +579,33 @@ export interface AccurateTotalsProgress {
 export const accurateTotals = writable<AccurateTotals | null>(null);
 export const isCalculatingAccurateTotals = writable<boolean>(false);
 export const accurateTotalsProgress = writable<AccurateTotalsProgress | null>(
-  null
+  null,
 );
 
 // Calculate total mined from loaded mining reward transactions (partial - based on loaded data)
 export const totalEarned = derived(transactions, ($txs) =>
   $txs
     .filter((tx) => tx.type === "mining")
-    .reduce((sum, tx) => sum + tx.amount, 0)
+    .reduce((sum, tx) => sum + tx.amount, 0),
 );
 
 export const totalSpent = derived(transactions, ($txs) =>
   $txs
     .filter((tx) => tx.type === "sent")
-    .reduce((sum, tx) => sum + tx.amount, 0)
+    .reduce((sum, tx) => sum + tx.amount, 0),
 );
 
 export const totalReceived = derived(transactions, ($txs) =>
   $txs
     .filter((tx) => tx.type === "received")
-    .reduce((sum, tx) => sum + tx.amount, 0)
+    .reduce((sum, tx) => sum + tx.amount, 0),
 );
 
 // Store for active P2P transfers and WebRTC sessions
 export interface ActiveTransfer {
   fileId: string;
   transferId: string;
-  type: "p2p" | "webrtc";
+  type: Protocol;
 }
 
 export const activeTransfers = writable<Map<string, ActiveTransfer>>(new Map());
@@ -694,8 +691,9 @@ export interface AppSettings {
   enableFileLogging: boolean; // Enable file-based logging
   maxLogSizeMB: number; // Maximum size of a single log file in MB
   pricePerMb: number; // Price per MB in Chiral (e.g., 0.001)
+  useDynamicPricing: boolean; // Use dynamic pricing for uploads
   customBootstrapNodes: string[]; // Custom bootstrap nodes for DHT (leave empty to use defaults)
-  selectedProtocol: "WebRTC" | "BitTorrent" | "ED2K" | "FTP"; // Protocol selected for file uploads
+  selectedProtocol: Protocol; // Protocol selected for file uploads
 }
 
 // Export the settings store
@@ -750,12 +748,13 @@ export const settings = writable<AppSettings>({
   enableFileLogging: false, // Disabled by default
   maxLogSizeMB: 10, // 10 MB per log file by default
   pricePerMb: 0.001, // Default price: 0.001, until ability to set pricePerMb is there, then change to 0.001 Chiral per MB
+  useDynamicPricing: false,
   customBootstrapNodes: [], // Empty by default - use hardcoded bootstrap nodes
-  selectedProtocol: "WebRTC", // Default to WebRTC
+  selectedProtocol: Protocol.UNKNOWN, // Default upload protocol
 });
 
 export const activeBandwidthLimits = writable<ActiveBandwidthLimits>(
-  defaultActiveBandwidthLimits
+  defaultActiveBandwidthLimits,
 );
 
 // Transaction polling functionality
@@ -763,6 +762,7 @@ import {
   pollTransactionStatus,
   type TransactionStatus as ApiTransactionStatus,
 } from "./services/transactionService";
+import type { TransferStatus } from "./stores/transferEventsStore";
 
 // Active polling tracker
 const activePollingTasks = new Map<string, boolean>();
@@ -771,7 +771,8 @@ const activePollingTasks = new Map<string, boolean>();
  * Add a transaction and start polling for status updates
  */
 export async function addTransactionWithPolling(
-  transaction: Transaction
+  transaction: Transaction,
+  onStatusUpdate?: (status: ApiTransactionStatus) => void,
 ): Promise<void> {
   if (!transaction.transaction_hash) {
     throw new Error("Transaction must have a hash for polling");
@@ -807,7 +808,8 @@ export async function addTransactionWithPolling(
                     ? "success"
                     : status.status === "failed"
                       ? "failed"
-                      : status.status === "pending"
+                      : status.status === "pending" ||
+                          status.status === "submitted"
                         ? "pending"
                         : "submitted",
                 confirmations: status.confirmations || 0,
@@ -817,11 +819,12 @@ export async function addTransactionWithPolling(
               };
             }
             return tx;
-          })
+          }),
         );
+        onStatusUpdate?.(status);
       },
       120, // 2 minutes max polling
-      2000 // 2 second intervals
+      2000, // 2 second intervals
     );
   } catch (error) {
     console.error(`Failed to poll transaction ${txHash}:`, error);
@@ -838,7 +841,7 @@ export async function addTransactionWithPolling(
           };
         }
         return tx;
-      })
+      }),
     );
   } finally {
     activePollingTasks.delete(txHash);
@@ -850,11 +853,83 @@ export async function addTransactionWithPolling(
  */
 export function updateTransactionStatus(
   txHash: string,
-  updates: Partial<Transaction>
+  updates: Partial<Transaction>,
 ): void {
   transactions.update((txs) =>
     txs.map((tx) =>
-      tx.transaction_hash === txHash ? { ...tx, ...updates } : tx
-    )
+      tx.transaction_hash === txHash ? { ...tx, ...updates } : tx,
+    ),
   );
+}
+
+import { Server, Globe } from "lucide-svelte";
+export type ProtocolDetails = {
+  id: string;
+  name: string;
+  icon: typeof Globe;
+  colorClass: string;
+};
+
+export const PROTOCOL_BADGES: Record<Protocol, ProtocolDetails> = {
+  WEBRTC: {
+    id: "webrtc",
+    name: "WebRTC",
+    icon: Globe,
+    colorClass: "bg-blue-100 text-blue-800",
+  },
+  BITTORRENT: {
+    id: "bittorrent",
+    name: "BitTorrent",
+    icon: Server,
+    colorClass: "bg-green-100 text-green-800",
+  },
+  HTTP: {
+    id: "http",
+    name: "HTTP",
+    icon: Globe,
+    colorClass: "bg-gray-100 text-gray-800",
+  },
+  FTP: {
+    id: "ftp",
+    name: "FTP",
+    icon: Server,
+    colorClass: "bg-gray-100 text-gray-800",
+  },
+  ED2K: {
+    id: "ed2k",
+    name: "ED2K",
+    icon: Server,
+    colorClass: "bg-orange-100 text-orange-800",
+  },
+  UNKNOWN: {
+    id: "unknown",
+    name: "Unknown",
+    icon: Globe,
+    colorClass: "bg-purple-100 text-purple-800",
+  },
+};
+export interface SeederInfo {
+  index: number;
+  peerId: string;
+  walletAddress?: string;
+  pricePerMb?: number;
+  protocols?: Protocol[];
+  protocolDetails?: any;
+  hasGeneralInfo: boolean;
+  hasFileInfo: boolean;
+}
+
+export interface ProgressiveSearchState {
+  status: "idle" | "searching" | "complete" | "timeout";
+  basicMetadata: {
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    createdAt: number;
+    mimeType?: string;
+  } | null;
+  // some providers may not respond
+  providers: string[];
+  // created from peers who responded
+  seeders: SeederInfo[];
 }

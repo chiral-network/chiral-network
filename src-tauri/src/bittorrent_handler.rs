@@ -993,6 +993,7 @@ impl BitTorrentHandler {
 
                         bus.emit_progress(TransferProgressEvent {
                             transfer_id: info_hash_str.clone(),
+                            protocol: "BitTorrent".to_string(),
                             downloaded_bytes: downloaded_total,
                             total_bytes,
                             completed_chunks: 0,
@@ -1592,6 +1593,7 @@ impl BitTorrentHandler {
             if let Some(ref bus) = *self.event_bus.lock().await {
                 bus.emit_paused(TransferPausedEvent {
                     transfer_id: info_hash.to_string(),
+                    protocol: "BitTorrent".to_string(),
                     paused_at: current_timestamp_ms(),
                     reason: PauseReason::UserRequested,
                     can_resume: true,
@@ -1626,6 +1628,7 @@ impl BitTorrentHandler {
             if let Some(ref bus) = *self.event_bus.lock().await {
                 bus.emit_resumed(TransferResumedEvent {
                     transfer_id: info_hash.to_string(),
+                    protocol: "BitTorrent".to_string(),
                     resumed_at: current_timestamp_ms(),
                     downloaded_bytes: stats.progress_bytes,
                     remaining_bytes: stats.total_bytes.saturating_sub(stats.progress_bytes),

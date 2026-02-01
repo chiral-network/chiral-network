@@ -12,7 +12,7 @@
   // const tr = (key: string, params?: TranslateParams) => get(t)(key, params)
   const tr = (key: string, params?: TranslateParams) => $t(key, params)
 
-  export let onComplete: (args: { mnemonic: string, passphrase: string, account: { address: string, privateKeyHex: string, index: number, change: number }, name?: string }) => void
+  export let onComplete: (args: { mnemonic: string, passphrase: string, account: { address: string, privateKeyHex: string, index: number, change: number }, name?: string, password?: string }) => void
   export let onCancel: () => void
   export let mode: 'create' | 'import' = 'create'
 
@@ -28,6 +28,7 @@
   let selectedStrength: 128 | 256 = 128
   // Optional wallet name
   let walletName = ''
+  let walletPassword = ''
 
   onMount(async () => {
     if (mode === 'create') {
@@ -89,7 +90,13 @@
         if (!valid) { confirmError = 'Invalid mnemonic (checksum)'; isBusy = false; return }
       }
       const acct = await deriveAccount(mnemonic, passphrase || '', 0, 0)
-      onComplete({ mnemonic, passphrase: passphrase || '', account: { address: acct.address, privateKeyHex: acct.privateKeyHex, index: 0, change: 0 }, name: walletName.trim() || undefined })
+      onComplete({
+        mnemonic,
+        passphrase: passphrase || '',
+        account: { address: acct.address, privateKeyHex: acct.privateKeyHex, index: 0, change: 0 },
+        name: walletName.trim() || undefined,
+        password: walletPassword
+      })
       // showToast('Wallet ready', 'success')
       showToast(tr('toasts.wallet.mnemonic.ready'), 'success')
     } catch (e) {
@@ -160,6 +167,10 @@
           <Label>Wallet Name (optional)</Label>
           <Input bind:value={walletName} placeholder="e.g., Main Wallet" />
         </div>
+        <div class="mb-3">
+          <Label>{$t('wallet.wizard.passwordOptional')}</Label>
+          <Input type="password" bind:value={walletPassword} placeholder={$t('wallet.wizard.passwordPlaceholder')} />
+        </div>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" bind:checked={ackChecked} />
           <span>I Understand</span>
@@ -177,6 +188,8 @@
       <textarea class="w-full border rounded-md p-2" rows="4" bind:value={mnemonic} placeholder="enter words separated by spaces"></textarea>
       <Label>Optional Passphrase</Label>
       <Input type="password" bind:value={passphrase} placeholder="(optional) unlock phrase" />
+      <Label>{$t('wallet.wizard.passwordOptional')}</Label>
+      <Input type="password" bind:value={walletPassword} placeholder={$t('wallet.wizard.passwordPlaceholder')} />
       {#if confirmError}<p class="text-sm text-red-500">{confirmError}</p>{/if}
       <div class="flex gap-2 justify-end">
         <Button variant="outline" on:click={onCancel}>Cancel</Button>

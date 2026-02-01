@@ -567,6 +567,23 @@
     "testWallet": {
       "header": "Только для Тестирования",
       "button": "Создать Тестовый Кошелек"
+    },
+    "wizard": {
+      "existingWallets": "Ваши Сохраненные Кошельки",
+      "loadingWallets": "Загрузка кошельков...",
+      "enterPassword": "Введите пароль кошелька",
+      "unlockWallet": "Разблокировать Кошелек",
+      "unlockSuccess": "Кошелек успешно разблокирован",
+      "orCreateImport": "Или",
+      "walletName": "Название Кошелька (необязательно)",
+      "walletNamePlaceholder": "например, Основной Кошелек",
+      "passwordOptional": "Пароль (необязательно)",
+      "passwordPlaceholder": "Оставьте пустым, если нет"
+    },
+    "errors": {
+      "loadKeystoreFailed": "Не удалось загрузить сохраненные кошельки",
+      "passwordRequired": "Требуется пароль",
+      "incorrectPassword": "Неверный пароль или поврежденное хранилище ключей"
     }
   },
   "transfer": {
@@ -1071,6 +1088,12 @@
     "off": "ВЫКЛ",
     "refresh": "Обновить",
     "clear": "Очистить",
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "Mining and RPC calls may pause for a few seconds while the node flushes data."
+      }
+    },
     "pools": {
       "solo": "Соло-майнинг",
       "pool1": "ChiralPool #1",
@@ -1546,7 +1569,15 @@
     },
     "blocks": {
       "latest": "Последние блоки",
-      "noBlocks": "Блоки не найдены"
+      "noBlocks": "Блоки не найдены",
+      "syncingTitle": "Идет синхронизация блоков...",
+      "syncingSubtitle": "Ваш узел все еще синхронизируется. Последние блоки могут быть недоступны до завершения синхронизации."
+    },
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "You can keep browsing other pages. This view will refresh automatically once the node stops/starts."
+      }
     },
     "sync": {
       "syncing": "Синхронизация",
@@ -1554,7 +1585,8 @@
       "highest": "Высший блок",
       "remaining": "Осталось",
       "eta": "Ожидаемое время",
-      "complete": "Синхронизация завершена"
+      "complete": "Синхронизация завершена",
+      "inProgress": "Синхронизация выполняется"
     },
     "search": {
       "title": "Поиск по блокчейну",
@@ -1705,7 +1737,9 @@
       "messageSent": "Тестовое сообщение отправлено: {message}",
       "sendError": "Не удалось отправить сообщение: {error}",
       "gethInstalled": "Geth уже установлен",
-      "gethDownloadError": "Не удалось загрузить Geth: {error}"
+      "gethDownloadError": "Не удалось загрузить Geth: {error}",
+      "gethReinitSuccess": "Данные блокчейна переинициализированы для новой сети",
+      "gethReinitError": "Не удалось переинициализировать данные блокчейна: {error}"
     },
     "download": {
       "payment": {

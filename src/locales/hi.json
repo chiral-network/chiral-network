@@ -587,6 +587,23 @@
     "testWallet": {
       "header": "केवल परीक्षण के लिए",
       "button": "टेस्ट वॉलेट बनाएं"
+    },
+    "wizard": {
+      "existingWallets": "आपके सहेजे गए वॉलेट",
+      "loadingWallets": "वॉलेट लोड हो रहे हैं...",
+      "enterPassword": "वॉलेट पासवर्ड दर्ज करें",
+      "unlockWallet": "वॉलेट अनलॉक करें",
+      "unlockSuccess": "वॉलेट सफलतापूर्वक अनलॉक किया गया",
+      "orCreateImport": "या",
+      "walletName": "वॉलेट का नाम (वैकल्पिक)",
+      "walletNamePlaceholder": "उदा. मुख्य वॉलेट",
+      "passwordOptional": "पासवर्ड (वैकल्पिक)",
+      "passwordPlaceholder": "यदि नहीं है तो खाली छोड़ें"
+    },
+    "errors": {
+      "loadKeystoreFailed": "सहेजे गए वॉलेट लोड करने में विफल",
+      "passwordRequired": "पासवर्ड आवश्यक है",
+      "incorrectPassword": "गलत पासवर्ड या भ्रष्ट कीस्टोर"
     }
   },
   "transfer": {
@@ -1072,6 +1089,12 @@
     "off": "बंद",
     "refresh": "अपडेट करें",
     "clear": "साफ़ करें",
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "Mining and RPC calls may pause for a few seconds while the node flushes data."
+      }
+    },
     "pools": {
       "solo": "सोलो माइनिंग",
       "pool1": "ChiralPool #1",
@@ -1653,7 +1676,15 @@
     },
     "blocks": {
       "latest": "नवीनतम ब्लॉक",
-      "noBlocks": "कोई ब्लॉक नहीं मिला"
+      "noBlocks": "कोई ब्लॉक नहीं मिला",
+      "syncingTitle": "ब्लॉक सिंक हो रहे हैं...",
+      "syncingSubtitle": "आपका नोड अभी भी सिंक हो रहा है। सिंक पूरा होने तक हाल के ब्लॉक उपलब्ध नहीं हो सकते।"
+    },
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "You can keep browsing other pages. This view will refresh automatically once the node stops/starts."
+      }
     },
     "sync": {
       "syncing": "सिंक हो रहा है",
@@ -1661,7 +1692,8 @@
       "highest": "उच्चतम ब्लॉक",
       "remaining": "शेष",
       "eta": "अनुमानित समय",
-      "complete": "सिंक पूरा हुआ"
+      "complete": "सिंक पूरा हुआ",
+      "inProgress": "सिंक प्रगति पर है"
     },
     "search": {
       "title": "ब्लॉकचेन में खोजें",
@@ -1811,7 +1843,9 @@
       "messageSent": "परीक्षण संदेश भेजा गया: {message}",
       "sendError": "संदेश भेजने में विफल: {error}",
       "gethInstalled": "Geth पहले से ही स्थापित है",
-      "gethDownloadError": "Geth डाउनलोड करने में विफल: {error}"
+      "gethDownloadError": "Geth डाउनलोड करने में विफल: {error}",
+      "gethReinitSuccess": "नई नेटवर्क के लिए ब्लॉकचेन डेटा पुनः आरंभ किया गया",
+      "gethReinitError": "ब्लॉकचेन डेटा पुनः आरंभ करने में विफल: {error}"
     },
     "download": {
       "payment": {

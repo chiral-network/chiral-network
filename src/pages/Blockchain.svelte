@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, getContext } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
   import { goto } from '@mateothegreat/svelte5-router';
@@ -24,7 +25,7 @@
     AlertCircle
   } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
-  import { gethStatus, gethSyncStatus } from '$lib/services/gethService';
+  import { gethStatus, gethSyncStatus, gethTransition, type SyncStatus } from '$lib/services/gethService';
   import { diagnosticLogger } from '$lib/diagnostics/logger';
 
   const tr = (k: string, params?: Record<string, any>): string => $t(k, params);
@@ -48,6 +49,10 @@
   let latestBlocks: BlockInfo[] = [];
   let currentBlockNumber = 0;
   let isLoadingBlocks = false;
+
+  let lastKnownGethStatus: 'running' | 'stopped' = 'stopped';
+
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   // Search state
   type SearchResult =
@@ -102,7 +107,6 @@
       const gethRunning = await invoke<boolean>('is_geth_running');
       if (!gethRunning) {
         console.log('Geth is not running, skipping blockchain queries');
-        latestBlocks = [];
         return;
       }
 
@@ -112,11 +116,29 @@
       console.log('Current block number:', currentBlockNumber);
       networkStats.totalBlocks = currentBlockNumber;
 
+      // During snap sync, eth_blockNumber can temporarily return 0 while eth_syncing reports progress.
+      // Fall back to sync status (if available) to avoid misleading "no blocks" messaging.
       if (currentBlockNumber === 0) {
-        console.log('No blocks mined yet. Is Geth running? Is mining active?');
-        showToast(tr('toasts.blockchain.noBlocks'), 'info');
-        latestBlocks = [];
-        return;
+        const syncFromStore = get(gethSyncStatus);
+        const syncFromRpc = await invoke<SyncStatus>('get_blockchain_sync_status').catch(() => null);
+        const inferredBlock =
+          (syncFromStore?.current_block ?? 0) ||
+          (typeof syncFromRpc?.current_block === 'number' ? syncFromRpc.current_block : 0);
+
+        if (inferredBlock > 0) {
+          currentBlockNumber = inferredBlock;
+          networkStats.totalBlocks = currentBlockNumber;
+        } else {
+          // RPC can briefly return 0 during startup; retry a few times before giving up.
+          for (let attempt = 0; attempt < 4 && currentBlockNumber === 0; attempt++) {
+            await sleep(600);
+            currentBlockNumber = await invoke<number>('get_current_block').catch(() => 0);
+            if (currentBlockNumber > 0) {
+              networkStats.totalBlocks = currentBlockNumber;
+              break;
+            }
+          }
+        }
       }
 
       // Fetch last 10 blocks
@@ -149,7 +171,9 @@
       }
 
       diagnosticLogger.debug('BLOCKCHAIN', 'Fetched blocks', { count: blocks.length });
-      latestBlocks = blocks;
+      if (blocks.length > 0) {
+        latestBlocks = blocks;
+      }
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       diagnosticLogger.error('BLOCKCHAIN', 'Failed to fetch blocks', { error: errorMsg });
@@ -364,10 +388,19 @@
 
   // Format time remaining
   function formatTimeRemaining(seconds: number | null): string {
-    if (seconds === null || seconds === 0) return 'Complete';
+    if (seconds === null) return '—';
+    if (seconds <= 0) return '0s';
     if (seconds < 60) return `${Math.round(seconds)}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  }
+
+  function formatTimeRemainingWithCompletion(
+    seconds: number | null,
+    blocksRemaining: number
+  ): string {
+    if (blocksRemaining === 0) return 'Complete';
+    return formatTimeRemaining(seconds);
   }
 
   // Refresh data
@@ -381,6 +414,7 @@
   }
 
   onMount(() => {
+    lastKnownGethStatus = $gethStatus;
     fetchLatestBlocks();
     fetchTxpool();
     fetchNetworkStats();
@@ -398,6 +432,19 @@
 
     return () => clearInterval(interval);
   });
+
+  // When Geth is (re)started, fetch blocks immediately (avoid waiting for the 30s interval).
+  $: if ($gethStatus === 'running' && lastKnownGethStatus !== 'running') {
+    lastKnownGethStatus = 'running';
+    // No toast here; this is an automatic refresh.
+    fetchLatestBlocks();
+    fetchTxpool();
+    fetchNetworkStats();
+  }
+
+  $: if ($gethStatus !== 'running' && lastKnownGethStatus === 'running') {
+    lastKnownGethStatus = 'stopped';
+  }
 </script>
 
 <div class="space-y-6">
@@ -418,6 +465,18 @@
   </div>
 
   <!-- Warning Banner: Geth Not Running -->
+  {#if $gethTransition === 'stopping'}
+    <div class="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
+      <div class="flex items-center gap-3">
+        <RefreshCw class="h-5 w-5 text-amber-600 animate-spin flex-shrink-0" />
+        <div>
+          <p class="text-sm font-medium text-amber-800">{tr('blockchain.node.shuttingDown.title')}</p>
+          <p class="text-xs text-amber-700 mt-1">{tr('blockchain.node.shuttingDown.subtitle')}</p>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if $gethStatus !== 'running'}
     <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
       <div class="flex items-center gap-3">
@@ -452,12 +511,11 @@
             <span class="text-muted-foreground">{tr('blockchain.sync.remaining')}:</span> {$gethSyncStatus.blocks_remaining.toLocaleString()} blocks
           </div>
           <div>
-            <span class="text-muted-foreground">{tr('blockchain.sync.eta')}:</span> {formatTimeRemaining($gethSyncStatus.estimated_seconds_remaining)}
+            <span class="text-muted-foreground">{tr('blockchain.sync.eta')}:</span>
+            {formatTimeRemainingWithCompletion($gethSyncStatus.estimated_seconds_remaining, $gethSyncStatus.blocks_remaining)}
           </div>
         </div>
-        <p class="text-xs text-blue-600 mt-2">
-          ⏳ {tr('blockchain.sync.complete')}
-        </p>
+        <p class="text-xs text-blue-600 mt-2">⏳ {tr('blockchain.sync.inProgress')}</p>
       </div>
     </div>
   {/if}
@@ -595,17 +653,26 @@
           </div>
         {:else if latestBlocks.length === 0}
           <div class="text-center py-8">
-            <p class="text-gray-900 mb-4 font-medium">
-              {tr('blockchain.blocks.noBlocks')}
-            </p>
-            <p class="text-gray-700 text-sm mb-4">
-              No blocks have been mined yet. To create blocks:
-            </p>
-            <ol class="text-left text-gray-700 text-sm max-w-md mx-auto space-y-2 mb-4">
-              <li>1. Start the Chiral node (Network page)</li>
-              <li>2. Start mining (Mining page)</li>
-              <li>3. Wait for blocks to be mined</li>
-            </ol>
+            {#if $gethSyncStatus?.syncing}
+              <p class="text-gray-900 mb-2 font-medium">
+                {tr('blockchain.blocks.syncingTitle')}
+              </p>
+              <p class="text-gray-700 text-sm max-w-md mx-auto">
+                {tr('blockchain.blocks.syncingSubtitle')}
+              </p>
+            {:else}
+              <p class="text-gray-900 mb-4 font-medium">
+                {tr('blockchain.blocks.noBlocks')}
+              </p>
+              <p class="text-gray-700 text-sm mb-4">
+                No blocks have been mined yet. To create blocks:
+              </p>
+              <ol class="text-left text-gray-700 text-sm max-w-md mx-auto space-y-2 mb-4">
+                <li>1. Start the Chiral node (Network page)</li>
+                <li>2. Start mining (Mining page)</li>
+                <li>3. Wait for blocks to be mined</li>
+              </ol>
+            {/if}
           </div>
         {:else}
           <div class="space-y-3">

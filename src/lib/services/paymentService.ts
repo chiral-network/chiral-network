@@ -8,10 +8,16 @@
  * - Recording transactions for both parties
  */
 
-import { wallet, transactions, type Transaction } from "$lib/stores";
+import {
+  addTransactionWithPolling,
+  wallet,
+  transactions,
+  type Transaction,
+} from "$lib/stores";
 import { get } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
 import { reputationService } from "./reputationService";
+import { downloadHistoryService } from "./downloadHistoryService";
 
 // type FullNetworkStats = {
 //   network_difficulty: number
@@ -41,7 +47,7 @@ function saveTransactionsToStorage(txs: Transaction[]) {
     const serialized = JSON.stringify(txs);
     localStorage.setItem("chiral_transactions", serialized);
     console.log(
-      `💾 Saved ${txs.length} transactions to localStorage (${(serialized.length / 1024).toFixed(2)} KB)`
+      `💾 Saved ${txs.length} transactions to localStorage (${(serialized.length / 1024).toFixed(2)} KB)`,
     );
   } catch (error) {
     console.error("Failed to save transactions to localStorage:", error);
@@ -92,6 +98,7 @@ export interface DownloadPayment {
 export class PaymentService {
   private static initialized = false;
   private static processedPayments = new Set<string>(); // Track processed file hashes (for downloads)
+  private static pendingPayments = new Set<string>(); // Track in-flight download payments
   private static receivedPayments = new Set<string>(); // Track received payments (for uploads)
   private static pollingInterval: number | null = null;
   private static readonly POLL_INTERVAL_MS = 10000; // Poll every 10 seconds
@@ -179,7 +186,7 @@ export class PaymentService {
         // Ratio clamped between 0.8x and 1.5x
         efficiencyFactor = Math.min(
           Math.max(actualEfficiency / baselineEfficiency, 0.8),
-          1.5
+          1.5,
         );
       }
 
@@ -226,7 +233,8 @@ export class PaymentService {
     fileName: string,
     fileSize: number,
     seederAddress: string,
-    seederPeerId?: string
+    seederPeerId?: string,
+    amountOverride?: number,
   ): Promise<{
     success: boolean;
     transactionId?: number;
@@ -235,7 +243,10 @@ export class PaymentService {
   }> {
     try {
       // Check if this file has already been paid for
-      if (this.processedPayments.has(fileHash)) {
+      if (
+        this.processedPayments.has(fileHash) ||
+        this.pendingPayments.has(fileHash)
+      ) {
         console.log("⚠️ Payment already processed for file:", fileHash);
         return {
           success: false,
@@ -243,7 +254,20 @@ export class PaymentService {
         };
       }
 
-      const amount = await this.calculateDownloadCost(fileSize);
+      let amount: number;
+      if (typeof amountOverride === "number") {
+        if (!Number.isFinite(amountOverride) || amountOverride < 0) {
+          return {
+            success: false,
+            error: "Invalid payment amount",
+          };
+        }
+        // Respect explicit 0 (used for free protocols), otherwise enforce minimum.
+        amount = amountOverride === 0 ? 0 : Math.max(amountOverride, 0.0001);
+        amount = parseFloat(amount.toFixed(8));
+      } else {
+        amount = await this.calculateDownloadCost(fileSize);
+      }
 
       if (!seederAddress || !this.WALLET_ADDRESS_REGEX.test(seederAddress)) {
         console.error("❌ Invalid seeder wallet address for payment", {
@@ -312,7 +336,7 @@ export class PaymentService {
 
       // Deduct from downloader's balance (support 8 decimal places)
       const newBalance = parseFloat(
-        (currentWallet.balance - amount).toFixed(8)
+        (currentWallet.balance - amount).toFixed(8),
       );
       console.log("💸 Balance Update:", {
         before: currentWallet.balance,
@@ -339,25 +363,58 @@ export class PaymentService {
         amount: amount,
         to: seederAddress,
         from: currentWallet.address,
+        transaction_hash: transactionHash,
         txHash: transactionHash,
+        hash: transactionHash,
         date: new Date(),
         description: `Download: ${fileName}`,
-        status: "success",
+        status: "pending",
       };
 
       console.log("📝 Creating transaction:", newTransaction);
 
-      // Add transaction to history with persistence
-      transactions.update((txs) => {
-        const updated = [newTransaction, ...txs];
-        console.log("✅ Updated transactions array length:", updated.length);
-        saveTransactionsToStorage(updated);
-        return updated;
+      // Add transaction to history and start polling for updates
+      this.pendingPayments.add(fileHash);
+      console.log("✅ Marked file as payment pending:", fileHash);
+
+      downloadHistoryService.updatePaymentStatus(
+        fileHash,
+        "pending",
+        transactionHash,
+      );
+
+      void addTransactionWithPolling(newTransaction, (status) => {
+        if (status.status === "success") {
+          this.processedPayments.add(fileHash);
+          this.pendingPayments.delete(fileHash);
+          downloadHistoryService.updatePaymentStatus(
+            fileHash,
+            "completed",
+            transactionHash,
+          );
+        } else if (status.status === "failed") {
+          this.pendingPayments.delete(fileHash);
+          downloadHistoryService.updatePaymentStatus(
+            fileHash,
+            "not_sent",
+            transactionHash,
+          );
+        } else if (
+          status.status === "pending" ||
+          status.status === "submitted"
+        ) {
+          downloadHistoryService.updatePaymentStatus(
+            fileHash,
+            "pending",
+            transactionHash,
+          );
+        }
+        saveTransactionsToStorage(get(transactions));
+      }).catch((error) => {
+        console.error("Failed to poll transaction status:", error);
       });
 
-      // Mark this file as paid to prevent duplicate payments
-      this.processedPayments.add(fileHash);
-      console.log("✅ Marked file as paid:", fileHash);
+      saveTransactionsToStorage(get(transactions));
 
       // Publish reputation verdict for successful payment (downloader perspective)
       // Get our own peer ID first for the issuer_id
@@ -368,14 +425,14 @@ export class PaymentService {
       } catch (err) {
         console.warn(
           "Could not get peer ID for issuer_id, using wallet address:",
-          err
+          err,
         );
       }
 
       // Publish reputation verdict using signed message system (see docs/SIGNED_TRANSACTION_MESSAGES.md)
       try {
         console.log(
-          "📊 Attempting to publish reputation verdict for downloader→seeder"
+          "📊 Attempting to publish reputation verdict for downloader→seeder",
         );
         console.log("📊 seederPeerId:", seederPeerId);
         console.log("📊 seederAddress:", seederAddress);
@@ -395,12 +452,12 @@ export class PaymentService {
 
         console.log(
           "✅ Published good reputation verdict for seeder:",
-          seederPeerId || seederAddress
+          seederPeerId || seederAddress,
         );
       } catch (reputationError) {
         console.error(
           "❌ Failed to publish reputation verdict:",
-          reputationError
+          reputationError,
         );
         // Don't fail the payment if reputation update fails
       }
@@ -409,12 +466,12 @@ export class PaymentService {
       try {
         console.log(
           "📤 Sending payment notification with downloaderPeerId:",
-          downloaderPeerId
+          downloaderPeerId,
         );
         console.log("📤 Type of downloaderPeerId:", typeof downloaderPeerId);
         console.log(
           "📤 Is downloaderPeerId a peer ID?",
-          downloaderPeerId?.startsWith("12D3Koo")
+          downloaderPeerId?.startsWith("12D3Koo"),
         );
 
         await invoke("record_download_payment", {
@@ -460,7 +517,7 @@ export class PaymentService {
     fileSize: number,
     downloaderAddress: string,
     downloaderPeerId: string,
-    transactionHash?: string
+    transactionHash?: string,
   ): Promise<{ success: boolean; transactionId?: number; error?: string }> {
     try {
       // Generate unique key for this payment receipt
@@ -541,20 +598,20 @@ export class PaymentService {
       } catch (err) {
         console.warn(
           "Could not get peer ID for issuer_id, using wallet address:",
-          err
+          err,
         );
       }
 
       // Publish reputation verdict using signed message system (see docs/SIGNED_TRANSACTION_MESSAGES.md)
       try {
         console.log(
-          "📊 Attempting to publish reputation verdict for seeder→downloader"
+          "📊 Attempting to publish reputation verdict for seeder→downloader",
         );
         console.log("📊 downloaderPeerId:", downloaderPeerId);
         console.log("📊 downloaderAddress:", downloaderAddress);
         console.log(
           "📊 Using target_id:",
-          downloaderPeerId || downloaderAddress
+          downloaderPeerId || downloaderAddress,
         );
         console.log("📊 Using issuer_id:", seederPeerId);
 
@@ -571,12 +628,12 @@ export class PaymentService {
 
         console.log(
           "✅ Published good reputation verdict for downloader:",
-          downloaderPeerId || downloaderAddress
+          downloaderPeerId || downloaderAddress,
         );
       } catch (reputationError) {
         console.error(
           "❌ Failed to publish reputation verdict:",
-          reputationError
+          reputationError,
         );
         // Don't fail the payment if reputation update fails
       }
@@ -594,7 +651,7 @@ export class PaymentService {
       } catch (invokeError) {
         console.warn(
           "Failed to persist seeder payment to backend:",
-          invokeError
+          invokeError,
         );
         // Continue anyway - frontend state is updated
       }
@@ -739,7 +796,7 @@ export class PaymentService {
    * Handle a payment notification from the DHT
    */
   private static async handlePaymentNotification(
-    notification: any
+    notification: any,
   ): Promise<void> {
     try {
       console.log("💰 Payment notification received:", notification);
@@ -750,7 +807,7 @@ export class PaymentService {
         notification.file_name,
         notification.file_size,
         notification.downloader_address,
-        notification.transaction_hash
+        notification.transaction_hash,
       );
 
       if (result.success) {

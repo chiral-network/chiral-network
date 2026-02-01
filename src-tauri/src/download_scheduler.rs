@@ -370,6 +370,7 @@ impl DownloadScheduler {
             let started_event = TransferStartedEvent {
                 transfer_id: task_id_clone.clone(),
                 file_hash: file_hash_clone.clone(),
+                protocol: "FTP".to_string(),
                 file_name: file_name_clone.clone(),
                 file_size: 0, // We'll get this from the download
                 total_chunks: 1, // FTP downloads are treated as single chunk
@@ -415,6 +416,7 @@ impl DownloadScheduler {
 
                     let progress_event = TransferProgressEvent {
                         transfer_id: task_id_for_callback.clone(),
+                        protocol: "FTP".to_string(),
                         downloaded_bytes: downloaded,
                         total_bytes: total,
                         completed_chunks: if total > 0 && downloaded >= total { 1 } else { 0 },
@@ -451,6 +453,7 @@ impl DownloadScheduler {
                     let completed_event = TransferCompletedEvent {
                         transfer_id: task_id_clone.clone(),
                         file_hash: file_hash_clone.clone(),
+                        protocol: "FTP".to_string(),
                         file_name: file_name_clone.clone(),
                         file_size: bytes,
                         output_path: output_path_clone.to_string_lossy().to_string(),
@@ -483,6 +486,7 @@ impl DownloadScheduler {
                     let failed_event = TransferFailedEvent {
                         transfer_id: task_id_clone.clone(),
                         file_hash: file_hash_clone.clone(),
+                        protocol: "FTP".to_string(),
                         failed_at: current_timestamp_ms(),
                         error: e.to_string(),
                         error_category: ErrorCategory::Network,

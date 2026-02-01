@@ -17,15 +17,15 @@ export class FileService {
     // The port and bootstrap nodes could be made configurable in the future.
     // Get bootstrap nodes from the backend instead of hardcoding
     const bootstrapNodes = await invoke<string[]>(
-      "get_bootstrap_nodes_command"
+      "get_bootstrap_nodes_command",
     );
-    await invoke("start_dht_node", {
+    const { dhtService } = await import("$lib/dht");
+    await dhtService.start({
       port: 4001,
       bootstrapNodes,
     });
 
     // Get the peer ID and set it on the DHT service singleton
-    const { dhtService } = await import("$lib/dht");
     const peerId = await invoke<string | null>("get_dht_peer_id");
     if (peerId) {
       dhtService.setPeerId(peerId);
@@ -59,7 +59,7 @@ export class FileService {
       // Use ChunkManager via encryptionService (same as file path upload)
       const manifest = await encryptionService.encryptFile(
         tempFilePath,
-        recipientPublicKey
+        recipientPublicKey,
       );
 
       return manifest;

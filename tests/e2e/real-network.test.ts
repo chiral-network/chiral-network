@@ -1,14 +1,14 @@
 /**
  * @fileoverview Real E2E Test Framework
  * Launches two actual Chiral Network nodes and tests real communication
- * 
+ *
  * This framework:
  * - Spawns two separate node processes with different configurations
  * - Uses real DHT network for peer discovery
  * - Tests actual WebRTC/Bitswap protocol communication
  * - Validates real payment transactions
  * - Can run across different machines on the same network
- * 
+ *
  * Usage:
  *   npm run test:e2e:real
  *   npm run test:e2e:real -- --cross-machine
@@ -25,7 +25,10 @@ function npmCommand(): string {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
-function spawnNpm(args: string[], opts: Parameters<typeof spawn>[2]): ChildProcess {
+function spawnNpm(
+  args: string[],
+  opts: Parameters<typeof spawn>[2],
+): ChildProcess {
   // On Windows, `.cmd` needs to be invoked through `cmd.exe /c`.
   if (process.platform === "win32") {
     return spawn("cmd.exe", ["/c", npmCommand(), ...args], opts);
@@ -34,7 +37,7 @@ function spawnNpm(args: string[], opts: Parameters<typeof spawn>[2]): ChildProce
 }
 
 function getTestTimeoutMs(
-  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent",
 ): number {
   // Priority:
   // 1) E2E_{PROTOCOL}_TEST_TIMEOUT_MS
@@ -51,7 +54,7 @@ function getTestTimeoutMs(
 }
 
 function getSearchTimeoutMs(
-  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent",
 ): number {
   // Priority:
   // 1) E2E_{PROTOCOL}_SEARCH_TIMEOUT_MS
@@ -67,7 +70,7 @@ function getSearchTimeoutMs(
 }
 
 function getReceiptTimeoutMs(
-  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+  protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent",
 ): number {
   // Priority:
   // 1) E2E_{PROTOCOL}_RECEIPT_TIMEOUT_MS
@@ -122,12 +125,18 @@ class RealE2ETestFramework {
       const downloaderApi = process.env.E2E_DOWNLOADER_API_URL;
       if (!uploaderApi || !downloaderApi) {
         throw new Error(
-          "E2E_ATTACH=true requires E2E_UPLOADER_API_URL and E2E_DOWNLOADER_API_URL"
+          "E2E_ATTACH=true requires E2E_UPLOADER_API_URL and E2E_DOWNLOADER_API_URL",
         );
       }
 
-      this.uploaderConfig = { nodeId: "uploader_node", apiBaseUrl: uploaderApi };
-      this.downloaderConfig = { nodeId: "downloader_node", apiBaseUrl: downloaderApi };
+      this.uploaderConfig = {
+        nodeId: "uploader_node",
+        apiBaseUrl: uploaderApi,
+      };
+      this.downloaderConfig = {
+        nodeId: "downloader_node",
+        apiBaseUrl: downloaderApi,
+      };
     } else {
       // Spawn mode is best-effort. Note: the current Tauri binary enforces single-instance
       // via binding DHT port 4001, so running two nodes locally may not work.
@@ -135,7 +144,9 @@ class RealE2ETestFramework {
       console.log(`📁 Test directory: ${this.testDir}`);
 
       const uploaderPort = Number(process.env.E2E_UPLOADER_API_PORT || "8081");
-      const downloaderPort = Number(process.env.E2E_DOWNLOADER_API_PORT || "8082");
+      const downloaderPort = Number(
+        process.env.E2E_DOWNLOADER_API_PORT || "8082",
+      );
       this.uploaderConfig = {
         nodeId: "uploader_node",
         apiBaseUrl: `http://localhost:${uploaderPort}`,
@@ -159,7 +170,7 @@ class RealE2ETestFramework {
     if (process.env.E2E_ATTACH === "true") return;
 
     const startupTimeoutMs = Number(
-      process.env.E2E_NODE_STARTUP_TIMEOUT_MS || "180000"
+      process.env.E2E_NODE_STARTUP_TIMEOUT_MS || "180000",
     );
 
     const nodeEnv = await this.buildNodeEnv("uploader", this.uploaderConfig);
@@ -176,7 +187,10 @@ class RealE2ETestFramework {
     this.setupNodeLogging(this.uploaderNode, "UPLOADER");
 
     // Wait for node to be ready
-    await this.waitForNodeReady(this.uploaderConfig.apiBaseUrl, startupTimeoutMs);
+    await this.waitForNodeReady(
+      this.uploaderConfig.apiBaseUrl,
+      startupTimeoutMs,
+    );
     console.log("✅ Uploader node ready");
   }
 
@@ -190,10 +204,13 @@ class RealE2ETestFramework {
     if (process.env.E2E_ATTACH === "true") return;
 
     const startupTimeoutMs = Number(
-      process.env.E2E_NODE_STARTUP_TIMEOUT_MS || "180000"
+      process.env.E2E_NODE_STARTUP_TIMEOUT_MS || "180000",
     );
 
-    const nodeEnv = await this.buildNodeEnv("downloader", this.downloaderConfig);
+    const nodeEnv = await this.buildNodeEnv(
+      "downloader",
+      this.downloaderConfig,
+    );
 
     this.downloaderNode = spawnNpm(["run", "tauri", "dev"], {
       cwd: process.cwd(),
@@ -205,7 +222,10 @@ class RealE2ETestFramework {
     this.setupNodeLogging(this.downloaderNode, "DOWNLOADER");
 
     // Wait for node to be ready
-    await this.waitForNodeReady(this.downloaderConfig.apiBaseUrl, startupTimeoutMs);
+    await this.waitForNodeReady(
+      this.downloaderConfig.apiBaseUrl,
+      startupTimeoutMs,
+    );
     console.log("✅ Downloader node ready");
 
     // Wait for DHT connection
@@ -240,7 +260,7 @@ class RealE2ETestFramework {
 
   private async buildNodeEnv(
     role: "uploader" | "downloader",
-    cfg: NodeConfig
+    cfg: NodeConfig,
   ): Promise<NodeJS.ProcessEnv> {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -296,11 +316,17 @@ class RealE2ETestFramework {
               maxLogSizeMb: 10,
             },
             null,
-            2
-          )
+            2,
+          ),
         );
       } else {
-        // Best-effort isolation for non-Windows spawn mode.
+        if (process.env.RUSTUP_HOME) env.RUSTUP_HOME = process.env.RUSTUP_HOME;
+        if (process.env.CARGO_HOME) env.CARGO_HOME = process.env.CARGO_HOME;
+
+        const actualHome = os.homedir();
+        env.RUSTUP_HOME = env.RUSTUP_HOME || path.join(actualHome, ".rustup");
+        env.CARGO_HOME = env.CARGO_HOME || path.join(actualHome, ".cargo");
+
         env.HOME = nodeRoot;
       }
 
@@ -320,7 +346,10 @@ class RealE2ETestFramework {
   /**
    * Wait for node to be ready
    */
-  private async waitForNodeReady(apiBaseUrl: string, timeout: number): Promise<void> {
+  private async waitForNodeReady(
+    apiBaseUrl: string,
+    timeout: number,
+  ): Promise<void> {
     const startTime = Date.now();
     const checkInterval = 500;
 
@@ -352,9 +381,9 @@ class RealE2ETestFramework {
     while (Date.now() - startTime < timeout) {
       try {
         const response = await fetch(
-          `${this.downloaderConfig.apiBaseUrl}/api/dht/peers`
+          `${this.downloaderConfig.apiBaseUrl}/api/dht/peers`,
         );
-        
+
         if (response.ok) {
           const data = await response.json();
           if (data.peers && data.peers.length > 0) {
@@ -376,36 +405,39 @@ class RealE2ETestFramework {
    */
   async uploadFile(
     file: TestFile,
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent",
   ): Promise<string> {
     if (!this.uploaderConfig) throw new Error("Config not initialized");
 
     console.log(
       `📤 Uploading file (generated on uploader): ${file.name} (${Math.round(
-        file.size / 1024 / 1024
-      )}MB) via ${protocol}`
+        file.size / 1024 / 1024,
+      )}MB) via ${protocol}`,
     );
 
     // Uploader generates deterministic bytes and publishes metadata.
-    const response = await fetch(`${this.uploaderConfig.apiBaseUrl}/api/upload`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sizeMb: Math.max(1, Math.round(file.size / 1024 / 1024)),
-        protocol,
-        // In spawn mode, default to price=0 to avoid requiring mining/funding.
-        // In attach mode (or when explicitly requested), keep payment enabled.
-        price: this.requirePayment ? 0.001 : 0,
-        fileName: file.name,
-      }),
-    });
+    const response = await fetch(
+      `${this.uploaderConfig.apiBaseUrl}/api/upload`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sizeMb: Math.max(1, Math.round(file.size / 1024 / 1024)),
+          protocol,
+          // In spawn mode, default to price=0 to avoid requiring mining/funding.
+          // In attach mode (or when explicitly requested), keep payment enabled.
+          price: this.requirePayment ? 0.001 : 0,
+          fileName: file.name,
+        }),
+      },
+    );
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       throw new Error(
         `Upload failed: ${response.status} ${response.statusText}${
           body ? ` - ${body}` : ""
-        }`
+        }`,
       );
     }
 
@@ -431,36 +463,42 @@ class RealE2ETestFramework {
 
     const start = Date.now();
     const pollIntervalMs = 750;
-    const perAttemptTimeoutMs = Number(process.env.E2E_SEARCH_ATTEMPT_TIMEOUT_MS || "10000");
+    const perAttemptTimeoutMs = Number(
+      process.env.E2E_SEARCH_ATTEMPT_TIMEOUT_MS || "10000",
+    );
 
     // DHT propagation is not instantaneous across real networks.
     // Poll until we get a non-null metadata (or until timeout).
     while (Date.now() - start < timeout) {
-      const response = await fetch(`${this.downloaderConfig.apiBaseUrl}/api/search`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileHash,
-          // Give each attempt a modest budget; overall timeout is controlled by this loop.
-          timeoutMs: Math.max(
-            1000,
-            Math.min(perAttemptTimeoutMs, Math.max(0, timeout - (Date.now() - start)))
-          ),
-        }),
-      });
+      const response = await fetch(
+        `${this.downloaderConfig.apiBaseUrl}/api/search`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileHash,
+            // Give each attempt a modest budget; overall timeout is controlled by this loop.
+            timeoutMs: Math.max(
+              1000,
+              Math.min(
+                perAttemptTimeoutMs,
+                Math.max(0, timeout - (Date.now() - start)),
+              ),
+            ),
+          }),
+        },
+      );
 
       if (!response.ok) {
         const body = await response.text().catch(() => "");
         throw new Error(
-          `Search failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`
+          `Search failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`,
         );
       }
 
       const metadata = await response.json();
       if (metadata) {
-        console.log(
-          `✅ File found. Seeders: ${metadata.seeders?.length || 0}`
-        );
+        console.log(`✅ File found. Seeders: ${metadata.seeders?.length || 0}`);
         return metadata;
       }
 
@@ -469,8 +507,8 @@ class RealE2ETestFramework {
 
     throw new Error(
       `Search timed out after ${timeout}ms (metadata not found). ` +
-        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and ${(this.uploaderConfig?.apiBaseUrl ?? "<uploader-api-unknown>")}/api/dht/peers. ` +
-        `Also confirm the uploader's libp2p port (default tcp/4001) is reachable (firewall/NAT/relay).`
+        `Check DHT connectivity: ${this.downloaderConfig.apiBaseUrl}/api/dht/peers and ${this.uploaderConfig?.apiBaseUrl ?? "<uploader-api-unknown>"}/api/dht/peers. ` +
+        `Also confirm the uploader's libp2p port (default tcp/4001) is reachable (firewall/NAT/relay).`,
     );
   }
 
@@ -480,7 +518,7 @@ class RealE2ETestFramework {
   async downloadFile(
     fileHash: string,
     fileName: string,
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent",
   ): Promise<string> {
     if (!this.downloaderConfig) throw new Error("Config not initialized");
 
@@ -492,31 +530,36 @@ class RealE2ETestFramework {
       this.uploaderConfig?.apiBaseUrl ?? this.downloaderConfig.apiBaseUrl;
     const bittorrentSeederIp =
       protocol === "BitTorrent"
-        ? (process.env.E2E_UPLOADER_PUBLIC_IP ?? new URL(uploaderApiBaseUrl).hostname)
+        ? (process.env.E2E_UPLOADER_PUBLIC_IP ??
+          new URL(uploaderApiBaseUrl).hostname)
         : undefined;
 
-    const response = await fetch(`${this.downloaderConfig.apiBaseUrl}/api/download`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fileHash,
-        fileName,
-        protocol,
-        torrentBase64:
-          protocol === "BitTorrent" ? this.torrentBase64ByHash.get(fileHash) : undefined,
-        bittorrentSeederIp:
-          bittorrentSeederIp,
-        bittorrentSeederPort:
-          protocol === "BitTorrent"
-            ? this.torrentSeederPortByHash.get(fileHash)
-            : undefined,
-      }),
-    });
+    const response = await fetch(
+      `${this.downloaderConfig.apiBaseUrl}/api/download`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileHash,
+          fileName,
+          protocol,
+          torrentBase64:
+            protocol === "BitTorrent"
+              ? this.torrentBase64ByHash.get(fileHash)
+              : undefined,
+          bittorrentSeederIp: bittorrentSeederIp,
+          bittorrentSeederPort:
+            protocol === "BitTorrent"
+              ? this.torrentSeederPortByHash.get(fileHash)
+              : undefined,
+        }),
+      },
+    );
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       throw new Error(
-        `Download failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`
+        `Download failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`,
       );
     }
 
@@ -528,7 +571,8 @@ class RealE2ETestFramework {
     const downloadId: string | undefined = result.downloadId;
 
     if (protocol === "HTTP" || !downloadId) {
-      if (!result.verified) throw new Error("Downloaded file failed verification on node");
+      if (!result.verified)
+        throw new Error("Downloaded file failed verification on node");
       console.log(`✅ File downloaded to: ${downloadPath}`);
       return downloadPath;
     }
@@ -539,18 +583,19 @@ class RealE2ETestFramework {
     let lastJob: any = null;
     while (Date.now() - start < waitTimeoutMs) {
       const st = await fetch(
-        `${this.downloaderConfig.apiBaseUrl}/api/download/status/${downloadId}`
+        `${this.downloaderConfig.apiBaseUrl}/api/download/status/${downloadId}`,
       );
       if (!st.ok) {
         const body = await st.text().catch(() => "");
         throw new Error(
-          `Download status failed: ${st.status} ${st.statusText}${body ? ` - ${body}` : ""}`
+          `Download status failed: ${st.status} ${st.statusText}${body ? ` - ${body}` : ""}`,
         );
       }
       const job = await st.json();
       lastJob = job;
       if (job.status === "success") {
-        if (!job.verified) throw new Error("Downloaded file failed verification on node");
+        if (!job.verified)
+          throw new Error("Downloaded file failed verification on node");
         console.log(`✅ File downloaded to: ${job.downloadPath}`);
         return job.downloadPath;
       }
@@ -560,12 +605,12 @@ class RealE2ETestFramework {
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error(
-      `Timed out waiting for download ${downloadId} (protocol=${protocol}, timeoutMs=${waitTimeoutMs}, lastStatus=${lastJob?.status ?? "unknown"}, lastError=${lastJob?.error ?? "none"})`
+      `Timed out waiting for download ${downloadId} (protocol=${protocol}, timeoutMs=${waitTimeoutMs}, lastStatus=${lastJob?.status ?? "unknown"}, lastError=${lastJob?.error ?? "none"})`,
     );
   }
 
   private getP2PDownloadTimeoutMs(
-    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent"
+    protocol: "HTTP" | "WebRTC" | "Bitswap" | "FTP" | "BitTorrent",
   ): number {
     // Protocol-specific overrides (milliseconds). Fallback order:
     // 1) E2E_{PROTOCOL}_DOWNLOAD_TIMEOUT_MS
@@ -580,7 +625,7 @@ class RealE2ETestFramework {
             ? "E2E_FTP_DOWNLOAD_TIMEOUT_MS"
             : protocol === "BitTorrent"
               ? "E2E_BITTORRENT_DOWNLOAD_TIMEOUT_MS"
-            : null;
+              : null;
 
     const raw =
       (byProtocolKey ? process.env[byProtocolKey] : undefined) ??
@@ -595,10 +640,16 @@ class RealE2ETestFramework {
     // if the test times out earlier, we only see lastStatus=running and lose the real error context.
     if (protocol === "BitTorrent") {
       const allowShort =
-        (process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? "").toLowerCase() === "1" ||
-        (process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? "").toLowerCase() === "true";
+        (
+          process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? ""
+        ).toLowerCase() === "1" ||
+        (
+          process.env.E2E_BITTORRENT_ALLOW_SHORT_NO_PROGRESS ?? ""
+        ).toLowerCase() === "true";
 
-      const noProgressRaw = Number(process.env.E2E_BITTORRENT_NO_PROGRESS_FAIL_MS ?? "60000");
+      const noProgressRaw = Number(
+        process.env.E2E_BITTORRENT_NO_PROGRESS_FAIL_MS ?? "60000",
+      );
       const noProgressMs =
         Number.isFinite(noProgressRaw) && noProgressRaw > 0
           ? allowShort
@@ -637,7 +688,10 @@ class RealE2ETestFramework {
   /**
    * Verify downloaded file matches original
    */
-  async verifyDownloadedFile(downloadPath: string, originalFile: TestFile): Promise<boolean> {
+  async verifyDownloadedFile(
+    downloadPath: string,
+    originalFile: TestFile,
+  ): Promise<boolean> {
     // Option1: node already verified via sha256 during /api/download.
     // Keep a lightweight sanity check that the file exists on the test runner machine
     // only when the path is local-accessible.
@@ -653,7 +707,9 @@ class RealE2ETestFramework {
   /**
    * Get payment transactions
    */
-  async getPaymentTransactions(nodeType: "uploader" | "downloader"): Promise<any[]> {
+  async getPaymentTransactions(
+    nodeType: "uploader" | "downloader",
+  ): Promise<any[]> {
     // Deprecated in option1: use /api/pay + /api/tx/receipt.
     void nodeType;
     return [];
@@ -700,7 +756,7 @@ class RealE2ETestFramework {
    */
   private async waitForProcessExit(
     process: ChildProcess,
-    timeout: number
+    timeout: number,
   ): Promise<void> {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -724,17 +780,20 @@ class RealE2ETestFramework {
     // IMPORTANT: make the filename unique per test run so the deterministic uploader bytes produce a new sha256,
     // avoiding stale DHT records when re-running tests against a real network.
     const ms = Date.now();
-    const uniqueName = name.replace(/(\.[^.]*)?$/, (ext) => `-${ms}${ext || ""}`);
+    const uniqueName = name.replace(
+      /(\.[^.]*)?$/,
+      (ext) => `-${ms}${ext || ""}`,
+    );
     return { name: uniqueName, size, content: Buffer.alloc(0) };
   }
 }
 
 /**
  * Real E2E Tests
- * 
+ *
  * These tests launch actual Chiral Network nodes and test real communication.
  * They can be run on a single machine or across multiple machines on the same network.
- * 
+ *
  * To run across machines:
  * 1. Machine 1: Run uploader node with known IP
  * 2. Machine 2: Set CHIRAL_BOOTSTRAP_NODES to Machine 1's IP:port
@@ -743,32 +802,37 @@ class RealE2ETestFramework {
 describe("Real E2E Tests (Two Actual Nodes)", () => {
   let framework: RealE2ETestFramework;
 
-  beforeAll(async () => {
-    // Check if running in cross-machine mode
-    const crossMachine = process.env.E2E_CROSS_MACHINE === "true";
-    
-    framework = new RealE2ETestFramework(crossMachine);
-    await framework.setup();
+  beforeAll(
+    async () => {
+      // Check if running in cross-machine mode
+      const crossMachine = process.env.E2E_CROSS_MACHINE === "true";
 
-    if (!crossMachine) {
-      // Launch both nodes on same machine
-      await framework.launchUploaderNode();
-      await framework.launchDownloaderNode();
-    } else {
-      // In cross-machine mode, launch only one node based on role
-      const role = process.env.E2E_NODE_ROLE;
-      
-      if (role === "uploader") {
+      framework = new RealE2ETestFramework(crossMachine);
+      await framework.setup();
+
+      if (!crossMachine) {
+        // Launch both nodes on same machine
         await framework.launchUploaderNode();
-        console.log("✅ Uploader node running. Waiting for downloader...");
-      } else if (role === "downloader") {
         await framework.launchDownloaderNode();
-        console.log("✅ Downloader node running and connected.");
       } else {
-        throw new Error("E2E_NODE_ROLE must be set to 'uploader' or 'downloader' in cross-machine mode");
+        // In cross-machine mode, launch only one node based on role
+        const role = process.env.E2E_NODE_ROLE;
+
+        if (role === "uploader") {
+          await framework.launchUploaderNode();
+          console.log("✅ Uploader node running. Waiting for downloader...");
+        } else if (role === "downloader") {
+          await framework.launchDownloaderNode();
+          console.log("✅ Downloader node running and connected.");
+        } else {
+          throw new Error(
+            "E2E_NODE_ROLE must be set to 'uploader' or 'downloader' in cross-machine mode",
+          );
+        }
       }
-    }
-  }, process.env.E2E_ATTACH === "true" ? 120000 : 300000);
+    },
+    process.env.E2E_ATTACH === "true" ? 120000 : 300000,
+  );
 
   afterAll(async () => {
     await framework.cleanup();
@@ -776,7 +840,8 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
 
   describe("HTTP Real Communication (Option1 / Attach)", () => {
     async function payAndWaitReceipt(uploaderAddress: string, price: number) {
-      if (!framework["downloaderConfig"]) throw new Error("Config not initialized");
+      if (!framework["downloaderConfig"])
+        throw new Error("Config not initialized");
       const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
 
       const payRes = await fetch(`${downloaderApi}/api/pay`, {
@@ -787,7 +852,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       if (!payRes.ok) {
         const body = await payRes.text().catch(() => "");
         throw new Error(
-          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`,
         );
       }
       const payJson = await payRes.json();
@@ -805,7 +870,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         if (!r.ok) {
           const body = await r.text().catch(() => "");
           throw new Error(
-            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`,
           );
         }
         const receipt = await r.json();
@@ -825,12 +890,20 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       const metadata = await framework.searchFile(fileHash);
       expect(metadata).toBeTruthy();
 
-      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
+      const uploaderAddress =
+        metadata.uploaderAddress ?? metadata.uploader_address;
       const price = metadata.price ?? 0.001;
       expect(typeof uploaderAddress).toBe("string");
 
-      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "HTTP");
-      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
+      const downloadPath = await framework.downloadFile(
+        fileHash,
+        testFile.name,
+        "HTTP",
+      );
+      const verified = await framework.verifyDownloadedFile(
+        downloadPath,
+        testFile,
+      );
       expect(verified).toBe(true);
 
       const receipt = await payAndWaitReceipt(uploaderAddress, price);
@@ -839,32 +912,125 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
   });
 
   describe("WebRTC Real Communication (Attach)", () => {
-    it("should upload, search, download (WebRTC), and pay (tx receipt success)", async () => {
-      const testFile = framework.createTestFile("real-test-webrtc.bin", 5);
+    it(
+      "should upload, search, download (WebRTC), and pay (tx receipt success)",
+      async () => {
+        const testFile = framework.createTestFile("real-test-webrtc.bin", 5);
 
-      // Use real P2P publish path on uploader
-      const fileHash = await framework.uploadFile(testFile, "WebRTC");
-      expect(fileHash).toBeTruthy();
+        // Use real P2P publish path on uploader
+        const fileHash = await framework.uploadFile(testFile, "WebRTC");
+        expect(fileHash).toBeTruthy();
 
-      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("WebRTC"));
-      expect(metadata).toBeTruthy();
+        const metadata = await framework.searchFile(
+          fileHash,
+          getSearchTimeoutMs("WebRTC"),
+        );
+        expect(metadata).toBeTruthy();
 
-      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
-      const price = metadata.price ?? 0.001;
-      expect(typeof uploaderAddress).toBe("string");
+        const uploaderAddress =
+          metadata.uploaderAddress ?? metadata.uploader_address;
+        const price = metadata.price ?? 0.001;
+        expect(typeof uploaderAddress).toBe("string");
 
-      // Trigger WebRTC P2P download on downloader node.
-      // WebRTC downloads are async (202 + downloadId) so always go through the framework helper.
-      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "WebRTC");
+        // Trigger WebRTC P2P download on downloader node.
+        // WebRTC downloads are async (202 + downloadId) so always go through the framework helper.
+        const downloadPath = await framework.downloadFile(
+          fileHash,
+          testFile.name,
+          "WebRTC",
+        );
 
-      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
-      expect(verified).toBe(true);
+        const verified = await framework.verifyDownloadedFile(
+          downloadPath,
+          testFile,
+        );
+        expect(verified).toBe(true);
 
-      // Final payment + receipt
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-      const receipt = await (async () => {
-        // reuse helper inside HTTP describe via access (copy minimal here)
-        if (!framework["downloaderConfig"]) throw new Error("Config not initialized");
+        // Final payment + receipt
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        const receipt = await (async () => {
+          // reuse helper inside HTTP describe via access (copy minimal here)
+          if (!framework["downloaderConfig"])
+            throw new Error("Config not initialized");
+          const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+          const payRes = await fetch(`${downloaderApi}/api/pay`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uploaderAddress, price }),
+          });
+          if (!payRes.ok) {
+            const body = await payRes.text().catch(() => "");
+            throw new Error(
+              `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`,
+            );
+          }
+          const payJson = await payRes.json();
+          const txHash: string = payJson.txHash;
+          expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+
+          const start = Date.now();
+          const timeoutMs = getReceiptTimeoutMs("WebRTC");
+          while (Date.now() - start < timeoutMs) {
+            const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ txHash }),
+            });
+            if (!r.ok) {
+              const body = await r.text().catch(() => "");
+              throw new Error(
+                `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`,
+              );
+            }
+            const receipt = await r.json();
+            if (receipt.status === "success") return receipt;
+            if (receipt.status === "failed")
+              throw new Error("Transaction failed");
+            await new Promise((res) => setTimeout(res, 1000));
+          }
+          throw new Error("Timed out waiting for tx receipt");
+        })();
+        expect(receipt.status).toBe("success");
+      },
+      getTestTimeoutMs("WebRTC"),
+    );
+  });
+
+  describe("Bitswap Real Communication (Attach)", () => {
+    it(
+      "should upload, search, download (Bitswap), and pay (tx receipt success)",
+      async () => {
+        const testFile = framework.createTestFile("real-test-bitswap.bin", 5);
+
+        const fileHash = await framework.uploadFile(testFile, "Bitswap");
+        expect(fileHash).toBeTruthy();
+
+        // Bitswap metadata propagation can be slower than WebRTC/HTTP on real networks.
+        const metadata = await framework.searchFile(
+          fileHash,
+          getSearchTimeoutMs("Bitswap"),
+        );
+        expect(metadata).toBeTruthy();
+
+        const uploaderAddress =
+          metadata.uploaderAddress ?? metadata.uploader_address;
+        const price = metadata.price ?? 0.001;
+        expect(typeof uploaderAddress).toBe("string");
+
+        // Bitswap downloads are async (202 + downloadId) so always go through the framework helper.
+        const downloadPath = await framework.downloadFile(
+          fileHash,
+          testFile.name,
+          "Bitswap",
+        );
+
+        const verified = await framework.verifyDownloadedFile(
+          downloadPath,
+          testFile,
+        );
+        expect(verified).toBe(true);
+
+        // Final payment + receipt
         const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
         const payRes = await fetch(`${downloaderApi}/api/pay`, {
           method: "POST",
@@ -874,7 +1040,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         if (!payRes.ok) {
           const body = await payRes.text().catch(() => "");
           throw new Error(
-            `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+            `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`,
           );
         }
         const payJson = await payRes.json();
@@ -882,7 +1048,7 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
         expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
         const start = Date.now();
-      const timeoutMs = getReceiptTimeoutMs("WebRTC");
+        const timeoutMs = getReceiptTimeoutMs("Bitswap");
         while (Date.now() - start < timeoutMs) {
           const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
             method: "POST",
@@ -892,197 +1058,169 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
           if (!r.ok) {
             const body = await r.text().catch(() => "");
             throw new Error(
-              `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+              `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`,
             );
           }
           const receipt = await r.json();
-          if (receipt.status === "success") return receipt;
-          if (receipt.status === "failed") throw new Error("Transaction failed");
+          if (receipt.status === "success") break;
+          if (receipt.status === "failed")
+            throw new Error("Transaction failed");
           await new Promise((res) => setTimeout(res, 1000));
         }
-        throw new Error("Timed out waiting for tx receipt");
-      })();
-      expect(receipt.status).toBe("success");
-    }, getTestTimeoutMs("WebRTC"));
-  });
-
-  describe("Bitswap Real Communication (Attach)", () => {
-    it("should upload, search, download (Bitswap), and pay (tx receipt success)", async () => {
-      const testFile = framework.createTestFile("real-test-bitswap.bin", 5);
-
-      const fileHash = await framework.uploadFile(testFile, "Bitswap");
-      expect(fileHash).toBeTruthy();
-
-      // Bitswap metadata propagation can be slower than WebRTC/HTTP on real networks.
-      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("Bitswap"));
-      expect(metadata).toBeTruthy();
-
-      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
-      const price = metadata.price ?? 0.001;
-      expect(typeof uploaderAddress).toBe("string");
-
-      // Bitswap downloads are async (202 + downloadId) so always go through the framework helper.
-      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "Bitswap");
-
-      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
-      expect(verified).toBe(true);
-
-      // Final payment + receipt
-      const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
-      const payRes = await fetch(`${downloaderApi}/api/pay`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploaderAddress, price }),
-      });
-      if (!payRes.ok) {
-        const body = await payRes.text().catch(() => "");
-        throw new Error(
-          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
-        );
-      }
-      const payJson = await payRes.json();
-      const txHash: string = payJson.txHash;
-      expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
-
-      const start = Date.now();
-      const timeoutMs = getReceiptTimeoutMs("Bitswap");
-      while (Date.now() - start < timeoutMs) {
-        const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ txHash }),
-        });
-        if (!r.ok) {
-          const body = await r.text().catch(() => "");
-          throw new Error(
-            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
-          );
-        }
-        const receipt = await r.json();
-        if (receipt.status === "success") break;
-        if (receipt.status === "failed") throw new Error("Transaction failed");
-        await new Promise((res) => setTimeout(res, 1000));
-      }
-    }, getTestTimeoutMs("Bitswap"));
+      },
+      getTestTimeoutMs("Bitswap"),
+    );
   });
 
   describe("BitTorrent Real Communication (Attach)", () => {
-    it("should upload, search, download (BitTorrent), and pay (tx receipt success)", async () => {
-      const testFile = framework.createTestFile("real-test-bittorrent.bin", 5);
-
-      const fileHash = await framework.uploadFile(testFile, "BitTorrent");
-      expect(fileHash).toBeTruthy();
-
-      // BitTorrent publish key is the info_hash; allow a bit more time for propagation.
-      const metadata = await framework.searchFile(fileHash, getSearchTimeoutMs("BitTorrent"));
-      expect(metadata).toBeTruthy();
-
-      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
-      const price = metadata.price ?? 0.001;
-      expect(typeof uploaderAddress).toBe("string");
-
-      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "BitTorrent");
-      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
-      expect(verified).toBe(true);
-
-      // Final payment + receipt
-      const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
-      const payRes = await fetch(`${downloaderApi}/api/pay`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploaderAddress, price }),
-      });
-      if (!payRes.ok) {
-        const body = await payRes.text().catch(() => "");
-        throw new Error(
-          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+    it(
+      "should upload, search, download (BitTorrent), and pay (tx receipt success)",
+      async () => {
+        const testFile = framework.createTestFile(
+          "real-test-bittorrent.bin",
+          5,
         );
-      }
-      const payJson = await payRes.json();
-      const txHash: string = payJson.txHash;
-      expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
 
-      const start = Date.now();
-      const timeoutMs = getReceiptTimeoutMs("BitTorrent");
-      while (Date.now() - start < timeoutMs) {
-        const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+        const fileHash = await framework.uploadFile(testFile, "BitTorrent");
+        expect(fileHash).toBeTruthy();
+
+        // BitTorrent publish key is the info_hash; allow a bit more time for propagation.
+        const metadata = await framework.searchFile(
+          fileHash,
+          getSearchTimeoutMs("BitTorrent"),
+        );
+        expect(metadata).toBeTruthy();
+
+        const uploaderAddress =
+          metadata.uploaderAddress ?? metadata.uploader_address;
+        const price = metadata.price ?? 0.001;
+        expect(typeof uploaderAddress).toBe("string");
+
+        const downloadPath = await framework.downloadFile(
+          fileHash,
+          testFile.name,
+          "BitTorrent",
+        );
+        const verified = await framework.verifyDownloadedFile(
+          downloadPath,
+          testFile,
+        );
+        expect(verified).toBe(true);
+
+        // Final payment + receipt
+        const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+        const payRes = await fetch(`${downloaderApi}/api/pay`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ txHash }),
+          body: JSON.stringify({ uploaderAddress, price }),
         });
-        if (!r.ok) {
-          const body = await r.text().catch(() => "");
+        if (!payRes.ok) {
+          const body = await payRes.text().catch(() => "");
           throw new Error(
-            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+            `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`,
           );
         }
-        const receipt = await r.json();
-        if (receipt.status === "success") break;
-        if (receipt.status === "failed") throw new Error("Transaction failed");
-        await new Promise((res) => setTimeout(res, 1000));
-      }
-    }, getTestTimeoutMs("BitTorrent"));
+        const payJson = await payRes.json();
+        const txHash: string = payJson.txHash;
+        expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+
+        const start = Date.now();
+        const timeoutMs = getReceiptTimeoutMs("BitTorrent");
+        while (Date.now() - start < timeoutMs) {
+          const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ txHash }),
+          });
+          if (!r.ok) {
+            const body = await r.text().catch(() => "");
+            throw new Error(
+              `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`,
+            );
+          }
+          const receipt = await r.json();
+          if (receipt.status === "success") break;
+          if (receipt.status === "failed")
+            throw new Error("Transaction failed");
+          await new Promise((res) => setTimeout(res, 1000));
+        }
+      },
+      getTestTimeoutMs("BitTorrent"),
+    );
   });
 
   describe("FTP Real Communication (Attach)", () => {
-    it("should upload, search, download (FTP), and pay (tx receipt success)", async () => {
-      const testFile = framework.createTestFile("real-test-ftp.bin", 5);
+    it(
+      "should upload, search, download (FTP), and pay (tx receipt success)",
+      async () => {
+        const testFile = framework.createTestFile("real-test-ftp.bin", 5);
 
-      const fileHash = await framework.uploadFile(testFile, "FTP");
-      expect(fileHash).toBeTruthy();
+        const fileHash = await framework.uploadFile(testFile, "FTP");
+        expect(fileHash).toBeTruthy();
 
-      const metadata = await framework.searchFile(fileHash, 60_000);
-      expect(metadata).toBeTruthy();
+        const metadata = await framework.searchFile(fileHash, 60_000);
+        expect(metadata).toBeTruthy();
 
-      // Ensure the uploader actually published FTP sources.
-      expect(metadata.ftpSources ?? metadata.ftp_sources).toBeTruthy();
+        // Ensure the uploader actually published FTP sources.
+        expect(metadata.ftpSources ?? metadata.ftp_sources).toBeTruthy();
 
-      const uploaderAddress = metadata.uploaderAddress ?? metadata.uploader_address;
-      const price = metadata.price ?? 0.001;
-      expect(typeof uploaderAddress).toBe("string");
+        const uploaderAddress =
+          metadata.uploaderAddress ?? metadata.uploader_address;
+        const price = metadata.price ?? 0.001;
+        expect(typeof uploaderAddress).toBe("string");
 
-      // FTP downloads are async (202 + downloadId) via the E2E API helper.
-      const downloadPath = await framework.downloadFile(fileHash, testFile.name, "FTP");
-      const verified = await framework.verifyDownloadedFile(downloadPath, testFile);
-      expect(verified).toBe(true);
-
-      // Final payment + receipt
-      const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
-      const payRes = await fetch(`${downloaderApi}/api/pay`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploaderAddress, price }),
-      });
-      if (!payRes.ok) {
-        const body = await payRes.text().catch(() => "");
-        throw new Error(
-          `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`
+        // FTP downloads are async (202 + downloadId) via the E2E API helper.
+        const downloadPath = await framework.downloadFile(
+          fileHash,
+          testFile.name,
+          "FTP",
         );
-      }
-      const payJson = await payRes.json();
-      const txHash: string = payJson.txHash;
-      expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+        const verified = await framework.verifyDownloadedFile(
+          downloadPath,
+          testFile,
+        );
+        expect(verified).toBe(true);
 
-      const start = Date.now();
-      const timeoutMs = getReceiptTimeoutMs("FTP");
-      while (Date.now() - start < timeoutMs) {
-        const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+        // Final payment + receipt
+        const downloaderApi = framework["downloaderConfig"]!.apiBaseUrl;
+        const payRes = await fetch(`${downloaderApi}/api/pay`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ txHash }),
+          body: JSON.stringify({ uploaderAddress, price }),
         });
-        if (!r.ok) {
-          const body = await r.text().catch(() => "");
+        if (!payRes.ok) {
+          const body = await payRes.text().catch(() => "");
           throw new Error(
-            `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`
+            `Pay failed: ${payRes.status} ${payRes.statusText}${body ? ` - ${body}` : ""}`,
           );
         }
-        const receipt = await r.json();
-        if (receipt.status === "success") break;
-        if (receipt.status === "failed") throw new Error("Transaction failed");
-        await new Promise((res) => setTimeout(res, 1000));
-      }
-    }, getTestTimeoutMs("FTP"));
+        const payJson = await payRes.json();
+        const txHash: string = payJson.txHash;
+        expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+
+        const start = Date.now();
+        const timeoutMs = getReceiptTimeoutMs("FTP");
+        while (Date.now() - start < timeoutMs) {
+          const r = await fetch(`${downloaderApi}/api/tx/receipt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ txHash }),
+          });
+          if (!r.ok) {
+            const body = await r.text().catch(() => "");
+            throw new Error(
+              `Receipt failed: ${r.status} ${r.statusText}${body ? ` - ${body}` : ""}`,
+            );
+          }
+          const receipt = await r.json();
+          if (receipt.status === "success") break;
+          if (receipt.status === "failed")
+            throw new Error("Transaction failed");
+          await new Promise((res) => setTimeout(res, 1000));
+        }
+      },
+      getTestTimeoutMs("FTP"),
+    );
   });
 
   // Payment checkpoint automation is currently UI-driven and not wired into the real-network harness yet.
@@ -1101,4 +1239,3 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
  * Export framework for manual testing
  */
 export { RealE2ETestFramework };
-

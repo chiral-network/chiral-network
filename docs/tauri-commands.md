@@ -281,7 +281,7 @@ These commands manage pool metadata locally and persist user-created pools to di
   - `preferred_relays?: string[]`
   - `enable_relay_server?: boolean`
 - **Returns**: `string` – the local libp2p peer ID.
-- **Description**: Boots the libp2p/Kademlia node, wires up file-transfer and multi-source services, and starts emitting events (`dht_peer_*`, `nat_status_update`, `found_file`, etc.) to the frontend.
+- **Description**: Boots the libp2p/Kademlia node, wires up file-transfer and multi-source services, and starts emitting events (`dht_peer_*`, `nat_status_update`, `dht_metadata_found`, etc.) to the frontend.
 
 ### `stop_dht_node`
 
@@ -723,7 +723,7 @@ A utility function to parse an ed2k link string into its structured `Ed2kSourceI
   - `file_hash: string`
   - `timeout_ms?: number`
 - **Returns**: `void`
-- **Description**: Triggers an asynchronous metadata search in the DHT (results arrive via `found_file` events).
+- **Description**: Triggers an asynchronous metadata search in the DHT (results arrive via `dht_metadata_found` events).
 
 ### `get_file_seeders`
 

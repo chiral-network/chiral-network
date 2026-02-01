@@ -2,767 +2,459 @@
   import Card from '$lib/components/ui/card.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
-  import { FileIcon, Copy, Download, Server, Globe, Star } from 'lucide-svelte';
-  import { createEventDispatcher, onMount } from 'svelte';
-  import { dhtService, type FileMetadata } from '$lib/dht';
+  import { FileIcon, Copy, Download, Star } from 'lucide-svelte';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
-  import { files, wallet } from '$lib/stores';
-  import { favorites } from '$lib/stores/favorites';
-  import { get } from 'svelte/store';
+  import { files, wallet, type ProgressiveSearchState, type ProtocolDetails, type SeederInfo } from '$lib/stores';
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
-  import { paymentService } from '$lib/services/paymentService';
+  import { costFromPricePerMb, minPricePerMb } from '$lib/utils/pricing';
+  import { isLoading } from 'svelte-i18n';
 
   type TranslateParams = { values?: Record<string, unknown>; default?: string };
   const tr = (key: string, params?: TranslateParams): string =>
   $t(key, params);
 
-  const dispatch = createEventDispatcher<{ download: FileMetadata; copy: string }>();
+  interface Props {
+    searchState: ProgressiveSearchState,
+    isSeeding: boolean,
+    availableProtocols: ProtocolDetails[],
+    download: ()=>void
+  }
+  
+  let {
+    searchState,
+    isSeeding,
+    availableProtocols,
+    download
+  }: Props = $props();
 
-  export let metadata: FileMetadata;
-  export let isBusy = false;
+  let showSeederDetailsModal = $state(false);
+  let selectedSeederDetails:SeederInfo|null = $state(null);
+  let metadata = $derived(searchState.basicMetadata);
+  let seeders = $derived(searchState.seeders);
 
-  let canAfford = true;
-  let checkingBalance = true; // Start as true since we check on mount
-  let currentPrice: number | null = null;
-  let showDecryptDialog = false;
-  let showDownloadConfirmDialog = false;
-  let showPaymentConfirmDialog = false;
-  let showSeedersSelection = false;
-  let selectedSeederIndex: number | null = 0;
+  const minOfferPricePerMb = $derived.by(() => {
+    const candidates = searchState.seeders.filter((s) => s.hasFileInfo && s.hasGeneralInfo);
+    if (candidates.length === 0) return null;
+    return candidates.reduce((s1, s2) =>
+      (s1.pricePerMb ?? 0) > (s2.pricePerMb ?? 0) ? s1 : s2,
+    ).pricePerMb ?? 0;
+  });
 
-  // Use reactive wallet balance from store
-  $: userBalance = $wallet.balance;
+  const minOfferTotal = $derived.by(() =>
+    (searchState.basicMetadata && minOfferPricePerMb !== null)
+      ? costFromPricePerMb({ bytes: searchState.basicMetadata?.fileSize, pricePerMb: minOfferPricePerMb })
+      : null,
+  );
+
+  const isBusy = $derived(searchState.status==="searching");
+
+  const loadingSeederCount = $derived.by(() => {
+    const pending = searchState.providers.length - searchState.seeders.length;
+    if (searchState.status === 'searching') return Math.max(1, pending);
+    return Math.max(0, pending);
+  });
+
+  const canAfford = $derived.by(() => {
+    if (isSeeding) return true;
+    if (minOfferTotal === null) return true;
+    return $wallet.balance >= minOfferTotal;
+  });
+
+  const isPriceLoading = $derived(minOfferTotal === null);
 
   function formatFileSize(bytes: number): string {
     return toHumanReadableSize(bytes);
   }
 
-  $: seederCount = metadata?.seeders?.length ?? 0;
-  $: createdLabel = metadata?.createdAt
-    ? formatRelativeTime(new Date(metadata.createdAt * 1000))
-    : null;
+  // once search finishes, show real number of seederCount, providers are from DHT, seeders are providers who have responded
+  let seederCount = $derived(
+    (searchState.status=="complete" || searchState.status=="timeout") ? searchState.seeders.length : searchState.providers.length 
+  );
+
+  let createdLabel = $derived(searchState.basicMetadata?.createdAt
+    ? formatRelativeTime(new Date(searchState.basicMetadata?.createdAt * 1000))
+    : null);
 
 
-  // Helper function to determine available protocols for a file
-  // Files can be downloaded via multiple protocols if they were uploaded with multiple protocols
-  $: availableProtocols = (() => {
-    const protocols = [];
-    
-    // Determine what metadata exists
-    const hasInfoHash = !!metadata.infoHash;
-    const hasHttpSources = !!(metadata.httpSources && metadata.httpSources.length > 0);
-    const hasFtpSources = !!(metadata.ftpSources && metadata.ftpSources.length > 0);
-    const hasEd2kSources = !!(metadata.ed2kSources && metadata.ed2kSources.length > 0);
-    const hasSeeders = !!(metadata.seeders && metadata.seeders.length > 0);
 
-    // WebRTC is available if file has seeders (for P2P transfers)
-    const isWebRTCAvailable = hasSeeders && !hasInfoHash && !hasHttpSources && !hasFtpSources && !hasEd2kSources;
-
-    // Check for WebRTC (P2P file sharing protocol)
-    if (isWebRTCAvailable) {
-      protocols.push({
-        id: 'webrtc',
-        name: 'WebRTC',
-        icon: Globe,
-        colorClass: 'bg-blue-100 text-blue-800'
-      });
-    }
-
-    // Check for BitTorrent (has info_hash)
-    if (hasInfoHash) {
-      protocols.push({
-        id: 'bittorrent',
-        name: 'BitTorrent',
-        icon: Server,
-        colorClass: 'bg-green-100 text-green-800'
-      });
-    }
-
-    // Check for HTTP (has HTTP sources)
-    if (hasHttpSources) {
-      protocols.push({
-        id: 'http',
-        name: 'HTTP',
-        icon: Globe,
-        colorClass: 'bg-gray-100 text-gray-800'
-      });
-    }
-
-    // Check for FTP (has FTP sources)
-    if (hasFtpSources) {
-      protocols.push({
-        id: 'ftp',
-        name: 'FTP',
-        icon: Server,
-        colorClass: 'bg-gray-100 text-gray-800'
-      });
-    }
-
-    // Check for ED2K (has ED2K sources)
-    if (hasEd2kSources) {
-      protocols.push({
-        id: 'ed2k',
-        name: 'ED2K',
-        icon: Server,
-        colorClass: 'bg-orange-100 text-orange-800'
-      });
-    }
-
-    return protocols;
-  })();
-
-  // Check if user is already seeding this file
-  $: isSeeding = !!get(files).find(f => f.hash === metadata.fileHash && f.status === 'seeding');
-
-  function copyHash() {
-    navigator.clipboard.writeText(metadata.fileHash).then(() => {
-      dispatch('copy', metadata.fileHash);
-    });
+  function copyFrom(data:string) {
+    return () =>
+    navigator.clipboard.writeText(data);
   }
 
-  function copySeeder(address: string, _index: number) {
-    navigator.clipboard.writeText(address).then(() => {
-      dispatch('copy', address);
-    });
-  }
-
-  function copyMagnetLink(link: string) {
-    navigator.clipboard.writeText(link).then(() => {
-      dispatch('copy', link);
-    });
-  }
-
-  function copyEd2kLink(link: string) {
-    navigator.clipboard.writeText(link).then(() => {
-      dispatch('copy', link);
-    });
-  }
-
-  function copyFtpLink(link: string) {
-    navigator.clipboard.writeText(link).then(() => {
-      dispatch('copy', link);
-    });
-  }
-
-  function copyHttpLink(link: string) {
-    navigator.clipboard.writeText(link).then(() => {
-      dispatch('copy', link);
-    });
-  }
-
-  async function handleDownload() {
-    // Skipping payment confirmation for now
-    // Always show initial download confirmation dialog first
-    // showDownloadConfirmDialog = true;
-
-    const freshSeeders = await dhtService.getSeedersForFile(metadata.fileHash);
-
-    // Also check stores for WebRTC seeder addresses
-    const existingFile = get(files).find(f => f.hash === metadata.fileHash);
-    const webrtcSeeders = existingFile?.seederAddresses ?? [];
-
-    // Combine DHT seeders with WebRTC seeders
-    const allSeeders = [...new Set([...freshSeeders, ...webrtcSeeders])];
-    metadata.seeders = allSeeders;
-
-    // Note: manual seeder selection was for demo purposes; now using intelligent peer selection
-
-    proceedWithDownload();
-
-  }
-
-  async function confirmSeeder() {
-    showSeedersSelection = false;
-    console.log("SELECTED SEEDER: ", selectedSeederIndex);
-
-    showDownloadConfirmDialog = true;
-  }
-
-  async function confirmDownload() {
-    showDownloadConfirmDialog = false;
-
-    // Skip payment for files the user is seeding (they already paid hosting costs)
-    if (isSeeding) {
-      showDecryptDialog = true;
+  function handleDownload() {
+    // Check if download should proceed
+    if (isBusy) {
       return;
     }
 
-    // All downloads require payment (minimum 0.0001 Chiral)
-    // Always show payment confirmation
-    showPaymentConfirmDialog = true;
-  }
-
-  function cancelDownload() {
-    showDownloadConfirmDialog = false;
-  }
-
-  async function proceedWithDownload() {
-    // Just dispatch the download event - let Download.svelte handle starting the actual download
-    // This ensures the file is added to the store before chunks start arriving
-    const copy = structuredClone(metadata);
-    copy.seeders = [copy.seeders[selectedSeederIndex?selectedSeederIndex:0]];
-    dispatch("download", metadata);
-  }
-
-  async function confirmPayment() {
-    showPaymentConfirmDialog = false;
-
-    if (!paymentService.isValidWalletAddress(metadata.uploaderAddress)) {
-      // showToast('Cannot process payment: uploader wallet address is missing or invalid', 'error');
-      showToast(tr('toasts.download.payment.invalidAddress'), 'error');
+    if (!canAfford && minOfferTotal !== null && minOfferTotal > 0 && !isSeeding) {
       return;
     }
 
-    try {
-      const seederPeerId = metadata.seeders?.[0];
-      const paymentResult = await paymentService.processDownloadPayment(
-        metadata.fileHash,
-        metadata.fileName,
-        metadata.fileSize,
-        metadata.uploaderAddress || '',
-        seederPeerId
-      );
+    download();
+  }
 
-      if (!paymentResult.success) {
-        const errorMessage = paymentResult.error || 'Unknown error';
-        // showToast(`Payment failed: ${errorMessage}`, 'error');
-        showToast(tr('toasts.download.payment.failed', { values: { error: errorMessage } }), 'error');
-        return;
-      }
 
-      if (paymentResult.transactionHash) {
-        showToast(
-          // `Payment successful! Transaction: ${paymentResult.transactionHash.substring(0, 10)}...`,
-          tr('toasts.download.payment.successWithHash', {
-            values: { hash: paymentResult.transactionHash.substring(0, 10) }
-          }),
-          'success'
-        );
-      } else {
-        // showToast('Payment successful!', 'success');
-        showToast(tr('toasts.download.payment.success'), 'success');
-      }
-
-      // Refresh balance after payment to reflect the deduction
-      await checkBalance();
-
-      // Proceed with download after successful payment
-      await proceedWithDownload();
-    } catch (error: any) {
-      console.error('Payment processing failed:', error);
-      const message = error?.message || error?.toString() || 'Unknown error';
-      // showToast(`Payment failed: ${message}`, 'error');
-      showToast(tr('toasts.download.payment.failed', { values: { error: message } }), 'error');
+  function showSeederInfo(peerId: string) {
+    // Find the seeder details by peer ID
+    const details = seeders.find(s => s.peerId === peerId);
+    if (details) {
+      selectedSeederDetails = details;
+      showSeederDetailsModal = true;
     }
   }
 
-  function cancelPayment() {
-    showPaymentConfirmDialog = false;
+  function closeSeederDetailsModal() {
+    showSeederDetailsModal = false;
+    selectedSeederDetails = null;
   }
 
-  async function confirmDecryptAndQueue() {
-    showDecryptDialog = false;
-    // Dispatch for both protocols - let Download.svelte handle the actual download
-    dispatch('download', metadata);
-    console.log("🔍 DEBUG: Dispatched decrypt and download event for file:", metadata.fileName);
-  }
+  let seederIds = $derived(seeders?.map((s, index) => ({
+    id: `${s.peerId}-${index}`,
+    address: s.peerId,
+    details: s
+  })) ?? []);
 
-  function cancelDecryptDialog() {
-    showDecryptDialog = false;
-  }
-
-  // Favorites functionality
-  $: isFavorite = favorites.isFavorite(metadata.fileHash, $favorites);
-
-  function toggleFavorite() {
-    if (isFavorite) {
-      favorites.remove(metadata.fileHash);
-      showToast(tr('toasts.favorites.removed'), 'info');
-    } else {
-      favorites.add({
-        hash: metadata.fileHash,
-        name: metadata.fileName,
-        size: metadata.fileSize,
-        protocol: availableProtocols[0]?.id,
-        seeders: metadata.seeders?.length,
-        leechers: metadata.leechers?.length
-      });
-      showToast(tr('toasts.favorites.added'), 'success');
-    }
-  }
-
-  const seederIds = metadata.seeders?.map((address, index) => ({
-    id: `${metadata.fileHash}-${index}`,
-    address,
-  })) ?? [];
-
-  // Check if user can afford the download when price is set
-  async function checkBalance() {
-    if (metadata.fileSize && metadata.fileSize > 0) {
-      checkingBalance = true;
-      try {
-        // Calculate current dynamic price instead of using static metadata.price
-        const currentDynamicPrice = await paymentService.calculateDownloadCost(metadata.fileSize);
-        const currentBalance = get(wallet).balance;
-        canAfford = currentBalance >= currentDynamicPrice;
-
-        // Store the dynamic price for display
-        currentPrice = currentDynamicPrice;
-
-      } catch (error) {
-        console.error('Failed to check balance:', error);
-        canAfford = false;
-      } finally {
-        checkingBalance = false;
-      }
-    } else {
-      // For magnet links or files with no size, skip balance check
-      checkingBalance = false;
-      canAfford = true;
-      currentPrice = 0;
-    }
-  }
-
-  // Trigger balance check when metadata or wallet balance changes
-  $: if (metadata.fileSize && metadata.fileSize > 0) {
-    checkBalance();
-  } else {
-    checkingBalance = false;
-    canAfford = true;
-    currentPrice = 0;
-  }
-
-  // Reactive check for affordability when balance changes and we have a current price
-  $: if (currentPrice !== null && currentPrice > 0) {
-    canAfford = $wallet.balance >= currentPrice;
-  }
-
-  // Check balance when component mounts
-  onMount(() => {
-    if (metadata.fileSize > 0) {
-      checkBalance();
-    } else {
-      checkingBalance = false;
-      canAfford = true;
-      currentPrice = 0;
-    }
-  });
 </script>
 
 <Card class="p-5 space-y-5">
-  <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-    <div class="flex items-start gap-3">
-      <div class="w-12 h-12 rounded-md bg-muted flex items-center justify-center">
-        <FileIcon class="h-6 w-6 text-muted-foreground" />
-      </div>
-      <div class="flex-1">
-        <h3 class="text-lg font-semibold break-all">{metadata.fileName}</h3>
-        <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mt-1">
-          {#if createdLabel}
-            <span>Published {createdLabel}</span>
-          {/if}
-          {#if metadata.mimeType}
+  {#if metadata}
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div class="flex items-start gap-3">
+        <div class="w-12 h-12 rounded-md bg-muted flex items-center justify-center">
+          <FileIcon class="h-6 w-6 text-muted-foreground" />
+        </div>
+        <div class="flex-1">
+          <h3 class="text-lg font-semibold break-all">{metadata.fileName}</h3>
+          <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mt-1">
             {#if createdLabel}
-              <span>•</span>
+              <span>Published {createdLabel}</span>
             {/if}
-            <span>{metadata.mimeType}</span>
-          {/if}
-        </div>
-      </div>
-    </div>
-
-    <div class="flex items-center gap-2 flex-wrap">
-      {#each availableProtocols as protocol}
-        <Badge class={protocol.colorClass}>
-          <svelte:component this={protocol.icon} class="h-3.5 w-3.5 mr-1" />
-          {protocol.name}
-        </Badge>
-      {/each}
-    </div>
-  </div>
-
-  <div class="grid gap-4 md:grid-cols-2">
-    <!-- Left Column: All technical identifiers and details -->
-    <div class="space-y-3">
-      <div>
-        <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Merkle hash</p>
-        <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 py-1 px-1.5 overflow-hidden">
-          <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{metadata.fileHash}</code>
-          <Button
-            variant="ghost"
-            size="icon"
-            class="h-7 w-7"
-            on:click={copyHash}
-          >
-            <Copy class="h-3.5 w-3.5" />
-            <span class="sr-only">Copy hash</span>
-          </Button>
+            {#if metadata.mimeType}
+              {#if createdLabel}
+                <span>•</span>
+              {/if}
+              <span>{metadata.mimeType}</span>
+            {/if}
+          </div>
         </div>
       </div>
 
-      {#if metadata.infoHash}
-        {@const magnetLink = `magnet:?xt=urn:btih:${metadata.infoHash}${metadata.trackers && metadata.trackers.length > 0 ? '&tr=' + metadata.trackers.join('&tr=') : ''}`}
-        <div>
-          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Magnet Link</p>
-          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
-            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{magnetLink}</code>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-7 w-7"
-              on:click={() => copyMagnetLink(magnetLink)}
-            >
-              <Copy class="h-3.5 w-3.5" />
-              <span class="sr-only">Copy magnet link</span>
-            </Button>
-          </div>
-        </div>
-      {/if}
+      <div class="flex items-center gap-2 flex-wrap">
+        {#each availableProtocols as protocol}
+          <Badge class={protocol.colorClass}>
+            {@const IconComponent = protocol.icon}
+            <IconComponent class="h-3.5 w-3.5 mr-1" />
+            {protocol.name}
+          </Badge>
+        {/each}
+      </div>
+    </div>
 
-      {#if metadata.ed2kSources && metadata.ed2kSources.length > 0}
-        {@const ed2kSource = metadata.ed2kSources[0]}
-        {@const ed2kLink = `ed2k://|file|${metadata.fileName}|${metadata.fileSize}|${ed2kSource.file_hash}|/`}
+    <div class="grid gap-4 md:grid-cols-2">
+      <div class="space-y-3">
         <div>
-          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">ED2K Link</p>
-          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
-            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{ed2kLink}</code>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">File hash</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 py-1 px-1.5 overflow-hidden">
+            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{metadata.fileHash}</code>
             <Button
               variant="ghost"
               size="icon"
               class="h-7 w-7"
-              on:click={() => copyEd2kLink(ed2kLink)}
+              onclick={copyFrom(metadata.fileHash)}
             >
               <Copy class="h-3.5 w-3.5" />
-              <span class="sr-only">Copy ED2K link</span>
+              <span class="sr-only">Copy hash</span>
             </Button>
           </div>
         </div>
-      {/if}
 
-      {#if metadata.ftpSources && metadata.ftpSources.length > 0}
-        {@const ftpSource = metadata.ftpSources[0]}
-        <div>
-          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">FTP Link</p>
-          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
-            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{ftpSource.url}</code>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-7 w-7"
-              on:click={() => copyFtpLink(ftpSource.url)}
-            >
-              <Copy class="h-3.5 w-3.5" />
-              <span class="sr-only">Copy FTP link</span>
-            </Button>
-          </div>
+        <div class="space-y-3">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">Details</p>
+          <ul class="space-y-2 text-sm text-foreground">
+            <li class="flex items-center justify-between">
+              <span class="text-muted-foreground">Seeder count</span>
+              <span>{seederCount}</span>
+            </li>
+            <li class="flex items-center justify-between">
+              <span class="text-muted-foreground">Size</span>
+              <span>{formatFileSize(metadata.fileSize)}</span>
+            </li>
+            <li class="flex items-center justify-between">
+              <span class="text-muted-foreground">Min file price</span>
+              <span class="font-semibold text-emerald-600">
+                {#if isSeeding}
+                  Free
+                {:else if isPriceLoading}
+                  Loading...
+                {:else if minOfferTotal !== null}
+                  {minOfferTotal.toFixed(4)} Chiral
+                {:else}
+                  0.0001 Chiral
+                {/if}
+              </span>
+            </li>
+            <li class="text-xs text-muted-foreground text-center col-span-2">
+              Min price calculated from currently known seeder offers
+            </li>
+          </ul>
         </div>
-      {/if}
-
-      {#if metadata.httpSources && metadata.httpSources.length > 0}
-        {@const httpSource = metadata.httpSources[0]}
-        <div>
-          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">HTTP Link</p>
-          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-1.5 overflow-hidden">
-            <code class="flex-1 text-xs font-mono break-all text-muted-foreground overflow-hidden" style="word-break: break-all;">{httpSource.url}</code>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-7 w-7"
-              on:click={() => copyHttpLink(httpSource.url)}
-            >
-              <Copy class="h-3.5 w-3.5" />
-              <span class="sr-only">Copy HTTP link</span>
-            </Button>
-          </div>
-        </div>
-      {/if}
+      </div>
 
       <div class="space-y-3">
-        <p class="text-xs uppercase tracking-wide text-muted-foreground">Details</p>
-        <ul class="space-y-2 text-sm text-foreground">
-          <li class="flex items-center justify-between">
-            <span class="text-muted-foreground">Seeder count</span>
-            <span>{seederCount}</span>
-          </li>
-          <li class="flex items-center justify-between">
-            <span class="text-muted-foreground">Size</span>
-            <span>{formatFileSize(metadata.fileSize)}</span>
-          </li>
-          <li class="flex items-center justify-between">
-            <span class="text-muted-foreground">Price</span>
-            <span class="font-semibold text-emerald-600">
-              {#if isSeeding}
-                Free
-              {:else if checkingBalance}
-                Calculating...
-              {:else if currentPrice !== null}
-                {currentPrice.toFixed(4)} Chiral
-              {:else}
-                0.0001 Chiral
-              {/if}
-            </span>
-          </li>
-          <li class="text-xs text-muted-foreground text-center col-span-2">
-            Price calculated based on current network conditions
-          </li>
-        </ul>
-      </div>
-    </div>
-
-    <!-- Right Column: Available peers -->
-    <div class="space-y-3">
-      {#if metadata.seeders?.length}
-        <div class="space-y-2">
+        {#if searchState.providers.length > 0 || searchState.status === 'searching'}
           <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
           <div class="space-y-2 max-h-40 overflow-auto pr-1">
             {#each seederIds as seeder, index}
-              <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden">
+              <button
+                type="button"
+                class="w-full flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden hover:bg-muted/60 transition-colors cursor-pointer text-left"
+                onclick={() => showSeederInfo(seeder.address)}
+                title={seeder.details?.hasGeneralInfo ? 'Click to view seeder details' : 'Seeder info loading...'}
+              >
                 <div class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
-                <div class="space-y-1 flex-1">
+                <div class="space-y-1 flex-1 min-w-0">
                   <code class="text-xs font-mono break-words block">{seeder.address}</code>
-                  <div class="flex items-center gap-1 text-xs text-muted-foreground">
+                  <div class="flex items-center gap-2 text-xs text-muted-foreground">
                     <span>Seed #{index + 1}</span>
+                    {#if seeder.details?.hasGeneralInfo}
+                      <span class="text-emerald-600">• Info available</span>
+                    {:else}
+                      <span class="text-amber-600">• Loading...</span>
+                    {/if}
                   </div>
+                  {#if seeder.details?.walletAddress}
+                    <div class="text-xs text-muted-foreground truncate">
+                      {seeder.details.walletAddress.slice(0, 10)}...
+                    </div>
+                  {/if}
                 </div>
                 <Button
                   variant="ghost"
                   size="icon"
                   class="h-7 w-7"
-                  on:click={() => copySeeder(seeder.address, index)}
+                  onclick={copyFrom(seeder.address)}
                 >
                   <Copy class="h-3.5 w-3.5" />
                   <span class="sr-only">Copy seeder address</span>
                 </Button>
-              </div>
+              </button>
             {/each}
-          </div>
-        </div>
-      {:else}
-        <div class="space-y-2">
-          <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
-          <p class="text-xs text-muted-foreground italic">No seeders reported yet for this file.</p>
-        </div>
-      {/if}
-    </div>
-  </div>
-
-  <div class="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-    <div class="text-xs text-muted-foreground">
-      {#if isSeeding}
-        <span class="text-emerald-600 font-semibold">You are seeding this file</span>
-        {#if metadata.isEncrypted}
-          <span class="ml-2 text-xs text-amber-600">(encrypted)</span>
-        {/if}
-      {:else if !canAfford && currentPrice && currentPrice > 0}
-        <span class="text-red-600 font-semibold">Insufficient balance to download this file</span>
-      {:else if metadata.seeders?.length}
-        {metadata.seeders.length > 1 ? '' : 'Single seeder available.'}
-      {:else}
-        Waiting for peers to announce this file.
-      {/if}
-    </div>
-    <div class="flex items-center gap-2">
-      <Button
-        variant="ghost"
-        size="icon"
-        on:click={toggleFavorite}
-        class="h-9 w-9 {isFavorite ? 'text-yellow-500 hover:text-yellow-600' : 'text-gray-400 hover:text-gray-600'}"
-        title={isFavorite ? tr('favorites.remove') : tr('favorites.add')}
-      >
-        <Star class="h-4 w-4 {isFavorite ? 'fill-current' : ''}" />
-      </Button>
-      <Button
-        on:click={handleDownload}
-        disabled={isBusy || checkingBalance || (!canAfford && currentPrice && currentPrice > 0 && !isSeeding)}
-        class={!canAfford && currentPrice && currentPrice > 0 && !isSeeding ? 'opacity-50 cursor-not-allowed' : ''}
-      >
-        <Download class="h-4 w-4 mr-2" />
-        {#if checkingBalance}
-          Checking balance...
-        {:else if !canAfford && currentPrice && currentPrice > 0 && !isSeeding}
-          Insufficient funds
-        {:else}
-          Download
-        {/if}
-      </Button>
-    </div>
-  </div>
-
-  {#if showDownloadConfirmDialog}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-    <div class="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
-      <h2 class="text-xl font-bold mb-4 text-center">
-        {isSeeding ? 'Download Local Copy' : 'Confirm Download'}
-      </h2>
-
-      <div class="space-y-4 mb-6">
-        <div class="p-4 bg-muted/50 rounded-lg border border-border">
-          <div class="space-y-2">
-            <div>
-              <p class="text-xs text-muted-foreground mb-1">File Name</p>
-              <p class="text-sm font-semibold break-all">{metadata.fileName}</p>
-            </div>
-            <div class="flex justify-between items-center pt-2 border-t border-border/50">
-              <span class="text-xs text-muted-foreground">Size</span>
-              <span class="text-sm font-medium">{formatFileSize(metadata.fileSize)}</span>
-            </div>
-            {#if isSeeding}
-              <div class="flex justify-between items-center pt-2 border-t border-border/50">
-                <span class="text-xs text-muted-foreground">Status</span>
-                <span class="text-sm font-medium text-emerald-600">Already Seeding</span>
-              </div>
-              {#if metadata.isEncrypted}
-                <div class="flex justify-between items-center pt-2 border-t border-border/50">
-                  <span class="text-xs text-muted-foreground">Encryption</span>
-                  <span class="text-sm font-medium text-amber-600">Encrypted</span>
+            
+            {#if loadingSeederCount > 0}
+              {#each Array(loadingSeederCount) as _}
+                <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden animate-pulse">
+                  <div class="mt-0.5 h-2 w-2 rounded-full bg-gray-300 flex-shrink-0"></div>
+                  <div class="space-y-1 flex-1">
+                    <div class="h-4 bg-gray-300 rounded w-3/4"></div>
+                    <div class="h-3 bg-gray-200 rounded w-1/4"></div>
+                  </div>
                 </div>
-              {/if}
+              {/each}
             {/if}
           </div>
-        </div>
+          {#if loadingSeederCount > 0}
+            <p class="text-xs text-muted-foreground text-center">Loading seeder information...</p>
+          {/if}
+        {:else}
+          <div class="space-y-2">
+            <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
+            <p class="text-xs text-muted-foreground italic">No seeders reported yet for this file.</p>
+          </div>
+        {/if}
+      </div>
+    </div>
 
-        <div class="p-4 bg-blue-500/10 rounded-lg border-2 border-blue-500/30">
-          <div class="text-center">
-            <p class="text-sm text-muted-foreground mb-1">Price</p>
-            <p class="text-2xl font-bold text-blue-600">
-              {#if checkingBalance}
-                Calculating...
-              {:else}
-                {(currentPrice ?? 0.0001).toFixed(4)} Chiral
-              {/if}
-            </p>
+    <div class="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+      <div class="text-xs text-muted-foreground">
+        {#if isSeeding}
+          <span class="text-emerald-600 font-semibold">You are seeding this file</span>
+        {:else if !canAfford && minOfferTotal !== null && minOfferTotal > 0}
+          <span class="text-red-600 font-semibold">Insufficient balance to download this file</span>
+        {:else if seeders.length > 0}
+          {seeders.length > 1 ? '' : 'Single seeder available.'}
+        {:else}
+          Waiting for peers to announce this file.
+        {/if}
+      </div>
+      <div class="flex items-center gap-2">
+        <Button
+          onclick={handleDownload}
+          disabled={isBusy || (!canAfford && minOfferTotal !== null && minOfferTotal > 0 && !isSeeding)}
+          class={!canAfford && minOfferTotal !== null && minOfferTotal > 0 && !isSeeding ? 'opacity-50 cursor-not-allowed' : ''}
+        >
+          <Download class="h-4 w-4 mr-2" />
+          {#if !canAfford && minOfferTotal !== null && minOfferTotal > 0}
+            Insufficient funds
+          {:else}
+            Download
+          {/if}
+        </Button>
+      </div>
+    </div>
+  {:else}
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div class="flex items-start gap-3">
+        <div class="w-12 h-12 rounded-md bg-muted flex items-center justify-center animate-pulse">
+          <FileIcon class="h-6 w-6 text-muted-foreground" />
+        </div>
+        <div class="flex-1 space-y-2">
+          <div class="h-6 bg-muted rounded w-3/4 animate-pulse"></div>
+          <div class="flex gap-2">
+            <div class="h-4 bg-muted rounded w-1/4 animate-pulse"></div>
+            <div class="h-4 bg-muted rounded w-1/4 animate-pulse"></div>
           </div>
         </div>
       </div>
-
-      <p class="text-sm text-muted-foreground text-center mb-6">
-        You will be charged ${(currentPrice ?? 0.0001).toFixed(4)} Chiral. Continue?
-      </p>
-
-      <div class="flex gap-3">
-        <Button variant="outline" on:click={cancelDownload} class="flex-1">
-          Cancel
-        </Button>
-        <Button on:click={confirmDownload} class="flex-1 bg-blue-600 hover:bg-blue-700">
-          Confirm
-        </Button>
-      </div>
     </div>
-  </div>
-{/if}
 
-{#if showDecryptDialog}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-    <div class="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
-      <h2 class="text-lg font-semibold mb-2">Already Seeding</h2>
-      <p class="mb-4 text-sm text-muted-foreground">
-        You're already seeding this file{metadata.isEncrypted ? ' (encrypted)' : ''}.<br />
-        Would you like to decrypt and save a local readable copy?
-      </p>
-      <div class="flex justify-end gap-2 mt-4">
-        <Button variant="outline" on:click={cancelDecryptDialog}>Cancel</Button>
-        <Button on:click={confirmDecryptAndQueue}>Download</Button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if showPaymentConfirmDialog}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-    <div class="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
-      <h2 class="text-xl font-bold mb-4 text-center">Confirm Payment</h2>
-
-      <div class="space-y-4 mb-6">
-        <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg">
-          <span class="text-sm text-muted-foreground">Your Balance</span>
-          <span class="text-lg font-bold">{userBalance.toFixed(4)} Chiral</span>
+    <div class="grid gap-4 md:grid-cols-2">
+      <div class="space-y-3">
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">File hash</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 py-1 px-1.5 overflow-hidden">
+            <div class="flex-1 h-4 bg-muted rounded animate-pulse"></div>
+            <div class="h-7 w-7 bg-muted rounded animate-pulse"></div>
+          </div>
         </div>
 
-        <div class="flex justify-between items-center p-3 bg-blue-500/10 rounded-lg border border-blue-500/30">
-          <span class="text-sm text-muted-foreground">File Price</span>
-          <span class="text-lg font-bold text-blue-600">{(currentPrice || 0).toFixed(4)} Chiral</span>
-        </div>
-
-        <div class="flex justify-between items-center p-3 bg-muted/50 rounded-lg border-2 border-border">
-          <span class="text-sm font-semibold">Balance After Purchase</span>
-          <span class="text-lg font-bold {canAfford ? 'text-emerald-600' : 'text-red-600'}">
-            {(userBalance - (currentPrice || 0)).toFixed(4)} Chiral
-          </span>
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">Details</p>
+          <ul class="space-y-2 text-sm text-foreground">
+            <li class="flex items-center justify-between">
+              <span class="text-muted-foreground">Seeder count</span>
+              <div class="h-4 w-8 bg-muted rounded animate-pulse"></div>
+            </li>
+            <li class="flex items-center justify-between">
+              <span class="text-muted-foreground">Size</span>
+              <div class="h-4 w-20 bg-muted rounded animate-pulse"></div>
+            </li>
+            <li class="flex items-center justify-between">
+              <span class="text-muted-foreground">Min file price</span>
+              <div class="h-4 w-24 bg-muted rounded animate-pulse"></div>
+            </li>
+          </ul>
         </div>
       </div>
 
-      {#if !canAfford}
-        <div class="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <p class="text-sm text-red-600 font-semibold text-center">
-            Insufficient balance! You need {(currentPrice || 0) - userBalance} more Chiral.
-          </p>
-        </div>
-      {/if}
-
-      <p class="text-sm text-muted-foreground text-center mb-6">
-        {canAfford
-          ? 'Proceed with payment to download this file?'
-          : 'You do not have enough Chiral to download this file.'}
-      </p>
-
-      <div class="flex gap-3">
-        <Button variant="outline" on:click={cancelPayment} class="flex-1">
-          Cancel
-        </Button>
-        <Button
-          on:click={confirmPayment}
-          disabled={!canAfford}
-          class="flex-1 {!canAfford ? 'opacity-50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}"
-        >
-          {canAfford ? 'Confirm Payment' : 'Insufficient Funds'}
-        </Button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if showSeedersSelection}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-    <div class="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
-      <h2 class="text-xl font-bold mb-4 text-center">Select a Seeder</h2>
-
-      {#if metadata.seeders && metadata.seeders.length > 0}
-        <p class="text-sm text-muted-foreground text-center mb-4">
-          Found {metadata.seeders.length} available peer{metadata.seeders.length === 1 ? '' : 's'}.
-        </p>
-        <div class="space-y-2 max-h-60 overflow-auto pr-1 mb-6">
-          {#each metadata.seeders as seeder, index}
-            <label
-              class="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors {selectedSeederIndex !== null && +selectedSeederIndex === index ? 'bg-blue-500/10 border-blue-500/50' : 'border-border hover:bg-muted/50'}"
-            >
-              <input
-                type="radio"
-                name="seeder-selection"
-                value={index}
-                bind:group={selectedSeederIndex}
-                class="h-4 w-4 mt-1 text-blue-600 focus:ring-blue-500 border-gray-300"
-              />
-              <div class="flex-1">
-                <code class="text-xs font-mono break-all">{seeder}</code>
+      <div class="space-y-3">
+        <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
+        <div class="space-y-2 max-h-40 overflow-auto pr-1">
+          {#each Array(loadingSeederCount) as _}
+            <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden animate-pulse">
+              <div class="mt-0.5 h-2 w-2 rounded-full bg-gray-300 flex-shrink-0"></div>
+              <div class="space-y-1 flex-1">
+                <div class="h-4 bg-gray-300 rounded w-3/4"></div>
+                <div class="h-3 bg-gray-200 rounded w-1/4"></div>
               </div>
-            </label>
+            </div>
           {/each}
         </div>
-      {:else}
-        <div class="p-4 bg-red-500/10 rounded-lg border border-red-500/30 mb-6">
-          <p class="text-sm text-red-600 text-center">
-            No online seeders found for this file at the moment. Please try again later.
-          </p>
-        </div>
-      {/if}
+        <p class="text-xs text-muted-foreground text-center">Loading seeder information...</p>
+      </div>
+    </div>
+  {/if}
 
-      <div class="flex gap-3">
-        <Button variant="outline" on:click={() => { showSeedersSelection = false; selectedSeederIndex = null; }} class="flex-1">
-          Cancel
-        </Button>
-        <Button on:click={confirmSeeder} disabled={selectedSeederIndex === null || metadata.seeders?.length === 0} class="flex-1 bg-blue-600 hover:bg-blue-700">
-          Confirm
+  <!-- for debugging -->
+  {#if showSeederDetailsModal && selectedSeederDetails}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div class="bg-background rounded-lg shadow-lg p-6 w-full max-w-md border border-border">
+      <h2 class="text-xl font-bold mb-4">Seeder Details</h2>
+
+      <div class="space-y-4">
+        <!-- Peer ID -->
+        <div>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Peer ID</p>
+          <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-2">
+            <code class="flex-1 text-xs font-mono break-all">{selectedSeederDetails?.peerId}</code>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7"
+              onclick={() => {
+                navigator.clipboard.writeText(selectedSeederDetails?.peerId || '');
+                showToast('Peer ID copied', 'success');
+              }}
+            >
+              <Copy class="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+
+        {#if selectedSeederDetails?.hasGeneralInfo}
+          <!-- Wallet Address -->
+          {#if selectedSeederDetails?.walletAddress}
+            <div>
+              <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Wallet Address</p>
+              <div class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 p-2">
+                <code class="flex-1 text-xs font-mono break-all">{selectedSeederDetails?.walletAddress}</code>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="h-7 w-7"
+                  onclick={() => {
+                    navigator.clipboard.writeText(selectedSeederDetails?.walletAddress || '');
+                    showToast('Wallet address copied', 'success');
+                  }}
+                >
+                  <Copy class="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Price -->
+          {#if selectedSeederDetails?.pricePerMb !== undefined}
+            <div>
+              <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Price per MB</p>
+              <div class="rounded-md border border-border/50 bg-muted/40 p-3">
+                <p class="text-lg font-bold text-emerald-600">
+                  {selectedSeederDetails?.pricePerMb?.toFixed(6)} Chiral
+                </p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Total: {((selectedSeederDetails?.pricePerMb || 0) * ((metadata?.fileSize ?? 0) / (1024 * 1024))).toFixed(4)} Chiral
+                </p>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Supported Protocols -->
+          {#if selectedSeederDetails?.protocols && selectedSeederDetails.protocols.length > 0}
+            <div>
+              <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Supported Protocols</p>
+              <div class="flex flex-wrap gap-2">
+                {#each selectedSeederDetails?.protocols || [] as protocol}
+                  <Badge class="bg-blue-100 text-blue-800">
+                    {protocol}
+                  </Badge>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          <!-- Protocol Details -->
+          {#if selectedSeederDetails?.hasFileInfo && selectedSeederDetails?.protocolDetails}
+            <div>
+              <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Protocol Details</p>
+              <div class="rounded-md border border-border/50 bg-muted/40 p-3 max-h-40 overflow-auto">
+                <pre class="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(selectedSeederDetails?.protocolDetails, null, 2)}</pre>
+              </div>
+            </div>
+          {/if}
+        {:else}
+          <div class="p-4 bg-amber-500/10 rounded-lg border border-amber-500/30">
+            <p class="text-sm text-amber-600 text-center">
+              Seeder information is still loading...
+            </p>
+          </div>
+        {/if}
+      </div>
+
+      <div class="flex justify-end gap-2 mt-6">
+        <Button variant="outline" onclick={closeSeederDetailsModal}>
+          Close
         </Button>
       </div>
     </div>

@@ -1060,38 +1060,52 @@ async fn api_search(
     Json(req): Json<SearchRequest>,
 ) -> impl IntoResponse {
     let timeout = req.timeout_ms.unwrap_or(10_000);
-    match state
-        .dht
-        .synchronous_search_metadata(req.file_hash, timeout)
-        .await
-    {
-        Ok(m) => (StatusCode::OK, Json(m)).into_response(),
-        Err(e) => (
+
+    // Trigger search
+    if let Err(e) = state.dht.search_metadata(req.file_hash.clone(), timeout).await {
+        return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(http_server::ErrorResponse { error: e }),
         )
-            .into_response(),
+            .into_response();
     }
+
+    // Poll cache for metadata
+    let poll_iterations = (timeout / 100) as usize;
+    let mut metadata = None;
+    for _ in 0..poll_iterations {
+        if let Some(m) = state.dht.get_cached_metadata(&req.file_hash).await {
+            metadata = Some(m);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    (StatusCode::OK, Json(metadata)).into_response()
 }
 
 async fn api_download(
     State(state): State<Arc<HeadlessE2eState>>,
     Json(req): Json<DownloadRequest>,
 ) -> impl IntoResponse {
-    let meta_opt = match state
-        .dht
-        .synchronous_search_metadata(req.file_hash.clone(), 10_000)
-        .await
-    {
-        Ok(m) => m,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(http_server::ErrorResponse { error: e }),
-            )
-                .into_response();
+    // Trigger search and poll cache
+    if let Err(e) = state.dht.search_metadata(req.file_hash.clone(), 10_000).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(http_server::ErrorResponse { error: e }),
+        )
+            .into_response();
+    }
+
+    let mut meta_opt = None;
+    for _ in 0..100 {  // 100 * 100ms = 10s
+        if let Some(m) = state.dht.get_cached_metadata(&req.file_hash).await {
+            meta_opt = Some(m);
+            break;
         }
-    };
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
     let Some(meta) = meta_opt else {
         return (
             StatusCode::NOT_FOUND,
@@ -1619,5 +1633,4 @@ async fn api_tx_receipt(
             .into_response(),
     }
 }
-
 

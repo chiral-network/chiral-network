@@ -40,6 +40,7 @@
   import { settingsBackupService } from "$lib/services/settingsBackupService";
   import { diagnosticLogger, errorLogger } from '$lib/diagnostics/logger';
   import { diagnosticsService, type DiagReport } from "$lib/services/diagnosticsService";
+  import { paymentService } from "$lib/services/paymentService";
   import {
     validateStoragePath,
     validatePort,
@@ -152,6 +153,7 @@
     bandwidthSchedules: [],
     enableFileLogging: false, // Logging to disk
     maxLogSizeMB: 10, // MB per log file
+    useDynamicPricing: false,
 
     // Upload Protocol
     selectedProtocol: "WebRTC", // Default to WebRTC
@@ -172,6 +174,12 @@
   // Diagnostics state
   let diagnosticsRunning = false;
   let diagnosticsReport: DiagReport | null = null;
+
+  // Pricing state
+  let dynamicPricePerMb: number | null = null;
+  let dynamicPriceError: string | null = null;
+  let isFetchingDynamicPrice = false;
+  let lastDynamicPricingEnabled = false;
 
   // Backup/Restore state
   let backupRestoreSectionOpen = false;
@@ -381,6 +389,16 @@
     restorePrivacySnapshot();
   }
 
+  $: if (localSettings.useDynamicPricing && !lastDynamicPricingEnabled) {
+    lastDynamicPricingEnabled = true;
+    refreshDynamicPrice();
+  }
+
+  $: if (!localSettings.useDynamicPricing && lastDynamicPricingEnabled) {
+    lastDynamicPricingEnabled = false;
+    dynamicPriceError = null;
+  }
+
   $: privacyStatus = (() => {
     switch (localSettings.ipPrivacyMode) {
       case "prefer":
@@ -444,6 +462,8 @@
     }
   if (isTauri) {
       try {
+        console.log("saving settings");
+        console.log(localSettings)
         await invoke("save_app_settings", {
           settingsJson: JSON.stringify(localSettings),
         });
@@ -651,9 +671,12 @@
       autonatProbeIntervalSecs: localSettings.autonatProbeInterval,
       chunkSizeKb: localSettings.chunkSize,
       cacheSizeMb: localSettings.cacheSize,
-      enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
+      enableAutorelay:
+        localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
       enableRelayServer: localSettings.enableRelayServer,
       enableUpnp: localSettings.enableUPnP,
+      pureClientMode: localSettings.pureClientMode,
+      forceServerMode: localSettings.forceServerMode,
     };
 
     if (localSettings.autonatServers?.length) {
@@ -1113,6 +1136,17 @@ selectedLanguage = initial; // Synchronize dropdown display value
       next.capWarningThresholds = null;
     }
 
+    if (!localSettings.useDynamicPricing) {
+      const price = Number(localSettings.pricePerMb);
+      if (!Number.isFinite(price) || price <= 0) {
+        next.pricePerMb = "Price per MB must be greater than 0.";
+      } else {
+        next.pricePerMb = null;
+      }
+    } else {
+      next.pricePerMb = null;
+    }
+
     // Validate storage path
     if (localSettings.storagePath && localSettings.storagePath.trim()) {
       // First do basic frontend validation
@@ -1174,6 +1208,30 @@ selectedLanguage = initial; // Synchronize dropdown display value
         // Clear warning when there's an error
         storagePathWarning = null;
       }
+    }
+  }
+
+  async function refreshDynamicPrice() {
+    if (isFetchingDynamicPrice) {
+      return;
+    }
+
+    isFetchingDynamicPrice = true;
+    dynamicPriceError = null;
+    dynamicPricePerMb = null;
+
+    try {
+      const price = await paymentService.getDynamicPricePerMB(1.2);
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new Error("Dynamic price unavailable");
+      }
+      dynamicPricePerMb = Number(price.toFixed(8));
+    } catch (error) {
+      dynamicPricePerMb = null;
+      dynamicPriceError =
+        error instanceof Error ? error.message : "Failed to fetch dynamic price";
+    } finally {
+      isFetchingDynamicPrice = false;
     }
   }
 
@@ -1354,6 +1412,9 @@ $: sectionLabels = {
     tr("advanced.cacheSize"),
     tr("advanced.logLevel"),
     tr("advanced.autoUpdate"),
+    "Pricing",
+    "Price per MB",
+    "Dynamic pricing",
     tr("advanced.exportSettings"),
     tr("advanced.importSettings"),
   ],
@@ -2338,6 +2399,48 @@ function sectionMatches(section: string, query: string) {
           <Label for="auto-update" class="cursor-pointer">
             {$t("advanced.autoUpdate")}
           </Label>
+        </div>
+
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="use-dynamic-pricing"
+              bind:checked={localSettings.useDynamicPricing}
+            />
+            <Label for="use-dynamic-pricing" class="cursor-pointer">
+              Use dynamic pricing
+            </Label>
+          </div>
+
+          {#if localSettings.useDynamicPricing}
+            <div class="ml-6 text-xs text-muted-foreground">
+              {#if isFetchingDynamicPrice}
+                Fetching dynamic price...
+              {:else if dynamicPricePerMb !== null}
+                Current dynamic price: {dynamicPricePerMb} Chiral/MB
+              {:else if dynamicPriceError}
+                <span class="text-red-600">Dynamic pricing unavailable: {dynamicPriceError}</span>
+              {:else}
+                Dynamic pricing unavailable.
+              {/if}
+            </div>
+          {:else}
+            <div class="ml-6">
+              <Label for="price-per-mb">Price per MB (Chiral)</Label>
+              <Input
+                id="price-per-mb"
+                type="number"
+                step="0.00000001"
+                min="0"
+                bind:value={localSettings.pricePerMb}
+                class="mt-2"
+              />
+              {#if errors.pricePerMb}
+                <p class="mt-1 text-sm text-red-500">{errors.pricePerMb}</p>
+              {/if}
+            </div>
+          {/if}
         </div>
 
 

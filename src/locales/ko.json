@@ -459,6 +459,23 @@
     "testWallet": {
       "header": "테스트 전용",
       "button": "테스트 지갑 생성"
+    },
+    "wizard": {
+      "existingWallets": "저장된 지갑",
+      "loadingWallets": "지갑을 불러오는 중...",
+      "enterPassword": "지갑 비밀번호 입력",
+      "unlockWallet": "지갑 잠금 해제",
+      "unlockSuccess": "지갑 잠금 해제 성공",
+      "orCreateImport": "또는",
+      "walletName": "지갑 이름 (선택사항)",
+      "walletNamePlaceholder": "예: 주 지갑",
+      "passwordOptional": "비밀번호 (선택사항)",
+      "passwordPlaceholder": "없으면 비워 두세요"
+    },
+    "errors": {
+      "loadKeystoreFailed": "저장된 지갑을 불러오는데 실패했습니다",
+      "passwordRequired": "비밀번호가 필요합니다",
+      "incorrectPassword": "비밀번호가 틀렸거나 키스토어가 손상되었습니다"
     }
   },
   "transfer": {
@@ -957,6 +974,12 @@
     "off": "꺼짐",
     "refresh": "새로고침",
     "clear": "지우기",
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "Mining and RPC calls may pause for a few seconds while the node flushes data."
+      }
+    },
     "pools": {
       "solo": "솔로 채굴",
       "pool1": "카이럴풀 #1",
@@ -1534,7 +1557,15 @@
     },
     "blocks": {
       "latest": "최신 블록",
-      "noBlocks": "블록을 찾을 수 없습니다"
+      "noBlocks": "블록을 찾을 수 없습니다",
+      "syncingTitle": "블록 동기화 중...",
+      "syncingSubtitle": "노드가 아직 동기화 중입니다. 동기화가 완료될 때까지 최신 블록이 표시되지 않을 수 있습니다."
+    },
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "You can keep browsing other pages. This view will refresh automatically once the node stops/starts."
+      }
     },
     "sync": {
       "syncing": "동기화 중",
@@ -1542,7 +1573,8 @@
       "highest": "최고 블록",
       "remaining": "남음",
       "eta": "예상 시간",
-      "complete": "동기화 완료"
+      "complete": "동기화 완료",
+      "inProgress": "동기화 진행 중"
     },
     "search": {
       "title": "블록체인 검색",
@@ -1693,7 +1725,9 @@
       "messageSent": "테스트 메시지를 보냈습니다: {message}",
       "sendError": "메시지를 보내지 못했습니다: {error}",
       "gethInstalled": "Geth가 이미 설치되어 있습니다",
-      "gethDownloadError": "Geth 다운로드에 실패했습니다: {error}"
+      "gethDownloadError": "Geth 다운로드에 실패했습니다: {error}",
+      "gethReinitSuccess": "새 네트워크를 위해 블록체인 데이터가 다시 초기화되었습니다",
+      "gethReinitError": "블록체인 데이터를 다시 초기화하지 못했습니다: {error}"
     },
     "download": {
       "payment": {

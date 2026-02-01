@@ -459,6 +459,23 @@
     "testWallet": {
       "header": "仅用于测试",
       "button": "创建测试钱包"
+    },
+    "wizard": {
+      "existingWallets": "您保存的钱包",
+      "loadingWallets": "正在加载钱包...",
+      "enterPassword": "输入钱包密码",
+      "unlockWallet": "解锁钱包",
+      "unlockSuccess": "钱包解锁成功",
+      "orCreateImport": "或",
+      "walletName": "钱包名称（可选）",
+      "walletNamePlaceholder": "例如：主钱包",
+      "passwordOptional": "密码（可选）",
+      "passwordPlaceholder": "如无密码可留空"
+    },
+    "errors": {
+      "loadKeystoreFailed": "加载保存的钱包失败",
+      "passwordRequired": "需要密码",
+      "incorrectPassword": "密码错误或密钥库已损坏"
     }
   },
   "transfer": {
@@ -981,6 +998,12 @@
     "off": "关闭",
     "refresh": "刷新",
     "clear": "清除",
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "Mining and RPC calls may pause for a few seconds while the node flushes data."
+      }
+    },
     "pools": {
       "solo": "单人挖矿",
       "pool1": "ChiralPool #1",
@@ -1563,7 +1586,15 @@
     },
     "blocks": {
       "latest": "最新区块",
-      "noBlocks": "未找到区块"
+      "noBlocks": "未找到区块",
+      "syncingTitle": "正在同步区块...",
+      "syncingSubtitle": "你的节点仍在同步中。在同步完成之前，最新区块可能无法显示。"
+    },
+    "node": {
+      "shuttingDown": {
+        "title": "Blockchain node is shutting down",
+        "subtitle": "You can keep browsing other pages. This view will refresh automatically once the node stops/starts."
+      }
     },
     "sync": {
       "syncing": "同步中",
@@ -1571,7 +1602,8 @@
       "highest": "最高区块",
       "remaining": "剩余",
       "eta": "预计时间",
-      "complete": "同步完成"
+      "complete": "同步完成",
+      "inProgress": "同步进行中"
     },
     "search": {
       "title": "搜索区块链",
@@ -1722,7 +1754,9 @@
       "messageSent": "已发送测试消息：{message}",
       "sendError": "发送消息失败：{error}",
       "gethInstalled": "Geth 已安装",
-      "gethDownloadError": "下载 Geth 失败：{error}"
+      "gethDownloadError": "下载 Geth 失败：{error}",
+      "gethReinitSuccess": "已为新网络重新初始化区块链数据",
+      "gethReinitError": "重新初始化区块链数据失败：{error}"
     },
     "download": {
       "payment": {

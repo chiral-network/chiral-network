@@ -9,23 +9,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 
+use base64::{engine::general_purpose, Engine as _};
+use librqbit::torrent_from_bytes;
 use sha2::Digest;
 use tauri::Manager;
-use base64::{Engine as _, engine::general_purpose};
-use librqbit::torrent_from_bytes;
 
 use crate::download_source::HttpSourceInfo;
+use crate::file_transfer::FileTransferService;
 use crate::http_download::HttpDownloadClient;
 use crate::http_server;
 use crate::manager::ChunkManager;
 use crate::protocols::ProtocolHandler;
 use crate::transaction_services;
-use crate::file_transfer::FileTransferService;
 use crate::webrtc_service::{set_webrtc_service, WebRTCService};
 
 fn extract_btih_info_hash(identifier: &str) -> Option<String> {
@@ -74,8 +74,8 @@ async fn bt_handshake_diag_on_fail(
         Err(e) => return format!("bt_fail_diag=<handshake-bytes-error:{}>", e),
     };
 
-    let connect = tokio::time::timeout(std::time::Duration::from_secs(2), TcpStream::connect(addr))
-        .await;
+    let connect =
+        tokio::time::timeout(std::time::Duration::from_secs(2), TcpStream::connect(addr)).await;
     let mut stream = match connect {
         Err(_) => return format!("bt_fail_diag=connect_timeout addr={}", addr),
         Ok(Err(e)) => return format!("bt_fail_diag=connect_error addr={} err={}", addr, e),
@@ -90,7 +90,12 @@ async fn bt_handshake_diag_on_fail(
     }
 
     let mut resp = [0u8; 68];
-    match tokio::time::timeout(std::time::Duration::from_secs(2), stream.read_exact(&mut resp)).await {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        stream.read_exact(&mut resp),
+    )
+    .await
+    {
         Err(_) => format!("bt_fail_diag=handshake_read_timeout addr={}", addr),
         Ok(Err(e)) => format!("bt_fail_diag=handshake_read_error addr={} err={}", addr, e),
         Ok(Ok(_)) => {
@@ -222,7 +227,7 @@ struct HealthResponse {
     ok: bool,
     node_id: Option<String>,
     peer_id: Option<String>,
-  file_server_url: Option<String>,
+    file_server_url: Option<String>,
     rpc_endpoint: Option<String>,
 }
 
@@ -486,7 +491,8 @@ async fn api_health(State(state): State<Arc<E2eApiState>>) -> impl IntoResponse 
             let app_state = state.app.state::<crate::AppState>();
             let addr_opt = app_state.http_server_addr.lock().await.clone();
             addr_opt.map(|addr| {
-                let host = std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
+                let host =
+                    std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
                 format!("http://{}:{}", host, addr.port())
             })
         }
@@ -547,10 +553,13 @@ async fn api_upload_generate(
     let seeder_url = if protocol_upper == "HTTP" {
         let bound_addr = app_state.http_server_addr.lock().await.clone();
         let Some(bound_addr) = bound_addr else {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: "HTTP file server is not running (no bound address)".to_string(),
-            }))
-            .into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: "HTTP file server is not running (no bound address)".to_string(),
+                }),
+            )
+                .into_response();
         };
         if let Ok(v) = std::env::var("CHIRAL_FILE_SERVER_URL") {
             if !v.trim().is_empty() {
@@ -559,7 +568,8 @@ async fn api_upload_generate(
                 format!("http://127.0.0.1:{}", bound_addr.port())
             }
         } else {
-            let host = std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
+            let host =
+                std::env::var("CHIRAL_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
             format!("http://{}:{}", host, bound_addr.port())
         }
     } else {
@@ -580,10 +590,13 @@ async fn api_upload_generate(
     // Require active account for publishing/payment metadata consistency.
     let uploader_address = app_state.active_account.lock().await.clone();
     if uploader_address.is_none() {
-        return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: "No active account. Set CHIRAL_PRIVATE_KEY and restart node.".to_string(),
-        }))
-        .into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(crate::http_server::ErrorResponse {
+                error: "No active account. Set CHIRAL_PRIVATE_KEY and restart node.".to_string(),
+            }),
+        )
+            .into_response();
     }
 
     // Create temp file, stream-write deterministic bytes and compute sha256.
@@ -606,10 +619,13 @@ async fn api_upload_generate(
     let mut f = match tokio::fs::File::create(&tmp_path).await {
         Ok(f) => f,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Failed to create temp file: {}", e),
-            }))
-            .into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!("Failed to create temp file: {}", e),
+                }),
+            )
+                .into_response();
         }
     };
     let mut written: u64 = 0;
@@ -627,10 +643,13 @@ async fn api_upload_generate(
         }
         let to_write = std::cmp::min(buf.len() as u64, file_size - written) as usize;
         if let Err(e) = f.write_all(&buf[..to_write]).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Failed to write temp file: {}", e),
-            }))
-            .into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!("Failed to write temp file: {}", e),
+                }),
+            )
+                .into_response();
         }
         hasher.update(&buf[..to_write]);
         written += to_write as u64;
@@ -647,10 +666,13 @@ async fn api_upload_generate(
         // Move into provider storage dir and register with HTTP file server state.
         let permanent_path = app_state.http_server_state.storage_dir.join(&file_hash);
         if let Err(e) = tokio::fs::rename(&tmp_path, &permanent_path).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Failed to move file into storage: {}", e),
-            }))
-            .into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!("Failed to move file into storage: {}", e),
+                }),
+            )
+                .into_response();
         }
 
         app_state
@@ -703,22 +725,38 @@ async fn api_upload_generate(
                 manifest: None,
             };
             if let Err(e) = dht.publish_file(meta, None).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                    error: format!("Failed to publish metadata to DHT: {}", e),
-                }))
-                .into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(crate::http_server::ErrorResponse {
+                        error: format!("Failed to publish metadata to DHT: {}", e),
+                    }),
+                )
+                    .into_response();
             }
         } else {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: "DHT is not running".to_string(),
-            }))
-            .into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: "DHT is not running".to_string(),
+                }),
+            )
+                .into_response();
         }
         file_hash.clone()
     } else if protocol_upper == "BITTORRENT" {
         // Seed the file via the protocol manager to obtain a magnet link (contains info_hash).
-        let seeding = match app_state
-            .protocol_manager
+        let protocol_manager = { app_state.protocol_manager.lock().await.as_ref().cloned() };
+        let Some(protocol_manager) = protocol_manager else {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: "Protocol manager is not running".to_string(),
+                }),
+            )
+                .into_response();
+        };
+
+        let seeding = match protocol_manager
             .seed(
                 "bittorrent",
                 std::path::PathBuf::from(&tmp_path),
@@ -848,10 +886,13 @@ async fn api_upload_generate(
             let chunk_storage_path = match state.app.path().app_data_dir() {
                 Ok(p) => p.join("chunks"),
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                        error: format!("Failed to get app data dir for chunk storage: {}", e),
-                    }))
-                    .into_response();
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(crate::http_server::ErrorResponse {
+                            error: format!("Failed to get app data dir for chunk storage: {}", e),
+                        }),
+                    )
+                        .into_response();
                 }
             };
             let manager = ChunkManager::new(chunk_storage_path);
@@ -865,16 +906,20 @@ async fn api_upload_generate(
             match result {
                 Ok(Ok(canon)) => canon.manifest.merkle_root,
                 Ok(Err(e)) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                        error: format!("Failed to compute WebRTC merkle root: {}", e),
-                    }))
-                    .into_response();
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(crate::http_server::ErrorResponse {
+                            error: format!("Failed to compute WebRTC merkle root: {}", e),
+                        }),
+                    )
+                        .into_response();
                 }
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                        error: e,
-                    }))
-                    .into_response();
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(crate::http_server::ErrorResponse { error: e }),
+                    )
+                        .into_response();
                 }
             }
         } else {
@@ -893,7 +938,10 @@ async fn api_upload_generate(
         )
         .await
         {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e }))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse { error: e }),
+            )
                 .into_response();
         }
 
@@ -906,11 +954,19 @@ async fn api_upload_generate(
         // DHT record does not contain them yet. For Bitswap, we therefore validate against the raw DHT record bytes.
         let dht = { app_state.dht.lock().await.as_ref().cloned() };
         let Some(dht) = dht else {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: "DHT is not running".to_string(),
-            }))
-            .into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: "DHT is not running".to_string(),
+                }),
+            )
+                .into_response();
         };
+        // Trigger search and poll cache for metadata
+        let _ = dht
+            .search_metadata(expected_merkle_root.clone(), 1500)
+            .await;
+
         let mut found = None;
         // Default: ~10s total. Bitswap may need longer until `cids` is observable.
         let max_attempts: u32 = if protocol_upper == "BITSWAP" { 240 } else { 40 }; // 60s vs 10s
@@ -969,10 +1025,16 @@ async fn api_upload_generate(
 
         expected_merkle_root
     } else {
-        return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, FTP, or BitTorrent.", protocol_norm),
-        }))
-        .into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(crate::http_server::ErrorResponse {
+                error: format!(
+                    "Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, FTP, or BitTorrent.",
+                    protocol_norm
+                ),
+            }),
+        )
+            .into_response();
     };
 
     (
@@ -986,20 +1048,21 @@ async fn api_upload_generate(
             uploader_address,
             torrent_base64: if protocol_upper == "BITTORRENT" {
                 let app_state = state.app.state::<crate::AppState>();
-                app_state
-                    .bittorrent_handler
-                    .get_seeded_torrent_bytes(&published_key)
-                    .await
-                    .map(|bytes| general_purpose::STANDARD.encode(bytes))
+                let bt = { app_state.bittorrent_handler.lock().await.as_ref().cloned() };
+                match bt {
+                    Some(bt) => bt
+                        .get_seeded_torrent_bytes(&published_key)
+                        .await
+                        .map(|bytes| general_purpose::STANDARD.encode(bytes)),
+                    None => None,
+                }
             } else {
                 None
             },
             bittorrent_port: if protocol_upper == "BITTORRENT" {
                 let app_state = state.app.state::<crate::AppState>();
-                app_state
-                    .bittorrent_handler
-                    .rqbit_session()
-                    .tcp_listen_port()
+                let bt = { app_state.bittorrent_handler.lock().await.as_ref().cloned() };
+                bt.map(|bt| bt.rqbit_session().tcp_listen_port()).flatten()
             } else {
                 None
             },
@@ -1015,30 +1078,38 @@ async fn api_search(
     let app_state = state.app.state::<crate::AppState>();
     let dht = { app_state.dht.lock().await.as_ref().cloned() };
     let Some(dht) = dht else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-            error: "DHT is not running".to_string(),
-        }))
-        .into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(crate::http_server::ErrorResponse {
+                error: "DHT is not running".to_string(),
+            }),
+        )
+            .into_response();
     };
 
     let timeout = req.timeout_ms.unwrap_or(10_000);
-    match dht.synchronous_search_metadata(req.file_hash, timeout).await {
-        Ok(m) => {
-            // In real networks, the DHT record can be visible before the record's `seeders` list is populated.
-            // For Bitswap/WebRTC, download initiation often needs a seeder peer ID; fall back to provider discovery.
-            let mut m = m;
-            if let Some(meta) = m.as_mut() {
-                if meta.seeders.is_empty() {
-                    let providers = dht.get_seeders_for_file(&meta.merkle_root).await;
-                    if !providers.is_empty() {
-                        meta.seeders = providers;
-                    }
-                }
-            }
-            (StatusCode::OK, Json(m)).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response(),
+
+    // Trigger search
+    if let Err(e) = dht.search_metadata(req.file_hash.clone(), timeout).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(crate::http_server::ErrorResponse { error: e }),
+        )
+            .into_response();
     }
+
+    // Poll cache for metadata
+    let poll_iterations = (timeout / 100) as usize;
+    let mut metadata = None;
+    for _ in 0..poll_iterations {
+        if let Some(m) = dht.get_cached_metadata(&req.file_hash).await {
+            metadata = Some(m);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    (StatusCode::OK, Json(metadata)).into_response()
 }
 
 async fn api_download(
@@ -1048,23 +1119,42 @@ async fn api_download(
     let app_state = state.app.state::<crate::AppState>();
     let dht = { app_state.dht.lock().await.as_ref().cloned() };
     let Some(dht) = dht else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-            error: "DHT is not running".to_string(),
-        }))
-        .into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(crate::http_server::ErrorResponse {
+                error: "DHT is not running".to_string(),
+            }),
+        )
+            .into_response();
     };
 
-    let meta_opt = match dht.synchronous_search_metadata(req.file_hash.clone(), 10_000).await {
-        Ok(m) => m,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+    // Trigger search and poll cache
+    if let Err(e) = dht.search_metadata(req.file_hash.clone(), 10_000).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(crate::http_server::ErrorResponse { error: e }),
+        )
+            .into_response();
+    }
+
+    let mut meta_opt = None;
+    for _ in 0..100 {
+        // 100 * 100ms = 10s
+        if let Some(m) = dht.get_cached_metadata(&req.file_hash).await {
+            meta_opt = Some(m);
+            break;
         }
-    };
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
     let Some(meta) = meta_opt else {
-        return (StatusCode::NOT_FOUND, Json(crate::http_server::ErrorResponse {
-            error: "Metadata not found".to_string(),
-        }))
-        .into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(crate::http_server::ErrorResponse {
+                error: "Metadata not found".to_string(),
+            }),
+        )
+            .into_response();
     };
 
     let out_name = req.file_name.unwrap_or_else(|| meta.file_name.clone());
@@ -1079,12 +1169,21 @@ async fn api_download(
     let seeder_url = if protocol_upper == "HTTP" {
         let seeder_url = req
             .seeder_url
-            .or_else(|| meta.http_sources.as_ref().and_then(|v| v.first()).map(|s| s.url.clone()))
+            .or_else(|| {
+                meta.http_sources
+                    .as_ref()
+                    .and_then(|v| v.first())
+                    .map(|s| s.url.clone())
+            })
             .ok_or_else(|| "No httpSources in metadata".to_string());
         match seeder_url {
             Ok(v) => Some(v),
             Err(e) => {
-                return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(crate::http_server::ErrorResponse { error: e }),
+                )
+                    .into_response();
             }
         }
     } else {
@@ -1121,10 +1220,19 @@ async fn api_download(
         let peer_id = Some(dht.get_peer_id().await);
         let client = HttpDownloadClient::new_with_peer_id(peer_id);
         if let Err(e) = client
-            .download_file(seeder_url.as_ref().unwrap(), &meta.merkle_root, &output_path, None)
+            .download_file(
+                seeder_url.as_ref().unwrap(),
+                &meta.merkle_root,
+                &output_path,
+                None,
+            )
             .await
         {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse { error: e }),
+            )
+                .into_response();
         }
     } else if protocol_upper == "WEBRTC"
         || protocol_upper == "BITSWAP"
@@ -1204,9 +1312,26 @@ async fn api_download(
                 if protocol_upper_for_task == "WEBRTC" {
                         // In case the service was stopped after request but before task runs.
                         ensure_p2p_services_started(&app_handle_for_task).await?;
+                    let peer_id = meta_for_task
+                        .seeders
+                        .get(0)
+                        .cloned()
+                        .ok_or_else(|| {
+                            "No seeder peer_id available for WebRTC download".to_string()
+                        })?;
+                    tracing::info!(
+                        "E2E WebRTC download using peer_id={} file_hash={} file_name={} file_size={}",
+                        peer_id,
+                        meta_for_task.merkle_root,
+                        meta_for_task.file_name,
+                        meta_for_task.file_size
+                    );
                     if let Err(e) = crate::download_file_from_network(
                         app_handle_for_task.state::<crate::AppState>(),
+                        peer_id,
                         meta_for_task.merkle_root.clone(),
+                        meta_for_task.file_name.clone(),
+                        meta_for_task.file_size,
                         out_path_for_task.clone(),
                     )
                     .await
@@ -1248,10 +1373,19 @@ async fn api_download(
                     } else if protocol_upper_for_task == "BITTORRENT" {
                         // BitTorrent: download via bittorrent handler (magnet), then copy the completed file into
                         // the E2E output path so verification/polling is consistent across protocols.
-                        let bt = app_handle_for_task
-                            .state::<crate::AppState>()
-                            .bittorrent_handler
-                            .clone();
+                        let bt = {
+                            let app_state = app_handle_for_task.state::<crate::AppState>();
+                            let bt_opt = app_state
+                                .bittorrent_handler
+                                .lock()
+                                .await
+                                .as_ref()
+                                .cloned();
+                            bt_opt
+                        };
+                        let Some(bt) = bt else {
+                            return Err("BitTorrent handler is not running".to_string());
+                        };
 
                         let expected_info_hash = meta_for_task
                             .info_hash
@@ -1621,8 +1755,8 @@ async fn api_download(
                                     let mut h = sha2::Sha256::new();
                                     h.update(&b);
                                     let computed = format!("{:x}", h.finalize());
-                                    job.verified =
-                                        computed == meta_for_task.merkle_root && bytes == meta_for_task.file_size;
+                                    job.verified = computed == meta_for_task.merkle_root
+                                        && bytes == meta_for_task.file_size;
                                 }
                                 Err(_) => {
                                     job.verified = false;
@@ -1655,20 +1789,29 @@ async fn api_download(
         )
             .into_response();
     } else {
-        return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-            error: format!("Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, FTP, or BitTorrent.", protocol_upper),
-        }))
-        .into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(crate::http_server::ErrorResponse {
+                error: format!(
+                    "Unsupported protocol '{}'. Use HTTP, WebRTC, Bitswap, FTP, or BitTorrent.",
+                    protocol_upper
+                ),
+            }),
+        )
+            .into_response();
     }
 
     // HTTP path returns synchronously.
     let bytes_len = match tokio::fs::metadata(&output_path).await {
         Ok(m) => m.len(),
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Download finished but output file is missing: {}", e),
-            }))
-            .into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!("Download finished but output file is missing: {}", e),
+                }),
+            )
+                .into_response();
         }
     };
 
@@ -1676,10 +1819,13 @@ async fn api_download(
     let bytes = match tokio::fs::read(&output_path).await {
         Ok(b) => b,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse {
-                error: format!("Failed to read downloaded file: {}", e),
-            }))
-            .into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(crate::http_server::ErrorResponse {
+                    error: format!("Failed to read downloaded file: {}", e),
+                }),
+            )
+                .into_response();
         }
     };
     let mut hasher = sha2::Sha256::new();
@@ -1687,14 +1833,17 @@ async fn api_download(
     let computed = format!("{:x}", hasher.finalize());
     let verified = computed == meta.merkle_root;
 
-    (StatusCode::OK, Json(DownloadResponse {
-        download_path: output_path.to_string_lossy().to_string(),
-        verified,
-        bytes: bytes_len,
-        download_id: None,
-        status: Some("success".to_string()),
-    }))
-    .into_response()
+    (
+        StatusCode::OK,
+        Json(DownloadResponse {
+            download_path: output_path.to_string_lossy().to_string(),
+            verified,
+            bytes: bytes_len,
+            download_id: None,
+            status: Some("success".to_string()),
+        }),
+    )
+        .into_response()
 }
 
 async fn api_pay(
@@ -1706,25 +1855,44 @@ async fn api_pay(
     let account = match app_state.active_account.lock().await.clone() {
         Some(a) => a,
         None => {
-            return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-                error: "No active account. Set CHIRAL_PRIVATE_KEY and restart node.".to_string(),
-            }))
-            .into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(crate::http_server::ErrorResponse {
+                    error: "No active account. Set CHIRAL_PRIVATE_KEY and restart node."
+                        .to_string(),
+                }),
+            )
+                .into_response();
         }
     };
     let private_key = match app_state.active_account_private_key.lock().await.clone() {
         Some(k) => k,
         None => {
-            return (StatusCode::BAD_REQUEST, Json(crate::http_server::ErrorResponse {
-                error: "No private key loaded. Set CHIRAL_PRIVATE_KEY and restart node.".to_string(),
-            }))
-            .into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(crate::http_server::ErrorResponse {
+                    error: "No private key loaded. Set CHIRAL_PRIVATE_KEY and restart node."
+                        .to_string(),
+                }),
+            )
+                .into_response();
         }
     };
 
-    match crate::ethereum::send_transaction(&account, &req.uploader_address, req.price, &private_key).await {
+    match crate::ethereum::send_transaction(
+        &account,
+        &req.uploader_address,
+        req.price,
+        &private_key,
+    )
+    .await
+    {
         Ok(tx_hash) => (StatusCode::OK, Json(PayResponse { tx_hash })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(crate::http_server::ErrorResponse { error: e }),
+        )
+            .into_response(),
     }
 }
 
@@ -1734,8 +1902,10 @@ async fn api_tx_receipt(
 ) -> impl IntoResponse {
     match transaction_services::get_transaction_receipt(&req.tx_hash).await {
         Ok(r) => (StatusCode::OK, Json(r)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(crate::http_server::ErrorResponse { error: e })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(crate::http_server::ErrorResponse { error: e }),
+        )
+            .into_response(),
     }
 }
-
-

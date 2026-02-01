@@ -184,7 +184,7 @@ pub struct FileMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "infoHash")]
     pub info_hash: Option<String>,
 
-    /// A list of BitTorrent tracker URLs.
+    /// A list of BitTorrent tracker URLs.print("".center(50, "-"))
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trackers: Option<Vec<String>>,
 
@@ -193,6 +193,35 @@ pub struct FileMetadata {
     /// instead of placeholder hashes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<String>,
+}
+
+/// Minimal DHT record - discovery data only
+/// This is published to the Kademlia DHT for basic file discovery.
+/// Full metadata (pricing, wallet addresses, protocols) comes from GossipSub.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DhtFileRecord {
+    #[serde(rename = "fileHash")]
+    pub file_hash: String,
+    #[serde(rename = "fileName")]
+    pub file_name: String,
+    #[serde(rename = "fileSize")]
+    pub file_size: u64,
+    #[serde(rename = "createdAt")]
+    pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "mimeType")]
+    pub mime_type: Option<String>,
+}
+
+impl From<FileMetadata> for DhtFileRecord {
+    fn from(metadata: FileMetadata) -> Self {
+        Self {
+            file_hash: metadata.merkle_root,
+            file_name: metadata.file_name,
+            file_size: metadata.file_size,
+            created_at: metadata.created_at,
+            mime_type: metadata.mime_type,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

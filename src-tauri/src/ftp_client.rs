@@ -18,6 +18,13 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
 use serde::{Serialize, Deserialize};
 use url::Url;
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
+use sha2::{Sha256, Digest};
+use rand::RngCore;
+use base64::{Engine as _, engine::general_purpose};
 
 /// FTP file entry information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -914,4 +921,100 @@ mod tests {
         let timeout = source_info.timeout_secs.unwrap_or(DEFAULT_FTP_TIMEOUT_SECS);
         assert_eq!(timeout, 60);
     }
+}
+
+// ------ FTP Credential Encryption ------
+
+/// Encrypts an FTP password using AES-256-GCM with file hash as key derivation material
+///
+/// # Security Properties
+/// - Uses AES-256-GCM for authenticated encryption (detects tampering)
+/// - Key derived from SHA-256(file_hash + static_salt)
+/// - Random 12-byte nonce prepended to ciphertext
+/// - Result is base64-encoded for storage/transmission
+///
+/// # Security Considerations
+/// - File hash is public, so anyone with the hash can decrypt the password
+/// - This is intentional: credentials are shared with peers who have the file hash
+/// - NOT suitable for private FTP servers - use WebRTC protocol instead
+///
+/// # Arguments
+/// * `password` - The plaintext FTP password to encrypt
+/// * `file_hash` - The file hash used as key derivation material
+///
+/// # Returns
+/// Base64-encoded string containing: nonce (12 bytes) + ciphertext
+pub fn encrypt_ftp_password(password: &str, file_hash: &str) -> Result<String> {
+    // Derive 256-bit key from file hash
+    let mut hasher = Sha256::new();
+    hasher.update(file_hash.as_bytes());
+    hasher.update(b"chiral_ftp_credential_salt_v1");
+    let key_bytes = hasher.finalize();
+
+    // Create cipher
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+        .map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
+
+    // Generate random nonce
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    // Encrypt
+    let ciphertext = cipher
+        .encrypt(nonce, password.as_bytes())
+        .map_err(|e| anyhow!("Encryption failed: {}", e))?;
+
+    // Combine nonce + ciphertext and base64 encode
+    let mut combined = nonce_bytes.to_vec();
+    combined.extend_from_slice(&ciphertext);
+    Ok(general_purpose::STANDARD.encode(&combined))
+}
+
+/// Decrypts an FTP password encrypted with encrypt_ftp_password
+///
+/// # Arguments
+/// * `encrypted` - Base64-encoded string containing nonce + ciphertext
+/// * `file_hash` - The file hash used as key derivation material (must match encryption)
+///
+/// # Returns
+/// Decrypted plaintext password
+///
+/// # Errors
+/// Returns error if:
+/// - Base64 decoding fails
+/// - Data is too short (< 12 bytes for nonce)
+/// - Key derivation fails
+/// - Decryption fails (wrong key or tampered data)
+/// - UTF-8 decoding fails
+pub fn decrypt_ftp_password(encrypted: &str, file_hash: &str) -> Result<String> {
+    // Decode base64
+    let combined = general_purpose::STANDARD.decode(encrypted)
+        .map_err(|e| anyhow!("Base64 decode failed: {}", e))?;
+
+    if combined.len() < 12 {
+        return Err(anyhow!("Invalid encrypted password: too short"));
+    }
+
+    // Split nonce and ciphertext
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    // Derive same key
+    let mut hasher = Sha256::new();
+    hasher.update(file_hash.as_bytes());
+    hasher.update(b"chiral_ftp_credential_salt_v1");
+    let key_bytes = hasher.finalize();
+
+    // Create cipher
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+        .map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
+
+    // Decrypt
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| anyhow!("Decryption failed (wrong key or tampered data): {}", e))?;
+
+    String::from_utf8(plaintext)
+        .map_err(|e| anyhow!("UTF-8 decode failed: {}", e))
 }
