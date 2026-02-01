@@ -112,9 +112,9 @@
 
         // Listen for file received (incoming complete)
         unlistenFileReceivedComplete = await listen<any>('file-received', (event) => {
-          const { transferId, fileName, fromPeerId } = event.payload;
+          const { transferId, fileName, fromPeerId, filePath } = event.payload;
           const fromAlias = aliasFromPeerId(fromPeerId);
-          toasts.show(`Received file "${fileName}" from ${fromAlias.displayName}`, 'success');
+          toasts.show(`File "${fileName}" saved to ${filePath}`, 'success', 8000);
           updateTransferStatus(transferId, 'completed');
         });
       } catch (error) {
@@ -227,9 +227,10 @@
 
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('accept_file_transfer', { transferId: transfer.id });
+      const filePath = await invoke<string>('accept_file_transfer', { transferId: transfer.id });
       acceptTransfer(transfer.id);
-      toasts.show(`Accepted file from ${transfer.fromAlias.displayName}`, 'success');
+      toasts.show(`Accepting file from ${transfer.fromAlias.displayName}...`, 'info');
+      // The actual file-received event will show the final path
     } catch (error) {
       console.error('Failed to accept transfer:', error);
       toasts.show(`Failed to accept transfer: ${error}`, 'error');
