@@ -1,19 +1,20 @@
 <script lang="ts">
-  import { Download, Upload, Wallet, Globe, Settings, LogOut } from 'lucide-svelte';
+  import { Download, Upload, Wallet, Globe, Settings, LogOut, Send } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   import { isAuthenticated, walletAccount, networkConnected } from '$lib/stores';
-  
+
   export let currentPage: string = 'download';
-  
+
   function handleLogout() {
     isAuthenticated.set(false);
     walletAccount.set(null);
     goto('/wallet');
   }
-  
+
   const navItems = [
     { path: '/download', label: 'Download', icon: Download },
     { path: '/upload', label: 'Upload', icon: Upload },
+    { path: '/chiraldrop', label: 'ChiralDrop', icon: Send },
     { path: '/account', label: 'Account', icon: Wallet },
     { path: '/network', label: 'Network', icon: Globe },
     { path: '/settings', label: 'Settings', icon: Settings }
