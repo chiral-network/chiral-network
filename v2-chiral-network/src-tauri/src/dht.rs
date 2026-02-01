@@ -200,6 +200,12 @@ async fn event_loop(
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                         println!("Connection established with {:?}", peer_id);
+                        let _ = app.emit("connection-established", peer_id.to_string());
+                    }
+                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                        if let Some(peer) = peer_id {
+                            println!("Failed to connect to {:?}: {:?}", peer, error);
+                        }
                     }
                     _ => {}
                 }
@@ -207,8 +213,31 @@ async fn event_loop(
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     SwarmCommand::Ping(peer_id) => {
-                        println!("Sending ping to: {}", peer_id);
-                        // The ping protocol will automatically send pings
+                        println!("Attempting to dial and ping peer: {}", peer_id);
+                        
+                        // Get the peer's multiaddrs from our peer list
+                        let peers_guard = peers.lock().await;
+                        let peer_id_str = peer_id.to_string();
+                        
+                        if let Some(peer_info) = peers_guard.iter().find(|p| p.id == peer_id_str) {
+                            // Try to dial each multiaddr
+                            for addr_str in &peer_info.multiaddrs {
+                                if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                                    println!("Dialing peer {} at {}", peer_id, addr);
+                                    match swarm.dial(addr) {
+                                        Ok(_) => {
+                                            println!("Dial initiated to {}", peer_id);
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            println!("Failed to dial {}: {:?}", peer_id, e);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            println!("Peer {} not found in peer list", peer_id);
+                        }
                     }
                 }
             }
