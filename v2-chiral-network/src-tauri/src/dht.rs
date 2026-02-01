@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct PeerInfo {
     pub id: String,
     pub address: String,
@@ -21,6 +22,7 @@ pub struct PeerInfo {
 }
 
 #[derive(Clone, Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkStats {
     pub connected_peers: usize,
     pub total_peers: usize,
