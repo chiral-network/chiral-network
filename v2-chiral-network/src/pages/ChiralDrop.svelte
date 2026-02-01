@@ -310,6 +310,13 @@
         <rect width="100%" height="100%" fill="url(#wave-pattern)" />
       </svg>
 
+      <!-- Pulsing waves from user -->
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+        <div class="pulse-wave pulse-wave-1"></div>
+        <div class="pulse-wave pulse-wave-2"></div>
+        <div class="pulse-wave pulse-wave-3"></div>
+      </div>
+
       <!-- User (center) -->
       <div
         class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-10"
@@ -481,3 +488,40 @@
     </div>
   </div>
 </div>
+
+<style>
+  .pulse-wave {
+    position: absolute;
+    border-radius: 50%;
+    border: 2px solid rgba(59, 130, 246, 0.5);
+    animation: pulse-expand 3s ease-out infinite;
+    transform: translate(-50%, -50%);
+  }
+
+  .pulse-wave-1 {
+    animation-delay: 0s;
+  }
+
+  .pulse-wave-2 {
+    animation-delay: 1s;
+  }
+
+  .pulse-wave-3 {
+    animation-delay: 2s;
+  }
+
+  @keyframes pulse-expand {
+    0% {
+      width: 64px;
+      height: 64px;
+      opacity: 0.6;
+      border-width: 3px;
+    }
+    100% {
+      width: 400px;
+      height: 400px;
+      opacity: 0;
+      border-width: 1px;
+    }
+  }
+</style>
