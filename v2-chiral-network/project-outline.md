@@ -31,6 +31,8 @@ If I connect from a second device, I should be able to see other clients.
 
 4. Download Page: We want to let users download the files that were uploaded. Allow the user to add new download by either searching via Merkle Root Hash (sha-256) or .torrent file or magent link. There should also be a download tracker which shows the states: active, paused, completed, cancelled, queued, or failed. Anything finished should also be shown in a download history section. 
 
+5. Account Page: Create an area for Wallet information such as balance (in Chiral), Chiral Address (should be hideable, copyable), private key (should be hideable, copyable). In addition, include transaction history. There should also be the ability to send chiral coins from one user to another. To send, a client can use the recipient address. Include a confirmation button for sending chirals. For testing purposes, give a default balance of 1 chiral to everyone who creates a wallet.
+
 Ensure all steps are implemented and working properly.
 
 You can also reference the old implementation and determine what is useful and what is not and include it into the new implementation and refine it to be better.
