@@ -640,6 +640,107 @@ fn find_dict_end(data: &[u8]) -> Option<usize> {
     None
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportTorrentResult {
+    path: String,
+}
+
+#[tauri::command]
+async fn export_torrent_file(
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    file_path: String,
+) -> Result<ExportTorrentResult, String> {
+    // Create a simple bencode-formatted torrent file
+    // This is a simplified torrent format for our network
+
+    // Get the downloads directory for saving the torrent
+    let downloads_dir = dirs::download_dir()
+        .ok_or_else(|| "Could not find downloads directory".to_string())?;
+
+    // Create torrent filename
+    let torrent_filename = format!("{}.torrent", file_name);
+    let torrent_path = downloads_dir.join(&torrent_filename);
+
+    // Build a simple bencode torrent structure
+    // Format: d8:announce<url>4:infod6:length<size>4:name<name>12:piece length<piece_len>6:pieces<hash>ee
+
+    // Our tracker URL (using DHT, but we include a placeholder)
+    let announce = "udp://dht.chiral.network:6881/announce";
+
+    // Piece length (256KB is common)
+    let piece_length: u64 = 262144;
+
+    // Build the torrent file content
+    let mut torrent_content = Vec::new();
+
+    // Start dictionary
+    torrent_content.push(b'd');
+
+    // Announce URL
+    let announce_key = format!("8:announce{}:{}", announce.len(), announce);
+    torrent_content.extend_from_slice(announce_key.as_bytes());
+
+    // Created by
+    let created_by = "chiral-network";
+    let created_by_entry = format!("10:created by{}:{}", created_by.len(), created_by);
+    torrent_content.extend_from_slice(created_by_entry.as_bytes());
+
+    // Creation date (Unix timestamp)
+    let creation_date = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let creation_date_entry = format!("13:creation datei{}e", creation_date);
+    torrent_content.extend_from_slice(creation_date_entry.as_bytes());
+
+    // Info dictionary
+    torrent_content.extend_from_slice(b"4:infod");
+
+    // File hash (our merkle root as the "pieces" field)
+    // In real BitTorrent this would be SHA1 hashes of pieces
+    let hash_bytes = hex::decode(&file_hash)
+        .map_err(|e| format!("Invalid hash: {}", e))?;
+    let pieces_entry = format!("6:pieces{}:", hash_bytes.len());
+    torrent_content.extend_from_slice(pieces_entry.as_bytes());
+    torrent_content.extend_from_slice(&hash_bytes);
+
+    // File length
+    let length_entry = format!("6:lengthi{}e", file_size);
+    torrent_content.extend_from_slice(length_entry.as_bytes());
+
+    // File name
+    let name_entry = format!("4:name{}:{}", file_name.len(), file_name);
+    torrent_content.extend_from_slice(name_entry.as_bytes());
+
+    // Piece length
+    let piece_length_entry = format!("12:piece lengthi{}e", piece_length);
+    torrent_content.extend_from_slice(piece_length_entry.as_bytes());
+
+    // Source path (custom field for our network)
+    let source_path_key = "11:source path";
+    let source_entry = format!("{}{}:{}", source_path_key, file_path.len(), file_path);
+    torrent_content.extend_from_slice(source_entry.as_bytes());
+
+    // End info dictionary
+    torrent_content.push(b'e');
+
+    // End main dictionary
+    torrent_content.push(b'e');
+
+    // Write the torrent file
+    std::fs::write(&torrent_path, &torrent_content)
+        .map_err(|e| format!("Failed to write torrent file: {}", e))?;
+
+    println!("Exported torrent file: {}", torrent_path.display());
+
+    Ok(ExportTorrentResult {
+        path: torrent_path.to_string_lossy().to_string(),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -667,7 +768,8 @@ pub fn run() {
             publish_file,
             search_file,
             start_download,
-            parse_torrent_file
+            parse_torrent_file,
+            export_torrent_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

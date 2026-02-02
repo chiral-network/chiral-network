@@ -18,7 +18,10 @@
     Globe,
     Share2,
     History,
-    Trash2
+    Trash2,
+    Link,
+    Download,
+    ExternalLink
   } from 'lucide-svelte';
   import { networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
@@ -261,6 +264,49 @@
   async function copyHash(hash: string) {
     await navigator.clipboard.writeText(hash);
     toasts.show('Hash copied to clipboard', 'success');
+  }
+
+  // Generate magnet link from file info
+  function generateMagnetLink(file: SharedFile): string {
+    const encodedName = encodeURIComponent(file.name);
+    // Using btih (BitTorrent Info Hash) format with our merkle root hash
+    return `magnet:?xt=urn:btih:${file.hash}&dn=${encodedName}&xl=${file.size}`;
+  }
+
+  async function copyMagnetLink(file: SharedFile) {
+    const magnetLink = generateMagnetLink(file);
+    await navigator.clipboard.writeText(magnetLink);
+    toasts.show('Magnet link copied to clipboard', 'success');
+  }
+
+  // Export .torrent file
+  async function exportTorrentFile(file: SharedFile) {
+    const tauriAvailable = checkTauriAvailability();
+    if (!tauriAvailable) {
+      toasts.show('Torrent export requires the desktop app', 'error');
+      return;
+    }
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<{ path: string }>('export_torrent_file', {
+        fileHash: file.hash,
+        fileName: file.name,
+        fileSize: file.size,
+        filePath: file.filePath
+      });
+      toasts.show(`Torrent file saved to ${result.path}`, 'success');
+    } catch (error) {
+      console.error('Failed to export torrent:', error);
+      toasts.show(`Failed to export torrent: ${error}`, 'error');
+    }
+  }
+
+  // State for showing share options
+  let expandedFileId = $state<string | null>(null);
+
+  function toggleShareOptions(fileId: string) {
+    expandedFileId = expandedFileId === fileId ? null : fileId;
   }
 
   // Drag and drop handlers
@@ -557,15 +603,90 @@
                   </div>
                 </div>
 
-                <!-- Remove Button -->
-                <button
-                  onclick={() => removeFile(file.id)}
-                  class="p-2 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
-                  title="Remove from history"
-                >
-                  <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
-                </button>
+                <!-- Share & Actions -->
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onclick={() => toggleShareOptions(file.id)}
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="Share options"
+                  >
+                    <ExternalLink class="w-4 h-4" />
+                    Share
+                  </button>
+                  <button
+                    onclick={() => removeFile(file.id)}
+                    class="p-2 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Remove from history"
+                  >
+                    <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                  </button>
+                </div>
               </div>
+
+              <!-- Expanded Share Options -->
+              {#if expandedFileId === file.id}
+                <div class="mt-4 ml-16 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  <p class="text-sm font-semibold text-gray-700 mb-3">Share this file</p>
+
+                  <!-- Magnet Link -->
+                  <div class="mb-3">
+                    <label class="text-xs text-gray-500 mb-1 block">Magnet Link</label>
+                    <div class="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readonly
+                        value={generateMagnetLink(file)}
+                        class="flex-1 px-3 py-2 text-xs font-mono bg-white border border-gray-300 rounded-lg text-gray-600 truncate"
+                      />
+                      <button
+                        onclick={() => copyMagnetLink(file)}
+                        class="flex items-center gap-1 px-3 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors"
+                        title="Copy magnet link"
+                      >
+                        <Link class="w-4 h-4" />
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Hash -->
+                  <div class="mb-3">
+                    <label class="text-xs text-gray-500 mb-1 block">Merkle Hash (for direct search)</label>
+                    <div class="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readonly
+                        value={file.hash}
+                        class="flex-1 px-3 py-2 text-xs font-mono bg-white border border-gray-300 rounded-lg text-gray-600"
+                      />
+                      <button
+                        onclick={() => copyHash(file.hash)}
+                        class="flex items-center gap-1 px-3 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                        title="Copy hash"
+                      >
+                        <Copy class="w-4 h-4" />
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Export Torrent -->
+                  <div>
+                    <label class="text-xs text-gray-500 mb-1 block">Torrent File</label>
+                    <button
+                      onclick={() => exportTorrentFile(file)}
+                      class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                    >
+                      <Download class="w-4 h-4" />
+                      Export .torrent File
+                    </button>
+                  </div>
+
+                  <p class="text-xs text-gray-400 mt-3">
+                    Share the magnet link or hash with others so they can download your file.
+                  </p>
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
