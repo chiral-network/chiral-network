@@ -574,12 +574,18 @@ async fn handle_behaviour_event(
         DhtBehaviourEvent::Kad(kad::Event::OutboundQueryProgressed { id, result, .. }) => {
             match result {
                 kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(record))) => {
-                    println!("DHT get successful for query {:?}", id);
+                    let key_bytes = record.record.key.as_ref();
+                    let key_str = String::from_utf8_lossy(key_bytes);
+                    println!("DHT get successful for query {:?}, key: {}", id, key_str);
                     let value = String::from_utf8(record.record.value.clone())
                         .unwrap_or_else(|_| String::new());
+                    println!("DHT record value length: {} bytes", value.len());
                     if let Some(tx) = pending_get_queries.remove(&id) {
                         let _ = tx.send(Ok(Some(value)));
                     }
+                }
+                kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. })) => {
+                    println!("DHT get finished with no additional records for query {:?}", id);
                 }
                 kad::QueryResult::GetRecord(Err(err)) => {
                     println!("DHT get failed for query {:?}: {:?}", id, err);
@@ -587,11 +593,19 @@ async fn handle_behaviour_event(
                         let _ = tx.send(Ok(None));
                     }
                 }
-                kad::QueryResult::PutRecord(Ok(_)) => {
-                    println!("DHT put successful for query {:?}", id);
+                kad::QueryResult::PutRecord(Ok(ok)) => {
+                    let key_bytes = ok.key.as_ref();
+                    let key_str = String::from_utf8_lossy(key_bytes);
+                    println!("DHT put successful for query {:?}, key: {}", id, key_str);
                 }
                 kad::QueryResult::PutRecord(Err(err)) => {
                     println!("DHT put failed for query {:?}: {:?}", id, err);
+                }
+                kad::QueryResult::Bootstrap(Ok(result)) => {
+                    println!("Kademlia bootstrap successful: {:?} peers", result.num_remaining);
+                }
+                kad::QueryResult::Bootstrap(Err(err)) => {
+                    println!("Kademlia bootstrap failed: {:?}", err);
                 }
                 _ => {}
             }
