@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
   import {
     Search,
     Download,
@@ -418,6 +419,32 @@
   $effect(() => {
     isTauri = checkTauriAvailability();
     loadDownloadHistory();
+  });
+  
+  // Listen for download completion events
+  onMount(async () => {
+    if (checkTauriAvailability()) {
+      const { listen } = await import('@tauri-apps/api/event');
+      const unlisten = await listen('download-complete', (event: any) => {
+        const { hash, fileName } = event.payload;
+        console.log(`Download completed: ${fileName}`);
+        
+        // Update download status
+        downloads = downloads.map(d => {
+          if (d.hash === hash) {
+            toasts.show(`Download complete: ${fileName}`, 'success');
+            return { ...d, status: 'completed' as const, progress: 100 };
+          }
+          return d;
+        });
+        saveDownloadHistory();
+      });
+      
+      // Cleanup on unmount
+      return () => {
+        unlisten();
+      };
+    }
   });
 
   // Get status color
