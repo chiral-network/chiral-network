@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { walletAccount, isAuthenticated, networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
+  import { walletService } from '$lib/services/walletService';
   import {
     Wallet,
     Copy,
@@ -12,10 +13,10 @@
     Shield,
     AlertTriangle,
     Check,
-    QrCode,
     Key,
     User,
-    ExternalLink
+    RefreshCw,
+    Coins
   } from 'lucide-svelte';
 
   // State
@@ -23,28 +24,36 @@
   let copied = $state<'address' | 'privateKey' | null>(null);
   let showExportModal = $state(false);
   let showLogoutModal = $state(false);
-  let qrCodeDataUrl = $state('');
-  let showQrModal = $state(false);
+  let balance = $state<string>('0.00');
+  let isLoadingBalance = $state(false);
 
-  // Generate QR code for address
-  async function generateQrCode() {
+  // Load balance on mount and when wallet changes
+  onMount(() => {
+    if ($walletAccount?.address) {
+      loadBalance();
+    }
+  });
+
+  // Watch for wallet changes
+  $effect(() => {
+    if ($walletAccount?.address) {
+      loadBalance();
+    }
+  });
+
+  // Load wallet balance
+  async function loadBalance() {
     if (!$walletAccount?.address) return;
 
+    isLoadingBalance = true;
     try {
-      // Using a simple QR code generation via canvas
-      const QRCode = await import('qrcode');
-      qrCodeDataUrl = await QRCode.toDataURL($walletAccount.address, {
-        width: 256,
-        margin: 2,
-        color: {
-          dark: '#000000',
-          light: '#ffffff'
-        }
-      });
-      showQrModal = true;
+      const result = await walletService.getBalance($walletAccount.address);
+      balance = result;
     } catch (error) {
-      console.error('Failed to generate QR code:', error);
-      toasts.show('Failed to generate QR code', 'error');
+      console.error('Failed to load balance:', error);
+      balance = '0.00';
+    } finally {
+      isLoadingBalance = false;
     }
   }
 
@@ -100,6 +109,13 @@
     if (!address) return '';
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   }
+
+  // Format balance for display
+  function formatBalance(bal: string): string {
+    const num = parseFloat(bal);
+    if (isNaN(num)) return '0.00';
+    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+  }
 </script>
 
 <div class="p-6 space-y-6 max-w-4xl mx-auto">
@@ -121,21 +137,48 @@
     <!-- Wallet Overview Card -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
       <div class="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-3 bg-white/20 rounded-full">
-            <Wallet class="w-8 h-8" />
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="p-3 bg-white/20 rounded-full">
+              <Wallet class="w-8 h-8" />
+            </div>
+            <div>
+              <h2 class="text-xl font-semibold">Chiral Wallet</h2>
+              <p class="text-blue-100 text-sm">Your decentralized identity</p>
+            </div>
           </div>
-          <div>
-            <h2 class="text-xl font-semibold">Chiral Wallet</h2>
-            <p class="text-blue-100 text-sm">Your decentralized identity</p>
+          <span class="px-3 py-1 bg-white/20 rounded-full text-sm">
+            {$networkConnected ? 'Connected' : 'Disconnected'}
+          </span>
+        </div>
+
+        <!-- Balance Display -->
+        <div class="bg-white/10 rounded-xl p-4 mt-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-blue-100 text-sm mb-1">Balance</p>
+              <div class="flex items-baseline gap-2">
+                {#if isLoadingBalance}
+                  <RefreshCw class="w-6 h-6 animate-spin" />
+                {:else}
+                  <span class="text-3xl font-bold">{formatBalance(balance)}</span>
+                  <span class="text-blue-100">CHR</span>
+                {/if}
+              </div>
+            </div>
+            <button
+              onclick={loadBalance}
+              disabled={isLoadingBalance}
+              class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
+              title="Refresh balance"
+            >
+              <RefreshCw class="w-5 h-5 {isLoadingBalance ? 'animate-spin' : ''}" />
+            </button>
           </div>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 mt-4">
           <span class="font-mono text-lg">{formatAddress($walletAccount.address)}</span>
-          <span class="px-2 py-0.5 bg-white/20 rounded text-xs">
-            {$networkConnected ? 'Connected' : 'Disconnected'}
-          </span>
         </div>
       </div>
 
@@ -144,16 +187,6 @@
         <div>
           <div class="flex items-center justify-between mb-2">
             <span class="text-sm font-medium text-gray-700">Wallet Address</span>
-            <div class="flex gap-2">
-              <button
-                onclick={generateQrCode}
-                class="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                title="Show QR Code"
-              >
-                <QrCode class="w-4 h-4" />
-                QR
-              </button>
-            </div>
           </div>
           <div class="flex items-center gap-2">
             <input
@@ -179,10 +212,10 @@
         <!-- Private Key Section -->
         <div>
           <div class="flex items-center justify-between mb-2">
-            <label class="text-sm font-medium text-gray-700 flex items-center gap-2">
+            <span class="text-sm font-medium text-gray-700 flex items-center gap-2">
               <Key class="w-4 h-4" />
               Private Key
-            </label>
+            </span>
           </div>
 
           <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
@@ -230,8 +263,35 @@
       </div>
     </div>
 
-    <!-- Security & Export Section -->
+    <!-- Balance & Export Section -->
     <div class="grid md:grid-cols-2 gap-6">
+      <!-- Balance Info Card -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="p-2 bg-yellow-100 rounded-lg">
+            <Coins class="w-6 h-6 text-yellow-600" />
+          </div>
+          <div>
+            <h3 class="font-semibold">CHR Token</h3>
+            <p class="text-sm text-gray-500">Chiral Network native token</p>
+          </div>
+        </div>
+        <div class="space-y-3">
+          <div class="flex justify-between items-center py-2 border-b border-gray-100">
+            <span class="text-sm text-gray-600">Available Balance</span>
+            <span class="font-medium">{formatBalance(balance)} CHR</span>
+          </div>
+          <div class="flex justify-between items-center py-2 border-b border-gray-100">
+            <span class="text-sm text-gray-600">Network</span>
+            <span class="font-medium">Chiral Mainnet</span>
+          </div>
+          <div class="flex justify-between items-center py-2">
+            <span class="text-sm text-gray-600">Token Symbol</span>
+            <span class="font-medium">CHR</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Export Wallet Card -->
       <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <div class="flex items-center gap-3 mb-4">
@@ -254,7 +314,10 @@
           Export Wallet
         </button>
       </div>
+    </div>
 
+    <!-- Security & Account Details Section -->
+    <div class="grid md:grid-cols-2 gap-6">
       <!-- Security Info Card -->
       <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <div class="flex items-center gap-3 mb-4">
@@ -285,39 +348,39 @@
           </li>
         </ul>
       </div>
-    </div>
 
-    <!-- Account Details Card -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-      <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-purple-100 rounded-lg">
-          <User class="w-6 h-6 text-purple-600" />
+      <!-- Account Details Card -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="p-2 bg-purple-100 rounded-lg">
+            <User class="w-6 h-6 text-purple-600" />
+          </div>
+          <div>
+            <h3 class="font-semibold">Account Details</h3>
+            <p class="text-sm text-gray-500">Technical information</p>
+          </div>
         </div>
-        <div>
-          <h3 class="font-semibold">Account Details</h3>
-          <p class="text-sm text-gray-500">Technical information about your account</p>
-        </div>
-      </div>
 
-      <div class="grid md:grid-cols-2 gap-4">
-        <div class="bg-gray-50 rounded-lg p-4">
-          <p class="text-xs text-gray-500 mb-1">Network</p>
-          <p class="font-medium">Chiral Network</p>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-4">
-          <p class="text-xs text-gray-500 mb-1">Address Format</p>
-          <p class="font-medium">Ethereum-compatible (EVM)</p>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-4">
-          <p class="text-xs text-gray-500 mb-1">Connection Status</p>
-          <p class="font-medium flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></span>
-            {$networkConnected ? 'Connected to DHT' : 'Not Connected'}
-          </p>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-4">
-          <p class="text-xs text-gray-500 mb-1">Key Type</p>
-          <p class="font-medium">secp256k1</p>
+        <div class="space-y-3">
+          <div class="flex justify-between items-center py-2 border-b border-gray-100">
+            <span class="text-sm text-gray-600">Network</span>
+            <span class="font-medium">Chiral Network</span>
+          </div>
+          <div class="flex justify-between items-center py-2 border-b border-gray-100">
+            <span class="text-sm text-gray-600">Address Format</span>
+            <span class="font-medium">EVM Compatible</span>
+          </div>
+          <div class="flex justify-between items-center py-2 border-b border-gray-100">
+            <span class="text-sm text-gray-600">Connection</span>
+            <span class="font-medium flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></span>
+              {$networkConnected ? 'Connected' : 'Disconnected'}
+            </span>
+          </div>
+          <div class="flex justify-between items-center py-2">
+            <span class="text-sm text-gray-600">Key Type</span>
+            <span class="font-medium">secp256k1</span>
+          </div>
         </div>
       </div>
     </div>
@@ -330,31 +393,6 @@
     </div>
   {/if}
 </div>
-
-<!-- QR Code Modal -->
-{#if showQrModal}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showQrModal = false} onkeydown={(e) => e.key === 'Escape' && (showQrModal = false)}>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-white rounded-xl shadow-xl p-6 max-w-sm mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-      <h3 class="text-lg font-semibold mb-4 text-center">Wallet Address QR Code</h3>
-      {#if qrCodeDataUrl}
-        <div class="bg-white p-4 rounded-lg border border-gray-200 mb-4">
-          <img src={qrCodeDataUrl} alt="QR Code" class="mx-auto" />
-        </div>
-      {/if}
-      <p class="text-xs text-gray-500 text-center mb-4 font-mono break-all">
-        {$walletAccount?.address}
-      </p>
-      <button
-        onclick={() => showQrModal = false}
-        class="w-full px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-      >
-        Close
-      </button>
-    </div>
-  </div>
-{/if}
 
 <!-- Export Modal -->
 {#if showExportModal}
