@@ -198,6 +198,27 @@ async fn get_file_size(file_path: String) -> Result<u64, String> {
     Ok(metadata.len())
 }
 
+#[tauri::command]
+async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
+    use rfd::FileDialog;
+    
+    if multiple {
+        let files = FileDialog::new().pick_files();
+        if let Some(paths) = files {
+            Ok(paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
+        } else {
+            Ok(vec![])
+        }
+    } else {
+        let file = FileDialog::new().pick_file();
+        if let Some(path) = file {
+            Ok(vec![path.to_string_lossy().to_string()])
+        } else {
+            Ok(vec![])
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PublishResult {
@@ -542,6 +563,7 @@ pub fn run() {
             get_dht_value,
             get_available_storage,
             get_file_size,
+            open_file_dialog,
             publish_file,
             search_file,
             start_download,

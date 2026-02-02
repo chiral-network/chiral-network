@@ -26,8 +26,13 @@
   import { networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
 
-  // Check if running in Tauri environment
-  const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+  // Check if running in Tauri environment (reactive)
+  let isTauri = $state(false);
+  
+  // Check Tauri availability
+  function checkTauriAvailability(): boolean {
+    return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+  }
 
   // Types
   type SearchMode = 'hash' | 'magnet' | 'torrent';
@@ -202,7 +207,8 @@
 
   // Handle torrent file upload
   async function handleTorrentFile() {
-    if (!isTauri) {
+    const tauriAvailable = checkTauriAvailability();
+    if (!tauriAvailable) {
       toasts.show('Torrent file upload requires the desktop app', 'error');
       return;
     }
@@ -307,7 +313,8 @@
 
   // Start download
   async function startDownload(result: SearchResult) {
-    if (!isTauri) {
+    const tauriAvailable = checkTauriAvailability();
+    if (!tauriAvailable) {
       toasts.show('Download requires the desktop app', 'error');
       return;
     }
@@ -409,6 +416,7 @@
 
   // Initialize
   $effect(() => {
+    isTauri = checkTauriAvailability();
     loadDownloadHistory();
   });
 
