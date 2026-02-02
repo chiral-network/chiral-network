@@ -35,5 +35,5 @@ Ensure all steps are implemented and working properly.
 
 You can also reference the old implementation and determine what is useful and what is not and include it into the new implementation and refine it to be better.
 
-Do not create any new MD files. Do not use emojis. Do not use mock/fake data.
+Do not create any new MD files. Do not use emojis. Do not use mock/fake data. No placeholders. You must implement every feature in full.
 
