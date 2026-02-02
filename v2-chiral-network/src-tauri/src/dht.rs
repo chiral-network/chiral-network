@@ -12,6 +12,7 @@ use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use std::str::FromStr;
+use std::collections::HashMap;
 
 // Ping protocol messages
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +292,9 @@ async fn event_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
 ) {
+    // Track pending get queries
+    let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
+    
     loop {
         let running = *is_running.lock().await;
         if !running {
@@ -301,7 +305,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Listening on {:?}", address);
@@ -370,11 +374,8 @@ async fn event_loop(
                     SwarmCommand::GetDhtValue { key, response_tx } => {
                         println!("Getting DHT value for key: {}", key);
                         let record_key = kad::RecordKey::new(&key);
-                        swarm.behaviour_mut().kad.get_record(record_key);
-                        // Note: The actual response will come via Kademlia events
-                        // For now, we return immediately - the caller should listen for events
-                        // In a production implementation, we'd maintain a map of pending queries
-                        let _ = response_tx.send(Ok(None));
+                        let query_id = swarm.behaviour_mut().kad.get_record(record_key);
+                        pending_get_queries.insert(query_id, response_tx);
                     }
                 }
             }
@@ -390,6 +391,7 @@ async fn handle_behaviour_event(
     app: &tauri::AppHandle,
     swarm: &mut Swarm<DhtBehaviour>,
     file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
+    pending_get_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>>,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -456,6 +458,31 @@ async fn handle_behaviour_event(
                 }
                 Event::InboundFailure { peer, error, .. } => {
                     println!("Inbound ping failed from {:?}: {:?}", peer, error);
+                }
+                _ => {}
+            }
+        }
+        DhtBehaviourEvent::Kad(kad::Event::OutboundQueryProgressed { id, result, .. }) => {
+            match result {
+                kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(record))) => {
+                    println!("DHT get successful for query {:?}", id);
+                    let value = String::from_utf8(record.record.value.clone())
+                        .unwrap_or_else(|_| String::new());
+                    if let Some(tx) = pending_get_queries.remove(&id) {
+                        let _ = tx.send(Ok(Some(value)));
+                    }
+                }
+                kad::QueryResult::GetRecord(Err(err)) => {
+                    println!("DHT get failed for query {:?}: {:?}", id, err);
+                    if let Some(tx) = pending_get_queries.remove(&id) {
+                        let _ = tx.send(Ok(None));
+                    }
+                }
+                kad::QueryResult::PutRecord(Ok(_)) => {
+                    println!("DHT put successful for query {:?}", id);
+                }
+                kad::QueryResult::PutRecord(Err(err)) => {
+                    println!("DHT put failed for query {:?}: {:?}", id, err);
                 }
                 _ => {}
             }
