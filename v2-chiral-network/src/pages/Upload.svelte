@@ -351,14 +351,18 @@
     return protocol === 'WebRTC' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800';
   }
 
+  // Track if we've already registered files for this network session
+  let hasRegisteredFiles = $state(false);
+
   // Re-register previously shared files with the backend
-  async function reregisterSharedFiles() {
-    if (!isTauri || sharedFiles.length === 0) return;
+  async function reregisterSharedFiles(filesToRegister: SharedFile[]) {
+    if (!isTauri || filesToRegister.length === 0) return;
 
     try {
       const { invoke } = await import('@tauri-apps/api/core');
+      const filesToRemove: string[] = [];
 
-      for (const file of sharedFiles) {
+      for (const file of filesToRegister) {
         try {
           await invoke('register_shared_file', {
             fileHash: file.hash,
@@ -369,28 +373,44 @@
           console.log(`Re-registered shared file: ${file.name}`);
         } catch (e) {
           console.warn(`Failed to re-register file ${file.name}:`, e);
-          // File might not exist anymore, remove from list
+          // File might not exist anymore, mark for removal
           if (String(e).includes('no longer exists')) {
-            sharedFiles = sharedFiles.filter(f => f.id !== file.id);
-            saveUploadHistory();
+            filesToRemove.push(file.id);
           }
         }
+      }
+
+      // Remove files that no longer exist
+      if (filesToRemove.length > 0) {
+        sharedFiles = sharedFiles.filter(f => !filesToRemove.includes(f.id));
+        saveUploadHistory();
       }
     } catch (e) {
       console.error('Failed to re-register shared files:', e);
     }
   }
 
-  // Initialize
+  // Watch for network connection changes to re-register files
   $effect(() => {
+    const connected = $networkConnected;
+    if (connected && isTauri && !hasRegisteredFiles && sharedFiles.length > 0) {
+      hasRegisteredFiles = true;
+      // Create a copy of the files array to avoid reactive loop
+      const filesToRegister = [...sharedFiles];
+      reregisterSharedFiles(filesToRegister);
+    }
+    // Reset when disconnected so we re-register on next connect
+    if (!connected) {
+      hasRegisteredFiles = false;
+    }
+  });
+
+  // Initialize on mount (runs once)
+  onMount(() => {
     isTauri = checkTauriAvailability();
     loadUploadHistory();
     if (isTauri) {
       refreshStorage();
-      // Re-register shared files when network is connected
-      if ($networkConnected) {
-        reregisterSharedFiles();
-      }
     }
   });
 
