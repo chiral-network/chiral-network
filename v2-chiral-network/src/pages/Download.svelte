@@ -309,9 +309,17 @@
           if ((searchMode === 'magnet' || searchQuery.startsWith('magnet:')) && fileName !== 'Unknown') {
             result.fileName = fileName;
           }
+          // If result has empty fileName (from DHT fallback), use the one from magnet/torrent
+          if (!result.fileName && fileName !== 'Unknown') {
+            result.fileName = fileName;
+          }
+          // Fallback file name
+          if (!result.fileName) {
+            result.fileName = `file-${fileHash.slice(0, 8)}`;
+          }
           searchResult = result;
           if (result.seeders.length > 0) {
-            toasts.show(`Found: ${result.fileName} (${result.seeders.length} seeder${result.seeders.length !== 1 ? 's' : ''})`, 'success');
+            toasts.show(`Found ${result.seeders.length} potential seeder${result.seeders.length !== 1 ? 's' : ''} for: ${result.fileName}`, 'success');
           } else {
             toasts.show(`Found: ${result.fileName} - no seeders currently available`, 'warning');
           }
