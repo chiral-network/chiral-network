@@ -485,31 +485,72 @@ async fn start_download(
             "seeders": seeders.len()
         }));
 
-        // Request file from the first available seeder
-        // In a production system, we'd try multiple seeders in parallel or with fallback
-        let seeder = &seeders[0];
-        println!("Requesting file {} from seeder {}", file_hash, seeder);
+        // Try each seeder until one succeeds
+        // This handles the case where DHT lookup returned connected peers as fallback
+        // but not all of them may have the file
+        let mut last_error = String::new();
+        let mut request_sent = false;
 
-        match dht.request_file(seeder.clone(), file_hash.clone(), request_id.clone()).await {
-            Ok(_) => {
-                println!("File request sent successfully");
-                Ok(DownloadStartResult {
-                    request_id,
-                    status: "requesting".to_string(),
-                })
+        for (i, seeder) in seeders.iter().enumerate() {
+            println!("Trying seeder {}/{}: {} for file {}", i + 1, seeders.len(), seeder, file_hash);
+
+            match dht.request_file(seeder.clone(), file_hash.clone(), request_id.clone()).await {
+                Ok(_) => {
+                    println!("File request sent successfully to seeder {}", seeder);
+                    request_sent = true;
+                    break;
+                }
+                Err(e) => {
+                    println!("Failed to request file from seeder {}: {}", seeder, e);
+                    last_error = e;
+                    // Continue to try next seeder
+                }
             }
-            Err(e) => {
-                println!("Failed to request file: {}", e);
-                let _ = app.emit("file-download-failed", serde_json::json!({
-                    "requestId": request_id,
-                    "fileHash": file_hash,
-                    "error": e
-                }));
-                Err(format!("Failed to request file from seeder: {}", e))
-            }
+        }
+
+        if request_sent {
+            Ok(DownloadStartResult {
+                request_id,
+                status: "requesting".to_string(),
+            })
+        } else {
+            let _ = app.emit("file-download-failed", serde_json::json!({
+                "requestId": request_id,
+                "fileHash": file_hash,
+                "error": format!("No seeder could provide the file: {}", last_error)
+            }));
+            Err(format!("Failed to request file from any seeder: {}", last_error))
         }
     } else {
         Err("DHT not running".to_string())
+    }
+}
+
+/// Re-register a previously shared file (called on app startup)
+#[tauri::command]
+async fn register_shared_file(
+    state: tauri::State<'_, AppState>,
+    file_hash: String,
+    file_path: String,
+    file_name: String,
+    file_size: u64,
+) -> Result<(), String> {
+    println!("Re-registering shared file: {} (hash: {})", file_name, file_hash);
+
+    // Verify file still exists
+    if !std::path::Path::new(&file_path).exists() {
+        return Err(format!("File no longer exists: {}", file_path));
+    }
+
+    // Get DHT service
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        dht.register_shared_file(file_hash, file_path, file_name, file_size).await;
+        Ok(())
+    } else {
+        // DHT not running yet - this is okay, will be registered when DHT starts
+        println!("DHT not running, file will be registered when DHT starts");
+        Ok(())
     }
 }
 
@@ -816,6 +857,7 @@ pub fn run() {
             publish_file,
             search_file,
             start_download,
+            register_shared_file,
             parse_torrent_file,
             export_torrent_file
         ])
