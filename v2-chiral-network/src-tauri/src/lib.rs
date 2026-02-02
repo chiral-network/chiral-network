@@ -743,7 +743,7 @@ struct ExportTorrentResult {
     path: String,
 }
 
-// Wallet balance tracking
+// Wallet balance tracking - queries blockchain via Geth RPC
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WalletBalanceResult {
@@ -751,56 +751,58 @@ struct WalletBalanceResult {
     balance_wei: String,
 }
 
-// In-memory balance storage (in production, this would be persisted or fetched from blockchain)
-static WALLET_BALANCES: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+// Default RPC endpoint for Chiral Network (can be configured)
+const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:8545";
 
 #[tauri::command]
 async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, String> {
-    let address_lower = address.to_lowercase();
+    // Query balance from blockchain via JSON-RPC
+    let client = reqwest::Client::new();
 
-    // Get balance from storage or return default
-    let balances = WALLET_BALANCES.lock().map_err(|e| e.to_string())?;
-    let balance = balances.get(&address_lower).cloned().unwrap_or_else(|| "0".to_string());
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getBalance",
+        "params": [address, "latest"],
+        "id": 1
+    });
 
-    // Convert to Wei (1 CHR = 10^18 Wei)
-    let balance_float: f64 = balance.parse().unwrap_or(0.0);
-    let balance_wei = (balance_float * 1e18) as u128;
+    let response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to blockchain node: {}. Make sure Geth is running.", e))?;
+
+    let json_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse blockchain response: {}", e))?;
+
+    // Check for RPC errors
+    if let Some(error) = json_response.get("error") {
+        return Err(format!("Blockchain RPC error: {}", error));
+    }
+
+    let balance_hex = json_response["result"]
+        .as_str()
+        .ok_or("Invalid balance response from blockchain")?;
+
+    // Convert hex to decimal (wei) - handle "0x" prefix
+    let hex_str = balance_hex.trim_start_matches("0x");
+    let balance_wei = if hex_str.is_empty() {
+        0u128
+    } else {
+        u128::from_str_radix(hex_str, 16)
+            .map_err(|e| format!("Failed to parse balance hex '{}': {}", balance_hex, e))?
+    };
+
+    // Convert wei to CHR (1 CHR = 10^18 wei)
+    let balance_chr = balance_wei as f64 / 1e18;
 
     Ok(WalletBalanceResult {
-        balance,
+        balance: format!("{:.6}", balance_chr),
         balance_wei: balance_wei.to_string(),
     })
-}
-
-#[tauri::command]
-async fn set_wallet_balance(address: String, balance: String) -> Result<(), String> {
-    let address_lower = address.to_lowercase();
-
-    // Validate balance is a valid number
-    balance.parse::<f64>().map_err(|_| "Invalid balance format")?;
-
-    let mut balances = WALLET_BALANCES.lock().map_err(|e| e.to_string())?;
-    balances.insert(address_lower, balance);
-
-    Ok(())
-}
-
-#[tauri::command]
-async fn add_to_wallet_balance(address: String, amount: String) -> Result<String, String> {
-    let address_lower = address.to_lowercase();
-    let add_amount: f64 = amount.parse().map_err(|_| "Invalid amount format")?;
-
-    let mut balances = WALLET_BALANCES.lock().map_err(|e| e.to_string())?;
-    let current: f64 = balances.get(&address_lower)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
-
-    let new_balance = current + add_amount;
-    let new_balance_str = format!("{:.6}", new_balance);
-    balances.insert(address_lower, new_balance_str.clone());
-
-    Ok(new_balance_str)
 }
 
 #[tauri::command]
@@ -928,9 +930,7 @@ pub fn run() {
             register_shared_file,
             parse_torrent_file,
             export_torrent_file,
-            get_wallet_balance,
-            set_wallet_balance,
-            add_to_wallet_balance
+            get_wallet_balance
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
