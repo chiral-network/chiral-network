@@ -21,7 +21,7 @@ pub struct PingRequest(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PingResponse(pub String);
 
-// File transfer protocol messages
+// File transfer protocol messages (for direct file push)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileTransferRequest {
     pub transfer_id: String,
@@ -36,6 +36,22 @@ pub struct FileTransferResponse {
     pub error: Option<String>,
 }
 
+// File request protocol messages (for requesting files by hash)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileRequestMessage {
+    pub request_id: String,
+    pub file_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileRequestResponse {
+    pub request_id: String,
+    pub file_hash: String,
+    pub file_name: String,
+    pub file_data: Option<Vec<u8>>,
+    pub error: Option<String>,
+}
+
 enum SwarmCommand {
     SendPing(PeerId),
     SendFile {
@@ -43,6 +59,11 @@ enum SwarmCommand {
         transfer_id: String,
         file_name: String,
         file_data: Vec<u8>,
+    },
+    RequestFile {
+        peer_id: PeerId,
+        request_id: String,
+        file_hash: String,
     },
     PutDhtValue {
         key: String,
@@ -79,6 +100,17 @@ struct DhtBehaviour {
     identify: identify::Behaviour,
     ping_protocol: request_response::cbor::Behaviour<PingRequest, PingResponse>,
     file_transfer: request_response::cbor::Behaviour<FileTransferRequest, FileTransferResponse>,
+    file_request: request_response::cbor::Behaviour<FileRequestMessage, FileRequestResponse>,
+}
+
+/// Map of file hash -> file path for files we're seeding
+pub type SharedFilesMap = Arc<Mutex<std::collections::HashMap<String, SharedFileInfo>>>;
+
+#[derive(Clone, Debug)]
+pub struct SharedFileInfo {
+    pub file_path: String,
+    pub file_name: String,
+    pub file_size: u64,
 }
 
 pub struct DhtService {
@@ -87,6 +119,7 @@ pub struct DhtService {
     local_peer_id: Arc<Mutex<Option<String>>>,
     command_sender: Arc<Mutex<Option<mpsc::UnboundedSender<SwarmCommand>>>>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
+    shared_files: SharedFilesMap,
 }
 
 impl DhtService {
@@ -97,7 +130,32 @@ impl DhtService {
             local_peer_id: Arc::new(Mutex::new(None)),
             command_sender: Arc::new(Mutex::new(None)),
             file_transfer_service: Some(file_transfer_service),
+            shared_files: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Register a file for sharing (seeding)
+    pub async fn register_shared_file(&self, file_hash: String, file_path: String, file_name: String, file_size: u64) {
+        let mut shared = self.shared_files.lock().await;
+        println!("Registered shared file: {} (hash: {})", file_name, file_hash);
+        shared.insert(file_hash, SharedFileInfo {
+            file_path,
+            file_name,
+            file_size,
+        });
+    }
+
+    /// Unregister a shared file
+    pub async fn unregister_shared_file(&self, file_hash: &str) {
+        let mut shared = self.shared_files.lock().await;
+        if let Some(info) = shared.remove(file_hash) {
+            println!("Unregistered shared file: {} (hash: {})", info.file_name, file_hash);
+        }
+    }
+
+    /// Get shared files map for the event loop
+    pub fn get_shared_files(&self) -> SharedFilesMap {
+        self.shared_files.clone()
     }
 
     pub async fn start(&self, app: tauri::AppHandle) -> Result<String, String> {
@@ -126,9 +184,10 @@ impl DhtService {
         let peers_clone = self.peers.clone();
         let is_running_clone = self.is_running.clone();
         let file_transfer_clone = self.file_transfer_service.clone();
-        
+        let shared_files_clone = self.shared_files.clone();
+
         tokio::spawn(async move {
-            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone).await;
+            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone, shared_files_clone).await;
         });
         
         Ok(format!("DHT started with peer ID: {}", peer_id))
@@ -228,6 +287,22 @@ impl DhtService {
             Err("DHT not running".to_string())
         }
     }
+
+    /// Request a file from a remote peer by hash
+    pub async fn request_file(&self, peer_id: String, file_hash: String, request_id: String) -> Result<(), String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
+            tx.send(SwarmCommand::RequestFile {
+                peer_id: peer_id_parsed,
+                request_id,
+                file_hash,
+            }).map_err(|e| e.to_string())?;
+            Ok(())
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
 }
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
@@ -260,6 +335,11 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         request_response::Config::default(),
     );
 
+    let file_request = request_response::cbor::Behaviour::new(
+        [(StreamProtocol::new("/chiral/file-request/1.0.0"), request_response::ProtocolSupport::Full)],
+        request_response::Config::default(),
+    );
+
     let behaviour = DhtBehaviour {
         kad,
         mdns,
@@ -267,6 +347,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         identify,
         ping_protocol,
         file_transfer,
+        file_request,
     };
     
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
@@ -293,6 +374,7 @@ async fn event_loop(
     app: tauri::AppHandle,
     mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
+    shared_files: SharedFilesMap,
 ) {
     // Track pending get queries
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
@@ -307,7 +389,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Listening on {:?}", address);
@@ -379,6 +461,20 @@ async fn event_loop(
                         let query_id = swarm.behaviour_mut().kad.get_record(record_key);
                         pending_get_queries.insert(query_id, response_tx);
                     }
+                    SwarmCommand::RequestFile { peer_id, request_id, file_hash } => {
+                        println!("Requesting file {} from peer {}", file_hash, peer_id);
+                        let request = FileRequestMessage {
+                            request_id: request_id.clone(),
+                            file_hash: file_hash.clone(),
+                        };
+                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                        println!("File request sent with ID: {:?}", req_id);
+                        let _ = app.emit("file-request-sent", serde_json::json!({
+                            "requestId": request_id,
+                            "fileHash": file_hash,
+                            "peerId": peer_id.to_string()
+                        }));
+                    }
                 }
             }
         }
@@ -394,6 +490,7 @@ async fn handle_behaviour_event(
     swarm: &mut Swarm<DhtBehaviour>,
     file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     pending_get_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>>,
+    shared_files: &SharedFilesMap,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -509,7 +606,7 @@ async fn handle_behaviour_event(
                     match message {
                         request_response::Message::Request { request, channel, .. } => {
                             println!("Received file transfer from {}: {}", peer, request.file_name);
-                            let file_size = request.file_data.len();
+                            let _file_size = request.file_data.len();
 
                             // Store file data in FileTransferService for later acceptance
                             if let Some(fts) = file_transfer_service {
@@ -560,6 +657,115 @@ async fn handle_behaviour_event(
                 }
                 Event::InboundFailure { peer, error, .. } => {
                     println!("Inbound file transfer failed from {:?}: {:?}", peer, error);
+                }
+                _ => {}
+            }
+        }
+        DhtBehaviourEvent::FileRequest(event) => {
+            use request_response::Event;
+            match event {
+                Event::Message { peer, message } => {
+                    match message {
+                        request_response::Message::Request { request, channel, .. } => {
+                            println!("Received file request from {}: hash={}", peer, request.file_hash);
+
+                            // Look up the file in our shared files
+                            let shared = shared_files.lock().await;
+                            let response = if let Some(file_info) = shared.get(&request.file_hash) {
+                                // Read the file and send it
+                                match std::fs::read(&file_info.file_path) {
+                                    Ok(file_data) => {
+                                        println!("Serving file {} ({} bytes) to peer {}", file_info.file_name, file_data.len(), peer);
+                                        FileRequestResponse {
+                                            request_id: request.request_id.clone(),
+                                            file_hash: request.file_hash.clone(),
+                                            file_name: file_info.file_name.clone(),
+                                            file_data: Some(file_data),
+                                            error: None,
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!("Failed to read file {}: {}", file_info.file_path, e);
+                                        FileRequestResponse {
+                                            request_id: request.request_id.clone(),
+                                            file_hash: request.file_hash.clone(),
+                                            file_name: file_info.file_name.clone(),
+                                            file_data: None,
+                                            error: Some(format!("Failed to read file: {}", e)),
+                                        }
+                                    }
+                                }
+                            } else {
+                                println!("File not found: {}", request.file_hash);
+                                FileRequestResponse {
+                                    request_id: request.request_id.clone(),
+                                    file_hash: request.file_hash.clone(),
+                                    file_name: String::new(),
+                                    file_data: None,
+                                    error: Some("File not found".to_string()),
+                                }
+                            };
+                            drop(shared);
+
+                            if let Err(e) = swarm.behaviour_mut().file_request.send_response(channel, response) {
+                                println!("Failed to send file request response: {:?}", e);
+                            }
+                        }
+                        request_response::Message::Response { response, .. } => {
+                            println!("Received file response from {}: hash={}, success={}",
+                                     peer, response.file_hash, response.file_data.is_some());
+
+                            if let Some(file_data) = response.file_data {
+                                // Save the file to Downloads folder
+                                if let Some(downloads_dir) = dirs::download_dir() {
+                                    let file_name = if response.file_name.is_empty() {
+                                        format!("{}.download", &response.file_hash[..8])
+                                    } else {
+                                        response.file_name.clone()
+                                    };
+                                    let file_path = downloads_dir.join(&file_name);
+
+                                    match std::fs::write(&file_path, &file_data) {
+                                        Ok(_) => {
+                                            println!("File saved to: {:?}", file_path);
+                                            let _ = app.emit("file-download-complete", serde_json::json!({
+                                                "requestId": response.request_id,
+                                                "fileHash": response.file_hash,
+                                                "fileName": file_name,
+                                                "filePath": file_path.to_string_lossy(),
+                                                "fileSize": file_data.len(),
+                                                "status": "completed"
+                                            }));
+                                        }
+                                        Err(e) => {
+                                            println!("Failed to save file: {}", e);
+                                            let _ = app.emit("file-download-failed", serde_json::json!({
+                                                "requestId": response.request_id,
+                                                "fileHash": response.file_hash,
+                                                "error": format!("Failed to save file: {}", e)
+                                            }));
+                                        }
+                                    }
+                                }
+                            } else {
+                                let _ = app.emit("file-download-failed", serde_json::json!({
+                                    "requestId": response.request_id,
+                                    "fileHash": response.file_hash,
+                                    "error": response.error.unwrap_or_else(|| "Unknown error".to_string())
+                                }));
+                            }
+                        }
+                    }
+                }
+                Event::OutboundFailure { peer, error, .. } => {
+                    println!("File request failed to {:?}: {:?}", peer, error);
+                    let _ = app.emit("file-download-failed", serde_json::json!({
+                        "peerId": peer.to_string(),
+                        "error": format!("{:?}", error)
+                    }));
+                }
+                Event::InboundFailure { peer, error, .. } => {
+                    println!("Inbound file request failed from {:?}: {:?}", peer, error);
                 }
                 _ => {}
             }
