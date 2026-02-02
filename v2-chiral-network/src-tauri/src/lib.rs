@@ -564,14 +564,13 @@ struct TorrentInfo {
 
 #[tauri::command]
 async fn parse_torrent_file(file_path: String) -> Result<TorrentInfo, String> {
-    use sha2::{Sha256, Digest};
-
     // Read the torrent file
     let torrent_data = std::fs::read(&file_path)
         .map_err(|e| format!("Failed to read torrent file: {}", e))?;
 
     let mut name = String::new();
     let mut size: u64 = 0;
+    let mut info_hash = String::new();
 
     // Simple bencode parsing for torrent files
     // Look for common patterns in torrent files
@@ -590,30 +589,22 @@ async fn parse_torrent_file(file_path: String) -> Result<TorrentInfo, String> {
         }
     }
 
-    // For multi-file torrents, we'd need to sum up all file lengths
-    // This is a simplified implementation
-
-    // Compute info hash - find the info dictionary and hash it
-    // BitTorrent uses SHA-1, but we'll use SHA-256 for our purposes
-    let info_hash = if let Some(info_start) = find_info_dict(&torrent_data) {
-        // Find the end of the info dictionary
-        if let Some(info_end) = find_dict_end(&torrent_data[info_start..]) {
-            let info_bytes = &torrent_data[info_start..info_start + info_end];
-            let mut hasher = Sha256::new();
-            hasher.update(info_bytes);
-            hex::encode(hasher.finalize())
-        } else {
-            // Fallback: hash entire file
-            let mut hasher = Sha256::new();
-            hasher.update(&torrent_data);
-            hex::encode(hasher.finalize())
+    // For Chiral Network torrents, the original file hash is stored in the "pieces" field
+    // Extract it directly instead of computing a hash of the info dictionary
+    if let Some(pieces_pos) = find_bencode_key(&torrent_data, b"pieces") {
+        // The pieces field contains raw bytes (the hash), extract them
+        if let Some(hash_bytes) = extract_bencode_bytes(&torrent_data[pieces_pos..]) {
+            // Convert bytes to hex string
+            info_hash = hex::encode(&hash_bytes);
+            println!("Extracted file hash from torrent pieces field: {}", info_hash);
         }
-    } else {
-        // Fallback: hash entire file
-        let mut hasher = Sha256::new();
-        hasher.update(&torrent_data);
-        hex::encode(hasher.finalize())
-    };
+    }
+
+    // If we couldn't extract the hash from pieces, this might be a standard BitTorrent torrent
+    // In that case, we can't use it with our network
+    if info_hash.is_empty() {
+        return Err("Invalid torrent file: could not find Chiral Network file hash in pieces field".to_string());
+    }
 
     if name.is_empty() {
         // Extract name from filename if not in torrent
@@ -622,6 +613,8 @@ async fn parse_torrent_file(file_path: String) -> Result<TorrentInfo, String> {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
     }
+
+    println!("Parsed torrent: name={}, size={}, hash={}", name, size, info_hash);
 
     Ok(TorrentInfo {
         info_hash,
@@ -666,6 +659,21 @@ fn extract_bencode_integer(data: &[u8]) -> Option<u64> {
     let end_pos = data.iter().position(|&b| b == b'e')?;
     let num_str = std::str::from_utf8(&data[1..end_pos]).ok()?;
     num_str.parse().ok()
+}
+
+// Helper to extract raw bytes from a bencode string (format: length:bytes)
+fn extract_bencode_bytes(data: &[u8]) -> Option<Vec<u8>> {
+    // Find the length prefix
+    let colon_pos = data.iter().position(|&b| b == b':')?;
+    let len_str = std::str::from_utf8(&data[..colon_pos]).ok()?;
+    let len: usize = len_str.parse().ok()?;
+
+    if data.len() >= colon_pos + 1 + len {
+        let start = colon_pos + 1;
+        Some(data[start..start + len].to_vec())
+    } else {
+        None
+    }
 }
 
 // Find the start of the info dictionary
