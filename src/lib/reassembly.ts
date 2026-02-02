@@ -33,16 +33,19 @@ interface TransferState {
   // bounded write queue to limit memory usage
   writeQueue: Array<{
     run: () => Promise<boolean>;
-    resolve: (v: boolean) => void;
-    reject: (e: any) => void;
+    chunkIndex?: number;
   }>;
   writeInFlight: number;
   maxConcurrentWrites: number;
   // hard cap on queued write jobs (to limit memory used by queued chunk buffers)
   maxQueueLength: number;
+  // single-writer drain flag
+  isDraining?: boolean;
+  // track which indices are currently queued to avoid duplicate writes
+  queuedIndices?: Set<number>;
 }
 
-export type ReassemblyEventName = "chunkState" | "progress" | "finalized";
+export type ReassemblyEventName = "chunkState" | "progress" | "finalized" | "queue";
 
 export class ReassemblyManager {
   private transfers = new Map<string, TransferState>();
@@ -52,11 +55,30 @@ export class ReassemblyManager {
     transferId: string,
     manifest: ManifestForReassembly,
     tmpPath: string,
-    maxConcurrentWrites = 2,
+    maxConcurrentWrites = 1,
     maxQueueLength = 1000
   ): void {
     if (this.transfers.has(transferId)) {
       throw new Error(`Transfer ${transferId} already initialized`);
+    }
+
+    // Basic manifest validation to avoid malformed inputs
+    if (!manifest || !Array.isArray(manifest.chunks) || manifest.chunks.length === 0) {
+      throw new Error("Invalid manifest: missing chunks");
+    }
+
+    let total = 0;
+    for (const ch of manifest.chunks) {
+      if (!ch || typeof ch.encryptedSize !== 'number' || ch.encryptedSize <= 0) {
+        throw new Error("Invalid manifest: chunk sizes must be positive numbers");
+      }
+      total += ch.encryptedSize;
+    }
+
+    if (total < manifest.fileSize) {
+      // tolerate metadata mismatch but log a warning via throwing would be strict; choose tolerance
+      // ensure fileSize is at most sum of chunk sizes
+      manifest.fileSize = total;
     }
 
     // Precompute offsets (supports variable chunk sizes)
@@ -82,6 +104,8 @@ export class ReassemblyManager {
       writeInFlight: 0,
       maxConcurrentWrites,
       maxQueueLength,
+      isDraining: false,
+      queuedIndices: new Set(),
     };
 
     this.transfers.set(transferId, state);
@@ -123,34 +147,78 @@ export class ReassemblyManager {
       writeQueueLength: state.writeQueue.length,
       maxConcurrentWrites: state.maxConcurrentWrites,
       maxQueueLength: state.maxQueueLength,
+      isDraining: !!state.isDraining,
+      queuedIndices: Array.from(state.queuedIndices ?? []),
     };
   }
 
-  private processWriteQueue(state: TransferState): void {
-    while (
-      state.writeInFlight < state.maxConcurrentWrites &&
-      state.writeQueue.length > 0
-    ) {
-      const job = state.writeQueue.shift()!;
-      state.writeInFlight += 1;
-      job
-        .run()
-        .then((res) => {
-          try {
-            job.resolve(res);
-          } finally {
-            state.writeInFlight -= 1;
-            this.processWriteQueue(state);
-          }
-        })
-        .catch((err) => {
-          try {
-            job.reject(err);
-          } finally {
-            state.writeInFlight -= 1;
-            this.processWriteQueue(state);
-          }
-        });
+  // Return current queue depth and in-flight count for a transfer
+  getQueueDepth(transferId: string): { queueDepth: number; inFlight: number } | null {
+    const state = this.transfers.get(transferId);
+    if (!state) return null;
+    return { queueDepth: state.writeQueue.length, inFlight: state.writeInFlight };
+  }
+
+  // Cancel and cleanup a transfer: clears queue and optionally asks backend to cleanup temp files
+  async cancelReassembly(transferId: string): Promise<void> {
+    const state = this.transfers.get(transferId);
+    if (!state) return;
+
+    // Clear queued jobs
+    state.writeQueue.length = 0;
+    state.queuedIndices?.clear();
+
+    try {
+      await invoke('cleanup_transfer_temp', { transferId });
+    } catch (e) {
+      // ignore cleanup errors
+    }
+
+    this.transfers.delete(transferId);
+    this.emit('finalized', { transferId, cancelled: true });
+  }
+
+  private async startDrain(state: TransferState): Promise<void> {
+    if (state.isDraining) return;
+    state.isDraining = true;
+
+    try {
+      while (state.writeQueue.length > 0) {
+        // respect maxConcurrentWrites though most callers use 1 for single-writer semantics
+        if (state.writeInFlight >= state.maxConcurrentWrites) {
+          // yield and retry
+          await new Promise((r) => setTimeout(r, 0));
+          continue;
+        }
+
+        const job = state.writeQueue.shift()!;
+        const jobIndex = job.chunkIndex;
+        if (jobIndex !== undefined) state.queuedIndices?.delete(jobIndex);
+        state.writeInFlight += 1;
+        try {
+          await job.run();
+        } catch (e) {
+          // run() already updates chunk state on errors; swallow to keep drain alive
+        } finally {
+          state.writeInFlight -= 1;
+          // emit progress including queue depth so callers can observe backpressure/resume
+          this.emit("progress", {
+            transferId: state.transferId,
+            received: state.receivedChunks.size,
+            total: state.manifest.chunks.length,
+            queueDepth: state.writeQueue.length,
+            inFlight: state.writeInFlight,
+          });
+          // also emit a queue-specific event for consumers that prefer it
+          this.emit('queue', {
+            transferId: state.transferId,
+            queueDepth: state.writeQueue.length,
+            inFlight: state.writeInFlight,
+          });
+        }
+      }
+    } finally {
+      state.isDraining = false;
     }
   }
 
@@ -169,6 +237,11 @@ export class ReassemblyManager {
 
     // Ignore already received chunks
     if (state.chunkStates[chunkIndex] === ChunkState.RECEIVED) {
+      return true;
+    }
+
+    // If this chunk is already queued, treat as accepted (idempotent)
+    if (state.queuedIndices?.has(chunkIndex)) {
       return true;
     }
 
@@ -191,8 +264,23 @@ export class ReassemblyManager {
       }
     }
 
-    // At this point, checksum validated. Mark logical receipt BEFORE enqueueing to reflect progress semantics
-    // (no need to guard against RECEIVED here because we returned earlier if it was already RECEIVED)
+    // Size and bounds checks to avoid malicious/accidental oversize writes
+    const expectedSize = info.encryptedSize;
+    if (chunkData.length > expectedSize) {
+      state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
+      state.corruptedChunks.add(chunkIndex);
+      this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.CORRUPTED });
+      return false;
+    }
+    const offset = state.offsets[chunkIndex] || 0;
+    if (offset + chunkData.length > state.manifest.fileSize) {
+      state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
+      state.corruptedChunks.add(chunkIndex);
+      this.emit("chunkState", { transferId, chunkIndex, state: ChunkState.CORRUPTED });
+      return false;
+    }
+
+    // Mark logical receipt BEFORE enqueueing to reflect progress semantics (idempotent)
     state.chunkStates[chunkIndex] = ChunkState.RECEIVED;
     state.receivedChunks.add(chunkIndex);
     state.corruptedChunks.delete(chunkIndex);
@@ -201,65 +289,86 @@ export class ReassemblyManager {
       transferId,
       received: state.receivedChunks.size,
       total: state.manifest.chunks.length,
+      queueDepth: state.writeQueue.length,
+      inFlight: state.writeInFlight,
     });
 
     // Enforce hard queue length cap to bound memory
     // Count both queued and in-flight writes against the cap
     if (state.writeQueue.length + state.writeInFlight >= state.maxQueueLength) {
-      throw new Error("Write queue full");
+      // Signal backpressure to caller by returning false
+      return false;
     }
 
-    // Create write task and enqueue
-    let resolveFn: (v: boolean) => void;
-    let rejectFn: (e: any) => void;
-    const p = new Promise<boolean>((resolve, reject) => {
-      resolveFn = resolve;
-      rejectFn = reject;
-    });
-
     const run = async (): Promise<boolean> => {
-      const offset = state.offsets[chunkIndex] || 0;
+      const maxRetries = 2;
+      let attempt = 0;
+      while (attempt <= maxRetries) {
+        try {
+          // Pass ArrayBuffer to avoid constructing a large Array from the bytes (zero-copy where possible)
+          const buffer = chunkData.buffer;
+          await invoke("write_chunk_temp", {
+            transferId,
+            chunkIndex,
+            offset,
+            bytes: buffer,
+            chunkChecksum: info.checksum ?? undefined,
+          });
 
-      try {
-        const bytes = Array.from(chunkData as Uint8Array);
+          // Durability succeeded — nothing else to do since logical receipt was already marked
+          return true;
+        } catch (err) {
+          attempt += 1;
+          // small backoff for transient errors
+          if (attempt <= maxRetries) {
+            await new Promise((r) => setTimeout(r, 10 * attempt));
+            continue;
+          }
 
-        await invoke("write_chunk_temp", {
-          transferId,
-          chunkIndex,
-          offset,
-          bytes,
-          chunkChecksum: info.checksum ?? undefined,
-        });
+          // Persistence failed → rollback logical receipt
+          state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
+          state.corruptedChunks.add(chunkIndex);
+          state.receivedChunks.delete(chunkIndex);
 
-        // Durability succeeded — nothing else to do since logical receipt was already marked
-        return true;
-      } catch (err) {
-        // Persistence failed → rollback logical receipt
-        state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
-        state.corruptedChunks.add(chunkIndex);
-        state.receivedChunks.delete(chunkIndex);
+          this.emit("chunkState", {
+            transferId,
+            chunkIndex,
+            state: ChunkState.CORRUPTED,
+          });
 
-        this.emit("chunkState", {
-          transferId,
-          chunkIndex,
-          state: ChunkState.CORRUPTED,
-        });
+          this.emit("progress", {
+            transferId,
+            received: state.receivedChunks.size,
+            total: state.manifest.chunks.length,
+            queueDepth: state.writeQueue.length,
+            inFlight: state.writeInFlight,
+          });
 
-        this.emit("progress", {
-          transferId,
-          received: state.receivedChunks.size,
-          total: state.manifest.chunks.length,
-        });
-
-        return false;
+          return false;
+        }
       }
+      return false;
     };
 
-    state.writeQueue.push({ run, resolve: resolveFn!, reject: rejectFn! });
-    this.processWriteQueue(state);
+    // Enqueue job and start single-writer drain loop. Do not await completion here (enqueue-only).
+    state.writeQueue.push({ run, chunkIndex });
+    state.queuedIndices?.add(chunkIndex);
+    // Emit queue depth so callers can observe backpressure
+    this.emit("progress", {
+      transferId,
+      received: state.receivedChunks.size,
+      total: state.manifest.chunks.length,
+      queueDepth: state.writeQueue.length,
+      inFlight: state.writeInFlight,
+    });
+    this.emit('queue', { transferId, queueDepth: state.writeQueue.length, inFlight: state.writeInFlight });
 
-    const result = await p;
-    return result;
+    // Start drain loop asynchronously (fire-and-forget)
+    void this.startDrain(state);
+
+    // Immediately return true to indicate the chunk was accepted for write.
+    // Caller should listen to progress/chunkState events to observe completion.
+    return true;
   }
 
   markChunkCorrupt(transferId: string, chunkIndex: number): void {
@@ -283,6 +392,8 @@ export class ReassemblyManager {
       transferId,
       received: state.receivedChunks.size,
       total: state.manifest.chunks.length,
+      queueDepth: state.writeQueue.length,
+      inFlight: state.writeInFlight,
     });
   }
 
