@@ -35,6 +35,10 @@
     return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
   }
 
+  // Event listener cleanup functions
+  let unlistenDownloadComplete: (() => void) | null = null;
+  let unlistenDownloadFailed: (() => void) | null = null;
+
   // Types
   type SearchMode = 'hash' | 'magnet' | 'torrent';
   type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'cancelled' | 'failed';
@@ -326,6 +330,12 @@
       return;
     }
 
+    // Check if we have any seeders
+    if (result.seeders.length === 0) {
+      toasts.show('No seeders available for this file', 'error');
+      return;
+    }
+
     const newDownload: DownloadItem = {
       id: `download-${Date.now()}`,
       hash: result.hash,
@@ -333,8 +343,8 @@
       size: result.fileSize,
       status: 'downloading',
       progress: 0,
-      speed: '0 B/s',
-      eta: 'Calculating...',
+      speed: 'Connecting...',
+      eta: 'Requesting file...',
       seeders: result.seeders.length,
       startedAt: new Date()
     };
@@ -344,12 +354,20 @@
 
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('start_download', {
+      const response = await invoke<{ requestId: string; status: string }>('start_download', {
         fileHash: result.hash,
         fileName: result.fileName,
         seeders: result.seeders
       });
-      toasts.show(`Download started: ${result.fileName}`, 'info');
+
+      console.log('Download request sent:', response);
+      toasts.show(`Requesting file from seeder...`, 'info');
+
+      // Update download with request ID
+      downloads = downloads.map(d =>
+        d.id === newDownload.id ? { ...d, id: response.requestId } : d
+      );
+      saveDownloadHistory();
     } catch (error) {
       console.error('Download failed:', error);
       downloads = downloads.map(d =>
@@ -415,36 +433,94 @@
     return downloads.filter(d => ['completed', 'failed', 'cancelled'].includes(d.status));
   }
 
-  // Initialize
-  $effect(() => {
-    isTauri = checkTauriAvailability();
-    loadDownloadHistory();
-  });
-  
-  // Listen for download completion events
-  onMount(async () => {
-    if (checkTauriAvailability()) {
+  // Setup event listeners for download events from Tauri backend
+  async function setupEventListeners() {
+    if (!isTauri) return;
+
+    try {
       const { listen } = await import('@tauri-apps/api/event');
-      const unlisten = await listen('download-complete', (event: any) => {
-        const { hash, fileName } = event.payload;
-        console.log(`Download completed: ${fileName}`);
-        
-        // Update download status
+
+      // Listen for successful file downloads
+      unlistenDownloadComplete = await listen<{
+        requestId: string;
+        fileHash: string;
+        fileName: string;
+        filePath: string;
+        fileSize: number;
+        status: string;
+      }>('file-download-complete', (event) => {
+        console.log('Download complete:', event.payload);
+        const { fileHash, fileName, filePath, fileSize } = event.payload;
+
+        // Update the download status
         downloads = downloads.map(d => {
-          if (d.hash === hash) {
-            toasts.show(`Download complete: ${fileName}`, 'success');
-            return { ...d, status: 'completed' as const, progress: 100 };
+          if (d.hash === fileHash) {
+            return {
+              ...d,
+              status: 'completed' as const,
+              progress: 100,
+              size: fileSize || d.size,
+              completedAt: new Date()
+            };
           }
           return d;
         });
         saveDownloadHistory();
+
+        toasts.show(`Downloaded: ${fileName}`, 'success');
       });
-      
-      // Cleanup on unmount
-      return () => {
-        unlisten();
-      };
+
+      // Listen for failed downloads
+      unlistenDownloadFailed = await listen<{
+        requestId: string;
+        fileHash: string;
+        error: string;
+      }>('file-download-failed', (event) => {
+        console.error('Download failed:', event.payload);
+        const { fileHash, error } = event.payload;
+
+        // Update the download status
+        downloads = downloads.map(d => {
+          if (d.hash === fileHash) {
+            return {
+              ...d,
+              status: 'failed' as const
+            };
+          }
+          return d;
+        });
+        saveDownloadHistory();
+
+        toasts.show(`Download failed: ${error}`, 'error');
+      });
+
+      console.log('Download event listeners registered');
+    } catch (error) {
+      console.error('Failed to setup event listeners:', error);
     }
+  }
+
+  // Cleanup event listeners
+  function cleanupEventListeners() {
+    if (unlistenDownloadComplete) {
+      unlistenDownloadComplete();
+      unlistenDownloadComplete = null;
+    }
+    if (unlistenDownloadFailed) {
+      unlistenDownloadFailed();
+      unlistenDownloadFailed = null;
+    }
+  }
+
+  // Initialize
+  onMount(() => {
+    isTauri = checkTauriAvailability();
+    loadDownloadHistory();
+    setupEventListeners();
+  });
+
+  onDestroy(() => {
+    cleanupEventListeners();
   });
 
   // Get status color
