@@ -188,11 +188,12 @@
 
   // Extract info hash from magnet link
   function extractInfoHashFromMagnet(magnetLink: string): string | null {
-    const match = magnetLink.match(/urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
+    // Match SHA-256 (64 chars), SHA-1 (40 chars), or Base32 (32 chars)
+    const match = magnetLink.match(/urn:btih:([a-fA-F0-9]{64}|[a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
     if (match) {
       let hash = match[1];
-      // Convert Base32 to hex if needed
-      if (hash.length === 32) {
+      // Convert Base32 to hex if needed (32 chars)
+      if (hash.length === 32 && !/^[a-fA-F0-9]+$/.test(hash)) {
         // Base32 decode would go here - for now just use as-is
         return hash.toLowerCase();
       }
