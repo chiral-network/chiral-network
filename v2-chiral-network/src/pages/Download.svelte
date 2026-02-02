@@ -219,27 +219,45 @@
     }
 
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selectedPath = await open({
-        multiple: false,
-        filters: [{ name: 'Torrent Files', extensions: ['torrent'] }]
-      }) as string | null;
+      const { invoke } = await import('@tauri-apps/api/core');
 
-      if (selectedPath) {
-        const { invoke } = await import('@tauri-apps/api/core');
+      // Use our custom file dialog command instead of plugin-dialog
+      const selectedPaths = await invoke<string[]>('open_file_dialog', {
+        multiple: false
+      });
+
+      if (selectedPaths && selectedPaths.length > 0) {
+        const selectedPath = selectedPaths[0];
+
+        // Check if it's a .torrent file
+        if (!selectedPath.toLowerCase().endsWith('.torrent')) {
+          toasts.show('Please select a .torrent file', 'error');
+          return;
+        }
+
         const result = await invoke<{ infoHash: string; name: string; size: number }>('parse_torrent_file', {
           filePath: selectedPath
         });
 
         if (result) {
+          // Search DHT for seeders using the parsed hash
+          const dhtResult = await invoke<SearchResult | null>('search_file', {
+            fileHash: result.infoHash
+          });
+
           searchResult = {
             hash: result.infoHash,
             fileName: result.name,
-            fileSize: result.size,
-            seeders: [],
-            createdAt: Date.now()
+            fileSize: result.size || dhtResult?.fileSize || 0,
+            seeders: dhtResult?.seeders || [],
+            createdAt: dhtResult?.createdAt || Date.now()
           };
-          toasts.show(`Loaded torrent: ${result.name}`, 'success');
+
+          if (searchResult.seeders.length > 0) {
+            toasts.show(`Loaded torrent: ${result.name} (${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''})`, 'success');
+          } else {
+            toasts.show(`Loaded torrent: ${result.name} - searching for seeders...`, 'info');
+          }
         }
       }
     } catch (error) {
@@ -287,10 +305,18 @@
         });
 
         if (result) {
+          // For magnet links, use the name from the magnet link if available
+          if ((searchMode === 'magnet' || searchQuery.startsWith('magnet:')) && fileName !== 'Unknown') {
+            result.fileName = fileName;
+          }
           searchResult = result;
-          toasts.show(`Found: ${result.fileName}`, 'success');
+          if (result.seeders.length > 0) {
+            toasts.show(`Found: ${result.fileName} (${result.seeders.length} seeder${result.seeders.length !== 1 ? 's' : ''})`, 'success');
+          } else {
+            toasts.show(`Found: ${result.fileName} - no seeders currently available`, 'warning');
+          }
         } else {
-          // For magnet links, create a result even if not in DHT
+          // For magnet links, create a result even if not in DHT but show warning
           if (searchMode === 'magnet' || searchQuery.startsWith('magnet:')) {
             searchResult = {
               hash: fileHash,
@@ -299,7 +325,7 @@
               seeders: [],
               createdAt: Date.now()
             };
-            toasts.show(`Magnet link parsed: ${fileName}`, 'info');
+            toasts.show(`Magnet link parsed but file not found in DHT. The seeder may be offline.`, 'warning');
           } else {
             searchError = 'File not found on the network';
           }
@@ -332,7 +358,7 @@
 
     // Check if we have any seeders
     if (result.seeders.length === 0) {
-      toasts.show('No seeders available for this file', 'error');
+      toasts.show('No seeders available. The file owner may be offline or the file was not found in DHT.', 'error');
       return;
     }
 
