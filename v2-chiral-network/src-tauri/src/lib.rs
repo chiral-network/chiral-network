@@ -6,10 +6,13 @@ use file_transfer::FileTransferService;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tauri::Emitter;
 
 pub struct AppState {
     pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
     pub file_transfer: Arc<Mutex<FileTransferService>>,
+    pub file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>, // hash -> file data
 }
 
 #[tauri::command]
@@ -162,7 +165,7 @@ async fn get_dht_value(
 #[tauri::command]
 async fn get_available_storage() -> Result<u64, String> {
     // Get available disk space in MB
-    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let _home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
 
     #[cfg(target_os = "linux")]
     {
@@ -256,6 +259,11 @@ async fn publish_file(
     let merkle_root = hex::encode(hash);
 
     println!("Publishing file: {} with hash: {}", file_name, merkle_root);
+    
+    // Store file data in memory for serving to peers
+    let mut storage = state.file_storage.lock().await;
+    storage.insert(merkle_root.clone(), file_data);
+    drop(storage);
 
     // Get DHT service and peer ID
     let dht_guard = state.dht.lock().await;
@@ -347,23 +355,50 @@ async fn search_file(
 
 #[tauri::command]
 async fn start_download(
-    _state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     file_hash: String,
     file_name: String,
     seeders: Vec<String>,
 ) -> Result<(), String> {
-    // Log the download initiation
     println!("Starting download: {} (hash: {}) from {} seeders", file_name, file_hash, seeders.len());
 
-    // In a full implementation, we would:
-    // 1. Connect to seeders via libp2p
-    // 2. Request file chunks using the file_transfer protocol
-    // 3. Reassemble and verify the file using the merkle hash
-    // 4. Emit progress events to the frontend
-
-    // For now, emit a placeholder event
-    // The actual file transfer will use the existing file_transfer protocol
-    Ok(())
+    // First, check if we have the file locally
+    let storage = state.file_storage.lock().await;
+    if let Some(file_data) = storage.get(&file_hash) {
+        println!("File found in local storage");
+        
+        // Save to downloads folder
+        let downloads_dir = dirs::download_dir()
+            .ok_or("Could not find downloads directory")?;
+        let file_path = downloads_dir.join(&file_name);
+        
+        std::fs::write(&file_path, file_data)
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+        
+        println!("File downloaded to: {:?}", file_path);
+        
+        // Emit completion event
+        let _ = app.emit("download-complete", serde_json::json!({
+            "hash": file_hash,
+            "fileName": file_name,
+            "filePath": file_path.to_string_lossy().to_string()
+        }));
+        
+        return Ok(());
+    }
+    drop(storage);
+    
+    // If not local, try to fetch from seeders
+    if seeders.is_empty() {
+        return Err("No seeders available".to_string());
+    }
+    
+    // Try to get file from first seeder via DHT
+    // In a real implementation, this would use the file_transfer protocol
+    println!("File not found locally, would fetch from network (not yet implemented)");
+    
+    Err("Remote file download not yet implemented. File must be on the same node.".to_string())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -548,6 +583,7 @@ pub fn run() {
         .manage(AppState {
             dht: Arc::new(Mutex::new(None)),
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
+            file_storage: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             start_dht,
