@@ -331,8 +331,10 @@ async fn search_file(
     if let Some(dht) = dht_guard.as_ref() {
         // Search for file metadata in DHT
         let dht_key = format!("chiral_file_{}", file_hash);
-        match dht.get_dht_value(dht_key).await? {
-            Some(metadata_json) => {
+        println!("Looking up DHT key: {}", dht_key);
+
+        match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(metadata_json)) => {
                 // Parse metadata from JSON
                 let metadata: FileMetadata = serde_json::from_str(&metadata_json)
                     .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
@@ -353,9 +355,55 @@ async fn search_file(
                     created_at: metadata.created_at,
                 }))
             }
-            None => {
+            Ok(None) => {
                 println!("File not found in DHT: {}", file_hash);
-                Ok(None)
+
+                // Fallback: If we have connected peers, return them as potential seeders
+                // They might have the file even if it's not in DHT yet
+                let peers = dht.get_peers().await;
+                if !peers.is_empty() {
+                    println!("DHT lookup failed, but {} peers are connected. Returning peers as potential seeders.", peers.len());
+                    let seeders: Vec<String> = peers.iter().map(|p| p.id.clone()).collect();
+
+                    // Return a partial result with connected peers as potential seeders
+                    // The download will attempt to request from these peers
+                    Ok(Some(SearchResult {
+                        hash: file_hash,
+                        file_name: String::new(), // Unknown, will be filled from magnet/torrent
+                        file_size: 0,
+                        seeders,
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    }))
+                } else {
+                    println!("No peers connected, cannot search for file");
+                    Ok(None)
+                }
+            }
+            Err(e) => {
+                println!("DHT lookup error: {}", e);
+
+                // On error, also try fallback to connected peers
+                let peers = dht.get_peers().await;
+                if !peers.is_empty() {
+                    println!("DHT lookup errored, but {} peers are connected. Returning peers as potential seeders.", peers.len());
+                    let seeders: Vec<String> = peers.iter().map(|p| p.id.clone()).collect();
+
+                    Ok(Some(SearchResult {
+                        hash: file_hash,
+                        file_name: String::new(),
+                        file_size: 0,
+                        seeders,
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    }))
+                } else {
+                    Err(e)
+                }
             }
         }
     } else {
