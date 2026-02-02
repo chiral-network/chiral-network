@@ -137,12 +137,18 @@ impl DhtService {
     /// Register a file for sharing (seeding)
     pub async fn register_shared_file(&self, file_hash: String, file_path: String, file_name: String, file_size: u64) {
         let mut shared = self.shared_files.lock().await;
-        println!("Registered shared file: {} (hash: {})", file_name, file_hash);
-        shared.insert(file_hash, SharedFileInfo {
+        println!("=== REGISTERING SHARED FILE ===");
+        println!("  Name: {}", file_name);
+        println!("  Hash: {}", file_hash);
+        println!("  Path: {}", file_path);
+        println!("  Size: {} bytes", file_size);
+        shared.insert(file_hash.clone(), SharedFileInfo {
             file_path,
             file_name,
             file_size,
         });
+        println!("  Total shared files now: {}", shared.len());
+        println!("================================");
     }
 
     /// Unregister a shared file
@@ -685,6 +691,13 @@ async fn handle_behaviour_event(
 
                             // Look up the file in our shared files
                             let shared = shared_files.lock().await;
+
+                            // Debug: print all shared files
+                            println!("Currently sharing {} files:", shared.len());
+                            for (hash, info) in shared.iter() {
+                                println!("  - {} (hash: {})", info.file_name, hash);
+                            }
+
                             let response = if let Some(file_info) = shared.get(&request.file_hash) {
                                 // Read the file and send it
                                 match std::fs::read(&file_info.file_path) {
