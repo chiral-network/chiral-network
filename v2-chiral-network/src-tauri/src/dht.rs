@@ -237,7 +237,9 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     println!("Local peer ID: {}", local_peer_id);
     
     let kad_store = kad::store::MemoryStore::new(local_peer_id);
-    let kad = kad::Behaviour::new(local_peer_id, kad_store);
+    let mut kad = kad::Behaviour::new(local_peer_id, kad_store);
+    // Set to server mode to help propagate records
+    kad.set_mode(Some(kad::Mode::Server));
     
     let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
     let ping = ping::Behaviour::new(ping::Config::new());
@@ -401,23 +403,33 @@ async fn handle_behaviour_event(
                 .unwrap()
                 .as_millis() as i64;
             
-            for (peer_id, multiaddrs) in list {
+            for (peer_id, multiaddr) in list {
                 let peer_id_str = peer_id.to_string();
                 println!("Discovered peer: {}", peer_id_str);
+                
+                // Add peer to Kademlia routing table
+                swarm.behaviour_mut().kad.add_address(&peer_id, multiaddr.clone());
                 
                 // Check if peer already exists
                 if let Some(existing) = peers_guard.iter_mut().find(|p| p.id == peer_id_str) {
                     existing.last_seen = now;
-                    existing.multiaddrs = multiaddrs.iter().map(|m| m.to_string()).collect();
+                    if !existing.multiaddrs.contains(&multiaddr.to_string()) {
+                        existing.multiaddrs.push(multiaddr.to_string());
+                    }
                 } else {
                     let peer_info = PeerInfo {
                         id: peer_id_str.clone(),
                         address: peer_id_str.clone(),
-                        multiaddrs: multiaddrs.iter().map(|m| m.to_string()).collect(),
+                        multiaddrs: vec![multiaddr.to_string()],
                         last_seen: now,
                     };
                     peers_guard.push(peer_info);
                 }
+            }
+            
+            // Bootstrap Kademlia when we have peers
+            if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+                println!("Kademlia bootstrap error: {:?}", e);
             }
             
             // Emit event to frontend
