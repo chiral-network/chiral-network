@@ -12,7 +12,7 @@ use tauri::Emitter;
 pub struct AppState {
     pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
     pub file_transfer: Arc<Mutex<FileTransferService>>,
-    pub file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>, // hash -> file data
+    pub file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>, // hash -> file data (for local caching)
 }
 
 #[tauri::command]
@@ -21,33 +21,33 @@ async fn start_dht(
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     let mut dht_guard = state.dht.lock().await;
-    
+
     if dht_guard.is_some() {
         return Err("DHT already running".to_string());
     }
-    
+
     let dht = Arc::new(DhtService::new(state.file_transfer.clone()));
     let result = dht.start(app.clone()).await?;
     *dht_guard = Some(dht);
-    
+
     Ok(result)
 }
 
 #[tauri::command]
 async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut dht_guard = state.dht.lock().await;
-    
+
     if let Some(dht) = dht_guard.take() {
         dht.stop().await?;
     }
-    
+
     Ok(())
 }
 
 #[tauri::command]
 async fn get_dht_peers(state: tauri::State<'_, AppState>) -> Result<Vec<dht::PeerInfo>, String> {
     let dht_guard = state.dht.lock().await;
-    
+
     if let Some(dht) = dht_guard.as_ref() {
         Ok(dht.get_peers().await)
     } else {
@@ -58,7 +58,7 @@ async fn get_dht_peers(state: tauri::State<'_, AppState>) -> Result<Vec<dht::Pee
 #[tauri::command]
 async fn get_network_stats(state: tauri::State<'_, AppState>) -> Result<dht::NetworkStats, String> {
     let dht_guard = state.dht.lock().await;
-    
+
     if let Some(dht) = dht_guard.as_ref() {
         Ok(dht.get_stats().await)
     } else {
@@ -72,7 +72,7 @@ async fn get_network_stats(state: tauri::State<'_, AppState>) -> Result<dht::Net
 #[tauri::command]
 async fn get_peer_id(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
     let dht_guard = state.dht.lock().await;
-    
+
     if let Some(dht) = dht_guard.as_ref() {
         Ok(dht.get_peer_id().await)
     } else {
@@ -165,7 +165,7 @@ async fn get_dht_value(
 #[tauri::command]
 async fn get_available_storage() -> Result<u64, String> {
     // Get available disk space in MB
-    let _home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
 
     #[cfg(target_os = "linux")]
     {
@@ -190,6 +190,7 @@ async fn get_available_storage() -> Result<u64, String> {
 
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = home_dir; // Suppress warning
         // Default fallback for other platforms
         Ok(10000) // Return 10GB as default
     }
@@ -204,7 +205,7 @@ async fn get_file_size(file_path: String) -> Result<u64, String> {
 #[tauri::command]
 async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
     use rfd::FileDialog;
-    
+
     if multiple {
         let files = FileDialog::new().pick_files();
         if let Some(paths) = files {
@@ -259,16 +260,25 @@ async fn publish_file(
     let merkle_root = hex::encode(hash);
 
     println!("Publishing file: {} with hash: {}", file_name, merkle_root);
-    
-    // Store file data in memory for serving to peers
-    let mut storage = state.file_storage.lock().await;
-    storage.insert(merkle_root.clone(), file_data);
-    drop(storage);
+
+    // Store file data in memory for serving to peers (local cache)
+    {
+        let mut storage = state.file_storage.lock().await;
+        storage.insert(merkle_root.clone(), file_data);
+    }
 
     // Get DHT service and peer ID
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
         let peer_id = dht.get_peer_id().await.unwrap_or_default();
+
+        // Register the file for sharing (so we can serve it to requesters)
+        dht.register_shared_file(
+            merkle_root.clone(),
+            file_path.clone(),
+            file_name.clone(),
+            file_size,
+        ).await;
 
         // Create file metadata
         let metadata = FileMetadata {
@@ -353,52 +363,106 @@ async fn search_file(
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadStartResult {
+    request_id: String,
+    status: String,
+}
+
 #[tauri::command]
 async fn start_download(
-    state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
     file_hash: String,
     file_name: String,
     seeders: Vec<String>,
-) -> Result<(), String> {
+) -> Result<DownloadStartResult, String> {
+    // Log the download initiation
     println!("Starting download: {} (hash: {}) from {} seeders", file_name, file_hash, seeders.len());
 
-    // First, check if we have the file locally
-    let storage = state.file_storage.lock().await;
-    if let Some(file_data) = storage.get(&file_hash) {
-        println!("File found in local storage");
-        
-        // Save to downloads folder
-        let downloads_dir = dirs::download_dir()
-            .ok_or("Could not find downloads directory")?;
-        let file_path = downloads_dir.join(&file_name);
-        
-        std::fs::write(&file_path, file_data)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
-        
-        println!("File downloaded to: {:?}", file_path);
-        
-        // Emit completion event
-        let _ = app.emit("download-complete", serde_json::json!({
-            "hash": file_hash,
-            "fileName": file_name,
-            "filePath": file_path.to_string_lossy().to_string()
-        }));
-        
-        return Ok(());
+    // First, check if we have the file in local cache
+    {
+        let storage = state.file_storage.lock().await;
+        if let Some(file_data) = storage.get(&file_hash) {
+            println!("File found in local cache");
+
+            // Save to downloads folder
+            let downloads_dir = dirs::download_dir()
+                .ok_or("Could not find downloads directory")?;
+            let file_path = downloads_dir.join(&file_name);
+
+            std::fs::write(&file_path, file_data)
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+
+            println!("File downloaded to: {:?}", file_path);
+
+            // Emit completion event
+            let _ = app.emit("file-download-complete", serde_json::json!({
+                "requestId": format!("local-{}", file_hash[..8].to_string()),
+                "fileHash": file_hash,
+                "fileName": file_name,
+                "filePath": file_path.to_string_lossy().to_string(),
+                "fileSize": file_data.len(),
+                "status": "completed"
+            }));
+
+            return Ok(DownloadStartResult {
+                request_id: format!("local-{}", file_hash[..8].to_string()),
+                status: "completed".to_string(),
+            });
+        }
     }
-    drop(storage);
-    
-    // If not local, try to fetch from seeders
+
+    // If not local, request from remote seeders
     if seeders.is_empty() {
-        return Err("No seeders available".to_string());
+        return Err("No seeders available for this file".to_string());
     }
-    
-    // Try to get file from first seeder via DHT
-    // In a real implementation, this would use the file_transfer protocol
-    println!("File not found locally, would fetch from network (not yet implemented)");
-    
-    Err("Remote file download not yet implemented. File must be on the same node.".to_string())
+
+    // Get DHT service
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        // Generate a unique request ID
+        let request_id = format!("download-{}-{}", &file_hash[..8],
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis());
+
+        // Emit download started event
+        let _ = app.emit("download-started", serde_json::json!({
+            "requestId": request_id,
+            "fileHash": file_hash,
+            "fileName": file_name,
+            "seeders": seeders.len()
+        }));
+
+        // Request file from the first available seeder
+        // In a production system, we'd try multiple seeders in parallel or with fallback
+        let seeder = &seeders[0];
+        println!("Requesting file {} from seeder {}", file_hash, seeder);
+
+        match dht.request_file(seeder.clone(), file_hash.clone(), request_id.clone()).await {
+            Ok(_) => {
+                println!("File request sent successfully");
+                Ok(DownloadStartResult {
+                    request_id,
+                    status: "requesting".to_string(),
+                })
+            }
+            Err(e) => {
+                println!("Failed to request file: {}", e);
+                let _ = app.emit("file-download-failed", serde_json::json!({
+                    "requestId": request_id,
+                    "fileHash": file_hash,
+                    "error": e
+                }));
+                Err(format!("Failed to request file from seeder: {}", e))
+            }
+        }
+    } else {
+        Err("DHT not running".to_string())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
