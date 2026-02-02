@@ -351,12 +351,46 @@
     return protocol === 'WebRTC' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800';
   }
 
+  // Re-register previously shared files with the backend
+  async function reregisterSharedFiles() {
+    if (!isTauri || sharedFiles.length === 0) return;
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+
+      for (const file of sharedFiles) {
+        try {
+          await invoke('register_shared_file', {
+            fileHash: file.hash,
+            filePath: file.filePath,
+            fileName: file.name,
+            fileSize: file.size
+          });
+          console.log(`Re-registered shared file: ${file.name}`);
+        } catch (e) {
+          console.warn(`Failed to re-register file ${file.name}:`, e);
+          // File might not exist anymore, remove from list
+          if (String(e).includes('no longer exists')) {
+            sharedFiles = sharedFiles.filter(f => f.id !== file.id);
+            saveUploadHistory();
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to re-register shared files:', e);
+    }
+  }
+
   // Initialize
   $effect(() => {
     isTauri = checkTauriAvailability();
     loadUploadHistory();
     if (isTauri) {
       refreshStorage();
+      // Re-register shared files when network is connected
+      if ($networkConnected) {
+        reregisterSharedFiles();
+      }
     }
   });
 
