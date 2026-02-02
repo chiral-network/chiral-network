@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import {
     Upload,
     FolderOpen,
@@ -22,8 +23,13 @@
   import { networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
 
-  // Check if running in Tauri environment
-  const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+  // Check if running in Tauri environment (reactive)
+  let isTauri = $state(false);
+  
+  // Check Tauri availability
+  function checkTauriAvailability(): boolean {
+    return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+  }
 
   // Protocol types
   type Protocol = 'WebRTC' | 'BitTorrent';
@@ -158,8 +164,12 @@
 
   // Handle file selection
   async function openFileDialog() {
-    if (!isTauri) {
-      toasts.show('File upload requires the desktop app', 'error');
+    // Check Tauri availability at runtime
+    const tauriAvailable = checkTauriAvailability();
+    
+    if (!tauriAvailable) {
+      console.error('Tauri not detected. Window properties:', Object.keys(window).filter(k => k.includes('TAURI')));
+      toasts.show('File upload requires the desktop app. Please run with: npm run tauri:dev', 'error');
       return;
     }
 
@@ -171,8 +181,10 @@
     if (isUploading) return;
 
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selectedPaths = await open({ multiple: true }) as string[] | null;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const selectedPaths = await invoke<string[]>('open_file_dialog', { 
+        multiple: true 
+      });
 
       if (selectedPaths && selectedPaths.length > 0) {
         isUploading = true;
@@ -180,7 +192,7 @@
       }
     } catch (error) {
       console.error('File dialog error:', error);
-      toasts.show('Failed to open file dialog', 'error');
+      toasts.show(`Failed to open file dialog: ${error}`, 'error');
     } finally {
       isUploading = false;
     }
@@ -267,8 +279,13 @@
     e.preventDefault();
     isDragging = false;
 
-    if (!isTauri) {
-      toasts.show('File upload requires the desktop app', 'error');
+    const tauriAvailable = checkTauriAvailability();
+    if (!tauriAvailable) {
+      // For web browsers, use FileList from DataTransfer
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        toasts.show('File upload requires the desktop app', 'error');
+      }
       return;
     }
 
@@ -277,8 +294,10 @@
       return;
     }
 
-    // Note: In Tauri, we need to use the onDragDropEvent API for proper file paths
-    toasts.show('Please use the Add Files button to select files', 'info');
+    if (isUploading) return;
+
+    // For Tauri, the drag-drop files are handled via onDragDropEvent listener
+    // which calls processFiles directly
   }
 
   // Get protocol badge color
@@ -288,9 +307,47 @@
 
   // Initialize
   $effect(() => {
+    isTauri = checkTauriAvailability();
     loadUploadHistory();
     if (isTauri) {
       refreshStorage();
+    }
+  });
+
+  // Set up Tauri drag-drop listener
+  onMount(async () => {
+    const tauriAvailable = checkTauriAvailability();
+    if (tauriAvailable) {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const appWindow = getCurrentWindow();
+        
+        const unlisten = await appWindow.onDragDropEvent((event) => {
+          if (event.payload.type === 'drop') {
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+              if (!$networkConnected) {
+                toasts.show('Please connect to the network first', 'error');
+                return;
+              }
+              isUploading = true;
+              processFiles(paths).finally(() => {
+                isUploading = false;
+              });
+            }
+          } else if (event.payload.type === 'enter') {
+            isDragging = true;
+          } else if (event.payload.type === 'leave' || event.payload.type === 'cancel') {
+            isDragging = false;
+          }
+        });
+
+        return () => {
+          unlisten();
+        };
+      } catch (error) {
+        console.error('Failed to setup drag-drop listener:', error);
+      }
     }
   });
 </script>

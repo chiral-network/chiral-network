@@ -27,8 +27,13 @@
   import { toasts } from '$lib/toastStore';
   import { dhtService } from '$lib/dhtService';
 
-  // Check if running in Tauri environment
-  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  // Check if running in Tauri environment (reactive)
+  let isTauri = $state(false);
+  
+  // Check Tauri availability
+  function checkTauriAvailability(): boolean {
+    return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+  }
 
   let showHistory = $state(false);
   let fileInput = $state<HTMLInputElement>();
@@ -52,6 +57,9 @@
 
   onMount(async () => {
     animate();
+    
+    // Check Tauri availability
+    isTauri = checkTauriAvailability();
 
     // Get our local peer ID for consistent alias
     if (isTauri) {
@@ -186,7 +194,8 @@
       timestamp: Date.now()
     });
 
-    if (!isTauri) {
+    const tauriAvailable = checkTauriAvailability();
+    if (!tauriAvailable) {
       toasts.show('File transfer requires the desktop app', 'error');
       updateTransferStatus(transferId, 'failed');
       selectPeer(null);
@@ -220,7 +229,8 @@
   }
 
   async function handleAccept(transfer: FileTransfer) {
-    if (!isTauri) {
+    const tauriAvailable = checkTauriAvailability();
+    if (!tauriAvailable) {
       toasts.show('File transfer requires the desktop app', 'error');
       return;
     }
@@ -238,7 +248,8 @@
   }
 
   async function handleDecline(transfer: FileTransfer) {
-    if (!isTauri) {
+    const tauriAvailable = checkTauriAvailability();
+    if (!tauriAvailable) {
       declineTransfer(transfer.id);
       return;
     }
