@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
-  import { isAuthenticated } from '$lib/stores';
+  import { isAuthenticated, isDarkMode } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import Navbar from '$lib/components/Navbar.svelte';
   import Toast from '$lib/components/Toast.svelte';
@@ -12,8 +12,19 @@
   import NetworkPage from './pages/Network.svelte';
   import MiningPage from './pages/Mining.svelte';
   import SettingsPage from './pages/Settings.svelte';
-  
+
   let currentPath = $state('/wallet');
+
+  // Apply dark mode class to document
+  $effect(() => {
+    if (typeof document !== 'undefined') {
+      if ($isDarkMode) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    }
+  });
   
   const authenticatedRoutes: RouteConfig[] = [
     {
@@ -82,12 +93,14 @@
 </script>
 
 {#if $isAuthenticated}
-  <div class="min-h-screen bg-gray-50">
+  <div class="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
     <Navbar currentPage={currentPath} />
     <Router routes={authenticatedRoutes} />
   </div>
 {:else}
-  <Router routes={unauthenticatedRoutes} />
+  <div class="dark:bg-gray-900 min-h-screen transition-colors">
+    <Router routes={unauthenticatedRoutes} />
+  </div>
 {/if}
 
 <!-- Toast notifications -->
