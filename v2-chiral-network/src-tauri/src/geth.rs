@@ -298,7 +298,12 @@ impl GethProcess {
     }
 
     /// Get the genesis.json content for Chiral Network
+    /// Pre-allocates 1 CHR (1e18 wei) to common test addresses for development
     fn get_genesis_json() -> String {
+        // Pre-allocate balance to a dev faucet address for testing
+        // This faucet address can distribute CHR to new users
+        // Faucet address: 0x0000000000000000000000000000000000001337
+        // Each allocation is 1000 CHR (1000 * 10^18 wei = 0x3635c9adc5dea00000)
         serde_json::json!({
             "config": {
                 "chainId": CHAIN_ID,
@@ -314,9 +319,15 @@ impl GethProcess {
                 "londonBlock": 0,
                 "ethash": {}
             },
-            "difficulty": "0x400",
+            "difficulty": "0x100",  // Lower difficulty for faster initial mining
             "gasLimit": "0x1C9C380",
-            "alloc": {}
+            "alloc": {
+                // Dev faucet address - 10000 CHR for testing
+                "0x0000000000000000000000000000000000001337": {
+                    "balance": "0x21e19e0c9bab2400000"  // 10000 CHR in wei
+                }
+            },
+            "extraData": "0x43686972616c204e6574776f726b2047656e65736973"  // "Chiral Network Genesis" in hex
         }).to_string()
     }
 
