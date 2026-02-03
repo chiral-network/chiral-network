@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use tauri::Emitter;
 use secp256k1::{Secp256k1, SecretKey, Message};
 use tiny_keccak::{Hasher, Keccak};
+use rlp::RlpStream;
 
 pub struct AppState {
     pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
@@ -853,81 +854,58 @@ fn parse_hex_u64(hex: &str) -> u64 {
     u64::from_str_radix(hex, 16).unwrap_or(0)
 }
 
-/// RLP encode a single value
-fn rlp_encode_value(value: &[u8]) -> Vec<u8> {
-    if value.is_empty() {
-        vec![0x80]
-    } else if value.len() == 1 && value[0] < 0x80 {
-        value.to_vec()
-    } else if value.len() < 56 {
-        let mut result = vec![0x80 + value.len() as u8];
-        result.extend_from_slice(value);
-        result
-    } else {
-        let len_bytes = {
-            let mut len = value.len();
-            let mut bytes = Vec::new();
-            while len > 0 {
-                bytes.push((len & 0xff) as u8);
-                len >>= 8;
-            }
-            bytes.reverse();
-            bytes
-        };
-        let mut result = vec![0xb7 + len_bytes.len() as u8];
-        result.extend_from_slice(&len_bytes);
-        result.extend_from_slice(value);
-        result
-    }
+/// Parse hex string to u128
+fn parse_hex_u128(hex: &str) -> u128 {
+    let hex = hex.trim_start_matches("0x");
+    u128::from_str_radix(hex, 16).unwrap_or(0)
 }
 
-/// RLP encode a list
-fn rlp_encode_list(items: Vec<Vec<u8>>) -> Vec<u8> {
-    let mut payload = Vec::new();
-    for item in items {
-        payload.extend(item);
-    }
-
-    if payload.len() < 56 {
-        let mut result = vec![0xc0 + payload.len() as u8];
-        result.extend(payload);
-        result
-    } else {
-        let len_bytes = {
-            let mut len = payload.len();
-            let mut bytes = Vec::new();
-            while len > 0 {
-                bytes.push((len & 0xff) as u8);
-                len >>= 8;
-            }
-            bytes.reverse();
-            bytes
-        };
-        let mut result = vec![0xf7 + len_bytes.len() as u8];
-        result.extend_from_slice(&len_bytes);
-        result.extend(payload);
-        result
-    }
+/// Encode unsigned transaction for signing (EIP-155)
+fn encode_unsigned_tx(
+    nonce: u64,
+    gas_price: u128,
+    gas_limit: u64,
+    to: &[u8],
+    value: u128,
+    data: &[u8],
+    chain_id: u64,
+) -> Vec<u8> {
+    let mut stream = RlpStream::new_list(9);
+    stream.append(&nonce);
+    stream.append(&gas_price);
+    stream.append(&gas_limit);
+    stream.append(&to.to_vec());
+    stream.append(&value);
+    stream.append(&data.to_vec());
+    stream.append(&chain_id);
+    stream.append(&0u8); // empty for EIP-155
+    stream.append(&0u8); // empty for EIP-155
+    stream.out().to_vec()
 }
 
-/// Convert u64 to minimal bytes (no leading zeros)
-fn u64_to_bytes(value: u64) -> Vec<u8> {
-    if value == 0 {
-        return vec![];
-    }
-    let bytes = value.to_be_bytes();
-    let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
-    bytes[start..].to_vec()
-}
-
-/// Convert u128 to minimal bytes (no leading zeros)
-fn u128_to_bytes(value: u128) -> Vec<u8> {
-    if value == 0 {
-        return vec![];
-    }
-    let bytes = value.to_be_bytes();
-    let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
-    bytes[start..].to_vec()
+/// Encode signed transaction
+fn encode_signed_tx(
+    nonce: u64,
+    gas_price: u128,
+    gas_limit: u64,
+    to: &[u8],
+    value: u128,
+    data: &[u8],
+    v: u64,
+    r: &[u8],
+    s: &[u8],
+) -> Vec<u8> {
+    let mut stream = RlpStream::new_list(9);
+    stream.append(&nonce);
+    stream.append(&gas_price);
+    stream.append(&gas_limit);
+    stream.append(&to.to_vec());
+    stream.append(&value);
+    stream.append(&data.to_vec());
+    stream.append(&v);
+    stream.append(&r.to_vec());
+    stream.append(&s.to_vec());
+    stream.out().to_vec()
 }
 
 /// Send a transaction from one address to another (signs locally)
@@ -1002,23 +980,22 @@ async fn send_transaction(
 
     let gas_limit: u64 = 21000; // Standard transfer
     let chain_id: u64 = geth::CHAIN_ID;
+    let gas_price_u128 = gas_price as u128;
 
     // Parse to address
     let to_bytes = hex::decode(to_address.trim_start_matches("0x"))
         .map_err(|e| format!("Invalid to address: {}", e))?;
 
-    // RLP encode for signing (EIP-155): [nonce, gasPrice, gasLimit, to, value, data, chainId, 0, 0]
-    let unsigned_tx = rlp_encode_list(vec![
-        rlp_encode_value(&u64_to_bytes(nonce)),
-        rlp_encode_value(&u64_to_bytes(gas_price)),
-        rlp_encode_value(&u64_to_bytes(gas_limit)),
-        rlp_encode_value(&to_bytes),
-        rlp_encode_value(&u128_to_bytes(amount_wei)),
-        rlp_encode_value(&[]), // data (empty for simple transfer)
-        rlp_encode_value(&u64_to_bytes(chain_id)),
-        rlp_encode_value(&[]), // empty for EIP-155
-        rlp_encode_value(&[]), // empty for EIP-155
-    ]);
+    // RLP encode for signing (EIP-155)
+    let unsigned_tx = encode_unsigned_tx(
+        nonce,
+        gas_price_u128,
+        gas_limit,
+        &to_bytes,
+        amount_wei,
+        &[], // empty data for simple transfer
+        chain_id,
+    );
 
     // Hash the unsigned transaction
     let tx_hash = keccak256(&unsigned_tx);
@@ -1038,24 +1015,30 @@ async fn send_transaction(
     let r = &signature[0..32];
     let s = &signature[32..64];
 
-    // Trim leading zeros from r and s
-    let r_trimmed: Vec<u8> = r.iter().skip_while(|&&b| b == 0).copied().collect();
-    let s_trimmed: Vec<u8> = s.iter().skip_while(|&&b| b == 0).copied().collect();
-
-    // RLP encode signed transaction: [nonce, gasPrice, gasLimit, to, value, data, v, r, s]
-    let signed_tx = rlp_encode_list(vec![
-        rlp_encode_value(&u64_to_bytes(nonce)),
-        rlp_encode_value(&u64_to_bytes(gas_price)),
-        rlp_encode_value(&u64_to_bytes(gas_limit)),
-        rlp_encode_value(&to_bytes),
-        rlp_encode_value(&u128_to_bytes(amount_wei)),
-        rlp_encode_value(&[]), // data
-        rlp_encode_value(&u64_to_bytes(v)),
-        rlp_encode_value(if r_trimmed.is_empty() { &[0u8] } else { &r_trimmed }),
-        rlp_encode_value(if s_trimmed.is_empty() { &[0u8] } else { &s_trimmed }),
-    ]);
+    // RLP encode signed transaction
+    let signed_tx = encode_signed_tx(
+        nonce,
+        gas_price_u128,
+        gas_limit,
+        &to_bytes,
+        amount_wei,
+        &[], // data
+        v,
+        r,
+        s,
+    );
 
     let signed_tx_hex = format!("0x{}", hex::encode(&signed_tx));
+
+    println!("📤 Sending transaction:");
+    println!("   From: {}", from_address);
+    println!("   To: {}", to_address);
+    println!("   Amount: {} CHR ({} wei)", amount, amount_wei);
+    println!("   Nonce: {}", nonce);
+    println!("   Gas Price: {}", gas_price);
+    println!("   Chain ID: {}", chain_id);
+    println!("   V: {}", v);
+    println!("   Signed TX: {}...", &signed_tx_hex[..66.min(signed_tx_hex.len())]);
 
     // Send the raw transaction
     let send_payload = serde_json::json!({
@@ -1075,6 +1058,8 @@ async fn send_transaction(
     let send_json: serde_json::Value = send_response.json().await
         .map_err(|e| format!("Failed to parse send response: {}", e))?;
 
+    println!("📥 RPC Response: {}", send_json);
+
     if let Some(error) = send_json.get("error") {
         return Err(format!("Transaction failed: {}", error));
     }
@@ -1083,6 +1068,37 @@ async fn send_transaction(
         .as_str()
         .ok_or("No transaction hash in response")?
         .to_string();
+
+    println!("✅ Transaction submitted: {}", tx_hash);
+
+    // Wait a moment and check if transaction is pending
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Check transaction status
+    let receipt_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionReceipt",
+        "params": [&tx_hash],
+        "id": 1
+    });
+
+    let receipt_response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&receipt_payload)
+        .send()
+        .await;
+
+    if let Ok(resp) = receipt_response {
+        if let Ok(receipt_json) = resp.json::<serde_json::Value>().await {
+            if receipt_json["result"].is_null() {
+                println!("⏳ Transaction pending (not yet mined). Make sure mining is running!");
+            } else {
+                let status = receipt_json["result"]["status"].as_str().unwrap_or("unknown");
+                let block = receipt_json["result"]["blockNumber"].as_str().unwrap_or("unknown");
+                println!("📦 Transaction mined in block {} with status {}", block, status);
+            }
+        }
+    }
 
     Ok(SendTransactionResult {
         hash: tx_hash,
