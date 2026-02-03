@@ -10,14 +10,16 @@
     Square,
     Radio,
     Server,
-    Cpu,
     Download,
     RefreshCw,
     AlertTriangle,
     Check,
     Loader2,
     Globe,
-    Zap
+    Zap,
+    Activity,
+    ChevronDown,
+    ChevronUp
   } from 'lucide-svelte';
 
   // Types
@@ -38,6 +40,25 @@
     status: string;
   }
 
+  interface NodeHealth {
+    enode: string;
+    name: string;
+    region: string;
+    reachable: boolean;
+    latencyMs: number | null;
+    error: string | null;
+    lastChecked: number;
+  }
+
+  interface BootstrapHealthReport {
+    totalNodes: number;
+    healthyNodes: number;
+    nodes: NodeHealth[];
+    timestamp: number;
+    isHealthy: boolean;
+    healthyEnodeString: string;
+  }
+
   // DHT State
   let isConnecting = $state(false);
   let error = $state('');
@@ -52,6 +73,11 @@
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
   let unlistenDownload: (() => void) | null = null;
 
+  // Bootstrap Health State
+  let bootstrapHealth = $state<BootstrapHealthReport | null>(null);
+  let isCheckingBootstrap = $state(false);
+  let showBootstrapDetails = $state(false);
+
   // Check if Tauri is available
   function isTauri(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -60,6 +86,7 @@
   onMount(async () => {
     if (isTauri()) {
       await loadGethStatus();
+      await loadBootstrapHealth();
 
       // Set up download progress listener
       unlistenDownload = await listen<DownloadProgress>('geth-download-progress', (event) => {
@@ -168,6 +195,34 @@
     } catch (err) {
       console.error('Failed to stop Geth:', err);
       toasts.show(`Failed to stop node: ${err}`, 'error');
+    }
+  }
+
+  // Check bootstrap node health
+  async function checkBootstrapHealth() {
+    if (!isTauri()) return;
+
+    isCheckingBootstrap = true;
+    try {
+      bootstrapHealth = await invoke<BootstrapHealthReport>('check_bootstrap_health');
+    } catch (err) {
+      console.error('Failed to check bootstrap health:', err);
+    } finally {
+      isCheckingBootstrap = false;
+    }
+  }
+
+  // Load cached bootstrap health (fast, no network calls)
+  async function loadBootstrapHealth() {
+    if (!isTauri()) return;
+
+    try {
+      const cached = await invoke<BootstrapHealthReport | null>('get_bootstrap_health');
+      if (cached) {
+        bootstrapHealth = cached;
+      }
+    } catch (err) {
+      console.debug('No cached bootstrap health available');
     }
   }
 
@@ -383,6 +438,84 @@
           </p>
         </div>
       {/if}
+
+      <!-- Bootstrap Node Health -->
+      <div class="mt-4 border-t border-gray-200 pt-4">
+        <button
+          onclick={() => showBootstrapDetails = !showBootstrapDetails}
+          class="w-full flex items-center justify-between text-left"
+        >
+          <div class="flex items-center gap-2">
+            <Activity class="w-4 h-4 text-gray-500" />
+            <span class="text-sm font-medium text-gray-700">Bootstrap Nodes</span>
+            {#if bootstrapHealth}
+              <span class="px-2 py-0.5 text-xs rounded-full {bootstrapHealth.isHealthy ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+                {bootstrapHealth.healthyNodes}/{bootstrapHealth.totalNodes} healthy
+              </span>
+            {/if}
+          </div>
+          {#if showBootstrapDetails}
+            <ChevronUp class="w-4 h-4 text-gray-400" />
+          {:else}
+            <ChevronDown class="w-4 h-4 text-gray-400" />
+          {/if}
+        </button>
+
+        {#if showBootstrapDetails}
+          <div class="mt-3 space-y-2">
+            <div class="flex justify-end mb-2">
+              <button
+                onclick={checkBootstrapHealth}
+                disabled={isCheckingBootstrap}
+                class="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+              >
+                {#if isCheckingBootstrap}
+                  <Loader2 class="w-3 h-3 animate-spin" />
+                {:else}
+                  <RefreshCw class="w-3 h-3" />
+                {/if}
+                Check Health
+              </button>
+            </div>
+
+            {#if bootstrapHealth}
+              {#each bootstrapHealth.nodes as node}
+                <div class="flex items-center justify-between p-2 bg-gray-50 rounded-lg text-sm">
+                  <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'}"></div>
+                    <div>
+                      <span class="font-medium">{node.name}</span>
+                      <span class="text-gray-500 text-xs ml-1">({node.region})</span>
+                    </div>
+                  </div>
+                  <div class="text-right">
+                    {#if node.reachable && node.latencyMs}
+                      <span class="text-green-600">{node.latencyMs}ms</span>
+                    {:else if node.error}
+                      <span class="text-red-500 text-xs">{node.error}</span>
+                    {:else}
+                      <span class="text-gray-400">—</span>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+
+              {#if !bootstrapHealth.isHealthy}
+                <div class="p-2 bg-red-50 border border-red-200 rounded-lg">
+                  <p class="text-xs text-red-700">
+                    <strong>Warning:</strong> Not enough bootstrap nodes are reachable.
+                    Peer discovery may be limited.
+                  </p>
+                </div>
+              {/if}
+            {:else}
+              <p class="text-xs text-gray-500 text-center py-2">
+                Click "Check Health" to test bootstrap node connectivity
+              </p>
+            {/if}
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 
