@@ -10,6 +10,7 @@
   import ChiralDropPage from './pages/ChiralDrop.svelte';
   import AccountPage from './pages/Account.svelte';
   import NetworkPage from './pages/Network.svelte';
+  import MiningPage from './pages/Mining.svelte';
   import SettingsPage from './pages/Settings.svelte';
   
   let currentPath = $state('/wallet');
@@ -34,6 +35,10 @@
     {
       path: '/network',
       component: NetworkPage
+    },
+    {
+      path: '/mining',
+      component: MiningPage
     },
     {
       path: '/settings',
