@@ -1,24 +1,20 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
+  import { goto } from '@mateothegreat/svelte5-router';
   import { walletAccount } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import {
     Pickaxe,
-    Play,
     Square,
-    Cpu,
     Zap,
     TrendingUp,
-    Clock,
     RefreshCw,
-    Download,
     AlertTriangle,
     Check,
     Loader2,
-    Settings,
-    BarChart3
+    BarChart3,
+    Globe
   } from 'lucide-svelte';
 
   // Types
@@ -38,25 +34,14 @@
     minerAddress: string | null;
   }
 
-  interface DownloadProgress {
-    downloaded: number;
-    total: number;
-    percentage: number;
-    status: string;
-  }
-
   // State
   let gethStatus = $state<GethStatus | null>(null);
   let miningStatus = $state<MiningStatus | null>(null);
   let isLoading = $state(true);
-  let isStartingGeth = $state(false);
   let isStartingMining = $state(false);
-  let isDownloading = $state(false);
-  let downloadProgress = $state<DownloadProgress | null>(null);
   let miningThreads = $state(1);
   let maxThreads = $state(navigator.hardwareConcurrency || 4);
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
-  let unlistenDownload: (() => void) | null = null;
 
   // Check if Tauri is available
   function isTauri(): boolean {
@@ -68,15 +53,6 @@
     if (isTauri()) {
       await loadStatus();
 
-      // Set up download progress listener
-      unlistenDownload = await listen<DownloadProgress>('geth-download-progress', (event) => {
-        downloadProgress = event.payload;
-        if (event.payload.percentage >= 100) {
-          isDownloading = false;
-          loadStatus();
-        }
-      });
-
       // Refresh status every 5 seconds
       refreshInterval = setInterval(loadStatus, 5000);
     }
@@ -87,14 +63,22 @@
     if (refreshInterval) {
       clearInterval(refreshInterval);
     }
-    if (unlistenDownload) {
-      unlistenDownload();
-    }
   });
 
   // Load Geth and mining status
   async function loadStatus() {
-    if (!isTauri()) return;
+    if (!isTauri()) {
+      gethStatus = {
+        installed: false,
+        running: false,
+        syncing: false,
+        currentBlock: 0,
+        highestBlock: 0,
+        peerCount: 0,
+        chainId: 0
+      };
+      return;
+    }
 
     try {
       const [geth, mining] = await Promise.all([
@@ -106,56 +90,16 @@
       miningStatus = mining;
     } catch (error) {
       console.error('Failed to load status:', error);
-    }
-  }
-
-  // Download Geth
-  async function handleDownloadGeth() {
-    if (!isTauri()) return;
-
-    isDownloading = true;
-    downloadProgress = { downloaded: 0, total: 0, percentage: 0, status: 'Starting download...' };
-
-    try {
-      await invoke('download_geth');
-      toasts.show('Geth downloaded successfully!', 'success');
-      await loadStatus();
-    } catch (error) {
-      console.error('Failed to download Geth:', error);
-      toasts.show(`Download failed: ${error}`, 'error');
-    } finally {
-      isDownloading = false;
-    }
-  }
-
-  // Start Geth
-  async function handleStartGeth() {
-    if (!isTauri() || !$walletAccount) return;
-
-    isStartingGeth = true;
-    try {
-      await invoke('start_geth', { minerAddress: $walletAccount.address });
-      toasts.show('Geth started successfully!', 'success');
-      await loadStatus();
-    } catch (error) {
-      console.error('Failed to start Geth:', error);
-      toasts.show(`Failed to start Geth: ${error}`, 'error');
-    } finally {
-      isStartingGeth = false;
-    }
-  }
-
-  // Stop Geth
-  async function handleStopGeth() {
-    if (!isTauri()) return;
-
-    try {
-      await invoke('stop_geth');
-      toasts.show('Geth stopped', 'info');
-      await loadStatus();
-    } catch (error) {
-      console.error('Failed to stop Geth:', error);
-      toasts.show(`Failed to stop Geth: ${error}`, 'error');
+      // Set default status on error
+      gethStatus = {
+        installed: false,
+        running: false,
+        syncing: false,
+        currentBlock: 0,
+        highestBlock: 0,
+        peerCount: 0,
+        chainId: 0
+      };
     }
   }
 
@@ -202,14 +146,6 @@
     if (rate >= 1e3) return `${(rate / 1e3).toFixed(2)} KH/s`;
     return `${rate} H/s`;
   }
-
-  // Format bytes
-  function formatBytes(bytes: number): string {
-    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
-    if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(2)} MB`;
-    if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(2)} KB`;
-    return `${bytes} B`;
-  }
 </script>
 
 <div class="p-6 space-y-6 max-w-4xl mx-auto">
@@ -232,133 +168,46 @@
     <div class="flex items-center justify-center py-12">
       <Loader2 class="w-8 h-8 animate-spin text-gray-400" />
     </div>
-  {:else}
-    <!-- Geth Status Card -->
+  {:else if !gethStatus?.installed || !gethStatus?.running}
+    <!-- Geth Not Running - Direct to Network Page -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div class="p-2 bg-blue-100 rounded-lg">
-            <Cpu class="w-6 h-6 text-blue-600" />
-          </div>
-          <div>
-            <h2 class="font-semibold">Blockchain Node (Geth)</h2>
-            <p class="text-sm text-gray-500">Core-Geth for Chiral Network</p>
-          </div>
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2 bg-yellow-100 rounded-lg">
+          <AlertTriangle class="w-6 h-6 text-yellow-600" />
         </div>
-        <div class="flex items-center gap-2">
-          {#if gethStatus?.running}
-            <span class="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
-              <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-              Running
-            </span>
-          {:else if gethStatus?.installed}
-            <span class="flex items-center gap-2 px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
-              <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
-              Stopped
-            </span>
-          {:else}
-            <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-sm">
-              <AlertTriangle class="w-4 h-4" />
-              Not Installed
-            </span>
-          {/if}
+        <div>
+          <h2 class="font-semibold">Blockchain Node Required</h2>
+          <p class="text-sm text-gray-500">
+            {#if !gethStatus?.installed}
+              Geth is not installed
+            {:else}
+              Geth is not running
+            {/if}
+          </p>
         </div>
       </div>
-
-      {#if !gethStatus?.installed}
-        <!-- Download Geth Section -->
-        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-          <div class="flex items-start gap-3">
-            <AlertTriangle class="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <p class="font-medium text-yellow-800">Geth Not Installed</p>
-              <p class="text-sm text-yellow-700 mt-1">
-                You need to download Core-Geth to mine on the Chiral Network.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {#if isDownloading && downloadProgress}
-          <div class="space-y-2">
-            <div class="flex justify-between text-sm">
-              <span>{downloadProgress.status}</span>
-              <span>{downloadProgress.percentage.toFixed(1)}%</span>
-            </div>
-            <div class="w-full bg-gray-200 rounded-full h-2">
-              <div
-                class="bg-blue-600 h-2 rounded-full transition-all"
-                style="width: {downloadProgress.percentage}%"
-              ></div>
-            </div>
-            {#if downloadProgress.total > 0}
-              <p class="text-xs text-gray-500 text-right">
-                {formatBytes(downloadProgress.downloaded)} / {formatBytes(downloadProgress.total)}
-              </p>
-            {/if}
-          </div>
-        {:else}
-          <button
-            onclick={handleDownloadGeth}
-            disabled={isDownloading}
-            class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            <Download class="w-5 h-5" />
-            Download Geth
-          </button>
-        {/if}
-      {:else}
-        <!-- Geth Stats -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          <div class="bg-gray-50 rounded-lg p-3">
-            <p class="text-xs text-gray-500">Block Height</p>
-            <p class="text-lg font-bold">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
-          </div>
-          <div class="bg-gray-50 rounded-lg p-3">
-            <p class="text-xs text-gray-500">Peers</p>
-            <p class="text-lg font-bold">{gethStatus?.peerCount || 0}</p>
-          </div>
-          <div class="bg-gray-50 rounded-lg p-3">
-            <p class="text-xs text-gray-500">Chain ID</p>
-            <p class="text-lg font-bold">{gethStatus?.chainId || 'N/A'}</p>
-          </div>
-          <div class="bg-gray-50 rounded-lg p-3">
-            <p class="text-xs text-gray-500">Sync Status</p>
-            <p class="text-lg font-bold">{gethStatus?.syncing ? 'Syncing' : 'Synced'}</p>
-          </div>
-        </div>
-
-        <!-- Geth Controls -->
-        <div class="flex gap-3">
-          {#if gethStatus?.running}
-            <button
-              onclick={handleStopGeth}
-              class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
-            >
-              <Square class="w-4 h-4" />
-              Stop Geth
-            </button>
+      <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+        <p class="text-sm text-yellow-800">
+          {#if !gethStatus?.installed}
+            You need to download and start Geth before you can mine CHR tokens.
           {:else}
-            <button
-              onclick={handleStartGeth}
-              disabled={isStartingGeth}
-              class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              {#if isStartingGeth}
-                <Loader2 class="w-4 h-4 animate-spin" />
-                Starting...
-              {:else}
-                <Play class="w-4 h-4" />
-                Start Geth
-              {/if}
-            </button>
+            You need to start Geth before you can mine CHR tokens.
           {/if}
-        </div>
-      {/if}
+        </p>
+        <p class="text-sm text-yellow-700 mt-2">
+          Go to the <strong>Network</strong> page to manage your blockchain node connection.
+        </p>
+      </div>
+      <button
+        onclick={() => goto('/network')}
+        class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+      >
+        <Globe class="w-5 h-5" />
+        Go to Network Page
+      </button>
     </div>
-
-    <!-- Mining Control Card -->
-    {#if gethStatus?.installed && gethStatus?.running}
+  {:else}
+    <!-- Mining Control Card - Geth is installed and running -->
       <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
@@ -454,25 +303,6 @@
           {/if}
         </div>
       </div>
-    {:else if gethStatus?.installed}
-      <!-- Geth Not Running Warning -->
-      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-gray-100 rounded-lg">
-            <Pickaxe class="w-6 h-6 text-gray-400" />
-          </div>
-          <div>
-            <h2 class="font-semibold text-gray-700">Mining</h2>
-            <p class="text-sm text-gray-500">Start Geth to begin mining</p>
-          </div>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-4 text-center text-gray-500">
-          <AlertTriangle class="w-8 h-8 mx-auto mb-2 opacity-50" />
-          <p>Geth must be running to mine CHR tokens.</p>
-          <p class="text-sm">Start Geth above to enable mining.</p>
-        </div>
-      </div>
-    {/if}
 
     <!-- Info Card -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
