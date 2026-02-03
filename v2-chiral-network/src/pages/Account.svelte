@@ -256,12 +256,12 @@
 <div class="p-6 space-y-6">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold">Account</h1>
-      <p class="text-gray-600 mt-1">Manage your wallet and account settings</p>
+      <h1 class="text-3xl font-bold dark:text-white">Account</h1>
+      <p class="text-gray-600 dark:text-gray-400 mt-1">Manage your wallet and account settings</p>
     </div>
     <button
       onclick={() => showLogoutModal = true}
-      class="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+      class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
     >
       <LogOut class="w-5 h-5" />
       Logout
@@ -270,7 +270,7 @@
 
   {#if $walletAccount}
     <!-- Wallet Overview Card -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
       <div class="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
@@ -321,24 +321,24 @@
         <!-- Wallet Address Section -->
         <div>
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm font-medium text-gray-700">Wallet Address</span>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Wallet Address</span>
           </div>
           <div class="flex items-center gap-2">
             <input
               type="text"
               readonly
               value={$walletAccount.address}
-              class="flex-1 px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg font-mono text-sm"
+              class="flex-1 px-4 py-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm dark:text-gray-200"
             />
             <button
               onclick={() => copyToClipboard($walletAccount!.address, 'address')}
-              class="p-3 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
+              class="p-3 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors border border-gray-200 dark:border-gray-600"
               title="Copy address"
             >
               {#if copied === 'address'}
-                <Check class="w-5 h-5 text-green-600" />
+                <Check class="w-5 h-5 text-green-600 dark:text-green-400" />
               {:else}
-                <Copy class="w-5 h-5 text-gray-600" />
+                <Copy class="w-5 h-5 text-gray-600 dark:text-gray-400" />
               {/if}
             </button>
           </div>
@@ -347,16 +347,16 @@
         <!-- Private Key Section -->
         <div>
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm font-medium text-gray-700 flex items-center gap-2">
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
               <Key class="w-4 h-4" />
               Private Key
             </span>
           </div>
 
-          <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
+          <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 mb-3">
             <div class="flex items-start gap-2">
-              <AlertTriangle class="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-              <p class="text-sm text-yellow-800">
+              <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+              <p class="text-sm text-yellow-800 dark:text-yellow-300">
                 <strong>Security Warning:</strong> Never share your private key with anyone. Anyone with your private key can access your wallet and all its contents.
               </p>
             </div>
@@ -368,29 +368,29 @@
                 type={privateKeyVisible ? 'text' : 'password'}
                 readonly
                 value={$walletAccount.privateKey}
-                class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg font-mono text-sm pr-12"
+                class="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm pr-12 dark:text-gray-200"
               />
               <button
                 onclick={() => privateKeyVisible = !privateKeyVisible}
-                class="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 rounded transition-colors"
+                class="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
                 title={privateKeyVisible ? 'Hide private key' : 'Show private key'}
               >
                 {#if privateKeyVisible}
-                  <EyeOff class="w-5 h-5 text-gray-600" />
+                  <EyeOff class="w-5 h-5 text-gray-600 dark:text-gray-400" />
                 {:else}
-                  <Eye class="w-5 h-5 text-gray-600" />
+                  <Eye class="w-5 h-5 text-gray-600 dark:text-gray-400" />
                 {/if}
               </button>
             </div>
             <button
               onclick={() => copyToClipboard($walletAccount!.privateKey, 'privateKey')}
-              class="p-3 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
+              class="p-3 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors border border-gray-200 dark:border-gray-600"
               title="Copy private key"
             >
               {#if copied === 'privateKey'}
-                <Check class="w-5 h-5 text-green-600" />
+                <Check class="w-5 h-5 text-green-600 dark:text-green-400" />
               {:else}
-                <Copy class="w-5 h-5 text-gray-600" />
+                <Copy class="w-5 h-5 text-gray-600 dark:text-gray-400" />
               {/if}
             </button>
           </div>
@@ -401,36 +401,36 @@
     <!-- Balance & Export Section -->
     <div class="grid md:grid-cols-2 gap-6">
       <!-- Balance Info Card -->
-      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
         <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-yellow-100 rounded-lg">
-            <Coins class="w-6 h-6 text-yellow-600" />
+          <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
+            <Coins class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
           </div>
           <div>
-            <h3 class="font-semibold">CHR Token</h3>
-            <p class="text-sm text-gray-500">Chiral Network native token</p>
+            <h3 class="font-semibold dark:text-white">CHR Token</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Chiral Network native token</p>
           </div>
         </div>
         <div class="space-y-3">
-          <div class="flex justify-between items-center py-2 border-b border-gray-100">
-            <span class="text-sm text-gray-600">Available Balance</span>
-            <span class="font-medium">{formatBalance(balance)} CHR</span>
+          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
+            <span class="text-sm text-gray-600 dark:text-gray-400">Available Balance</span>
+            <span class="font-medium dark:text-white">{formatBalance(balance)} CHR</span>
           </div>
-          <div class="flex justify-between items-center py-2 border-b border-gray-100">
-            <span class="text-sm text-gray-600">Network</span>
-            <span class="font-medium">Chiral Mainnet</span>
+          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
+            <span class="text-sm text-gray-600 dark:text-gray-400">Network</span>
+            <span class="font-medium dark:text-white">Chiral Mainnet</span>
           </div>
           <div class="flex justify-between items-center py-2">
-            <span class="text-sm text-gray-600">Token Symbol</span>
-            <span class="font-medium">CHR</span>
+            <span class="text-sm text-gray-600 dark:text-gray-400">Token Symbol</span>
+            <span class="font-medium dark:text-white">CHR</span>
           </div>
         </div>
 
         <!-- Get Test CHR Info -->
         {#if parseFloat(balance) === 0}
-          <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <p class="text-sm text-yellow-800 font-medium mb-1">Need test CHR?</p>
-            <p class="text-xs text-yellow-700">
+          <div class="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+            <p class="text-sm text-yellow-800 dark:text-yellow-300 font-medium mb-1">Need test CHR?</p>
+            <p class="text-xs text-yellow-700 dark:text-yellow-400">
               Go to the <strong>Mining</strong> page to start Geth and mine blocks.
               Block rewards will be sent to your wallet address.
             </p>
@@ -439,17 +439,17 @@
       </div>
 
       <!-- Export Wallet Card -->
-      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
         <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-green-100 rounded-lg">
-            <Download class="w-6 h-6 text-green-600" />
+          <div class="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
+            <Download class="w-6 h-6 text-green-600 dark:text-green-400" />
           </div>
           <div>
-            <h3 class="font-semibold">Export Wallet</h3>
-            <p class="text-sm text-gray-500">Download your wallet backup</p>
+            <h3 class="font-semibold dark:text-white">Export Wallet</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Download your wallet backup</p>
           </div>
         </div>
-        <p class="text-sm text-gray-600 mb-4">
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
           Export your wallet to a JSON file for backup. Keep this file secure and never share it.
         </p>
         <button
@@ -463,15 +463,15 @@
     </div>
 
     <!-- Send CHR Card -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <div class="p-2 bg-blue-100 rounded-lg">
-            <Send class="w-6 h-6 text-blue-600" />
+          <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+            <Send class="w-6 h-6 text-blue-600 dark:text-blue-400" />
           </div>
           <div>
-            <h3 class="font-semibold">Send CHR</h3>
-            <p class="text-sm text-gray-500">Transfer CHR to another address</p>
+            <h3 class="font-semibold dark:text-white">Send CHR</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Transfer CHR to another address</p>
           </div>
         </div>
         <button
@@ -485,21 +485,21 @@
     </div>
 
     <!-- Transaction History Card -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <div class="p-2 bg-indigo-100 rounded-lg">
-            <History class="w-6 h-6 text-indigo-600" />
+          <div class="p-2 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg">
+            <History class="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
           </div>
           <div>
-            <h3 class="font-semibold">Transaction History</h3>
-            <p class="text-sm text-gray-500">Recent transactions</p>
+            <h3 class="font-semibold dark:text-white">Transaction History</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Recent transactions</p>
           </div>
         </div>
         <button
           onclick={loadTransactionHistory}
           disabled={isLoadingHistory}
-          class="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+          class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
           title="Refresh history"
         >
           <RefreshCw class="w-5 h-5 {isLoadingHistory ? 'animate-spin' : ''}" />
@@ -511,7 +511,7 @@
           <Loader2 class="w-8 h-8 animate-spin text-gray-400" />
         </div>
       {:else if transactions.length === 0}
-        <div class="text-center py-8 text-gray-500">
+        <div class="text-center py-8 text-gray-500 dark:text-gray-400">
           <History class="w-12 h-12 mx-auto mb-2 opacity-50" />
           <p>No transactions yet</p>
           <p class="text-sm">Your transaction history will appear here</p>
@@ -519,22 +519,22 @@
       {:else}
         <div class="space-y-3 max-h-80 overflow-y-auto">
           {#each transactions as tx}
-            <div class="flex items-center gap-4 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-              <div class="p-2 {isIncoming(tx) ? 'bg-green-100' : 'bg-red-100'} rounded-full">
+            <div class="flex items-center gap-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+              <div class="p-2 {isIncoming(tx) ? 'bg-green-100 dark:bg-green-900/30' : 'bg-red-100 dark:bg-red-900/30'} rounded-full">
                 {#if isIncoming(tx)}
-                  <ArrowDownLeft class="w-5 h-5 text-green-600" />
+                  <ArrowDownLeft class="w-5 h-5 text-green-600 dark:text-green-400" />
                 {:else}
-                  <ArrowUpRight class="w-5 h-5 text-red-600" />
+                  <ArrowUpRight class="w-5 h-5 text-red-600 dark:text-red-400" />
                 {/if}
               </div>
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
-                  <span class="font-medium {isIncoming(tx) ? 'text-green-600' : 'text-red-600'}">
+                  <span class="font-medium {isIncoming(tx) ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
                     {isIncoming(tx) ? '+' : '-'}{tx.value} CHR
                   </span>
-                  <span class="text-xs px-2 py-0.5 bg-gray-200 rounded-full">{tx.status}</span>
+                  <span class="text-xs px-2 py-0.5 bg-gray-200 dark:bg-gray-600 dark:text-gray-300 rounded-full">{tx.status}</span>
                 </div>
-                <div class="text-sm text-gray-500 truncate">
+                <div class="text-sm text-gray-500 dark:text-gray-400 truncate">
                   {isIncoming(tx) ? 'From:' : 'To:'} {formatAddress(isIncoming(tx) ? tx.from : tx.to)}
                 </div>
                 <div class="text-xs text-gray-400">
@@ -543,7 +543,7 @@
               </div>
               <button
                 onclick={() => navigator.clipboard.writeText(tx.hash)}
-                class="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+                class="p-2 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
                 title="Copy transaction hash"
               >
                 <Copy class="w-4 h-4 text-gray-400" />
@@ -557,17 +557,17 @@
     <!-- Security & Account Details Section -->
     <div class="grid md:grid-cols-2 gap-6">
       <!-- Security Info Card -->
-      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
         <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-blue-100 rounded-lg">
-            <Shield class="w-6 h-6 text-blue-600" />
+          <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+            <Shield class="w-6 h-6 text-blue-600 dark:text-blue-400" />
           </div>
           <div>
-            <h3 class="font-semibold">Security Tips</h3>
-            <p class="text-sm text-gray-500">Keep your wallet safe</p>
+            <h3 class="font-semibold dark:text-white">Security Tips</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Keep your wallet safe</p>
           </div>
         </div>
-        <ul class="text-sm text-gray-600 space-y-2">
+        <ul class="text-sm text-gray-600 dark:text-gray-400 space-y-2">
           <li class="flex items-start gap-2">
             <Check class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
             <span>Store your recovery phrase offline</span>
@@ -588,46 +588,46 @@
       </div>
 
       <!-- Account Details Card -->
-      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
         <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-purple-100 rounded-lg">
-            <User class="w-6 h-6 text-purple-600" />
+          <div class="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
+            <User class="w-6 h-6 text-purple-600 dark:text-purple-400" />
           </div>
           <div>
-            <h3 class="font-semibold">Account Details</h3>
-            <p class="text-sm text-gray-500">Technical information</p>
+            <h3 class="font-semibold dark:text-white">Account Details</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Technical information</p>
           </div>
         </div>
 
         <div class="space-y-3">
-          <div class="flex justify-between items-center py-2 border-b border-gray-100">
-            <span class="text-sm text-gray-600">Network</span>
-            <span class="font-medium">Chiral Network</span>
+          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
+            <span class="text-sm text-gray-600 dark:text-gray-400">Network</span>
+            <span class="font-medium dark:text-white">Chiral Network</span>
           </div>
-          <div class="flex justify-between items-center py-2 border-b border-gray-100">
-            <span class="text-sm text-gray-600">Address Format</span>
-            <span class="font-medium">EVM Compatible</span>
+          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
+            <span class="text-sm text-gray-600 dark:text-gray-400">Address Format</span>
+            <span class="font-medium dark:text-white">EVM Compatible</span>
           </div>
-          <div class="flex justify-between items-center py-2 border-b border-gray-100">
-            <span class="text-sm text-gray-600">Connection</span>
-            <span class="font-medium flex items-center gap-2">
+          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
+            <span class="text-sm text-gray-600 dark:text-gray-400">Connection</span>
+            <span class="font-medium dark:text-white flex items-center gap-2">
               <span class="w-2 h-2 rounded-full {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></span>
               {$networkConnected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
           <div class="flex justify-between items-center py-2">
-            <span class="text-sm text-gray-600">Key Type</span>
-            <span class="font-medium">secp256k1</span>
+            <span class="text-sm text-gray-600 dark:text-gray-400">Key Type</span>
+            <span class="font-medium dark:text-white">secp256k1</span>
           </div>
         </div>
       </div>
     </div>
 
   {:else}
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-      <Wallet class="w-16 h-16 mx-auto text-gray-300 mb-4" />
-      <h2 class="text-xl font-semibold text-gray-700 mb-2">No Wallet Connected</h2>
-      <p class="text-gray-500 mb-6">Please create or import a wallet to view account details.</p>
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-12 text-center">
+      <Wallet class="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
+      <h2 class="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">No Wallet Connected</h2>
+      <p class="text-gray-500 dark:text-gray-400 mb-6">Please create or import a wallet to view account details.</p>
     </div>
   {/if}
 </div>
@@ -637,28 +637,28 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showExportModal = false} onkeydown={(e) => e.key === 'Escape' && (showExportModal = false)}>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-white rounded-xl shadow-xl p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-yellow-100 rounded-lg">
-          <AlertTriangle class="w-6 h-6 text-yellow-600" />
+        <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
+          <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
         </div>
-        <h3 class="text-lg font-semibold">Export Wallet</h3>
+        <h3 class="text-lg font-semibold dark:text-white">Export Wallet</h3>
       </div>
 
-      <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-        <p class="text-sm text-yellow-800">
+      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
+        <p class="text-sm text-yellow-800 dark:text-yellow-300">
           <strong>Warning:</strong> This file will contain your private key. Anyone with access to this file can control your wallet. Store it securely and never share it.
         </p>
       </div>
 
-      <p class="text-sm text-gray-600 mb-6">
+      <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
         Your wallet will be exported as a JSON file containing your address and private key.
       </p>
 
       <div class="flex gap-3">
         <button
           onclick={() => showExportModal = false}
-          class="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
         >
           Cancel
         </button>
@@ -679,22 +679,22 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showLogoutModal = false} onkeydown={(e) => e.key === 'Escape' && (showLogoutModal = false)}>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-white rounded-xl shadow-xl p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-red-100 rounded-lg">
-          <LogOut class="w-6 h-6 text-red-600" />
+        <div class="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+          <LogOut class="w-6 h-6 text-red-600 dark:text-red-400" />
         </div>
-        <h3 class="text-lg font-semibold">Logout</h3>
+        <h3 class="text-lg font-semibold dark:text-white">Logout</h3>
       </div>
 
-      <p class="text-sm text-gray-600 mb-6">
+      <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
         Are you sure you want to logout? Make sure you have saved your recovery phrase or exported your wallet before logging out.
       </p>
 
       <div class="flex gap-3">
         <button
           onclick={() => showLogoutModal = false}
-          class="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
         >
           Cancel
         </button>
@@ -715,26 +715,26 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => { showSendModal = false; showConfirmSend = false; }} onkeydown={(e) => e.key === 'Escape' && (showSendModal = false)}>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       {#if !showConfirmSend}
         <!-- Send Form -->
         <div class="flex items-center gap-3 mb-6">
-          <div class="p-2 bg-blue-100 rounded-lg">
-            <Send class="w-6 h-6 text-blue-600" />
+          <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+            <Send class="w-6 h-6 text-blue-600 dark:text-blue-400" />
           </div>
-          <h3 class="text-lg font-semibold">Send CHR</h3>
+          <h3 class="text-lg font-semibold dark:text-white">Send CHR</h3>
         </div>
 
         <div class="space-y-4">
           <!-- Available Balance -->
-          <div class="bg-gray-50 rounded-lg p-3">
-            <p class="text-sm text-gray-500">Available Balance</p>
-            <p class="text-xl font-bold">{formatBalance(balance)} CHR</p>
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <p class="text-sm text-gray-500 dark:text-gray-400">Available Balance</p>
+            <p class="text-xl font-bold dark:text-white">{formatBalance(balance)} CHR</p>
           </div>
 
           <!-- Recipient Address -->
           <div>
-            <label for="recipient" class="block text-sm font-medium text-gray-700 mb-1">
+            <label for="recipient" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Recipient Address
             </label>
             <input
@@ -742,13 +742,13 @@
               type="text"
               bind:value={recipientAddress}
               placeholder="0x..."
-              class="w-full px-4 py-3 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
             />
           </div>
 
           <!-- Amount -->
           <div>
-            <label for="amount" class="block text-sm font-medium text-gray-700 mb-1">
+            <label for="amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Amount (CHR)
             </label>
             <div class="relative">
@@ -759,11 +759,11 @@
                 pattern="[0-9]*\.?[0-9]*"
                 bind:value={sendAmount}
                 placeholder="0.00"
-                class="w-full px-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
               />
               <button
                 onclick={() => sendAmount = balance}
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-blue-600 hover:text-blue-700 font-medium"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 font-medium"
               >
                 MAX
               </button>
@@ -774,7 +774,7 @@
         <div class="flex gap-3 mt-6">
           <button
             onclick={() => showSendModal = false}
-            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
           >
             Cancel
           </button>
@@ -790,29 +790,29 @@
       {:else}
         <!-- Confirmation Screen -->
         <div class="flex items-center gap-3 mb-6">
-          <div class="p-2 bg-yellow-100 rounded-lg">
-            <AlertTriangle class="w-6 h-6 text-yellow-600" />
+          <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
+            <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
           </div>
-          <h3 class="text-lg font-semibold">Confirm Transaction</h3>
+          <h3 class="text-lg font-semibold dark:text-white">Confirm Transaction</h3>
         </div>
 
-        <div class="bg-gray-50 rounded-lg p-4 space-y-3 mb-6">
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-3 mb-6">
           <div class="flex justify-between">
-            <span class="text-sm text-gray-500">From</span>
-            <span class="text-sm font-mono">{formatAddress($walletAccount?.address || '')}</span>
+            <span class="text-sm text-gray-500 dark:text-gray-400">From</span>
+            <span class="text-sm font-mono dark:text-gray-300">{formatAddress($walletAccount?.address || '')}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm text-gray-500">To</span>
-            <span class="text-sm font-mono">{formatAddress(recipientAddress)}</span>
+            <span class="text-sm text-gray-500 dark:text-gray-400">To</span>
+            <span class="text-sm font-mono dark:text-gray-300">{formatAddress(recipientAddress)}</span>
           </div>
-          <div class="flex justify-between border-t border-gray-200 pt-3">
-            <span class="text-sm text-gray-500">Amount</span>
-            <span class="text-lg font-bold text-blue-600">{sendAmount} CHR</span>
+          <div class="flex justify-between border-t border-gray-200 dark:border-gray-600 pt-3">
+            <span class="text-sm text-gray-500 dark:text-gray-400">Amount</span>
+            <span class="text-lg font-bold text-blue-600 dark:text-blue-400">{sendAmount} CHR</span>
           </div>
         </div>
 
-        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
-          <p class="text-sm text-yellow-800">
+        <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 mb-6">
+          <p class="text-sm text-yellow-800 dark:text-yellow-300">
             <strong>Warning:</strong> This transaction cannot be reversed. Please verify the recipient address and amount before confirming.
           </p>
         </div>
@@ -821,7 +821,7 @@
           <button
             onclick={() => showConfirmSend = false}
             disabled={isSending}
-            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+            class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 dark:text-gray-300"
           >
             Back
           </button>
