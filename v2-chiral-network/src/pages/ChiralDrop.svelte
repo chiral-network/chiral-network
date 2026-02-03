@@ -285,14 +285,14 @@
   <!-- Header -->
   <div class="flex items-center justify-between mb-6">
     <div>
-      <h1 class="text-2xl font-bold text-gray-900">ChiralDrop</h1>
-      <p class="text-gray-600 mt-1">
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">ChiralDrop</h1>
+      <p class="text-gray-600 dark:text-gray-400 mt-1">
         Your alias: <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
       </p>
     </div>
     <button
       onclick={() => showHistory = !showHistory}
-      class="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition"
+      class="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
     >
       <History class="w-4 h-4" />
       <span>{showHistory ? 'Hide History' : 'Show History'}</span>
@@ -301,9 +301,9 @@
 
   <div class="flex-1 flex gap-6 min-h-0">
     <!-- Map Area -->
-    <div class="flex-1 bg-white rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
+    <div class="flex-1 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm relative overflow-hidden">
       <!-- Wave background -->
-      <div class="absolute inset-0 bg-gradient-to-br from-blue-50 to-purple-50"></div>
+      <div class="absolute inset-0 bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20"></div>
 
       <!-- Wave pattern overlay -->
       <svg class="absolute inset-0 w-full h-full opacity-20" preserveAspectRatio="none">
@@ -333,12 +333,12 @@
         class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-10"
       >
         <div
-          class="w-16 h-16 rounded-full flex items-center justify-center shadow-lg border-4 border-white"
+          class="w-16 h-16 rounded-full flex items-center justify-center shadow-lg border-4 border-white dark:border-gray-700"
           style="background-color: {$userAlias.colorHex}"
         >
           <User class="w-8 h-8 text-white" />
         </div>
-        <span class="mt-2 text-sm font-medium text-gray-700 bg-white px-2 py-1 rounded shadow">
+        <span class="mt-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 px-2 py-1 rounded shadow">
           You
         </span>
       </div>
@@ -352,12 +352,12 @@
           style="left: {peer.position.x}%; top: calc({peer.position.y}% + {waveOffset}px); transform: translate(-50%, -50%);"
         >
           <div
-            class="w-12 h-12 rounded-full flex items-center justify-center shadow-md border-2 border-white"
+            class="w-12 h-12 rounded-full flex items-center justify-center shadow-md border-2 border-white dark:border-gray-700"
             style="background-color: {peer.alias.colorHex}"
           >
             <User class="w-6 h-6 text-white" />
           </div>
-          <span class="mt-1 text-xs font-medium text-gray-700 bg-white px-2 py-0.5 rounded shadow whitespace-nowrap">
+          <span class="mt-1 text-xs font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 px-2 py-0.5 rounded shadow whitespace-nowrap">
             {peer.alias.displayName}
           </span>
         </button>
@@ -366,7 +366,7 @@
       <!-- Empty state -->
       {#if $nearbyPeers.length === 0}
         <div class="absolute inset-0 flex items-center justify-center">
-          <div class="text-center text-gray-500">
+          <div class="text-center text-gray-500 dark:text-gray-400">
             <p class="text-lg font-medium">No nearby users found</p>
             <p class="text-sm mt-1">Connect to the network to discover peers</p>
           </div>
@@ -378,11 +378,11 @@
     <div class="w-80 flex flex-col gap-4">
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
-        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          <h3 class="font-semibold text-gray-900 mb-3">Incoming Transfers</h3>
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4">
+          <h3 class="font-semibold text-gray-900 dark:text-white mb-3">Incoming Transfers</h3>
           <div class="space-y-3 max-h-48 overflow-y-auto">
             {#each $incomingPendingTransfers as transfer (transfer.id)}
-              <div class="bg-gray-50 rounded-lg p-3">
+              <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
                 <div class="flex items-start gap-3">
                   <div
                     class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
@@ -391,8 +391,8 @@
                     <User class="w-4 h-4 text-white" />
                   </div>
                   <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-gray-900 truncate">{transfer.fileName}</p>
-                    <p class="text-xs text-gray-500">
+                    <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{transfer.fileName}</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400">
                       From {transfer.fromAlias.displayName} - {formatFileSize(transfer.fileSize)}
                     </p>
                   </div>
@@ -421,14 +421,14 @@
 
       <!-- Selected Peer Panel -->
       {#if $selectedPeer}
-        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4">
           <div class="flex items-center justify-between mb-4">
-            <h3 class="font-semibold text-gray-900">Send to Peer</h3>
+            <h3 class="font-semibold text-gray-900 dark:text-white">Send to Peer</h3>
             <button
               onclick={() => selectPeer(null)}
-              class="p-1 hover:bg-gray-100 rounded-lg transition"
+              class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
             >
-              <X class="w-4 h-4 text-gray-500" />
+              <X class="w-4 h-4 text-gray-500 dark:text-gray-400" />
             </button>
           </div>
           <div class="flex items-center gap-3 mb-4">
@@ -439,8 +439,8 @@
               <User class="w-6 h-6 text-white" />
             </div>
             <div>
-              <p class="font-medium text-gray-900">{$selectedPeer.alias.displayName}</p>
-              <p class="text-xs text-gray-500 truncate max-w-[180px]">{$selectedPeer.peerId}</p>
+              <p class="font-medium text-gray-900 dark:text-white">{$selectedPeer.alias.displayName}</p>
+              <p class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[180px]">{$selectedPeer.peerId}</p>
             </div>
           </div>
           <button
@@ -458,29 +458,29 @@
           />
         </div>
       {:else}
-        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
-          <div class="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4 text-center">
+          <div class="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-3">
             <Upload class="w-6 h-6 text-gray-400" />
           </div>
-          <p class="text-gray-600 text-sm">Click on a nearby user to send them a file</p>
+          <p class="text-gray-600 dark:text-gray-400 text-sm">Click on a nearby user to send them a file</p>
         </div>
       {/if}
 
       <!-- Transaction History -->
       {#if showHistory}
-        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex-1 min-h-0 flex flex-col">
-          <h3 class="font-semibold text-gray-900 mb-3">Transaction History</h3>
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4 flex-1 min-h-0 flex flex-col">
+          <h3 class="font-semibold text-gray-900 dark:text-white mb-3">Transaction History</h3>
           <div class="flex-1 overflow-y-auto space-y-2">
             {#if $transferHistory.length === 0}
-              <p class="text-gray-500 text-sm text-center py-4">No transfers yet</p>
+              <p class="text-gray-500 dark:text-gray-400 text-sm text-center py-4">No transfers yet</p>
             {:else}
               {#each $transferHistory as transfer (transfer.id)}
-                <div class="bg-gray-50 rounded-lg p-3">
+                <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
                   <div class="flex items-start gap-2">
                     <FileIcon class="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
                     <div class="flex-1 min-w-0">
-                      <p class="text-sm font-medium text-gray-900 truncate">{transfer.fileName}</p>
-                      <p class="text-xs text-gray-500">
+                      <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{transfer.fileName}</p>
+                      <p class="text-xs text-gray-500 dark:text-gray-400">
                         {transfer.direction === 'incoming' ? 'From' : 'To'} {transfer.direction === 'incoming' ? transfer.fromAlias.displayName : transfer.toAlias.displayName}
                       </p>
                       <div class="flex items-center gap-2 mt-1">
