@@ -154,7 +154,7 @@
       const result = await invoke<{ hash: string; status: string }>('send_transaction', {
         fromAddress: $walletAccount.address,
         toAddress: recipientAddress,
-        amount: sendAmount,
+        amount: String(sendAmount),
         privateKey: $walletAccount.privateKey
       });
 
@@ -253,7 +253,7 @@
 
 </script>
 
-<div class="p-6 space-y-6 max-w-4xl mx-auto">
+<div class="p-6 space-y-6">
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-3xl font-bold">Account</h1>
@@ -754,9 +754,9 @@
             <div class="relative">
               <input
                 id="amount"
-                type="number"
-                step="0.000001"
-                min="0"
+                type="text"
+                inputmode="decimal"
+                pattern="[0-9]*\.?[0-9]*"
                 bind:value={sendAmount}
                 placeholder="0.00"
                 class="w-full px-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
