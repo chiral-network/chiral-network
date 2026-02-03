@@ -17,7 +17,10 @@
     Check,
     Loader2,
     Globe,
-    Zap
+    Zap,
+    Copy,
+    Link,
+    Plus
   } from 'lucide-svelte';
 
   // Types
@@ -49,6 +52,10 @@
   let isStartingGeth = $state(false);
   let isDownloading = $state(false);
   let downloadProgress = $state<DownloadProgress | null>(null);
+  let localEnode = $state('');
+  let peerEnodeInput = $state('');
+  let isAddingPeer = $state(false);
+  let enodeCopied = $state(false);
 
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
   let unlistenDownload: (() => void) | null = null;
@@ -165,12 +172,66 @@
     try {
       await invoke('stop_geth');
       toasts.show('Blockchain node stopped', 'info');
+      localEnode = '';
       await loadGethStatus();
     } catch (err) {
       console.error('Failed to stop Geth:', err);
       toasts.show(`Failed to stop node: ${err}`, 'error');
     }
   }
+
+  // Get local enode URL
+  async function loadEnode() {
+    if (!isTauri() || !gethStatus?.running) return;
+
+    try {
+      localEnode = await invoke<string>('get_enode');
+    } catch (err) {
+      console.debug('Failed to get enode:', err);
+    }
+  }
+
+  // Copy enode to clipboard
+  async function copyEnode() {
+    if (!localEnode) return;
+    try {
+      await navigator.clipboard.writeText(localEnode);
+      enodeCopied = true;
+      toasts.show('Enode URL copied to clipboard', 'success');
+      setTimeout(() => enodeCopied = false, 2000);
+    } catch (err) {
+      toasts.show('Failed to copy', 'error');
+    }
+  }
+
+  // Add peer by enode URL
+  async function handleAddPeer() {
+    if (!isTauri() || !peerEnodeInput.trim()) return;
+
+    isAddingPeer = true;
+    try {
+      const success = await invoke<boolean>('add_peer', { enode: peerEnodeInput.trim() });
+      if (success) {
+        toasts.show('Peer added successfully!', 'success');
+        peerEnodeInput = '';
+        await loadGethStatus();
+      } else {
+        toasts.show('Failed to add peer - invalid enode or peer unreachable', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to add peer:', err);
+      toasts.show(`Failed to add peer: ${err}`, 'error');
+    } finally {
+      isAddingPeer = false;
+    }
+  }
+
+  // Load enode when Geth is running
+  $effect(() => {
+    if (gethStatus?.running) {
+      loadEnode();
+    }
+  });
 
   // DHT Functions
   async function connectToNetwork() {
@@ -349,7 +410,7 @@
       </div>
 
       <!-- Geth Controls -->
-      <div class="flex gap-3">
+      <div class="flex gap-3 mb-4">
         {#if gethStatus?.running}
           <button
             onclick={handleStopGeth}
@@ -374,6 +435,69 @@
           </button>
         {/if}
       </div>
+
+      <!-- Peer Connection Section (only when running) -->
+      {#if gethStatus?.running}
+        <div class="border-t border-gray-200 pt-4 mt-4">
+          <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+            <Link class="w-4 h-4" />
+            Peer Connection
+          </h3>
+
+          <!-- Your Enode URL -->
+          {#if localEnode}
+            <div class="mb-4">
+              <label class="block text-xs text-gray-500 mb-1">Your Enode URL (share with other devices)</label>
+              <div class="flex gap-2">
+                <input
+                  type="text"
+                  readonly
+                  value={localEnode}
+                  class="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg font-mono text-xs"
+                />
+                <button
+                  onclick={copyEnode}
+                  class="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                  title="Copy enode URL"
+                >
+                  {#if enodeCopied}
+                    <Check class="w-4 h-4 text-green-600" />
+                  {:else}
+                    <Copy class="w-4 h-4 text-gray-600" />
+                  {/if}
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Add Peer -->
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Add Peer (paste enode URL from another device)</label>
+            <div class="flex gap-2">
+              <input
+                type="text"
+                bind:value={peerEnodeInput}
+                placeholder="enode://..."
+                class="flex-1 px-3 py-2 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                onclick={handleAddPeer}
+                disabled={isAddingPeer || !peerEnodeInput.trim()}
+                class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-1"
+              >
+                {#if isAddingPeer}
+                  <Loader2 class="w-4 h-4 animate-spin" />
+                {:else}
+                  <Plus class="w-4 h-4" />
+                {/if}
+              </button>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">
+              To sync with another device: copy your enode URL and paste it on the other device
+            </p>
+          </div>
+        </div>
+      {/if}
     {/if}
   </div>
 
