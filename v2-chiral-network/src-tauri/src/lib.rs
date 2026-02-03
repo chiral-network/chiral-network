@@ -956,6 +956,37 @@ async fn send_transaction(
 
     let nonce = parse_hex_u64(nonce_json["result"].as_str().unwrap_or("0x0"));
 
+    // Get sender balance to verify they have enough
+    let balance_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getBalance",
+        "params": [&from_address, "latest"],
+        "id": 1
+    });
+
+    let balance_response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&balance_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get balance: {}", e))?;
+
+    let balance_json: serde_json::Value = balance_response.json().await
+        .map_err(|e| format!("Failed to parse balance response: {}", e))?;
+
+    let balance_hex = balance_json["result"].as_str().unwrap_or("0x0");
+    let balance_wei = u128::from_str_radix(balance_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+
+    println!("💰 Sender balance: {} wei ({} CHR)", balance_wei, balance_wei as f64 / 1e18);
+
+    if balance_wei < amount_wei {
+        return Err(format!(
+            "Insufficient balance: have {} CHR, need {} CHR",
+            balance_wei as f64 / 1e18,
+            amount_wei as f64 / 1e18
+        ));
+    }
+
     // Get gas price
     let gas_price_payload = serde_json::json!({
         "jsonrpc": "2.0",
