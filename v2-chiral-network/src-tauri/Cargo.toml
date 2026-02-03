@@ -30,3 +30,5 @@ futures-util = "0.3"
 secp256k1 = { version = "0.29", features = ["recovery"] }
 tiny-keccak = { version = "2.0", features = ["keccak"] }
 rlp = "0.5"
+once_cell = "1.19"
+tracing = "0.1"
