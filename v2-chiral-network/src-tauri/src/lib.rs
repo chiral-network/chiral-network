@@ -1,8 +1,10 @@
 mod dht;
 mod file_transfer;
+mod geth;
 
 use dht::DhtService;
 use file_transfer::FileTransferService;
+use geth::{GethProcess, GethDownloader, GethStatus, MiningStatus};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,7 @@ pub struct AppState {
     pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
     pub file_transfer: Arc<Mutex<FileTransferService>>,
     pub file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>, // hash -> file data (for local caching)
+    pub geth: Arc<Mutex<GethProcess>>,
 }
 
 #[tauri::command]
@@ -900,6 +903,83 @@ async fn export_torrent_file(
     })
 }
 
+// ============================================================================
+// Geth Commands
+// ============================================================================
+
+#[tauri::command]
+async fn is_geth_installed() -> Result<bool, String> {
+    let downloader = GethDownloader::new();
+    Ok(downloader.is_geth_installed())
+}
+
+#[tauri::command]
+async fn download_geth(app: tauri::AppHandle) -> Result<(), String> {
+    let downloader = GethDownloader::new();
+
+    downloader
+        .download_geth(move |progress| {
+            let _ = app.emit("geth-download-progress", &progress);
+        })
+        .await
+}
+
+#[tauri::command]
+async fn start_geth(
+    state: tauri::State<'_, AppState>,
+    miner_address: Option<String>,
+) -> Result<(), String> {
+    let mut geth = state.geth.lock().await;
+    geth.start(miner_address.as_deref()).await
+}
+
+#[tauri::command]
+async fn stop_geth(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut geth = state.geth.lock().await;
+    geth.stop()
+}
+
+#[tauri::command]
+async fn get_geth_status(state: tauri::State<'_, AppState>) -> Result<GethStatus, String> {
+    let geth = state.geth.lock().await;
+    geth.get_status().await
+}
+
+#[tauri::command]
+async fn start_mining(
+    state: tauri::State<'_, AppState>,
+    threads: Option<u32>,
+) -> Result<(), String> {
+    let geth = state.geth.lock().await;
+    geth.start_mining(threads.unwrap_or(1)).await
+}
+
+#[tauri::command]
+async fn stop_mining(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let geth = state.geth.lock().await;
+    geth.stop_mining().await
+}
+
+#[tauri::command]
+async fn get_mining_status(state: tauri::State<'_, AppState>) -> Result<MiningStatus, String> {
+    let geth = state.geth.lock().await;
+    geth.get_mining_status().await
+}
+
+#[tauri::command]
+async fn set_miner_address(
+    state: tauri::State<'_, AppState>,
+    address: String,
+) -> Result<(), String> {
+    let geth = state.geth.lock().await;
+    geth.set_miner_address(&address).await
+}
+
+#[tauri::command]
+fn get_chain_id() -> u64 {
+    geth::CHAIN_ID
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -908,8 +988,10 @@ pub fn run() {
             dht: Arc::new(Mutex::new(None)),
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
             file_storage: Arc::new(Mutex::new(HashMap::new())),
+            geth: Arc::new(Mutex::new(GethProcess::new())),
         })
         .invoke_handler(tauri::generate_handler![
+            // DHT commands
             start_dht,
             stop_dht,
             get_dht_peers,
@@ -921,6 +1003,7 @@ pub fn run() {
             decline_file_transfer,
             store_dht_value,
             get_dht_value,
+            // File commands
             get_available_storage,
             get_file_size,
             open_file_dialog,
@@ -930,7 +1013,19 @@ pub fn run() {
             register_shared_file,
             parse_torrent_file,
             export_torrent_file,
-            get_wallet_balance
+            // Wallet commands
+            get_wallet_balance,
+            get_chain_id,
+            // Geth commands
+            is_geth_installed,
+            download_geth,
+            start_geth,
+            stop_geth,
+            get_geth_status,
+            start_mining,
+            stop_mining,
+            get_mining_status,
+            set_miner_address
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
