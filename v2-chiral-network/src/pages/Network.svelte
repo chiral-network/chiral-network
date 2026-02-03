@@ -284,13 +284,13 @@
 <div class="p-6 max-w-6xl mx-auto">
   <div class="flex items-center justify-between mb-6">
     <div>
-      <h1 class="text-3xl font-bold">Network</h1>
-      <p class="text-gray-600 mt-1">Manage blockchain and P2P network connections</p>
+      <h1 class="text-3xl font-bold dark:text-white">Network</h1>
+      <p class="text-gray-600 dark:text-gray-400 mt-1">Manage blockchain and P2P network connections</p>
     </div>
     <button
       onclick={loadGethStatus}
       disabled={isLoadingGeth}
-      class="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
       title="Refresh status"
     >
       <RefreshCw class="w-5 h-5 {isLoadingGeth ? 'animate-spin' : ''}" />
@@ -298,39 +298,39 @@
   </div>
 
   {#if error}
-    <div class="bg-red-50 border-l-4 border-red-400 p-4 mb-6 rounded-r-lg">
+    <div class="bg-red-50 dark:bg-red-900/30 border-l-4 border-red-400 p-4 mb-6 rounded-r-lg">
       <div class="flex items-center gap-2">
-        <AlertTriangle class="w-5 h-5 text-red-600" />
-        <p class="text-sm text-red-800">{error}</p>
+        <AlertTriangle class="w-5 h-5 text-red-600 dark:text-red-400" />
+        <p class="text-sm text-red-800 dark:text-red-300">{error}</p>
       </div>
     </div>
   {/if}
 
   <!-- Blockchain Node Section -->
-  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
-        <div class="p-2 {gethStatus?.running ? 'bg-green-100' : 'bg-gray-100'} rounded-lg">
-          <Server class="w-6 h-6 {gethStatus?.running ? 'text-green-600' : 'text-gray-600'}" />
+        <div class="p-2 {gethStatus?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+          <Server class="w-6 h-6 {gethStatus?.running ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
         </div>
         <div>
-          <h2 class="font-semibold">Blockchain Node (Geth)</h2>
-          <p class="text-sm text-gray-500">Chiral Network blockchain connection</p>
+          <h2 class="font-semibold dark:text-white">Blockchain Node (Geth)</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Chiral Network blockchain connection</p>
         </div>
       </div>
       <div class="flex items-center gap-2">
         {#if gethStatus?.running}
-          <span class="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
+          <span class="flex items-center gap-2 px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-sm">
             <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
             Running
           </span>
         {:else if gethStatus?.installed}
-          <span class="flex items-center gap-2 px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
+          <span class="flex items-center gap-2 px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-sm">
             <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
             Stopped
           </span>
         {:else}
-          <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-sm">
+          <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-full text-sm">
             <AlertTriangle class="w-4 h-4" />
             Not Installed
           </span>
@@ -340,12 +340,12 @@
 
     {#if !gethStatus?.installed}
       <!-- Download Geth Section -->
-      <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
         <div class="flex items-start gap-3">
-          <AlertTriangle class="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+          <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
           <div>
-            <p class="font-medium text-yellow-800">Geth Not Installed</p>
-            <p class="text-sm text-yellow-700 mt-1">
+            <p class="font-medium text-yellow-800 dark:text-yellow-300">Geth Not Installed</p>
+            <p class="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
               Download Core-Geth to connect to the Chiral Network blockchain.
               This is required for wallet balance, transactions, and mining.
             </p>
@@ -355,18 +355,18 @@
 
       {#if isDownloading && downloadProgress}
         <div class="space-y-2">
-          <div class="flex justify-between text-sm">
+          <div class="flex justify-between text-sm dark:text-gray-300">
             <span>{downloadProgress.status}</span>
             <span>{downloadProgress.percentage.toFixed(1)}%</span>
           </div>
-          <div class="w-full bg-gray-200 rounded-full h-2">
+          <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
             <div
               class="bg-blue-600 h-2 rounded-full transition-all"
               style="width: {downloadProgress.percentage}%"
             ></div>
           </div>
           {#if downloadProgress.total > 0}
-            <p class="text-xs text-gray-500 text-right">
+            <p class="text-xs text-gray-500 dark:text-gray-400 text-right">
               {formatBytes(downloadProgress.downloaded)} / {formatBytes(downloadProgress.total)}
             </p>
           {/if}
@@ -384,21 +384,21 @@
     {:else}
       <!-- Geth Stats -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-        <div class="bg-gray-50 rounded-lg p-3">
-          <p class="text-xs text-gray-500">Block Height</p>
-          <p class="text-lg font-bold">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Block Height</p>
+          <p class="text-lg font-bold dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
         </div>
-        <div class="bg-gray-50 rounded-lg p-3">
-          <p class="text-xs text-gray-500">Blockchain Peers</p>
-          <p class="text-lg font-bold">{gethStatus?.peerCount || 0}</p>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
+          <p class="text-lg font-bold dark:text-white">{gethStatus?.peerCount || 0}</p>
         </div>
-        <div class="bg-gray-50 rounded-lg p-3">
-          <p class="text-xs text-gray-500">Chain ID</p>
-          <p class="text-lg font-bold">{gethStatus?.chainId || 'N/A'}</p>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Chain ID</p>
+          <p class="text-lg font-bold dark:text-white">{gethStatus?.chainId || 'N/A'}</p>
         </div>
-        <div class="bg-gray-50 rounded-lg p-3">
-          <p class="text-xs text-gray-500">Sync Status</p>
-          <p class="text-lg font-bold">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : 'Offline'}</p>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Sync Status</p>
+          <p class="text-lg font-bold dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : 'Offline'}</p>
         </div>
       </div>
 
@@ -431,8 +431,8 @@
 
       <!-- Bootstrap Info -->
       {#if gethStatus?.running && gethStatus?.peerCount === 0}
-        <div class="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <p class="text-sm text-blue-800">
+        <div class="mt-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg">
+          <p class="text-sm text-blue-800 dark:text-blue-300">
             <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
             This may take a moment. Peer count will update automatically.
           </p>
@@ -440,16 +440,16 @@
       {/if}
 
       <!-- Bootstrap Node Health -->
-      <div class="mt-4 border-t border-gray-200 pt-4">
+      <div class="mt-4 border-t border-gray-200 dark:border-gray-700 pt-4">
         <button
           onclick={() => showBootstrapDetails = !showBootstrapDetails}
           class="w-full flex items-center justify-between text-left"
         >
           <div class="flex items-center gap-2">
-            <Activity class="w-4 h-4 text-gray-500" />
-            <span class="text-sm font-medium text-gray-700">Bootstrap Nodes</span>
+            <Activity class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Bootstrap Nodes</span>
             {#if bootstrapHealth}
-              <span class="px-2 py-0.5 text-xs rounded-full {bootstrapHealth.isHealthy ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+              <span class="px-2 py-0.5 text-xs rounded-full {bootstrapHealth.isHealthy ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'}">
                 {bootstrapHealth.healthyNodes}/{bootstrapHealth.totalNodes} healthy
               </span>
             {/if}
@@ -467,7 +467,7 @@
               <button
                 onclick={checkBootstrapHealth}
                 disabled={isCheckingBootstrap}
-                class="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+                class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
               >
                 {#if isCheckingBootstrap}
                   <Loader2 class="w-3 h-3 animate-spin" />
@@ -480,19 +480,19 @@
 
             {#if bootstrapHealth}
               {#each bootstrapHealth.nodes as node}
-                <div class="flex items-center justify-between p-2 bg-gray-50 rounded-lg text-sm">
+                <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded-lg text-sm">
                   <div class="flex items-center gap-2">
                     <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'}"></div>
                     <div>
-                      <span class="font-medium">{node.name}</span>
-                      <span class="text-gray-500 text-xs ml-1">({node.region})</span>
+                      <span class="font-medium dark:text-white">{node.name}</span>
+                      <span class="text-gray-500 dark:text-gray-400 text-xs ml-1">({node.region})</span>
                     </div>
                   </div>
                   <div class="text-right">
                     {#if node.reachable && node.latencyMs}
-                      <span class="text-green-600">{node.latencyMs}ms</span>
+                      <span class="text-green-600 dark:text-green-400">{node.latencyMs}ms</span>
                     {:else if node.error}
-                      <span class="text-red-500 text-xs">{node.error}</span>
+                      <span class="text-red-500 dark:text-red-400 text-xs">{node.error}</span>
                     {:else}
                       <span class="text-gray-400">—</span>
                     {/if}
@@ -501,15 +501,15 @@
               {/each}
 
               {#if !bootstrapHealth.isHealthy}
-                <div class="p-2 bg-red-50 border border-red-200 rounded-lg">
-                  <p class="text-xs text-red-700">
+                <div class="p-2 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+                  <p class="text-xs text-red-700 dark:text-red-300">
                     <strong>Warning:</strong> Not enough bootstrap nodes are reachable.
                     Peer discovery may be limited.
                   </p>
                 </div>
               {/if}
             {:else}
-              <p class="text-xs text-gray-500 text-center py-2">
+              <p class="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
                 Click "Check Health" to test bootstrap node connectivity
               </p>
             {/if}
@@ -521,26 +521,26 @@
 
   <!-- P2P Network Section -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 {$networkConnected ? 'bg-green-100' : 'bg-gray-100'} rounded-lg">
-          <Globe class="w-6 h-6 {$networkConnected ? 'text-green-600' : 'text-gray-600'}" />
+        <div class="p-2 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+          <Globe class="w-6 h-6 {$networkConnected ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
         </div>
         <div>
-          <h2 class="font-semibold">P2P Network (DHT)</h2>
-          <p class="text-sm text-gray-500">File sharing peer discovery</p>
+          <h2 class="font-semibold dark:text-white">P2P Network (DHT)</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">File sharing peer discovery</p>
         </div>
       </div>
 
       <div class="flex items-center gap-3 mb-4">
         <div class="w-3 h-3 rounded-full {$networkConnected ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}"></div>
-        <span class="font-medium">{$networkConnected ? 'Connected' : 'Disconnected'}</span>
+        <span class="font-medium dark:text-white">{$networkConnected ? 'Connected' : 'Disconnected'}</span>
       </div>
 
       {#if localPeerId}
-        <div class="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <div class="text-xs text-gray-500 mb-1">Your Peer ID:</div>
-          <div class="font-mono text-xs break-all">{localPeerId}</div>
+        <div class="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+          <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Your Peer ID:</div>
+          <div class="font-mono text-xs break-all dark:text-gray-300">{localPeerId}</div>
         </div>
       {/if}
 
@@ -569,52 +569,52 @@
       {/if}
     </div>
 
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-purple-100 rounded-lg">
-          <Zap class="w-6 h-6 text-purple-600" />
+        <div class="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
+          <Zap class="w-6 h-6 text-purple-600 dark:text-purple-400" />
         </div>
         <div>
-          <h2 class="font-semibold">Network Statistics</h2>
-          <p class="text-sm text-gray-500">Current network status</p>
+          <h2 class="font-semibold dark:text-white">Network Statistics</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Current network status</p>
         </div>
       </div>
 
       <div class="space-y-3">
-        <div class="flex justify-between items-center py-2 border-b border-gray-100">
-          <span class="text-sm text-gray-600">DHT Peers</span>
-          <span class="font-medium">{$networkStats.connectedPeers}</span>
+        <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
+          <span class="text-sm text-gray-600 dark:text-gray-400">DHT Peers</span>
+          <span class="font-medium dark:text-white">{$networkStats.connectedPeers}</span>
         </div>
-        <div class="flex justify-between items-center py-2 border-b border-gray-100">
-          <span class="text-sm text-gray-600">Discovered Peers</span>
-          <span class="font-medium">{$networkStats.totalPeers}</span>
+        <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
+          <span class="text-sm text-gray-600 dark:text-gray-400">Discovered Peers</span>
+          <span class="font-medium dark:text-white">{$networkStats.totalPeers}</span>
         </div>
-        <div class="flex justify-between items-center py-2 border-b border-gray-100">
-          <span class="text-sm text-gray-600">Blockchain Peers</span>
-          <span class="font-medium">{gethStatus?.peerCount || 0}</span>
+        <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
+          <span class="text-sm text-gray-600 dark:text-gray-400">Blockchain Peers</span>
+          <span class="font-medium dark:text-white">{gethStatus?.peerCount || 0}</span>
         </div>
         <div class="flex justify-between items-center py-2">
-          <span class="text-sm text-gray-600">Block Height</span>
-          <span class="font-medium">{gethStatus?.currentBlock?.toLocaleString() || 0}</span>
+          <span class="text-sm text-gray-600 dark:text-gray-400">Block Height</span>
+          <span class="font-medium dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</span>
         </div>
       </div>
     </div>
   </div>
 
   <!-- Connected Peers -->
-  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
     <div class="flex items-center gap-3 mb-4">
-      <div class="p-2 bg-blue-100 rounded-lg">
-        <Radio class="w-6 h-6 text-blue-600" />
+      <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+        <Radio class="w-6 h-6 text-blue-600 dark:text-blue-400" />
       </div>
       <div>
-        <h2 class="font-semibold">Connected DHT Peers</h2>
-        <p class="text-sm text-gray-500">Peers discovered via mDNS</p>
+        <h2 class="font-semibold dark:text-white">Connected DHT Peers</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Peers discovered via mDNS</p>
       </div>
     </div>
 
     {#if $peers.length === 0}
-      <div class="text-center py-8 text-gray-500">
+      <div class="text-center py-8 text-gray-500 dark:text-gray-400">
         <Globe class="w-12 h-12 mx-auto mb-2 opacity-50" />
         <p>No peers connected</p>
         <p class="text-sm">Connect to the P2P network to discover peers</p>
@@ -622,14 +622,14 @@
     {:else}
       <div class="space-y-2">
         {#each $peers as peer}
-          <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors">
+          <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
             <div class="flex items-start justify-between gap-3">
               <div class="flex-1 min-w-0">
-                <div class="font-mono text-sm break-all">{peer.id}</div>
+                <div class="font-mono text-sm break-all dark:text-gray-200">{peer.id}</div>
                 {#if peer.address}
-                  <div class="text-xs text-gray-500 mt-1">Address: {peer.address}</div>
+                  <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Address: {peer.address}</div>
                 {/if}
-                <div class="text-xs text-gray-500 mt-1">
+                <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
                   Last seen: {formatDate(peer.lastSeen)}
                 </div>
               </div>

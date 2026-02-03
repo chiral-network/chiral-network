@@ -454,18 +454,18 @@
 
 <div class="p-6 space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Upload</h1>
-    <p class="text-gray-600 mt-2">Share files with the Chiral Network</p>
+    <h1 class="text-3xl font-bold dark:text-white">Upload</h1>
+    <p class="text-gray-600 dark:text-gray-400 mt-2">Share files with the Chiral Network</p>
   </div>
 
   <!-- Network Status Warning -->
   {#if !$networkConnected}
-    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+    <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
       <div class="flex items-start gap-3">
-        <div class="text-yellow-600 mt-0.5">!</div>
+        <div class="text-yellow-600 dark:text-yellow-400 mt-0.5">!</div>
         <div>
-          <p class="text-sm font-semibold text-yellow-800">Network Not Connected</p>
-          <p class="text-sm text-yellow-700">
+          <p class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">Network Not Connected</p>
+          <p class="text-sm text-yellow-700 dark:text-yellow-400">
             Please connect to the DHT network from the Network page before uploading files.
           </p>
         </div>
@@ -475,10 +475,10 @@
 
   <!-- Storage Info -->
   {#if isTauri}
-    <div class="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
+    <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between">
       <div>
-        <p class="text-sm font-semibold text-gray-900">Storage</p>
-        <p class="text-sm text-gray-600">
+        <p class="text-sm font-semibold text-gray-900 dark:text-white">Storage</p>
+        <p class="text-sm text-gray-600 dark:text-gray-400">
           {#if availableStorage !== null}
             {formatFileSize(availableStorage * 1024 * 1024)} available
           {:else}
@@ -489,7 +489,7 @@
       <button
         onclick={refreshStorage}
         disabled={isRefreshingStorage}
-        class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+        class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
       >
         <RefreshCw class="w-4 h-4 {isRefreshingStorage ? 'animate-spin' : ''}" />
         Refresh
@@ -498,23 +498,23 @@
   {/if}
 
   <!-- Protocol Selection -->
-  <div class="bg-white rounded-lg border border-gray-200 p-4">
+  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
     <div class="flex items-center justify-between">
       <div>
-        <p class="text-sm font-semibold text-gray-900">Upload Protocol</p>
-        <p class="text-xs text-gray-500 mt-1">Choose the protocol for file sharing</p>
+        <p class="text-sm font-semibold text-gray-900 dark:text-white">Upload Protocol</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Choose the protocol for file sharing</p>
       </div>
       <div class="flex gap-2">
         <button
           onclick={() => selectedProtocol = 'WebRTC'}
-          class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {selectedProtocol === 'WebRTC' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+          class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {selectedProtocol === 'WebRTC' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
         >
           <Globe class="w-4 h-4" />
           WebRTC
         </button>
         <button
           onclick={() => selectedProtocol = 'BitTorrent'}
-          class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {selectedProtocol === 'BitTorrent' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+          class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {selectedProtocol === 'BitTorrent' ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
         >
           <Share2 class="w-4 h-4" />
           BitTorrent
@@ -530,7 +530,7 @@
     ondragover={handleDragOver}
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
-    class="relative border-2 border-dashed rounded-xl p-8 transition-all duration-200 {isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}"
+    class="relative border-2 border-dashed rounded-xl p-8 transition-all duration-200 {isDragging ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'}"
   >
     <div class="text-center py-8">
       <div class="mb-6">
@@ -541,11 +541,11 @@
         {/if}
       </div>
 
-      <h3 class="text-2xl font-bold mb-3 {isDragging ? 'text-blue-600' : 'text-gray-900'}">
+      <h3 class="text-2xl font-bold mb-3 {isDragging ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-white'}">
         {isDragging ? 'Drop files here' : 'Share Files'}
       </h3>
 
-      <p class="text-gray-600 mb-4 text-lg">
+      <p class="text-gray-600 dark:text-gray-400 mb-4 text-lg">
         {#if isDragging}
           Release to upload files
         {:else}
@@ -553,8 +553,8 @@
         {/if}
       </p>
 
-      <p class="text-sm text-gray-500 mb-8">
-        Using <span class="font-semibold {selectedProtocol === 'WebRTC' ? 'text-blue-600' : 'text-green-600'}">{selectedProtocol}</span> protocol
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-8">
+        Using <span class="font-semibold {selectedProtocol === 'WebRTC' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'}">{selectedProtocol}</span> protocol
       </p>
 
       <div class="flex justify-center gap-4 mb-8 opacity-60">
@@ -575,7 +575,7 @@
           {isUploading ? 'Uploading...' : 'Add Files'}
         </button>
       {:else}
-        <p class="text-sm text-gray-500">
+        <p class="text-sm text-gray-500 dark:text-gray-400">
           File upload requires the desktop application
         </p>
       {/if}
@@ -587,21 +587,21 @@
   </div>
 
   <!-- Upload History -->
-  <div class="bg-white rounded-lg border border-gray-200">
-    <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+    <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
       <button
         onclick={() => showUploadHistory = !showUploadHistory}
-        class="flex items-center gap-2 text-lg font-semibold text-gray-900"
+        class="flex items-center gap-2 text-lg font-semibold text-gray-900 dark:text-white"
       >
         <History class="w-5 h-5" />
         Upload History
-        <span class="text-sm font-normal text-gray-500">({sharedFiles.length})</span>
+        <span class="text-sm font-normal text-gray-500 dark:text-gray-400">({sharedFiles.length})</span>
       </button>
 
       {#if sharedFiles.length > 0}
         <button
           onclick={clearAllHistory}
-          class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
         >
           <Trash2 class="w-4 h-4" />
           Clear All
@@ -612,47 +612,47 @@
     {#if showUploadHistory}
       {#if sharedFiles.length === 0}
         <div class="p-8 text-center">
-          <History class="w-12 h-12 mx-auto text-gray-300 mb-3" />
-          <p class="text-gray-600">No upload history</p>
-          <p class="text-sm text-gray-500 mt-1">Files you share will appear here</p>
+          <History class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+          <p class="text-gray-600 dark:text-gray-400">No upload history</p>
+          <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">Files you share will appear here</p>
         </div>
       {:else}
-        <div class="divide-y divide-gray-100">
+        <div class="divide-y divide-gray-100 dark:divide-gray-700">
           {#each sharedFiles as file (file.id)}
-            <div class="p-4 hover:bg-gray-50 transition-colors">
+            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
               <div class="flex items-center gap-4">
                 <!-- File Icon -->
-                <div class="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-lg flex-shrink-0">
+                <div class="flex items-center justify-center w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-lg flex-shrink-0">
                   <svelte:component this={getFileIcon(file.name)} class="w-6 h-6 {getFileColor(file.name)}" />
                 </div>
 
                 <!-- File Info -->
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
-                    <p class="text-sm font-semibold truncate text-gray-900">{file.name}</p>
+                    <p class="text-sm font-semibold truncate text-gray-900 dark:text-white">{file.name}</p>
                     <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(file.protocol)}">
                       {file.protocol}
                     </span>
                   </div>
 
-                  <div class="flex items-center gap-4 text-xs text-gray-500 mt-1">
+                  <div class="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400 mt-1">
                     <span>{formatFileSize(file.size)}</span>
                     <span>{file.fileType}</span>
                     <span>{formatDate(file.uploadDate)}</span>
-                    <span class="text-green-600">{file.seeders} seeder{file.seeders !== 1 ? 's' : ''}</span>
+                    <span class="text-green-600 dark:text-green-400">{file.seeders} seeder{file.seeders !== 1 ? 's' : ''}</span>
                   </div>
 
                   <div class="flex items-center gap-2 mt-2">
-                    <span class="text-xs text-gray-500">Merkle Hash:</span>
-                    <code class="bg-gray-100 px-2 py-0.5 rounded text-xs font-mono text-gray-600">
+                    <span class="text-xs text-gray-500 dark:text-gray-400">Merkle Hash:</span>
+                    <code class="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded text-xs font-mono text-gray-600 dark:text-gray-300">
                       {file.hash.slice(0, 12)}...{file.hash.slice(-8)}
                     </code>
                     <button
                       onclick={() => copyHash(file.hash)}
-                      class="p-1 hover:bg-gray-200 rounded transition-colors"
+                      class="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
                       title="Copy full hash"
                     >
-                      <Copy class="w-3 h-3 text-gray-400 hover:text-gray-600" />
+                      <Copy class="w-3 h-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" />
                     </button>
                   </div>
                 </div>
@@ -661,7 +661,7 @@
                 <div class="flex items-center gap-2 flex-shrink-0">
                   <button
                     onclick={() => toggleShareOptions(file.id)}
-                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
                     title="Share options"
                   >
                     <ExternalLink class="w-4 h-4" />
@@ -669,7 +669,7 @@
                   </button>
                   <button
                     onclick={() => removeFile(file.id)}
-                    class="p-2 hover:bg-red-50 rounded-lg transition-colors"
+                    class="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                     title="Remove from history"
                   >
                     <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
@@ -679,18 +679,18 @@
 
               <!-- Expanded Share Options -->
               {#if expandedFileId === file.id}
-                <div class="mt-4 ml-16 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                  <p class="text-sm font-semibold text-gray-700 mb-3">Share this file</p>
+                <div class="mt-4 ml-16 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+                  <p class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Share this file</p>
 
                   <!-- Magnet Link -->
                   <div class="mb-3">
-                    <label class="text-xs text-gray-500 mb-1 block">Magnet Link</label>
+                    <label class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Magnet Link</label>
                     <div class="flex items-center gap-2">
                       <input
                         type="text"
                         readonly
                         value={generateMagnetLink(file)}
-                        class="flex-1 px-3 py-2 text-xs font-mono bg-white border border-gray-300 rounded-lg text-gray-600 truncate"
+                        class="flex-1 px-3 py-2 text-xs font-mono bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-300 truncate"
                       />
                       <button
                         onclick={() => copyMagnetLink(file)}
@@ -705,13 +705,13 @@
 
                   <!-- Hash -->
                   <div class="mb-3">
-                    <label class="text-xs text-gray-500 mb-1 block">Merkle Hash (for direct search)</label>
+                    <label class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Merkle Hash (for direct search)</label>
                     <div class="flex items-center gap-2">
                       <input
                         type="text"
                         readonly
                         value={file.hash}
-                        class="flex-1 px-3 py-2 text-xs font-mono bg-white border border-gray-300 rounded-lg text-gray-600"
+                        class="flex-1 px-3 py-2 text-xs font-mono bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-300"
                       />
                       <button
                         onclick={() => copyHash(file.hash)}
@@ -726,7 +726,7 @@
 
                   <!-- Export Torrent -->
                   <div>
-                    <label class="text-xs text-gray-500 mb-1 block">Torrent File</label>
+                    <label class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Torrent File</label>
                     <button
                       onclick={() => exportTorrentFile(file)}
                       class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
