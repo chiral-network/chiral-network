@@ -10,6 +10,8 @@ use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tauri::Emitter;
+use secp256k1::{Secp256k1, SecretKey, Message};
+use tiny_keccak::{Hasher, Keccak};
 
 pub struct AppState {
     pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
@@ -836,7 +838,99 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
     })
 }
 
-/// Send a transaction from one address to another
+/// Keccak256 hash helper
+fn keccak256(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Keccak::v256();
+    let mut output = [0u8; 32];
+    hasher.update(data);
+    hasher.finalize(&mut output);
+    output
+}
+
+/// Parse hex string to u64
+fn parse_hex_u64(hex: &str) -> u64 {
+    let hex = hex.trim_start_matches("0x");
+    u64::from_str_radix(hex, 16).unwrap_or(0)
+}
+
+/// RLP encode a single value
+fn rlp_encode_value(value: &[u8]) -> Vec<u8> {
+    if value.is_empty() {
+        vec![0x80]
+    } else if value.len() == 1 && value[0] < 0x80 {
+        value.to_vec()
+    } else if value.len() < 56 {
+        let mut result = vec![0x80 + value.len() as u8];
+        result.extend_from_slice(value);
+        result
+    } else {
+        let len_bytes = {
+            let mut len = value.len();
+            let mut bytes = Vec::new();
+            while len > 0 {
+                bytes.push((len & 0xff) as u8);
+                len >>= 8;
+            }
+            bytes.reverse();
+            bytes
+        };
+        let mut result = vec![0xb7 + len_bytes.len() as u8];
+        result.extend_from_slice(&len_bytes);
+        result.extend_from_slice(value);
+        result
+    }
+}
+
+/// RLP encode a list
+fn rlp_encode_list(items: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut payload = Vec::new();
+    for item in items {
+        payload.extend(item);
+    }
+
+    if payload.len() < 56 {
+        let mut result = vec![0xc0 + payload.len() as u8];
+        result.extend(payload);
+        result
+    } else {
+        let len_bytes = {
+            let mut len = payload.len();
+            let mut bytes = Vec::new();
+            while len > 0 {
+                bytes.push((len & 0xff) as u8);
+                len >>= 8;
+            }
+            bytes.reverse();
+            bytes
+        };
+        let mut result = vec![0xf7 + len_bytes.len() as u8];
+        result.extend_from_slice(&len_bytes);
+        result.extend(payload);
+        result
+    }
+}
+
+/// Convert u64 to minimal bytes (no leading zeros)
+fn u64_to_bytes(value: u64) -> Vec<u8> {
+    if value == 0 {
+        return vec![];
+    }
+    let bytes = value.to_be_bytes();
+    let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    bytes[start..].to_vec()
+}
+
+/// Convert u128 to minimal bytes (no leading zeros)
+fn u128_to_bytes(value: u128) -> Vec<u8> {
+    if value == 0 {
+        return vec![];
+    }
+    let bytes = value.to_be_bytes();
+    let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    bytes[start..].to_vec()
+}
+
+/// Send a transaction from one address to another (signs locally)
 #[tauri::command]
 async fn send_transaction(
     from_address: String,
@@ -846,11 +940,19 @@ async fn send_transaction(
 ) -> Result<SendTransactionResult, String> {
     let client = reqwest::Client::new();
 
+    // Parse private key
+    let pk_hex = private_key.trim_start_matches("0x");
+    let pk_bytes = hex::decode(pk_hex)
+        .map_err(|e| format!("Invalid private key hex: {}", e))?;
+
+    let secp = Secp256k1::new();
+    let secret_key = SecretKey::from_slice(&pk_bytes)
+        .map_err(|e| format!("Invalid private key: {}", e))?;
+
     // Convert amount from CHR to wei (1 CHR = 10^18 wei)
     let amount_f64: f64 = amount.parse()
         .map_err(|e| format!("Invalid amount: {}", e))?;
     let amount_wei = (amount_f64 * 1e18) as u128;
-    let amount_hex = format!("0x{:x}", amount_wei);
 
     // Get the nonce for the sender address
     let nonce_payload = serde_json::json!({
@@ -874,7 +976,7 @@ async fn send_transaction(
         return Err(format!("RPC error getting nonce: {}", error));
     }
 
-    let nonce = nonce_json["result"].as_str().unwrap_or("0x0");
+    let nonce = parse_hex_u64(nonce_json["result"].as_str().unwrap_or("0x0"));
 
     // Get gas price
     let gas_price_payload = serde_json::json!({
@@ -894,57 +996,72 @@ async fn send_transaction(
     let gas_price_json: serde_json::Value = gas_price_response.json().await
         .map_err(|e| format!("Failed to parse gas price response: {}", e))?;
 
-    // Use minimum gas price (0 for our test network)
-    let gas_price = gas_price_json["result"].as_str().unwrap_or("0x0");
+    let gas_price = parse_hex_u64(gas_price_json["result"].as_str().unwrap_or("0x0"));
+    // Use at least 1 gwei if gas price is 0
+    let gas_price = if gas_price == 0 { 1_000_000_000 } else { gas_price };
 
-    // Build transaction object
-    let tx = serde_json::json!({
-        "from": from_address,
-        "to": to_address,
-        "value": amount_hex,
-        "gas": "0x5208", // 21000 gas for simple transfer
-        "gasPrice": gas_price,
-        "nonce": nonce,
-        "chainId": format!("0x{:x}", geth::CHAIN_ID)
-    });
+    let gas_limit: u64 = 21000; // Standard transfer
+    let chain_id: u64 = geth::CHAIN_ID;
 
-    // First, try to unlock the account and send via personal_sendTransaction
-    // This requires the private key to be imported into Geth
-    // For now, we'll use eth_sendTransaction with an unlocked account
+    // Parse to address
+    let to_bytes = hex::decode(to_address.trim_start_matches("0x"))
+        .map_err(|e| format!("Invalid to address: {}", e))?;
 
-    // Import the private key into Geth's keystore
-    let import_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "personal_importRawKey",
-        "params": [private_key.trim_start_matches("0x"), ""],
-        "id": 1
-    });
+    // RLP encode for signing (EIP-155): [nonce, gasPrice, gasLimit, to, value, data, chainId, 0, 0]
+    let unsigned_tx = rlp_encode_list(vec![
+        rlp_encode_value(&u64_to_bytes(nonce)),
+        rlp_encode_value(&u64_to_bytes(gas_price)),
+        rlp_encode_value(&u64_to_bytes(gas_limit)),
+        rlp_encode_value(&to_bytes),
+        rlp_encode_value(&u128_to_bytes(amount_wei)),
+        rlp_encode_value(&[]), // data (empty for simple transfer)
+        rlp_encode_value(&u64_to_bytes(chain_id)),
+        rlp_encode_value(&[]), // empty for EIP-155
+        rlp_encode_value(&[]), // empty for EIP-155
+    ]);
 
-    let _ = client
-        .post(DEFAULT_RPC_ENDPOINT)
-        .json(&import_payload)
-        .send()
-        .await;
+    // Hash the unsigned transaction
+    let tx_hash = keccak256(&unsigned_tx);
 
-    // Unlock the account
-    let unlock_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "personal_unlockAccount",
-        "params": [&from_address, "", 60],
-        "id": 1
-    });
+    // Sign the hash
+    let message = Message::from_digest_slice(&tx_hash)
+        .map_err(|e| format!("Failed to create message: {}", e))?;
 
-    let _ = client
-        .post(DEFAULT_RPC_ENDPOINT)
-        .json(&unlock_payload)
-        .send()
-        .await;
+    let (recovery_id, signature) = secp
+        .sign_ecdsa_recoverable(&message, &secret_key)
+        .serialize_compact();
 
-    // Send the transaction
+    // Calculate v value (EIP-155)
+    let v = chain_id * 2 + 35 + recovery_id.to_i32() as u64;
+
+    // Extract r and s from signature
+    let r = &signature[0..32];
+    let s = &signature[32..64];
+
+    // Trim leading zeros from r and s
+    let r_trimmed: Vec<u8> = r.iter().skip_while(|&&b| b == 0).copied().collect();
+    let s_trimmed: Vec<u8> = s.iter().skip_while(|&&b| b == 0).copied().collect();
+
+    // RLP encode signed transaction: [nonce, gasPrice, gasLimit, to, value, data, v, r, s]
+    let signed_tx = rlp_encode_list(vec![
+        rlp_encode_value(&u64_to_bytes(nonce)),
+        rlp_encode_value(&u64_to_bytes(gas_price)),
+        rlp_encode_value(&u64_to_bytes(gas_limit)),
+        rlp_encode_value(&to_bytes),
+        rlp_encode_value(&u128_to_bytes(amount_wei)),
+        rlp_encode_value(&[]), // data
+        rlp_encode_value(&u64_to_bytes(v)),
+        rlp_encode_value(if r_trimmed.is_empty() { &[0u8] } else { &r_trimmed }),
+        rlp_encode_value(if s_trimmed.is_empty() { &[0u8] } else { &s_trimmed }),
+    ]);
+
+    let signed_tx_hex = format!("0x{}", hex::encode(&signed_tx));
+
+    // Send the raw transaction
     let send_payload = serde_json::json!({
         "jsonrpc": "2.0",
-        "method": "eth_sendTransaction",
-        "params": [tx],
+        "method": "eth_sendRawTransaction",
+        "params": [signed_tx_hex],
         "id": 1
     });
 
