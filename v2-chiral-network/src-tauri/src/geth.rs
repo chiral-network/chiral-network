@@ -5,13 +5,15 @@
 //! - Starting/stopping Geth process
 //! - Genesis initialization
 //! - RPC communication
+//! - Bootstrap node health checking (via geth_bootstrap module)
 
+use crate::geth_bootstrap;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use futures_util::StreamExt;
 
 // ============================================================================
 // Configuration
@@ -25,12 +27,6 @@ pub const NETWORK_ID: u64 = 98765;
 
 /// Default RPC endpoint
 pub const RPC_ENDPOINT: &str = "http://127.0.0.1:8545";
-
-/// Bootstrap nodes for Chiral Network
-const BOOTSTRAP_NODES: &[&str] = &[
-    "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303",
-    "enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303",
-];
 
 // ============================================================================
 // Types
@@ -382,7 +378,15 @@ impl GethProcess {
         }
 
         let geth_path = self.geth_path();
-        let bootstrap_nodes = BOOTSTRAP_NODES.join(",");
+
+        // Get healthy bootstrap nodes (with health checking and caching)
+        println!("🔍 Checking bootstrap node health...");
+        let bootstrap_nodes = geth_bootstrap::get_healthy_enodes().await;
+        println!("✅ Using bootstrap nodes: {}", if bootstrap_nodes.len() > 100 {
+            format!("{}...", &bootstrap_nodes[..100])
+        } else {
+            bootstrap_nodes.clone()
+        });
 
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")

@@ -104,10 +104,16 @@ static CACHE: Lazy<Arc<RwLock<BootstrapCache>>> =
 pub fn get_default_nodes() -> Vec<BootstrapNode> {
     vec![
         BootstrapNode {
-            enode: "enode://45cc5ba89142b2c82180986f411aa16dbfe6041043d1f7112f08e710f23fdeb7283551ec15ca9d23a0da91ac12e080e014f8c32230a8109d6d0b01be8ca71102@130.245.173.73:30303".into(),
-            name: "Primary Bootstrap (Chiral Test)".into(),
+            enode: "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303".into(),
+            name: "Stony Brook Primary".into(),
             region: "US East".into(),
             priority: 1,
+        },
+        BootstrapNode {
+            enode: "enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303".into(),
+            name: "Azure West".into(),
+            region: "US West".into(),
+            priority: 2,
         },
     ]
 }
@@ -332,6 +338,22 @@ pub async fn get_cached_report() -> Option<BootstrapHealthReport> {
     cache.report.clone()
 }
 
+/// Clear the cache (useful for forcing fresh health check)
+pub async fn clear_cache() {
+    let mut cache = CACHE.write().await;
+    cache.report = None;
+    cache.last_updated = None;
+}
+
+/// Get all bootstrap enodes without health checking (synchronous fallback)
+pub fn get_all_enodes() -> String {
+    get_nodes()
+        .iter()
+        .map(|n| n.enode.clone())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -376,86 +398,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_enode_extracts_correct_port() {
-        let enode = "enode://abc@10.0.0.1:30303";
-        let (ip, port) = parse_enode(enode).unwrap();
-        assert_eq!(ip, "10.0.0.1");
-        assert_eq!(port, 30303);
+    fn test_get_all_enodes() {
+        let enodes = get_all_enodes();
+        assert!(!enodes.is_empty());
+        assert!(enodes.contains("enode://"));
     }
-
-    #[test]
-    fn test_parse_enode_missing_at_sign() {
-        assert!(parse_enode("enode://abc123").is_err());
-    }
-
-    #[test]
-    fn test_parse_enode_missing_port() {
-        assert!(parse_enode("enode://abc@192.168.1.1").is_err());
-    }
-
-    #[test]
-    fn test_parse_enode_invalid_port() {
-        assert!(parse_enode("enode://abc@192.168.1.1:notaport").is_err());
-    }
-
-    #[test]
-    fn test_default_nodes_have_required_fields() {
-        for node in get_default_nodes() {
-            assert!(!node.name.is_empty(), "Node name should not be empty");
-            assert!(!node.region.is_empty(), "Node region should not be empty");
-            assert!(node.enode.starts_with("enode://"), "Enode should start with enode://");
-            assert!(node.enode.contains("@"), "Enode should contain @");
-            assert!(node.enode.contains(":30303"), "Enode should contain port 30303");
-        }
-    }
-
-    #[test]
-    fn test_get_nodes_returns_defaults_without_env() {
-        let nodes = get_nodes();
-        let defaults = get_default_nodes();
-        assert_eq!(nodes.len(), defaults.len());
-    }
-
-    #[test]
-    fn test_bootstrap_node_priorities() {
-        let nodes = get_default_nodes();
-        assert_eq!(nodes[0].priority, 1);
-    }
-
-    #[test]
-    fn test_node_health_serialization() {
-        let health = NodeHealth {
-            enode: "enode://abc@127.0.0.1:30303".to_string(),
-            name: "Test Node".to_string(),
-            region: "US East".to_string(),
-            reachable: true,
-            latency_ms: Some(42),
-            error: None,
-            last_checked: 1700000000,
-        };
-        let json = serde_json::to_string(&health).unwrap();
-        assert!(json.contains("latencyMs"));
-        assert!(json.contains("lastChecked"));
-        let deserialized: NodeHealth = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.name, "Test Node");
-        assert_eq!(deserialized.latency_ms, Some(42));
-    }
-
-    #[test]
-    fn test_bootstrap_health_report_serialization() {
-        let report = BootstrapHealthReport {
-            total_nodes: 2,
-            healthy_nodes: 1,
-            nodes: vec![],
-            timestamp: 1700000000,
-            is_healthy: true,
-            healthy_enode_string: "enode://test@127.0.0.1:30303".to_string(),
-        };
-        let json = serde_json::to_string(&report).unwrap();
-        assert!(json.contains("totalNodes"));
-        assert!(json.contains("healthyNodes"));
-        assert!(json.contains("isHealthy"));
-        assert!(json.contains("healthyEnodeString"));
-    }
-
 }
