@@ -11,9 +11,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { writable, type Writable } from 'svelte/store';
-import { logger } from '$lib/logger';
-
-const log = logger('Geth');
 
 // ============================================================================
 // Types
@@ -66,7 +63,7 @@ class GethService {
     try {
       return await invoke<boolean>('is_geth_installed');
     } catch (error) {
-      log.error('Failed to check Geth installation:', error);
+      console.error('Failed to check Geth installation:', error);
       return false;
     }
   }
@@ -129,7 +126,6 @@ class GethService {
    */
   async getStatus(): Promise<GethStatus> {
     const status = await invoke<GethStatus>('get_geth_status');
-    log.info('[gethService.getStatus] Status:', JSON.stringify(status));
     gethStatus.set(status);
     return status;
   }
@@ -180,8 +176,8 @@ class GethService {
     this.stopStatusPolling();
 
     // Initial fetch
-    this.getStatus().catch((e: unknown) => log.error(e));
-    this.getMiningStatus().catch((e: unknown) => log.error(e));
+    this.getStatus().catch(console.error);
+    this.getMiningStatus().catch(console.error);
 
     // Poll every intervalMs
     this.statusInterval = setInterval(async () => {
@@ -190,7 +186,7 @@ class GethService {
         await this.getMiningStatus();
       } catch (error) {
         // Geth might not be running
-        log.debug('Status poll failed:', error);
+        console.debug('Status poll failed:', error);
       }
     }, intervalMs);
   }
@@ -219,7 +215,7 @@ class GethService {
         }
       }
     } catch (error) {
-      log.debug('Geth initialization check failed:', error);
+      console.debug('Geth initialization check failed:', error);
     }
   }
 }
