@@ -391,7 +391,7 @@ impl GethProcess {
             .arg(NETWORK_ID.to_string())
             .arg("--http")
             .arg("--http.addr")
-            .arg("127.0.0.1")
+            .arg("0.0.0.0")  // Allow external connections to RPC
             .arg("--http.port")
             .arg("8545")
             .arg("--http.api")
@@ -405,7 +405,7 @@ impl GethProcess {
             .arg("--cache")
             .arg("512")
             .arg("--maxpeers")
-            .arg("25")
+            .arg("50")
             .arg("--port")
             .arg("30303")
             .arg("--nat")
@@ -413,10 +413,9 @@ impl GethProcess {
             .arg("--miner.gasprice")
             .arg("0")
             .arg("--txpool.pricelimit")
-            .arg("0")
-            .arg("--nodiscover");  // Disable discovery for local testing
+            .arg("0");
 
-        // Only add bootstrap nodes if we're not in local-only mode
+        // Add bootstrap nodes if available
         if !bootstrap_nodes.is_empty() {
             cmd.arg("--bootnodes").arg(&bootstrap_nodes);
         }
@@ -604,6 +603,36 @@ impl GethProcess {
         self.rpc_call(&client, "miner_setEtherbase", serde_json::json!([address]))
             .await
             .map(|_| ())
+    }
+
+    /// Get local enode URL for peer connections
+    pub async fn get_enode(&self) -> Result<String, String> {
+        let client = reqwest::Client::new();
+        let result = self.rpc_call(&client, "admin_nodeInfo", serde_json::json!([]))
+            .await?;
+
+        result["enode"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Could not get enode URL".to_string())
+    }
+
+    /// Add a peer by enode URL
+    pub async fn add_peer(&self, enode: &str) -> Result<bool, String> {
+        let client = reqwest::Client::new();
+        let result = self.rpc_call(&client, "admin_addPeer", serde_json::json!([enode]))
+            .await?;
+
+        Ok(result.as_bool().unwrap_or(false))
+    }
+
+    /// Get list of connected peers
+    pub async fn get_peers(&self) -> Result<Vec<serde_json::Value>, String> {
+        let client = reqwest::Client::new();
+        let result = self.rpc_call(&client, "admin_peers", serde_json::json!([]))
+            .await?;
+
+        Ok(result.as_array().cloned().unwrap_or_default())
     }
 
     /// Make an RPC call to Geth
