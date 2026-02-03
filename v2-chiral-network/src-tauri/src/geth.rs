@@ -389,8 +389,6 @@ impl GethProcess {
             .arg(&self.data_dir)
             .arg("--networkid")
             .arg(NETWORK_ID.to_string())
-            .arg("--bootnodes")
-            .arg(&bootstrap_nodes)
             .arg("--http")
             .arg("--http.addr")
             .arg("127.0.0.1")
@@ -401,11 +399,13 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg("snap")
+            .arg("full")  // Use full sync for local/private chain
+            .arg("--gcmode")
+            .arg("archive")  // Keep all state for querying
             .arg("--cache")
-            .arg("1024")
+            .arg("512")
             .arg("--maxpeers")
-            .arg("50")
+            .arg("25")
             .arg("--port")
             .arg("30303")
             .arg("--nat")
@@ -413,7 +413,13 @@ impl GethProcess {
             .arg("--miner.gasprice")
             .arg("0")
             .arg("--txpool.pricelimit")
-            .arg("0");
+            .arg("0")
+            .arg("--nodiscover");  // Disable discovery for local testing
+
+        // Only add bootstrap nodes if we're not in local-only mode
+        if !bootstrap_nodes.is_empty() {
+            cmd.arg("--bootnodes").arg(&bootstrap_nodes);
+        }
 
         // Set miner address if provided
         if let Some(addr) = miner_address {
@@ -445,8 +451,17 @@ impl GethProcess {
         println!("   Logs: {}", log_path.display());
         println!("   RPC: {}", RPC_ENDPOINT);
 
-        // Wait a moment for Geth to start
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Wait for Geth to start up
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        // Auto-start mining if miner address is set
+        if miner_address.is_some() {
+            println!("⛏️  Auto-starting mining...");
+            match self.start_mining(1).await {
+                Ok(_) => println!("✅ Mining started automatically"),
+                Err(e) => println!("⚠️  Failed to auto-start mining: {}", e),
+            }
+        }
 
         Ok(())
     }
