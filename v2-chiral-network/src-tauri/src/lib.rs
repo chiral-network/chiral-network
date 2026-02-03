@@ -1498,27 +1498,6 @@ fn get_chain_id() -> u64 {
     geth::CHAIN_ID
 }
 
-#[tauri::command]
-async fn get_enode(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let geth = state.geth.lock().await;
-    geth.get_enode().await
-}
-
-#[tauri::command]
-async fn add_peer(
-    state: tauri::State<'_, AppState>,
-    enode: String,
-) -> Result<bool, String> {
-    let geth = state.geth.lock().await;
-    geth.add_peer(&enode).await
-}
-
-#[tauri::command]
-async fn get_blockchain_peers(state: tauri::State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
-    let geth = state.geth.lock().await;
-    geth.get_peers().await
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1567,10 +1546,7 @@ pub fn run() {
             start_mining,
             stop_mining,
             get_mining_status,
-            set_miner_address,
-            get_enode,
-            add_peer,
-            get_blockchain_peers
+            set_miner_address
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
