@@ -58,8 +58,6 @@
   let transactions = $state<Transaction[]>([]);
   let isLoadingHistory = $state(false);
 
-  // Faucet state
-  let isRequestingFaucet = $state(false);
 
   // Check if Tauri is available
   function isTauri(): boolean {
@@ -82,6 +80,9 @@
     }
   });
 
+  // Track if we've shown the Geth warning
+  let gethWarningShown = $state(false);
+
   // Load wallet balance
   async function loadBalance() {
     if (!$walletAccount?.address) return;
@@ -90,8 +91,13 @@
     try {
       const result = await walletService.getBalance($walletAccount.address);
       balance = result;
+      gethWarningShown = false; // Reset if successful
     } catch (error) {
-      console.error('Failed to load balance:', error);
+      // Only log once to avoid console spam
+      if (!gethWarningShown) {
+        console.warn('Balance unavailable - Geth may not be running');
+        gethWarningShown = true;
+      }
       balance = '0.00';
     } finally {
       isLoadingBalance = false;
@@ -109,7 +115,7 @@
       });
       transactions = result.transactions;
     } catch (error) {
-      console.error('Failed to load transaction history:', error);
+      // Silent fail - Geth not running is expected initially
       transactions = [];
     } finally {
       isLoadingHistory = false;
@@ -245,30 +251,6 @@
     return tx.to.toLowerCase() === $walletAccount?.address.toLowerCase();
   }
 
-  // Request test CHR from faucet
-  async function requestTestCHR() {
-    if (!$walletAccount || !isTauri()) return;
-
-    isRequestingFaucet = true;
-    try {
-      const result = await invoke<{ hash: string; status: string }>('request_faucet', {
-        address: $walletAccount.address
-      });
-
-      toasts.show('Test CHR requested! Waiting for confirmation...', 'success');
-
-      // Refresh balance after a delay
-      setTimeout(() => {
-        loadBalance();
-        loadTransactionHistory();
-      }, 3000);
-    } catch (error) {
-      console.error('Faucet request failed:', error);
-      toasts.show(`${error}`, 'error');
-    } finally {
-      isRequestingFaucet = false;
-    }
-  }
 </script>
 
 <div class="p-6 space-y-6 max-w-4xl mx-auto">
@@ -444,24 +426,16 @@
           </div>
         </div>
 
-        <!-- Get Test CHR Button (for testing) -->
-        <button
-          onclick={requestTestCHR}
-          disabled={isRequestingFaucet || parseFloat(balance) > 0}
-          class="w-full mt-4 px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          title={parseFloat(balance) > 0 ? 'You already have CHR' : 'Get 1 test CHR'}
-        >
-          {#if isRequestingFaucet}
-            <Loader2 class="w-4 h-4 animate-spin" />
-            Requesting...
-          {:else}
-            <Coins class="w-4 h-4" />
-            Get Test CHR (1 CHR)
-          {/if}
-        </button>
-        <p class="text-xs text-gray-500 mt-2 text-center">
-          For testing only. Start Geth and mine blocks if faucet is unavailable.
-        </p>
+        <!-- Get Test CHR Info -->
+        {#if parseFloat(balance) === 0}
+          <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <p class="text-sm text-yellow-800 font-medium mb-1">Need test CHR?</p>
+            <p class="text-xs text-yellow-700">
+              Go to the <strong>Mining</strong> page to start Geth and mine blocks.
+              Block rewards will be sent to your wallet address.
+            </p>
+          </div>
+        {/if}
       </div>
 
       <!-- Export Wallet Card -->
