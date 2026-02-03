@@ -151,13 +151,13 @@
 <div class="p-6 space-y-6 max-w-4xl mx-auto">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold">Mining</h1>
-      <p class="text-gray-600 mt-1">Mine CHR tokens on the Chiral Network</p>
+      <h1 class="text-3xl font-bold dark:text-white">Mining</h1>
+      <p class="text-gray-600 dark:text-gray-400 mt-1">Mine CHR tokens on the Chiral Network</p>
     </div>
     <button
       onclick={loadStatus}
       disabled={isLoading}
-      class="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
       title="Refresh status"
     >
       <RefreshCw class="w-5 h-5 {isLoading ? 'animate-spin' : ''}" />
@@ -170,14 +170,14 @@
     </div>
   {:else if !gethStatus?.installed || !gethStatus?.running}
     <!-- Geth Not Running - Direct to Network Page -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-yellow-100 rounded-lg">
-          <AlertTriangle class="w-6 h-6 text-yellow-600" />
+        <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
+          <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
         </div>
         <div>
-          <h2 class="font-semibold">Blockchain Node Required</h2>
-          <p class="text-sm text-gray-500">
+          <h2 class="font-semibold dark:text-white">Blockchain Node Required</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">
             {#if !gethStatus?.installed}
               Geth is not installed
             {:else}
@@ -186,15 +186,15 @@
           </p>
         </div>
       </div>
-      <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-        <p class="text-sm text-yellow-800">
+      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
+        <p class="text-sm text-yellow-800 dark:text-yellow-300">
           {#if !gethStatus?.installed}
             You need to download and start Geth before you can mine CHR tokens.
           {:else}
             You need to start Geth before you can mine CHR tokens.
           {/if}
         </p>
-        <p class="text-sm text-yellow-700 mt-2">
+        <p class="text-sm text-yellow-700 dark:text-yellow-400 mt-2">
           Go to the <strong>Network</strong> page to manage your blockchain node connection.
         </p>
       </div>
@@ -208,25 +208,25 @@
     </div>
   {:else}
     <!-- Mining Control Card - Geth is installed and running -->
-      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
-            <div class="p-2 {miningStatus?.mining ? 'bg-yellow-100' : 'bg-gray-100'} rounded-lg">
-              <Pickaxe class="w-6 h-6 {miningStatus?.mining ? 'text-yellow-600' : 'text-gray-600'}" />
+            <div class="p-2 {miningStatus?.mining ? 'bg-yellow-100 dark:bg-yellow-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+              <Pickaxe class="w-6 h-6 {miningStatus?.mining ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-600 dark:text-gray-400'}" />
             </div>
             <div>
-              <h2 class="font-semibold">Mining</h2>
-              <p class="text-sm text-gray-500">Earn CHR by mining blocks</p>
+              <h2 class="font-semibold dark:text-white">Mining</h2>
+              <p class="text-sm text-gray-500 dark:text-gray-400">Earn CHR by mining blocks</p>
             </div>
           </div>
           <div class="flex items-center gap-2">
             {#if miningStatus?.mining}
-              <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-sm">
+              <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-full text-sm">
                 <span class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>
                 Mining
               </span>
             {:else}
-              <span class="flex items-center gap-2 px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
+              <span class="flex items-center gap-2 px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-sm">
                 <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
                 Idle
               </span>
@@ -236,21 +236,21 @@
 
         <!-- Mining Stats -->
         <div class="grid grid-cols-2 gap-4 mb-4">
-          <div class="bg-gray-50 rounded-lg p-4">
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
             <div class="flex items-center gap-2 mb-2">
               <Zap class="w-4 h-4 text-yellow-500" />
-              <span class="text-sm text-gray-600">Hash Rate</span>
+              <span class="text-sm text-gray-600 dark:text-gray-400">Hash Rate</span>
             </div>
-            <p class="text-2xl font-bold">
+            <p class="text-2xl font-bold dark:text-white">
               {miningStatus?.mining ? formatHashRate(miningStatus?.hashRate || 0) : '0 H/s'}
             </p>
           </div>
-          <div class="bg-gray-50 rounded-lg p-4">
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
             <div class="flex items-center gap-2 mb-2">
               <TrendingUp class="w-4 h-4 text-green-500" />
-              <span class="text-sm text-gray-600">Miner Address</span>
+              <span class="text-sm text-gray-600 dark:text-gray-400">Miner Address</span>
             </div>
-            <p class="text-sm font-mono truncate">
+            <p class="text-sm font-mono truncate dark:text-gray-300">
               {miningStatus?.minerAddress || $walletAccount?.address || 'Not set'}
             </p>
           </div>
@@ -258,7 +258,7 @@
 
         <!-- Thread Control -->
         <div class="mb-4">
-          <label for="threads" class="block text-sm font-medium text-gray-700 mb-2">
+          <label for="threads" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
             Mining Threads ({miningThreads} / {maxThreads})
           </label>
           <input
@@ -268,9 +268,9 @@
             max={maxThreads}
             bind:value={miningThreads}
             disabled={miningStatus?.mining}
-            class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+            class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
           />
-          <div class="flex justify-between text-xs text-gray-500 mt-1">
+          <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
             <span>1 thread</span>
             <span>{maxThreads} threads (max)</span>
           </div>
@@ -305,17 +305,17 @@
       </div>
 
     <!-- Info Card -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-purple-100 rounded-lg">
-          <BarChart3 class="w-6 h-6 text-purple-600" />
+        <div class="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
+          <BarChart3 class="w-6 h-6 text-purple-600 dark:text-purple-400" />
         </div>
         <div>
-          <h2 class="font-semibold">Mining Information</h2>
-          <p class="text-sm text-gray-500">How mining works on Chiral Network</p>
+          <h2 class="font-semibold dark:text-white">Mining Information</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">How mining works on Chiral Network</p>
         </div>
       </div>
-      <div class="space-y-3 text-sm text-gray-600">
+      <div class="space-y-3 text-sm text-gray-600 dark:text-gray-400">
         <div class="flex items-start gap-3">
           <Check class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
           <p>Mining helps secure the Chiral Network and process transactions</p>
