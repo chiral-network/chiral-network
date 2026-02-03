@@ -58,6 +58,10 @@
     {
       path: '/',
       component: WalletPage
+    },
+    {
+      path: '*',
+      component: WalletPage
     }
   ];
   
