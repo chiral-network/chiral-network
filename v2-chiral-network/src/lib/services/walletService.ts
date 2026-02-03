@@ -82,7 +82,11 @@ class WalletService {
 
         return balance;
       } catch (error) {
-        console.error('Failed to fetch balance from backend:', error);
+        // Silent fail - Geth not running is expected initially
+        // Only log if we don't have a cached value
+        if (!cached) {
+          console.debug('Balance unavailable - Geth may not be running');
+        }
         // Return cached value if available, otherwise 0
         return cached?.balance || '0.00';
       }
