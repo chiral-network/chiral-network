@@ -88,19 +88,43 @@
 
   // Load Geth status
   async function loadGethStatus() {
-    if (!isTauri()) return;
+    if (!isTauri()) {
+      // In non-Tauri mode, set a default status
+      gethStatus = {
+        installed: false,
+        running: false,
+        syncing: false,
+        currentBlock: 0,
+        highestBlock: 0,
+        peerCount: 0,
+        chainId: 0
+      };
+      return;
+    }
 
     try {
       gethStatus = await invoke<GethStatus>('get_geth_status');
     } catch (err) {
-      // Silent fail - expected if Geth commands aren't available
-      console.debug('Geth status check failed:', err);
+      // If we can't get status, set installed to false
+      console.error('Geth status check failed:', err);
+      gethStatus = {
+        installed: false,
+        running: false,
+        syncing: false,
+        currentBlock: 0,
+        highestBlock: 0,
+        peerCount: 0,
+        chainId: 0
+      };
     }
   }
 
   // Download Geth
   async function handleDownloadGeth() {
-    if (!isTauri()) return;
+    if (!isTauri()) {
+      toasts.show('Geth download requires desktop app', 'error');
+      return;
+    }
 
     isDownloading = true;
     downloadProgress = { downloaded: 0, total: 0, percentage: 0, status: 'Starting download...' };
