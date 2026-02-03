@@ -597,18 +597,18 @@
 
 <div class="p-6 space-y-6">
   <div>
-    <h1 class="text-3xl font-bold">Download</h1>
-    <p class="text-gray-600 mt-2">Search and download files from the Chiral Network</p>
+    <h1 class="text-3xl font-bold dark:text-white">Download</h1>
+    <p class="text-gray-600 dark:text-gray-400 mt-2">Search and download files from the Chiral Network</p>
   </div>
 
   <!-- Network Status Warning -->
   {#if !$networkConnected}
-    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+    <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
       <div class="flex items-start gap-3">
-        <div class="text-yellow-600 mt-0.5">!</div>
+        <div class="text-yellow-600 dark:text-yellow-400 mt-0.5">!</div>
         <div>
-          <p class="text-sm font-semibold text-yellow-800">Network Not Connected</p>
-          <p class="text-sm text-yellow-700">
+          <p class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">Network Not Connected</p>
+          <p class="text-sm text-yellow-700 dark:text-yellow-400">
             Please connect to the DHT network from the Network page before downloading files.
           </p>
         </div>
@@ -617,31 +617,31 @@
   {/if}
 
   <!-- Add New Download Section -->
-  <div class="bg-white rounded-lg border border-gray-200 p-6">
+  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
     <div class="flex items-center gap-2 mb-4">
-      <Plus class="w-5 h-5 text-gray-600" />
-      <h2 class="text-lg font-semibold">Add New Download</h2>
+      <Plus class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+      <h2 class="text-lg font-semibold dark:text-white">Add New Download</h2>
     </div>
 
     <!-- Search Mode Tabs -->
     <div class="flex gap-2 mb-4">
       <button
         onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
       >
         <Search class="w-4 h-4" />
         Merkle Hash
       </button>
       <button
         onclick={() => { searchMode = 'magnet'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
       >
         <Link class="w-4 h-4" />
         Magnet Link
       </button>
       <button
         onclick={() => { searchMode = 'torrent'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
       >
         <FileUp class="w-4 h-4" />
         .torrent File
@@ -650,9 +650,9 @@
 
     <!-- Search Input -->
     {#if searchMode === 'torrent'}
-      <div class="text-center py-8 border-2 border-dashed border-gray-300 rounded-lg">
+      <div class="text-center py-8 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
         <FileUp class="w-12 h-12 mx-auto text-gray-400 mb-3" />
-        <p class="text-gray-600 mb-4">Upload a .torrent file to start downloading</p>
+        <p class="text-gray-600 dark:text-gray-400 mb-4">Upload a .torrent file to start downloading</p>
         <button
           onclick={handleTorrentFile}
           disabled={!$networkConnected}
@@ -669,7 +669,7 @@
               type="text"
               bind:value={searchQuery}
               placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
-              class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+              class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
               onkeydown={(e) => e.key === 'Enter' && searchFile()}
               onfocus={() => showSearchHistory = true}
               onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -692,7 +692,7 @@
         </div>
       </div>
 
-      <p class="text-xs text-gray-500 mt-2">
+      <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
         {#if searchMode === 'hash'}
           Enter a 64-character SHA-256 Merkle root hash to search for files
         {:else}
@@ -703,23 +703,23 @@
 
     <!-- Search Result -->
     {#if searchResult}
-      <div class="mt-6 bg-gray-50 rounded-lg p-4 border border-gray-200">
+      <div class="mt-6 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
         <div class="flex items-start gap-4">
-          <div class="flex items-center justify-center w-14 h-14 bg-white rounded-lg border border-gray-200 flex-shrink-0">
+          <div class="flex items-center justify-center w-14 h-14 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 flex-shrink-0">
             <svelte:component this={getFileIcon(searchResult.fileName)} class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
           </div>
 
           <div class="flex-1 min-w-0">
-            <h3 class="text-lg font-semibold truncate">{searchResult.fileName}</h3>
-            <div class="flex items-center gap-4 text-sm text-gray-600 mt-1">
+            <h3 class="text-lg font-semibold truncate dark:text-white">{searchResult.fileName}</h3>
+            <div class="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
               {#if searchResult.fileSize > 0}
                 <span>{formatFileSize(searchResult.fileSize)}</span>
               {/if}
-              <span class="text-green-600">
+              <span class="text-green-600 dark:text-green-400">
                 {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''}` : 'Unknown seeders'}
               </span>
             </div>
-            <p class="text-xs text-gray-500 font-mono mt-2 truncate">
+            <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-2 truncate">
               {searchResult.hash}
             </p>
           </div>
@@ -738,51 +738,51 @@
 
     <!-- Search Error -->
     {#if searchError}
-      <div class="mt-6 bg-red-50 rounded-lg p-4 border border-red-200">
+      <div class="mt-6 bg-red-50 dark:bg-red-900/30 rounded-lg p-4 border border-red-200 dark:border-red-800">
         <div class="flex items-center gap-3">
-          <AlertCircle class="w-5 h-5 text-red-500" />
-          <p class="text-sm text-red-700">{searchError}</p>
+          <AlertCircle class="w-5 h-5 text-red-500 dark:text-red-400" />
+          <p class="text-sm text-red-700 dark:text-red-300">{searchError}</p>
         </div>
       </div>
     {/if}
   </div>
 
   <!-- Download Tracker -->
-  <div class="bg-white rounded-lg border border-gray-200 p-6">
+  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-2">
-        <Download class="w-5 h-5 text-gray-600" />
-        <h2 class="text-lg font-semibold">Download Tracker</h2>
-        <span class="text-sm text-gray-500">({getActiveDownloads().length} active)</span>
+        <Download class="w-5 h-5 text-gray-600 dark:text-gray-400" />
+        <h2 class="text-lg font-semibold dark:text-white">Download Tracker</h2>
+        <span class="text-sm text-gray-500 dark:text-gray-400">({getActiveDownloads().length} active)</span>
       </div>
     </div>
 
     {#if downloads.length === 0}
       <div class="text-center py-12">
-        <Download class="w-16 h-16 mx-auto text-gray-300 mb-4" />
-        <p class="text-gray-600">No downloads</p>
-        <p class="text-sm text-gray-500 mt-1">Search for a file or add a magnet link to start downloading</p>
+        <Download class="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
+        <p class="text-gray-600 dark:text-gray-400">No downloads</p>
+        <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">Search for a file or add a magnet link to start downloading</p>
       </div>
     {:else}
       <div class="space-y-4">
         {#each downloads as download (download.id)}
-          <div class="border border-gray-200 rounded-lg p-4">
+          <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
             <div class="flex items-center gap-4">
               <!-- File Icon -->
-              <div class="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-lg flex-shrink-0">
+              <div class="flex items-center justify-center w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-lg flex-shrink-0">
                 <svelte:component this={getFileIcon(download.name)} class="w-6 h-6 {getFileColor(download.name)}" />
               </div>
 
               <!-- File Info -->
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
-                  <p class="text-sm font-semibold truncate">{download.name}</p>
+                  <p class="text-sm font-semibold truncate dark:text-white">{download.name}</p>
                   <span class="px-2 py-0.5 text-xs font-medium rounded capitalize {getStatusBadgeColor(download.status)}">
                     {download.status}
                   </span>
                 </div>
 
-                <div class="flex items-center gap-4 text-xs text-gray-500 mt-1">
+                <div class="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400 mt-1">
                   {#if download.size > 0}
                     <span>{formatFileSize(download.size)}</span>
                   {/if}
@@ -797,9 +797,9 @@
                 {#if download.status === 'downloading' || download.status === 'paused'}
                   <div class="mt-2">
                     <div class="flex items-center justify-between text-xs mb-1">
-                      <span class="text-gray-600">{download.progress.toFixed(1)}%</span>
+                      <span class="text-gray-600 dark:text-gray-400">{download.progress.toFixed(1)}%</span>
                     </div>
-                    <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div class="h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
                       <div
                         class="h-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}"
                         style="width: {download.progress}%"
@@ -814,18 +814,18 @@
                 {#if download.status === 'downloading' || download.status === 'paused'}
                   <button
                     onclick={() => togglePause(download.id)}
-                    class="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                    class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                     title={download.status === 'downloading' ? 'Pause' : 'Resume'}
                   >
                     {#if download.status === 'downloading'}
-                      <Pause class="w-4 h-4 text-gray-600" />
+                      <Pause class="w-4 h-4 text-gray-600 dark:text-gray-400" />
                     {:else}
-                      <Play class="w-4 h-4 text-gray-600" />
+                      <Play class="w-4 h-4 text-gray-600 dark:text-gray-400" />
                     {/if}
                   </button>
                   <button
                     onclick={() => cancelDownload(download.id)}
-                    class="p-2 hover:bg-red-50 rounded-lg transition-colors"
+                    class="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                     title="Cancel"
                   >
                     <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
@@ -833,7 +833,7 @@
                 {:else if download.status === 'queued'}
                   <button
                     onclick={() => cancelDownload(download.id)}
-                    class="p-2 hover:bg-red-50 rounded-lg transition-colors"
+                    class="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                     title="Cancel"
                   >
                     <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
@@ -841,7 +841,7 @@
                 {:else}
                   <button
                     onclick={() => moveToHistory(download.id)}
-                    class="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                    class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                     title="Move to history"
                   >
                     <History class="w-4 h-4 text-gray-400" />
@@ -856,21 +856,21 @@
   </div>
 
   <!-- Download History -->
-  <div class="bg-white rounded-lg border border-gray-200">
-    <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+    <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
       <button
         onclick={() => showDownloadHistory = !showDownloadHistory}
-        class="flex items-center gap-2 text-lg font-semibold text-gray-900"
+        class="flex items-center gap-2 text-lg font-semibold text-gray-900 dark:text-white"
       >
         <History class="w-5 h-5" />
         Download History
-        <span class="text-sm font-normal text-gray-500">({downloadHistory.length})</span>
+        <span class="text-sm font-normal text-gray-500 dark:text-gray-400">({downloadHistory.length})</span>
       </button>
 
       {#if downloadHistory.length > 0}
         <button
           onclick={clearDownloadHistory}
-          class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
         >
           <Trash2 class="w-4 h-4" />
           Clear All
@@ -881,29 +881,29 @@
     {#if showDownloadHistory}
       {#if downloadHistory.length === 0}
         <div class="p-8 text-center">
-          <History class="w-12 h-12 mx-auto text-gray-300 mb-3" />
-          <p class="text-gray-600">No download history</p>
-          <p class="text-sm text-gray-500 mt-1">Completed and finished downloads will appear here</p>
+          <History class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+          <p class="text-gray-600 dark:text-gray-400">No download history</p>
+          <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">Completed and finished downloads will appear here</p>
         </div>
       {:else}
-        <div class="divide-y divide-gray-100">
+        <div class="divide-y divide-gray-100 dark:divide-gray-700">
           {#each downloadHistory as entry (entry.id)}
-            <div class="p-4 hover:bg-gray-50 transition-colors">
+            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
               <div class="flex items-center gap-4">
                 <!-- File Icon -->
-                <div class="flex items-center justify-center w-10 h-10 bg-gray-100 rounded-lg flex-shrink-0">
+                <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-gray-700 rounded-lg flex-shrink-0">
                   <svelte:component this={getFileIcon(entry.fileName)} class="w-5 h-5 {getFileColor(entry.fileName)}" />
                 </div>
 
                 <!-- File Info -->
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
-                    <p class="text-sm font-medium truncate text-gray-900">{entry.fileName}</p>
+                    <p class="text-sm font-medium truncate text-gray-900 dark:text-white">{entry.fileName}</p>
                     <span class="px-2 py-0.5 text-xs font-medium rounded capitalize {getStatusBadgeColor(entry.status)}">
                       {entry.status}
                     </span>
                   </div>
-                  <div class="flex items-center gap-4 text-xs text-gray-500 mt-1">
+                  <div class="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400 mt-1">
                     {#if entry.fileSize > 0}
                       <span>{formatFileSize(entry.fileSize)}</span>
                     {/if}

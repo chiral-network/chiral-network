@@ -23,20 +23,23 @@
   ];
 </script>
 
-<nav class="bg-white shadow-md border-b border-gray-200">
+<nav class="bg-white dark:bg-gray-800 shadow-md border-b border-gray-200 dark:border-gray-700">
   <div class="max-w-7xl mx-auto px-4">
     <div class="flex items-center justify-between h-16">
       <div class="flex items-center gap-8">
         <div class="flex items-center gap-2">
           <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg"></div>
-          <span class="text-xl font-bold">Chiral Network</span>
+          <span class="text-xl font-bold dark:text-white">Chiral Network</span>
         </div>
-        
+
         <div class="flex gap-1">
           {#each navItems as item}
             <button
               onclick={() => goto(item.path)}
-              class="flex items-center gap-2 px-4 py-2 rounded-lg transition {currentPage === item.path ? 'bg-blue-50 text-blue-600' : 'text-gray-700 hover:bg-gray-100'}"
+              class="flex items-center gap-2 px-4 py-2 rounded-lg transition
+                {currentPage === item.path
+                  ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
             >
               <svelte:component this={item.icon} class="w-4 h-4" />
               <span class="font-medium">{item.label}</span>
@@ -44,18 +47,24 @@
           {/each}
         </div>
       </div>
-      
+
       <div class="flex items-center gap-4">
-        <div class="flex items-center gap-2 px-3 py-1.5 rounded-full {$networkConnected ? 'bg-green-50' : 'bg-red-50'}">
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-full
+          {$networkConnected
+            ? 'bg-green-50 dark:bg-green-900/30'
+            : 'bg-red-50 dark:bg-red-900/30'}">
           <div class="w-2 h-2 rounded-full {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
-          <span class="text-sm font-medium {$networkConnected ? 'text-green-700' : 'text-red-700'}">
+          <span class="text-sm font-medium
+            {$networkConnected
+              ? 'text-green-700 dark:text-green-400'
+              : 'text-red-700 dark:text-red-400'}">
             {$networkConnected ? 'Connected' : 'Disconnected'}
           </span>
         </div>
-        
+
         <button
           onclick={handleLogout}
-          class="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition"
+          class="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
         >
           <LogOut class="w-4 h-4" />
           <span>Logout</span>
