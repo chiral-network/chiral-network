@@ -1,10 +1,12 @@
 mod dht;
 mod file_transfer;
 mod geth;
+mod geth_bootstrap;
 
 use dht::DhtService;
 use file_transfer::FileTransferService;
-use geth::{GethProcess, GethDownloader, GethStatus, MiningStatus};
+use geth::{GethDownloader, GethProcess, GethStatus, MiningStatus};
+use geth_bootstrap::BootstrapHealthReport;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
@@ -1498,6 +1500,22 @@ fn get_chain_id() -> u64 {
     geth::CHAIN_ID
 }
 
+// ============================================================================
+// Bootstrap Health Commands
+// ============================================================================
+
+/// Check health of all bootstrap nodes
+#[tauri::command]
+async fn check_bootstrap_health() -> Result<BootstrapHealthReport, String> {
+    Ok(geth_bootstrap::check_all_nodes().await)
+}
+
+/// Get cached bootstrap health report (faster, no network calls)
+#[tauri::command]
+async fn get_bootstrap_health() -> Result<Option<BootstrapHealthReport>, String> {
+    Ok(geth_bootstrap::get_cached_report().await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1546,7 +1564,10 @@ pub fn run() {
             start_mining,
             stop_mining,
             get_mining_status,
-            set_miner_address
+            set_miner_address,
+            // Bootstrap health commands
+            check_bootstrap_health,
+            get_bootstrap_health
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
