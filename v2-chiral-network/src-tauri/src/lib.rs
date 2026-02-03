@@ -754,6 +754,34 @@ struct WalletBalanceResult {
     balance_wei: String,
 }
 
+// Transaction types
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Transaction {
+    hash: String,
+    from: String,
+    to: String,
+    value: String,
+    value_wei: String,
+    block_number: u64,
+    timestamp: u64,
+    status: String, // "confirmed", "pending", "failed"
+    gas_used: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendTransactionResult {
+    hash: String,
+    status: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionHistoryResult {
+    transactions: Vec<Transaction>,
+}
+
 // Default RPC endpoint for Chiral Network (can be configured)
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:8545";
 
@@ -806,6 +834,332 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
         balance: format!("{:.6}", balance_chr),
         balance_wei: balance_wei.to_string(),
     })
+}
+
+/// Send a transaction from one address to another
+#[tauri::command]
+async fn send_transaction(
+    from_address: String,
+    to_address: String,
+    amount: String,
+    private_key: String,
+) -> Result<SendTransactionResult, String> {
+    let client = reqwest::Client::new();
+
+    // Convert amount from CHR to wei (1 CHR = 10^18 wei)
+    let amount_f64: f64 = amount.parse()
+        .map_err(|e| format!("Invalid amount: {}", e))?;
+    let amount_wei = (amount_f64 * 1e18) as u128;
+    let amount_hex = format!("0x{:x}", amount_wei);
+
+    // Get the nonce for the sender address
+    let nonce_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionCount",
+        "params": [&from_address, "latest"],
+        "id": 1
+    });
+
+    let nonce_response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&nonce_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get nonce: {}", e))?;
+
+    let nonce_json: serde_json::Value = nonce_response.json().await
+        .map_err(|e| format!("Failed to parse nonce response: {}", e))?;
+
+    if let Some(error) = nonce_json.get("error") {
+        return Err(format!("RPC error getting nonce: {}", error));
+    }
+
+    let nonce = nonce_json["result"].as_str().unwrap_or("0x0");
+
+    // Get gas price
+    let gas_price_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_gasPrice",
+        "params": [],
+        "id": 1
+    });
+
+    let gas_price_response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&gas_price_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get gas price: {}", e))?;
+
+    let gas_price_json: serde_json::Value = gas_price_response.json().await
+        .map_err(|e| format!("Failed to parse gas price response: {}", e))?;
+
+    // Use minimum gas price (0 for our test network)
+    let gas_price = gas_price_json["result"].as_str().unwrap_or("0x0");
+
+    // Build transaction object
+    let tx = serde_json::json!({
+        "from": from_address,
+        "to": to_address,
+        "value": amount_hex,
+        "gas": "0x5208", // 21000 gas for simple transfer
+        "gasPrice": gas_price,
+        "nonce": nonce,
+        "chainId": format!("0x{:x}", geth::CHAIN_ID)
+    });
+
+    // First, try to unlock the account and send via personal_sendTransaction
+    // This requires the private key to be imported into Geth
+    // For now, we'll use eth_sendTransaction with an unlocked account
+
+    // Import the private key into Geth's keystore
+    let import_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "personal_importRawKey",
+        "params": [private_key.trim_start_matches("0x"), ""],
+        "id": 1
+    });
+
+    let _ = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&import_payload)
+        .send()
+        .await;
+
+    // Unlock the account
+    let unlock_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "personal_unlockAccount",
+        "params": [&from_address, "", 60],
+        "id": 1
+    });
+
+    let _ = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&unlock_payload)
+        .send()
+        .await;
+
+    // Send the transaction
+    let send_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_sendTransaction",
+        "params": [tx],
+        "id": 1
+    });
+
+    let send_response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&send_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send transaction: {}", e))?;
+
+    let send_json: serde_json::Value = send_response.json().await
+        .map_err(|e| format!("Failed to parse send response: {}", e))?;
+
+    if let Some(error) = send_json.get("error") {
+        return Err(format!("Transaction failed: {}", error));
+    }
+
+    let tx_hash = send_json["result"]
+        .as_str()
+        .ok_or("No transaction hash in response")?
+        .to_string();
+
+    Ok(SendTransactionResult {
+        hash: tx_hash,
+        status: "pending".to_string(),
+    })
+}
+
+/// Dev faucet - gives 1 CHR to an address for testing
+/// Only works if there's CHR in the faucet address
+#[tauri::command]
+async fn request_faucet(address: String) -> Result<SendTransactionResult, String> {
+    let client = reqwest::Client::new();
+
+    // Faucet address - this is a known test address with pre-allocated balance
+    let faucet_address = "0x0000000000000000000000000000000000001337";
+
+    // Amount: 1 CHR = 1e18 wei = 0xde0b6b3a7640000
+    let amount_hex = "0xde0b6b3a7640000";
+
+    // Get the nonce for the faucet address
+    let nonce_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionCount",
+        "params": [faucet_address, "latest"],
+        "id": 1
+    });
+
+    let nonce_response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&nonce_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get faucet nonce: {}", e))?;
+
+    let nonce_json: serde_json::Value = nonce_response.json().await
+        .map_err(|e| format!("Failed to parse nonce response: {}", e))?;
+
+    let nonce = nonce_json["result"].as_str().unwrap_or("0x0");
+
+    // Build transaction object
+    let tx = serde_json::json!({
+        "from": faucet_address,
+        "to": address,
+        "value": amount_hex,
+        "gas": "0x5208", // 21000 gas for simple transfer
+        "gasPrice": "0x0",
+        "nonce": nonce
+    });
+
+    // The faucet address is a special address that doesn't need unlocking
+    // in development mode (it's pre-unlocked or uses a null key)
+    // Try to unlock it first (password is empty for dev)
+    let unlock_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "personal_unlockAccount",
+        "params": [faucet_address, "", 60],
+        "id": 1
+    });
+
+    let _ = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&unlock_payload)
+        .send()
+        .await;
+
+    // Send the transaction
+    let send_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_sendTransaction",
+        "params": [tx],
+        "id": 1
+    });
+
+    let send_response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&send_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Faucet request failed: {}", e))?;
+
+    let send_json: serde_json::Value = send_response.json().await
+        .map_err(|e| format!("Failed to parse faucet response: {}", e))?;
+
+    if let Some(error) = send_json.get("error") {
+        // If faucet fails, suggest mining instead
+        return Err(format!("Faucet unavailable. Please mine some blocks to get CHR. Error: {}", error));
+    }
+
+    let tx_hash = send_json["result"]
+        .as_str()
+        .ok_or("No transaction hash in faucet response")?
+        .to_string();
+
+    Ok(SendTransactionResult {
+        hash: tx_hash,
+        status: "pending".to_string(),
+    })
+}
+
+/// Get transaction history for an address
+#[tauri::command]
+async fn get_transaction_history(address: String) -> Result<TransactionHistoryResult, String> {
+    let client = reqwest::Client::new();
+
+    // Get the latest block number
+    let block_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+
+    let block_response = client
+        .post(DEFAULT_RPC_ENDPOINT)
+        .json(&block_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get block number: {}", e))?;
+
+    let block_json: serde_json::Value = block_response.json().await
+        .map_err(|e| format!("Failed to parse block response: {}", e))?;
+
+    let latest_block_hex = block_json["result"].as_str().unwrap_or("0x0");
+    let latest_block = u64::from_str_radix(latest_block_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+
+    // For simplicity, we'll check the last 100 blocks for transactions
+    // In production, you'd use an indexer or logs
+    let mut transactions = Vec::new();
+    let start_block = if latest_block > 100 { latest_block - 100 } else { 0 };
+
+    let address_lower = address.to_lowercase();
+
+    for block_num in (start_block..=latest_block).rev() {
+        let block_hex = format!("0x{:x}", block_num);
+
+        let get_block_payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [block_hex, true],
+            "id": 1
+        });
+
+        let block_response = client
+            .post(DEFAULT_RPC_ENDPOINT)
+            .json(&get_block_payload)
+            .send()
+            .await;
+
+        if let Ok(response) = block_response {
+            if let Ok(json) = response.json::<serde_json::Value>().await {
+                if let Some(result) = json.get("result") {
+                    if let Some(txs) = result.get("transactions").and_then(|t| t.as_array()) {
+                        let block_timestamp = result.get("timestamp")
+                            .and_then(|t| t.as_str())
+                            .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0))
+                            .unwrap_or(0);
+
+                        for tx in txs {
+                            let from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
+                            let to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
+
+                            if from == address_lower || to == address_lower {
+                                let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
+                                let value_wei = u128::from_str_radix(value_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                                let value_chr = value_wei as f64 / 1e18;
+
+                                let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
+                                let gas_used = u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+
+                                transactions.push(Transaction {
+                                    hash: tx.get("hash").and_then(|h| h.as_str()).unwrap_or("").to_string(),
+                                    from: tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_string(),
+                                    to: tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+                                    value: format!("{:.6}", value_chr),
+                                    value_wei: value_wei.to_string(),
+                                    block_number: block_num,
+                                    timestamp: block_timestamp,
+                                    status: "confirmed".to_string(),
+                                    gas_used,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Limit to 50 transactions
+        if transactions.len() >= 50 {
+            break;
+        }
+    }
+
+    Ok(TransactionHistoryResult { transactions })
 }
 
 #[tauri::command]
@@ -1015,6 +1369,9 @@ pub fn run() {
             export_torrent_file,
             // Wallet commands
             get_wallet_balance,
+            send_transaction,
+            get_transaction_history,
+            request_faucet,
             get_chain_id,
             // Geth commands
             is_geth_installed,
