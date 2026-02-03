@@ -8,7 +8,8 @@
   function handleLogout() {
     isAuthenticated.set(false);
     walletAccount.set(null);
-    goto('/wallet');
+    // Use window.location to force a full page reload to wallet page
+    window.location.href = '/';
   }
 
   const navItems = [
