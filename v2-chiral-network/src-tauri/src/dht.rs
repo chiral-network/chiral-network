@@ -4,7 +4,7 @@ use tokio::sync::{Mutex, mpsc};
 use libp2p::{
     kad, mdns, noise, ping,
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Swarm, PeerId, StreamProtocol,
+    tcp, yamux, Swarm, PeerId, StreamProtocol, Multiaddr,
     identify, request_response,
 };
 use futures::StreamExt;
@@ -13,6 +13,36 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use std::str::FromStr;
 use std::collections::HashMap;
+
+/// Get bootstrap nodes for the Chiral Network DHT
+/// These are the same bootstrap nodes used in v1
+pub fn get_bootstrap_nodes() -> Vec<String> {
+    vec![
+        "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE".to_string(),
+        "/ip4/34.44.149.113/tcp/4001/p2p/12D3KooWETLNJUVLbkAbenbSPPdwN9ZLkBU3TLfyAeEUW2dsVptr".to_string(),
+        "/ip4/34.44.149.113/tcp/4002/p2p/12D3KooWGV5BUSYMhNMrhdPh9EUbuLrvAiDsMXEMRpGGvt4LQneA".to_string(), // relay-capable peer
+        "/ip4/130.245.173.105/tcp/4001/p2p/12D3KooWSDDA2jyo6Cynr7SHPfhdQoQazu1jdUEAp7rLKKKLqqTr".to_string(),
+    ]
+}
+
+/// Extract peer ID from a multiaddr like /ip4/.../tcp/.../p2p/<peer_id>
+fn extract_peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
+    use libp2p::multiaddr::Protocol;
+    for proto in addr.iter() {
+        if let Protocol::P2p(peer_id) = proto {
+            return Some(peer_id);
+        }
+    }
+    None
+}
+
+/// Remove the /p2p/<peer_id> component from a multiaddr
+fn remove_peer_id_from_multiaddr(addr: &Multiaddr) -> Multiaddr {
+    use libp2p::multiaddr::Protocol;
+    addr.iter()
+        .filter(|p| !matches!(p, Protocol::P2p(_)))
+        .collect()
+}
 
 // Ping protocol messages
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -314,23 +344,36 @@ impl DhtService {
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
     let local_key = libp2p::identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(local_key.public());
-    
+
     println!("Local peer ID: {}", local_peer_id);
-    
+
     let kad_store = kad::store::MemoryStore::new(local_peer_id);
     let mut kad = kad::Behaviour::new(local_peer_id, kad_store);
     // Set to server mode to help propagate records
     kad.set_mode(Some(kad::Mode::Server));
-    
+
+    // Add bootstrap nodes to Kademlia routing table
+    for addr_str in get_bootstrap_nodes() {
+        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+            // Extract peer ID from the multiaddr (last component is /p2p/<peer_id>)
+            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                // Remove the /p2p/<peer_id> suffix to get the transport address
+                let transport_addr = remove_peer_id_from_multiaddr(&addr);
+                kad.add_address(&peer_id, transport_addr);
+                println!("Added bootstrap node to Kademlia: {}", peer_id);
+            }
+        }
+    }
+
     let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
     let ping = ping::Behaviour::new(ping::Config::new());
-    
+
     let identify_config = identify::Config::new(
         "/chiral/id/1.0.0".to_string(),
         local_key.public(),
     );
     let identify = identify::Behaviour::new(identify_config);
-    
+
     let ping_protocol = request_response::cbor::Behaviour::new(
         [(StreamProtocol::new("/chiral/ping/1.0.0"), request_response::ProtocolSupport::Full)],
         request_response::Config::default(),
@@ -355,7 +398,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         file_transfer,
         file_request,
     };
-    
+
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
         .with_tokio()
         .with_tcp(
@@ -366,10 +409,25 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         .with_behaviour(|_| behaviour)?
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(60)))
         .build();
-    
+
     // Listen on all interfaces
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
-    
+
+    // Dial bootstrap nodes to establish connections
+    for addr_str in get_bootstrap_nodes() {
+        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+            match swarm.dial(addr.clone()) {
+                Ok(_) => println!("Dialing bootstrap node: {}", addr),
+                Err(e) => println!("Failed to dial bootstrap node {}: {:?}", addr, e),
+            }
+        }
+    }
+
+    // Trigger Kademlia bootstrap
+    if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+        println!("Kademlia bootstrap error (expected if no peers yet): {:?}", e);
+    }
+
     Ok((swarm, local_peer_id.to_string()))
 }
 
