@@ -27,3 +27,6 @@ rfd = "0.15"
 reqwest = { version = "0.11", features = ["json", "stream"] }
 zip = "0.6"
 futures-util = "0.3"
+secp256k1 = { version = "0.29", features = ["recovery"] }
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+rlp = "0.5"
