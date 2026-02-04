@@ -316,4 +316,32 @@ describe('ReassemblyManager', () => {
       resolves.slice(1).forEach((fn) => fn(true));
     }
   });
+
+  it('accepts chunk with valid checksum', async () => {
+    const { createHash } = require('crypto');
+    const chunk = new Uint8Array([1, 2, 3]);
+    const checksum = createHash('sha256').update(Buffer.from(chunk)).digest('hex');
+
+    const manifest = {
+      fileSize: 3,
+      chunks: [{ index: 0, encryptedSize: 3, checksum }],
+    };
+
+    reassemblyManager.initReassembly('t10', manifest, '/tmp/t10');
+
+    // Mock invoke success
+    (invoke as any).mockResolvedValue(true);
+
+    const ok = await reassemblyManager.acceptChunk('t10', 0, chunk);
+    expect(ok).toBe(true);
+
+    const state = reassemblyManager.getState('t10')!;
+    expect(state.receivedChunks.includes(0)).toBe(true);
+    expect(state.chunkStates[0]).toBe(ChunkState.RECEIVED);
+
+    // ensure backend was invoked (drain runs async)
+    await new Promise((r) => setTimeout(r, 0));
+    expect((invoke as any).mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
 });
