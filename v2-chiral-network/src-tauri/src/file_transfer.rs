@@ -195,3 +195,91 @@ impl FileTransferService {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transfer_status_equality() {
+        assert_eq!(TransferStatus::Pending, TransferStatus::Pending);
+        assert_ne!(TransferStatus::Pending, TransferStatus::Accepted);
+        assert_ne!(TransferStatus::Completed, TransferStatus::Failed);
+    }
+
+    #[test]
+    fn test_transfer_status_serialization() {
+        let status = TransferStatus::Pending;
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: TransferStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, deserialized);
+    }
+
+    #[test]
+    fn test_all_transfer_statuses_serialize() {
+        let statuses = vec![
+            TransferStatus::Pending,
+            TransferStatus::Accepted,
+            TransferStatus::Declined,
+            TransferStatus::InProgress,
+            TransferStatus::Completed,
+            TransferStatus::Failed,
+        ];
+        for status in statuses {
+            let json = serde_json::to_string(&status).unwrap();
+            let deserialized: TransferStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(status, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_pending_transfer_serialization() {
+        let transfer = PendingTransfer {
+            transfer_id: "tx-001".to_string(),
+            peer_id: "peer-abc".to_string(),
+            file_name: "test.txt".to_string(),
+            file_data: vec![1, 2, 3],
+            status: TransferStatus::Pending,
+        };
+        let json = serde_json::to_string(&transfer).unwrap();
+        assert!(json.contains("transferId"));
+        assert!(json.contains("peerId"));
+        assert!(json.contains("fileName"));
+        let deserialized: PendingTransfer = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.transfer_id, "tx-001");
+        assert_eq!(deserialized.file_data, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_file_transfer_request_serialization() {
+        let request = FileTransferRequest {
+            transfer_id: "tx-001".to_string(),
+            from_peer_id: "peer-abc".to_string(),
+            file_name: "document.pdf".to_string(),
+            file_size: 1024,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("transferId"));
+        assert!(json.contains("fromPeerId"));
+        assert!(json.contains("fileSize"));
+        let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.file_size, 1024);
+    }
+
+    #[tokio::test]
+    async fn test_file_transfer_service_new() {
+        let service = FileTransferService::new();
+        let incoming = service.get_pending_incoming().await;
+        let outgoing = service.get_pending_outgoing().await;
+        assert!(incoming.is_empty());
+        assert!(outgoing.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_decline_nonexistent_transfer() {
+        let service = FileTransferService::new();
+        let result = service.decline_transfer("nonexistent".to_string()).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Transfer not found");
+    }
+}

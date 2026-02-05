@@ -403,4 +403,98 @@ mod tests {
         assert!(!enodes.is_empty());
         assert!(enodes.contains("enode://"));
     }
+
+    #[test]
+    fn test_parse_enode_extracts_correct_port() {
+        let enode = "enode://abc@10.0.0.1:30303";
+        let (ip, port) = parse_enode(enode).unwrap();
+        assert_eq!(ip, "10.0.0.1");
+        assert_eq!(port, 30303);
+    }
+
+    #[test]
+    fn test_parse_enode_missing_at_sign() {
+        assert!(parse_enode("enode://abc123").is_err());
+    }
+
+    #[test]
+    fn test_parse_enode_missing_port() {
+        assert!(parse_enode("enode://abc@192.168.1.1").is_err());
+    }
+
+    #[test]
+    fn test_parse_enode_invalid_port() {
+        assert!(parse_enode("enode://abc@192.168.1.1:notaport").is_err());
+    }
+
+    #[test]
+    fn test_default_nodes_have_required_fields() {
+        for node in get_default_nodes() {
+            assert!(!node.name.is_empty(), "Node name should not be empty");
+            assert!(!node.region.is_empty(), "Node region should not be empty");
+            assert!(node.enode.starts_with("enode://"), "Enode should start with enode://");
+            assert!(node.enode.contains("@"), "Enode should contain @");
+            assert!(node.enode.contains(":30303"), "Enode should contain port 30303");
+        }
+    }
+
+    #[test]
+    fn test_get_nodes_returns_defaults_without_env() {
+        let nodes = get_nodes();
+        let defaults = get_default_nodes();
+        assert_eq!(nodes.len(), defaults.len());
+    }
+
+    #[test]
+    fn test_bootstrap_node_priorities() {
+        let nodes = get_default_nodes();
+        assert_eq!(nodes[0].priority, 1);
+        assert_eq!(nodes[1].priority, 2);
+    }
+
+    #[test]
+    fn test_node_health_serialization() {
+        let health = NodeHealth {
+            enode: "enode://abc@127.0.0.1:30303".to_string(),
+            name: "Test Node".to_string(),
+            region: "US East".to_string(),
+            reachable: true,
+            latency_ms: Some(42),
+            error: None,
+            last_checked: 1700000000,
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        assert!(json.contains("latencyMs"));
+        assert!(json.contains("lastChecked"));
+        let deserialized: NodeHealth = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "Test Node");
+        assert_eq!(deserialized.latency_ms, Some(42));
+    }
+
+    #[test]
+    fn test_bootstrap_health_report_serialization() {
+        let report = BootstrapHealthReport {
+            total_nodes: 2,
+            healthy_nodes: 1,
+            nodes: vec![],
+            timestamp: 1700000000,
+            is_healthy: true,
+            healthy_enode_string: "enode://test@127.0.0.1:30303".to_string(),
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("totalNodes"));
+        assert!(json.contains("healthyNodes"));
+        assert!(json.contains("isHealthy"));
+        assert!(json.contains("healthyEnodeString"));
+    }
+
+    #[test]
+    fn test_get_all_enodes_comma_separated() {
+        let enodes = get_all_enodes();
+        let parts: Vec<&str> = enodes.split(',').collect();
+        assert_eq!(parts.len(), get_default_nodes().len());
+        for part in parts {
+            assert!(part.starts_with("enode://"));
+        }
+    }
 }
