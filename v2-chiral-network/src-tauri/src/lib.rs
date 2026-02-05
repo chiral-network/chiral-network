@@ -1,9 +1,11 @@
 mod dht;
+mod encryption;
 mod file_transfer;
 mod geth;
 mod geth_bootstrap;
 
 use dht::DhtService;
+use encryption::EncryptionKeypair;
 use file_transfer::FileTransferService;
 use geth::{GethDownloader, GethProcess, GethStatus, MiningStatus};
 use geth_bootstrap::BootstrapHealthReport;
@@ -21,6 +23,7 @@ pub struct AppState {
     pub file_transfer: Arc<Mutex<FileTransferService>>,
     pub file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>, // hash -> file data (for local caching)
     pub geth: Arc<Mutex<GethProcess>>,
+    pub encryption_keypair: Arc<Mutex<Option<EncryptionKeypair>>>,
 }
 
 #[tauri::command]
@@ -1516,6 +1519,124 @@ async fn get_bootstrap_health() -> Result<Option<BootstrapHealthReport>, String>
     Ok(geth_bootstrap::get_cached_report().await)
 }
 
+// ============================================================================
+// Encryption Commands
+// ============================================================================
+
+/// Initialize encryption keypair (derived from wallet private key for consistency)
+#[tauri::command]
+async fn init_encryption_keypair(
+    state: tauri::State<'_, AppState>,
+    wallet_private_key: String,
+) -> Result<String, String> {
+    let pk_bytes = hex::decode(&wallet_private_key)
+        .map_err(|e| format!("Invalid private key hex: {}", e))?;
+
+    let keypair = EncryptionKeypair::from_wallet_key(&pk_bytes);
+    let public_key_hex = keypair.public_key_hex();
+
+    let mut keypair_guard = state.encryption_keypair.lock().await;
+    *keypair_guard = Some(keypair);
+
+    Ok(public_key_hex)
+}
+
+/// Get our encryption public key (for sharing with others)
+#[tauri::command]
+async fn get_encryption_public_key(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let keypair_guard = state.encryption_keypair.lock().await;
+    Ok(keypair_guard.as_ref().map(|k| k.public_key_hex()))
+}
+
+/// Encrypt file data for a recipient
+#[tauri::command]
+async fn encrypt_file_for_recipient(
+    recipient_public_key: String,
+    file_data: Vec<u8>,
+) -> Result<encryption::EncryptedFileBundle, String> {
+    encryption::encrypt_for_recipient_hex(&file_data, &recipient_public_key)
+}
+
+/// Decrypt file data using our keypair
+#[tauri::command]
+async fn decrypt_file_data(
+    state: tauri::State<'_, AppState>,
+    encrypted_bundle: encryption::EncryptedFileBundle,
+) -> Result<Vec<u8>, String> {
+    let keypair_guard = state.encryption_keypair.lock().await;
+    let keypair = keypair_guard.as_ref()
+        .ok_or("Encryption keypair not initialized")?;
+
+    encryption::decrypt_with_keypair(&encrypted_bundle, keypair)
+}
+
+/// Send an encrypted file to a peer
+#[tauri::command]
+async fn send_encrypted_file(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    file_name: String,
+    file_data: Vec<u8>,
+    recipient_public_key: String,
+    transfer_id: String,
+) -> Result<(), String> {
+    // Encrypt the file for the recipient
+    let encrypted_bundle = encryption::encrypt_for_recipient_hex(&file_data, &recipient_public_key)?;
+
+    // Serialize the encrypted bundle to JSON for transmission
+    let encrypted_json = serde_json::to_vec(&encrypted_bundle)
+        .map_err(|e| format!("Failed to serialize encrypted bundle: {}", e))?;
+
+    // Send via DHT
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        // Prefix file name with .encrypted to indicate it's encrypted
+        let encrypted_file_name = format!("{}.encrypted", file_name);
+        dht.send_file(peer_id, transfer_id, encrypted_file_name, encrypted_json).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+/// Publish a peer's encryption public key to the DHT (for discovery)
+#[tauri::command]
+async fn publish_encryption_key(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let keypair_guard = state.encryption_keypair.lock().await;
+    let keypair = keypair_guard.as_ref()
+        .ok_or("Encryption keypair not initialized")?;
+
+    let public_key = keypair.public_key_hex();
+    drop(keypair_guard);
+
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.ok_or("Peer ID not available")?;
+        let key = format!("chiral_pubkey_{}", peer_id);
+        dht.put_dht_value(key, public_key).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+/// Lookup a peer's encryption public key from the DHT
+#[tauri::command]
+async fn lookup_encryption_key(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+) -> Result<Option<String>, String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_pubkey_{}", peer_id);
+        dht.get_dht_value(key).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1525,6 +1646,7 @@ pub fn run() {
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
             file_storage: Arc::new(Mutex::new(HashMap::new())),
             geth: Arc::new(Mutex::new(GethProcess::new())),
+            encryption_keypair: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -1567,7 +1689,15 @@ pub fn run() {
             set_miner_address,
             // Bootstrap health commands
             check_bootstrap_health,
-            get_bootstrap_health
+            get_bootstrap_health,
+            // Encryption commands
+            init_encryption_keypair,
+            get_encryption_public_key,
+            encrypt_file_for_recipient,
+            decrypt_file_data,
+            send_encrypted_file,
+            publish_encryption_key,
+            lookup_encryption_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
