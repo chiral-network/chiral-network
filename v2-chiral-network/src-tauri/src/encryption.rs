@@ -281,4 +281,158 @@ mod tests {
         // Same wallet key should produce same encryption keypair
         assert_eq!(keypair1.public_key_hex(), keypair2.public_key_hex());
     }
+
+    #[test]
+    fn test_different_wallet_keys_produce_different_keypairs() {
+        let wallet_key1 = [0u8; 32];
+        let wallet_key2 = [1u8; 32];
+        let keypair1 = EncryptionKeypair::from_wallet_key(&wallet_key1);
+        let keypair2 = EncryptionKeypair::from_wallet_key(&wallet_key2);
+
+        assert_ne!(keypair1.public_key_hex(), keypair2.public_key_hex());
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_hex_roundtrip() {
+        let recipient = EncryptionKeypair::generate();
+        let plaintext = b"Testing hex API";
+        let pub_key_hex = recipient.public_key_hex();
+
+        let bundle = encrypt_for_recipient_hex(plaintext, &pub_key_hex).unwrap();
+        let decrypted = decrypt_with_keypair(&bundle, &recipient).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_hex_invalid_key() {
+        let result = encrypt_for_recipient_hex(b"test", "not_valid_hex");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_hex_wrong_length() {
+        let result = encrypt_for_recipient_hex(b"test", "aabb");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypted_bundle_fields_are_hex() {
+        let recipient = EncryptionKeypair::generate();
+        let bundle = encrypt_for_recipient(b"data", &recipient.public_key_bytes()).unwrap();
+
+        // All fields should be valid hex strings
+        assert!(hex::decode(&bundle.ephemeral_public_key).is_ok());
+        assert!(hex::decode(&bundle.ciphertext).is_ok());
+        assert!(hex::decode(&bundle.nonce).is_ok());
+
+        // Ephemeral public key should be 32 bytes (64 hex chars)
+        assert_eq!(bundle.ephemeral_public_key.len(), 64);
+
+        // Nonce should be 12 bytes (24 hex chars) for AES-GCM
+        assert_eq!(bundle.nonce.len(), 24);
+
+        // Ciphertext should be longer than plaintext (includes auth tag)
+        assert!(hex::decode(&bundle.ciphertext).unwrap().len() > 4);
+    }
+
+    #[test]
+    fn test_symmetric_wrong_key_fails() {
+        let key1 = generate_file_key();
+        let key2 = generate_file_key();
+        let plaintext = b"Symmetric test";
+
+        let (ciphertext, nonce) = encrypt_with_key(plaintext, &key1).unwrap();
+        let result = decrypt_with_key(&ciphertext, &key2, &nonce);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_symmetric_tampered_ciphertext_fails() {
+        let key = generate_file_key();
+        let plaintext = b"Integrity test";
+
+        let (mut ciphertext, nonce) = encrypt_with_key(plaintext, &key).unwrap();
+        // Tamper with ciphertext
+        if !ciphertext.is_empty() {
+            ciphertext[0] ^= 0xFF;
+        }
+        let result = decrypt_with_key(&ciphertext, &key, &nonce);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypt_empty_data() {
+        let recipient = EncryptionKeypair::generate();
+        let plaintext = b"";
+
+        let bundle = encrypt_for_recipient(plaintext, &recipient.public_key_bytes()).unwrap();
+        let decrypted = decrypt_with_keypair(&bundle, &recipient).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_from_secret_bytes() {
+        let bytes = [42u8; 32];
+        let keypair1 = EncryptionKeypair::from_secret_bytes(bytes);
+        let keypair2 = EncryptionKeypair::from_secret_bytes(bytes);
+
+        assert_eq!(keypair1.public_key_hex(), keypair2.public_key_hex());
+        assert_eq!(keypair1.secret_key_bytes(), keypair2.secret_key_bytes());
+    }
+
+    #[test]
+    fn test_public_key_bytes_roundtrip() {
+        let keypair = EncryptionKeypair::generate();
+        let pk_bytes = keypair.public_key_bytes();
+        let pk_hex = keypair.public_key_hex();
+
+        assert_eq!(hex::encode(pk_bytes), pk_hex);
+    }
+
+    #[test]
+    fn test_each_encryption_produces_unique_ciphertext() {
+        let recipient = EncryptionKeypair::generate();
+        let plaintext = b"Same message";
+
+        let bundle1 = encrypt_for_recipient(plaintext, &recipient.public_key_bytes()).unwrap();
+        let bundle2 = encrypt_for_recipient(plaintext, &recipient.public_key_bytes()).unwrap();
+
+        // Each encryption uses ephemeral keys and random nonces
+        assert_ne!(bundle1.ephemeral_public_key, bundle2.ephemeral_public_key);
+        assert_ne!(bundle1.nonce, bundle2.nonce);
+        assert_ne!(bundle1.ciphertext, bundle2.ciphertext);
+
+        // But both should decrypt to the same plaintext
+        let d1 = decrypt_with_keypair(&bundle1, &recipient).unwrap();
+        let d2 = decrypt_with_keypair(&bundle2, &recipient).unwrap();
+        assert_eq!(d1, d2);
+    }
+
+    #[test]
+    fn test_file_key_randomness() {
+        let key1 = generate_file_key();
+        let key2 = generate_file_key();
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_bundle_serialization_roundtrip() {
+        let recipient = EncryptionKeypair::generate();
+        let bundle = encrypt_for_recipient(b"serialize me", &recipient.public_key_bytes()).unwrap();
+
+        let json = serde_json::to_string(&bundle).unwrap();
+        let deserialized: EncryptedFileBundle = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(bundle.ephemeral_public_key, deserialized.ephemeral_public_key);
+        assert_eq!(bundle.ciphertext, deserialized.ciphertext);
+        assert_eq!(bundle.nonce, deserialized.nonce);
+
+        // Decryption should still work with deserialized bundle
+        let decrypted = decrypt_with_keypair(&deserialized, &recipient).unwrap();
+        assert_eq!(decrypted, b"serialize me");
+    }
 }
