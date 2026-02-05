@@ -648,3 +648,136 @@ impl Drop for GethProcess {
         let _ = self.stop();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chain_id_constant() {
+        assert_eq!(CHAIN_ID, 98765);
+    }
+
+    #[test]
+    fn test_network_id_matches_chain_id() {
+        assert_eq!(NETWORK_ID, CHAIN_ID);
+    }
+
+    #[test]
+    fn test_rpc_endpoint() {
+        assert_eq!(RPC_ENDPOINT, "http://127.0.0.1:8545");
+        assert!(RPC_ENDPOINT.starts_with("http://127.0.0.1"));
+    }
+
+    #[test]
+    fn test_genesis_json_is_valid() {
+        let genesis = GethProcess::get_genesis_json();
+        let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
+
+        let config = parsed.get("config").expect("genesis should have config");
+        let chain_id = config.get("chainId").expect("config should have chainId");
+        assert_eq!(chain_id.as_u64().unwrap(), CHAIN_ID);
+
+        assert_eq!(config["homesteadBlock"].as_u64().unwrap(), 0);
+        assert_eq!(config["eip155Block"].as_u64().unwrap(), 0);
+        assert_eq!(config["byzantiumBlock"].as_u64().unwrap(), 0);
+        assert_eq!(config["londonBlock"].as_u64().unwrap(), 0);
+
+        assert!(config.get("ethash").is_some());
+        assert!(parsed.get("gasLimit").is_some());
+        assert!(parsed.get("alloc").is_some());
+    }
+
+    #[test]
+    fn test_genesis_has_faucet_allocation() {
+        let genesis = GethProcess::get_genesis_json();
+        let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
+
+        let alloc = parsed.get("alloc").expect("should have alloc");
+        let faucet = alloc.get("0x0000000000000000000000000000000000001337");
+        assert!(faucet.is_some(), "Faucet address should be allocated");
+        assert!(faucet.unwrap().get("balance").is_some());
+    }
+
+    #[test]
+    fn test_genesis_extra_data() {
+        let genesis = GethProcess::get_genesis_json();
+        let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
+
+        let extra_data = parsed.get("extraData").unwrap().as_str().unwrap();
+        assert!(extra_data.starts_with("0x"));
+
+        let bytes = hex::decode(extra_data.trim_start_matches("0x")).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert_eq!(text, "Chiral Network Genesis");
+    }
+
+    #[test]
+    fn test_download_progress_serialization() {
+        let progress = DownloadProgress {
+            downloaded: 1024,
+            total: 4096,
+            percentage: 25.0,
+            status: "Downloading...".to_string(),
+        };
+        let json = serde_json::to_string(&progress).unwrap();
+        let deserialized: DownloadProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.downloaded, 1024);
+        assert_eq!(deserialized.percentage, 25.0);
+    }
+
+    #[test]
+    fn test_geth_status_serialization() {
+        let status = GethStatus {
+            installed: true,
+            running: true,
+            syncing: false,
+            current_block: 100,
+            highest_block: 100,
+            peer_count: 5,
+            chain_id: CHAIN_ID,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("currentBlock"));
+        assert!(json.contains("peerCount"));
+        assert!(json.contains("chainId"));
+        let deserialized: GethStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.chain_id, CHAIN_ID);
+    }
+
+    #[test]
+    fn test_mining_status_serialization() {
+        let status = MiningStatus {
+            mining: true,
+            hash_rate: 1000,
+            miner_address: Some("0x1234567890abcdef".to_string()),
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("hashRate"));
+        assert!(json.contains("minerAddress"));
+        let deserialized: MiningStatus = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.mining);
+        assert_eq!(deserialized.hash_rate, 1000);
+    }
+
+    #[test]
+    fn test_geth_path_has_correct_extension() {
+        let downloader = GethDownloader::new();
+        let path = downloader.geth_path();
+        let path_str = path.to_string_lossy();
+
+        if cfg!(target_os = "windows") {
+            assert!(path_str.ends_with("geth.exe"));
+        } else {
+            assert!(path_str.ends_with("geth"));
+        }
+    }
+
+    #[test]
+    fn test_geth_path_in_bin_directory() {
+        let downloader = GethDownloader::new();
+        let path = downloader.geth_path();
+        let parent = path.parent().unwrap();
+        assert_eq!(parent.file_name().unwrap().to_str().unwrap(), "bin");
+    }
+}
