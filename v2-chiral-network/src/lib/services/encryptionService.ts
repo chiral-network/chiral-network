@@ -8,9 +8,6 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import { logger } from '$lib/logger';
-
-const log = logger('Encryption');
 
 /** Encrypted file bundle returned from encryption */
 export interface EncryptedFileBundle {
@@ -38,7 +35,7 @@ export const encryptionService = {
    */
   async initializeKeypair(walletPrivateKey: string): Promise<string> {
     if (!isTauri()) {
-      log.warn('Encryption not available in web mode');
+      console.warn('Encryption not available in web mode');
       return '';
     }
 
