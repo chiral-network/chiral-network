@@ -858,3 +858,217 @@ async fn handle_behaviour_event(
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bootstrap_nodes_not_empty() {
+        let nodes = get_bootstrap_nodes();
+        assert!(!nodes.is_empty());
+        assert_eq!(nodes.len(), 4);
+    }
+
+    #[test]
+    fn test_bootstrap_nodes_are_valid_multiaddrs() {
+        for addr_str in get_bootstrap_nodes() {
+            let parsed = addr_str.parse::<Multiaddr>();
+            assert!(parsed.is_ok(), "Failed to parse multiaddr: {}", addr_str);
+        }
+    }
+
+    #[test]
+    fn test_bootstrap_nodes_contain_peer_ids() {
+        for addr_str in get_bootstrap_nodes() {
+            let addr: Multiaddr = addr_str.parse().unwrap();
+            let peer_id = extract_peer_id_from_multiaddr(&addr);
+            assert!(peer_id.is_some(), "No peer ID in: {}", addr_str);
+        }
+    }
+
+    #[test]
+    fn test_bootstrap_nodes_have_unique_peer_ids() {
+        let mut peer_ids = Vec::new();
+        for addr_str in get_bootstrap_nodes() {
+            let addr: Multiaddr = addr_str.parse().unwrap();
+            let peer_id = extract_peer_id_from_multiaddr(&addr).unwrap();
+            assert!(!peer_ids.contains(&peer_id), "Duplicate peer ID: {}", peer_id);
+            peer_ids.push(peer_id);
+        }
+    }
+
+    #[test]
+    fn test_extract_peer_id_from_valid_multiaddr() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+            .parse()
+            .unwrap();
+        let peer_id = extract_peer_id_from_multiaddr(&addr);
+        assert!(peer_id.is_some());
+        assert_eq!(
+            peer_id.unwrap().to_string(),
+            "12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+        );
+    }
+
+    #[test]
+    fn test_extract_peer_id_from_multiaddr_without_p2p() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        let peer_id = extract_peer_id_from_multiaddr(&addr);
+        assert!(peer_id.is_none());
+    }
+
+    #[test]
+    fn test_remove_peer_id_from_multiaddr() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+            .parse()
+            .unwrap();
+        let transport = remove_peer_id_from_multiaddr(&addr);
+        assert_eq!(transport.to_string(), "/ip4/127.0.0.1/tcp/4001");
+    }
+
+    #[test]
+    fn test_remove_peer_id_from_multiaddr_without_p2p() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        let transport = remove_peer_id_from_multiaddr(&addr);
+        assert_eq!(transport.to_string(), "/ip4/127.0.0.1/tcp/4001");
+    }
+
+    #[test]
+    fn test_ping_request_serialization() {
+        let ping = PingRequest("PING".to_string());
+        let json = serde_json::to_string(&ping).unwrap();
+        let deserialized: PingRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(ping, deserialized);
+    }
+
+    #[test]
+    fn test_ping_response_serialization() {
+        let pong = PingResponse("PONG".to_string());
+        let json = serde_json::to_string(&pong).unwrap();
+        let deserialized: PingResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(pong, deserialized);
+    }
+
+    #[test]
+    fn test_file_transfer_request_serialization() {
+        let request = FileTransferRequest {
+            transfer_id: "tx-001".to_string(),
+            file_name: "test.txt".to_string(),
+            file_data: vec![1, 2, 3, 4, 5],
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(request.transfer_id, deserialized.transfer_id);
+        assert_eq!(request.file_name, deserialized.file_name);
+        assert_eq!(request.file_data, deserialized.file_data);
+    }
+
+    #[test]
+    fn test_file_transfer_response_serialization() {
+        let response = FileTransferResponse {
+            transfer_id: "tx-001".to_string(),
+            accepted: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: FileTransferResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(response.transfer_id, deserialized.transfer_id);
+        assert_eq!(response.accepted, deserialized.accepted);
+        assert!(deserialized.error.is_none());
+    }
+
+    #[test]
+    fn test_file_transfer_response_with_error() {
+        let response = FileTransferResponse {
+            transfer_id: "tx-002".to_string(),
+            accepted: false,
+            error: Some("Transfer declined by user".to_string()),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: FileTransferResponse = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.accepted);
+        assert_eq!(deserialized.error.unwrap(), "Transfer declined by user");
+    }
+
+    #[test]
+    fn test_file_request_message_serialization() {
+        let msg = FileRequestMessage {
+            request_id: "req-001".to_string(),
+            file_hash: "abc123def456".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: FileRequestMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg.request_id, deserialized.request_id);
+        assert_eq!(msg.file_hash, deserialized.file_hash);
+    }
+
+    #[test]
+    fn test_file_request_response_with_data() {
+        let resp = FileRequestResponse {
+            request_id: "req-001".to_string(),
+            file_hash: "abc123".to_string(),
+            file_name: "document.pdf".to_string(),
+            file_data: Some(vec![10, 20, 30]),
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: FileRequestResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.file_data.unwrap(), vec![10, 20, 30]);
+        assert!(deserialized.error.is_none());
+    }
+
+    #[test]
+    fn test_file_request_response_not_found() {
+        let resp = FileRequestResponse {
+            request_id: "req-002".to_string(),
+            file_hash: "nonexistent".to_string(),
+            file_name: String::new(),
+            file_data: None,
+            error: Some("File not found".to_string()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: FileRequestResponse = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.file_data.is_none());
+        assert_eq!(deserialized.error.unwrap(), "File not found");
+    }
+
+    #[test]
+    fn test_peer_info_serialization() {
+        let peer = PeerInfo {
+            id: "12D3KooWFYTuQ2FY".to_string(),
+            address: "12D3KooWFYTuQ2FY".to_string(),
+            multiaddrs: vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
+            last_seen: 1700000000,
+        };
+        let json = serde_json::to_string(&peer).unwrap();
+        // camelCase serialization
+        assert!(json.contains("lastSeen"));
+        let deserialized: PeerInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(peer.id, deserialized.id);
+        assert_eq!(peer.multiaddrs, deserialized.multiaddrs);
+    }
+
+    #[test]
+    fn test_network_stats_serialization() {
+        let stats = NetworkStats {
+            connected_peers: 5,
+            total_peers: 10,
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        // camelCase serialization
+        assert!(json.contains("connectedPeers"));
+        assert!(json.contains("totalPeers"));
+    }
+
+    #[test]
+    fn test_shared_file_info() {
+        let info = SharedFileInfo {
+            file_path: "/path/to/file.txt".to_string(),
+            file_name: "file.txt".to_string(),
+            file_size: 1024,
+        };
+        assert_eq!(info.file_name, "file.txt");
+        assert_eq!(info.file_size, 1024);
+    }
+}
