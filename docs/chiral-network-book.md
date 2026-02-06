@@ -58,7 +58,7 @@
 
 ### 1.1 What is Chiral Network?
 
-Chiral Network is a **decentralized peer-to-peer file sharing application** that combines blockchain technology with distributed hash table (DHT) based file storage. It implements a BitTorrent-like continuous seeding model where files are instantly available to the network, with a strong focus on privacy, security, and legitimate use cases.
+Chiral Network is a **decentralized peer-to-peer file sharing application** that combines blockchain technology with distributed hash table (DHT) based file discovery. It implements a BitTorrent-like continuous seeding model where files are instantly available to the network, with a strong focus on privacy, security, and legitimate use cases.
 
 ### 1.2 Key Innovation: Decoupled Architecture
 
@@ -71,13 +71,13 @@ The fundamental innovation of Chiral Network is the **complete decoupling of pay
 
 ### 1.3 Project Goals
 
-| Goal | Description |
-|------|-------------|
-| **Decentralization** | No centralized servers - all peer discovery via DHT |
-| **Economic Incentives** | Seeders earn cryptocurrency for sharing files |
-| **Privacy-First** | Circuit Relay v2, AutoNAT v2, SOCKS5 proxy support |
-| **Legitimate Use** | Designed for personal, educational, and organizational file sharing |
-| **Non-Commercial** | No marketplace, pricing, or trading features |
+| Goal                    | Description                                                         |
+| ----------------------- | ------------------------------------------------------------------- |
+| **Decentralization**    | No centralized servers - all peer discovery via DHT                 |
+| **Economic Incentives** | Seeders earn cryptocurrency for sharing files                       |
+| **Privacy-First**       | Circuit Relay v2, AutoNAT v2, SOCKS5 proxy support                  |
+| **Legitimate Use**      | Designed for personal, educational, and organizational file sharing |
+| **Non-Commercial**      | No marketplace, pricing, or trading features                        |
 
 ### 1.4 What Chiral Network is NOT
 
@@ -125,53 +125,52 @@ All nodes are equal peers. There are no special roles:
 
 ### 3.1 Frontend
 
-| Technology | Purpose |
-|------------|---------|
-| **Svelte 5** | Reactive UI framework with runes |
-| **TypeScript** | Type-safe development |
-| **Tailwind CSS** | Utility-first styling |
-| **Bits UI** | Accessible component primitives |
-| **svelte-i18n** | Internationalization (EN, ES, RU, ZH, KO) |
-| **Lucide Svelte** | Icon library |
-| **mode-watcher** | Dark/light mode support |
+| Technology        | Purpose                                   |
+| ----------------- | ----------------------------------------- |
+| **Svelte 5**      | Reactive UI framework with runes          |
+| **TypeScript**    | Type-safe development                     |
+| **Tailwind CSS**  | Utility-first styling                     |
+| **Bits UI**       | Accessible component primitives           |
+| **svelte-i18n**   | Internationalization (EN, ES, RU, ZH, KO) |
+| **Lucide Svelte** | Icon library                              |
+| **mode-watcher**  | Dark/light mode support                   |
 
 ### 3.2 Desktop Integration
 
-| Technology | Purpose |
-|------------|---------|
-| **Tauri 2** | Rust-based desktop runtime |
-| **Native File System** | OS-level file operations |
-| **System Tray** | Background operation support |
+| Technology             | Purpose                      |
+| ---------------------- | ---------------------------- |
+| **Tauri 2**            | Rust-based desktop runtime   |
+| **Native File System** | OS-level file operations     |
+| **System Tray**        | Background operation support |
 
 ### 3.3 P2P Network Infrastructure
 
-| Technology | Purpose |
-|------------|---------|
-| **libp2p v0.54** | Full P2P networking stack (Rust backend) |
-| **Kademlia DHT** | Distributed file metadata storage |
-| **WebRTC** | Direct peer-to-peer data channels |
-| **Noise Protocol** | Cryptographic transport security |
-| **Bitswap Protocol** | Efficient block exchange |
+| Technology         | Purpose                                  |
+| ------------------ | ---------------------------------------- |
+| **libp2p v0.54**   | Full P2P networking stack (Rust backend) |
+| **Kademlia DHT**   | File discovery with minimal records      |
+| **WebRTC**         | Direct peer-to-peer data channels        |
+| **Noise Protocol** | Cryptographic transport security         |
 
 ### 3.4 NAT Traversal
 
-| Technology | Purpose |
-|------------|---------|
-| **AutoNAT v2** | Reachability detection |
-| **Circuit Relay v2** | Traffic forwarding for NAT'd peers |
-| **DCUtR** | Direct Connection Upgrade through Relay |
-| **mDNS** | Local peer discovery |
-| **UPnP** | Automatic port forwarding |
+| Technology           | Purpose                                 |
+| -------------------- | --------------------------------------- |
+| **AutoNAT v2**       | Reachability detection                  |
+| **Circuit Relay v2** | Traffic forwarding for NAT'd peers      |
+| **DCUtR**            | Direct Connection Upgrade through Relay |
+| **mDNS**             | Local peer discovery                    |
+| **UPnP**             | Automatic port forwarding               |
 
 ### 3.5 Blockchain & Security
 
-| Technology | Purpose |
-|------------|---------|
-| **Geth Integration** | Ethereum node operations |
-| **HD Wallets** | BIP32, BIP39, secp256k1 |
-| **AES-256-GCM** | File encryption |
-| **PBKDF2** | Key derivation |
-| **Clef** | External transaction signing |
+| Technology           | Purpose                      |
+| -------------------- | ---------------------------- |
+| **Geth Integration** | Ethereum node operations     |
+| **HD Wallets**       | BIP32, BIP39, secp256k1      |
+| **AES-256-GCM**      | File encryption              |
+| **PBKDF2**           | Key derivation               |
+| **Clef**             | External transaction signing |
 
 ---
 
@@ -194,9 +193,10 @@ All nodes are equal peers. There are no special roles:
 │  (Blockchain)        │              │  (Protocols)        │
 │                      │              │                     │
 │  • ETH-compatible    │◄─────────────┤  • HTTP             │
-│  • Payment contracts │  Settlement  │  • WebTorrent       │
+│  • Payment contracts │  Settlement  │  • WebRTC           │
 │  • Mining rewards    │              │  • BitTorrent       │
 │  • Gas fees          │              │  • ed2k             │
+│                      │              │  • FTP              │
 └──────────────────────┘              └─────────────────────┘
 ```
 
@@ -207,16 +207,6 @@ All nodes are equal peers. There are no special roles:
 3. **Legacy Protocol Support**: Use established protocols without modification
 4. **Choice**: Users select best protocol while payments remain consistent
 5. **Testing**: Test data transfer and payments independently
-
-### 4.3 Two Protocol Styles
-
-**Style 1: Public Protocols with Out-of-Band Payments (Primary)**
-
-Uses proven public protocols (HTTP, BitTorrent, WebTorrent, ed2k) for data transfer. Payments are settled separately on the blockchain after transfer completion.
-
-**Style 2: Private Protocol with In-Band Payments (Under Development)**
-
-A custom protocol that combines data transfer and payment in a single channel for atomic, trustless exchanges.
 
 ---
 
@@ -233,7 +223,7 @@ Tier 1: Client Applications
 Tier 2: Service Layer
 ├─ File Service (chunking, assembly)
 ├─ Wallet Service (payment management)
-├─ Protocol Manager (HTTP/WebTorrent/BitTorrent/ed2k)
+├─ Protocol Manager (upload/download interface)
 ├─ Network Service (libp2p integration)
 ├─ DHT Service (Kademlia discovery)
 ├─ Reputation Service (peer scoring)
@@ -243,6 +233,7 @@ Tier 2: Service Layer
 Tier 3: Network Layer
 ├─ libp2p v0.54 (P2P stack)
 ├─ Kademlia DHT (file discovery)
+├─ Gossipsub (seeder & file information)
 ├─ Noise Protocol (encryption)
 ├─ Circuit Relay v2 (NAT traversal)
 ├─ AutoNAT v2 (reachability detection)
@@ -258,21 +249,21 @@ Tier 4: Blockchain Layer
 Tier 5: Storage Layer
 ├─ Local file cache
 ├─ Block store (chunk storage)
-└─ Metadata DHT records
+└─ Minimal DHT records (file discovery)
 ```
 
 ### 5.2 Service Responsibilities
 
-| Service | Responsibility |
-|---------|----------------|
-| **FileService** | File chunking, assembly, versioning |
-| **WalletService** | Key management, transaction signing |
-| **ProtocolManager** | Protocol selection and delegation |
-| **NetworkService** | P2P connection management |
-| **DHTService** | Kademlia DHT operations |
-| **ReputationService** | Peer scoring and trust levels |
-| **PaymentService** | Blockchain transaction handling |
-| **BandwidthScheduler** | Time-based rate limiting |
+| Service                | Responsibility                                                     |
+| ---------------------- | ------------------------------------------------------------------ |
+| **FileService**        | File chunking, assembly, versioning                                |
+| **WalletService**      | Key management, transaction signing                                |
+| **ProtocolManager**    | Protocol selection and abstracts protocol specific upload/download |
+| **NetworkService**     | P2P connection management                                          |
+| **DHTService**         | Kademlia DHT operations                                            |
+| **ReputationService**  | Peer scoring and trust levels                                      |
+| **PaymentService**     | Blockchain transaction handling                                    |
+| **BandwidthScheduler** | Time-based rate limiting                                           |
 
 ---
 
@@ -286,17 +277,20 @@ All content protocols implement this unified interface:
 interface IContentProtocol {
   getName(): Protocol;
   getPeersServing(identification: FileIdentification): Promise<PeerInfo[]>;
-  getFileMetadata(identification: FileIdentification): Promise<FileMetadata | null>;
   getContentFrom(
     peerId: string,
     identification: FileIdentification,
     progressUpdate: ProgressUpdate,
-    outputPath?: string
-  ): Promise<Uint8Array | void>;
+    outputPath?: string,
+  ): Promise<DownloadResult>;
+  uploadFile(
+    options: UploadOptions,
+    progressUpdate: ProgressUpdate,
+  ): Promise<UploadResult>;
   startSeeding(
     filePathOrData: string | Uint8Array,
-    progressUpdate: ProgressUpdate
-  ): Promise<FileMetadata>;
+    progressUpdate: ProgressUpdate,
+  ): Promise<UploadResult>;
   stopSeeding(identification: FileIdentification): Promise<boolean>;
   pauseDownload(identification: FileIdentification): Promise<boolean>;
   resumeDownload(identification: FileIdentification): Promise<boolean>;
@@ -306,18 +300,19 @@ interface IContentProtocol {
 
 ### 6.2 ProtocolManager Class
 
-The ProtocolManager orchestrates all protocol interactions:
+The ProtocolManager orchestrates protocol interactions and delegates to registered (src/lib/services/contentProtocols/index.ts) implementations:
 
-| Method | Description |
-|--------|-------------|
-| `constructor(initialProtocol)` | Register protocols and set active |
-| `setProtocol(protocol)` | Switch active protocol |
-| `getProtocolImpl()` | Get active protocol implementation |
-| `getPeersServing(..)` | List available peers |
-| `downloadFile(..)` | Download via active protocol |
-| `uploadFile(..)` | Seed via active protocol |
-| `stopSharing(..)` | Stop seeding content |
-| `cleanup()` | Clean shutdown of all protocols |
+| Method                         | Description                                    |
+| ------------------------------ | ---------------------------------------------- |
+| `getProtocolImpl(protocol)`   | Get protocol implementation                     |
+| `getPeersServing(..)`          | List available peers for a protocol            |
+| `downloadFile(..)`             | Download via protocol in identification        |
+| `uploadFile(..)`               | Upload/seed via requested protocol             |
+| `stopSharing(..)`              | Stop seeding content                           |
+| `pauseDownload(..)`            | Pause an in-progress download                  |
+| `resumeDownload(..)`           | Resume a paused download                       |
+| `cancelDownload(..)`           | Cancel an in-progress download                 |
+| `cleanup()`                    | Clean shutdown of all protocols                |
 
 ### 6.3 Default Protocol Selection
 
@@ -338,56 +333,87 @@ Browser Only                    → WebTorrent (only option)
 
 ### 7.1 Kademlia Parameters
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| **K** | 20 | Bucket size |
-| **α** | 3 | Concurrency parameter |
-| **Key Space** | 160 bits | Node ID size |
-| **Refresh Interval** | 3600s | Bucket refresh time |
-| **Record Expiration** | 86400s | TTL for records |
+| Parameter             | Value    | Description           |
+| --------------------- | -------- | --------------------- |
+| **K**                 | 20       | Bucket size           |
+| **α**                 | 3        | Concurrency parameter |
+| **Key Space**         | 160 bits | Node ID size          |
+| **Refresh Interval**  | 3600s    | Bucket refresh time   |
+| **Record Expiration** | 86400s   | TTL for records       |
 
 ### 7.2 DHT Operations
 
-| Operation | Timeout | Retries | Description |
-|-----------|---------|---------|-------------|
-| **PING** | 5s | 3 | Liveness check |
-| **FIND_NODE** | 10s | 3 | Node discovery |
-| **FIND_VALUE** | 10s | 5 | Value lookup |
-| **STORE** | 10s | 3 | Store key-value |
+| Operation      | Timeout | Retries | Description     |
+| -------------- | ------- | ------- | --------------- |
+| **PING**       | 5s      | 3       | Liveness check  |
+| **FIND_NODE**  | 10s     | 3       | Node discovery  |
+| **FIND_VALUE** | 10s     | 5       | Value lookup    |
+| **STORE**      | 10s     | 3       | Store key-value |
 
-### 7.3 File Metadata Structure
+### 7.3 Minimal DHT File Record
+
+For file metadata, the DHT is used only for basic file info retrieval and provider lookup. Each file hash key
+stores a minimal record so the UI can display basic file information while seeder
+identity, pricing, and protocol details are exchanged via GossipSub.
 
 ```typescript
-{
-  fileHash: string,           // SHA-256 Merkle root (CID)
-  fileName: string,
-  fileSize: number,           // bytes
-  seeders: string[],          // Seeder peer IDs
-  createdAt: number,          // Unix timestamp
-  mimeType?: string,
-  isEncrypted: boolean,
-  encryptionMethod?: string,  // e.g., 'AES-256-GCM'
-  keyFingerprint?: string,
-  version?: number
+export interface DhtFileRecord {
+  fileHash: string;
+  fileName: string;
+  fileSize: number; // bytes
+  createdAt: number; // Unix timestamp
+  mimeType?: string;
 }
 ```
 
-### 7.4 Protocol-Aware Seeder Information
+### 7.4 Seeder General Info (GossipSub)
+
+Seeder identity and pricing are broadcast on a per-seeder topic:
+`seeder/{peerId}`.
 
 ```typescript
-seeders: {
-  http: [
-    {
-      multiaddr: "/ip4/192.168.1.100/tcp/8080/p2p/12D3KooW...",
-      wallet: "0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983",
-      chunks: [0, 1, 2, ..., 15],
-      price_per_mb: 0.001
-    }
-  ],
-  webtorrent: [...],
-  bittorrent: [...],
-  ed2k: [...]
+export interface SeederGeneralInfo {
+  peerId: string;
+  walletAddress: string;
+  defaultPricePerMb: number;
+  timestamp: number;
 }
+```
+
+### 7.5 Seeder File Info (GossipSub)
+
+File-specific protocol support and pricing overrides are broadcast on:
+`seeder/{peerId}/file/{fileHash}`.
+
+```typescript
+export interface SeederFileInfo {
+  peerId: string;
+  fileHash: string;
+  pricePerMb?: number; // Overrides defaultPricePerMb if set
+  supportedProtocols: Protocol[];
+  protocolDetails: ProtocolDetails;
+  timestamp: number;
+}
+```
+
+### 7.6 Protocol Details Types
+
+Protocol detail payloads are defined per protocol and carried in
+`SeederFileInfo.protocolDetails`.
+
+```typescript
+import { Protocol } from "$lib/services/contentProtocols/types";
+
+export type ProtocolDetailsByProtocol = {
+  [Protocol.HTTP]: HttpProtocolDetails;
+  [Protocol.FTP]: FtpProtocolDetails;
+  [Protocol.ED2K]: Ed2kProtocolDetails;
+  [Protocol.BitTorrent]: BitTorrentProtocolDetails;
+  [Protocol.WebRTC]: WebRtcProtocolDetails;
+  [Protocol.UNKNOWN]: never;
+};
+
+export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 ```
 
 ---
@@ -397,16 +423,19 @@ seeders: {
 ### 8.1 Three-Layer Approach
 
 **Layer 1: Direct Connection (Fastest)**
+
 - For publicly reachable peers
 - No NAT, no firewall restrictions
 - Lowest latency, highest bandwidth
 
 **Layer 2: Hole Punching (DCUtR)**
+
 - Direct Connection Upgrade through Relay
 - For symmetric NAT traversal
 - Uses UPnP when available
 
 **Layer 3: Circuit Relay v2 (Fallback)**
+
 - For restrictive NATs
 - End-to-end encrypted (relay cannot read data)
 - Trusted relay nodes only
@@ -416,11 +445,13 @@ seeders: {
 **Purpose**: Detect if node is behind NAT (Public/Private/Unknown status)
 
 **How It Works**:
+
 - Other peers try to dial you back directly on observed addresses
 - Cannot use relay connections for dial-back (security requirement)
 - 30-second probe cycles (configurable)
 
 **Provides**:
+
 - Real-time reachability status
 - Confidence scoring (High/Medium/Low)
 - Reachability history tracking
@@ -430,12 +461,14 @@ seeders: {
 **Purpose**: Forward traffic between NAT'd peers who cannot connect directly
 
 **How It Works**:
+
 1. NAT'd peer (A) requests reservation with relay (R)
 2. Relay R listens for incoming connections on A's behalf
 3. When peer B wants to connect to A, B connects to relay R
 4. Relay forwards traffic between A and B
 
 **Features**:
+
 - Decentralized: Any public node can opt-in to relay mode
 - End-to-end encrypted (relay cannot tamper)
 - Automatic relay candidate detection from bootstrap nodes
@@ -444,11 +477,13 @@ seeders: {
 ### 8.4 UPnP (Automatic Port Forwarding)
 
 **How It Works**:
+
 1. Discovers IGD (Internet Gateway Device) via SSDP multicast
 2. Requests external port mappings through SOAP/XML API
 3. Router exposes internal service on its public IP
 
 **Connection Priority**:
+
 ```
 1. Try UPnP → Direct connection if successful
 2. If failed → Hole Punching (DCUtR)
@@ -561,17 +596,13 @@ Example Multi-Protocol Transfer:
    ↓
 2. Generate SHA-256 Hash (CID)
    ↓
-3. Chunk into 256 KB pieces
+3. Optional: Encrypt with AES-256-GCM
    ↓
-4. Optional: Encrypt with AES-256-GCM
+4. Publish minimal DHT record and announce seeder info via GossipSub
    ↓
-5. Build Merkle tree from chunk hashes
+5. Start serving via configured protocols
    ↓
-6. Publish metadata to DHT
-   ↓
-7. Start serving via configured protocols
-   ↓
-8. Continuous seeding (while online)
+6. Continuous seeding (while online)
 ```
 
 ### 10.2 Download Pipeline
@@ -581,19 +612,17 @@ Example Multi-Protocol Transfer:
    ↓
 2. Query DHT for metadata and seeders
    ↓
-3. Select protocol(s) based on availability
+3. Subscribe to GossipSub for seeder general + file info
    ↓
-4. Download chunks (possibly multi-source)
+4. Auto or Manually Select protocol(s) & Peers based on availability and pricing 
    ↓
-5. Verify chunk hashes
+5. Download chunks (possibly multi-source)
    ↓
 6. Optional: Decrypt chunks
    ↓
 7. Reassemble file
    ↓
-8. Verify against Merkle root
-   ↓
-9. Settlement: Pay seeders on blockchain
+8. Settlement: Pay seeders on blockchain
 ```
 
 ### 10.3 Chunk Structure
@@ -635,6 +664,7 @@ Merkle Tree Structure (built from original chunk hashes):
 ```
 
 **Verification Steps**:
+
 1. Fetch encrypted chunks from network
 2. Decrypt the file AES key, then decrypt each chunk
 3. Hash the decrypted (plaintext) chunk
@@ -648,12 +678,14 @@ Merkle Tree Structure (built from original chunk hashes):
 ### 11.1 Seeding Behavior
 
 **Continuous Seeding**:
+
 - Files remain seeded while in "Shared Files" list
 - No upload step - files immediately available
 - Real-time seeder count displayed
-- Automatic DHT metadata refresh
+- Automatic DHT record refresh and GossipSub seeder announcements
 
 **Seed Management**:
+
 - Stop seeding: Remove file from shared list
 - Bandwidth control: Configurable upload limits
 - Statistics: Total bandwidth contributed, peers served
@@ -661,11 +693,13 @@ Merkle Tree Structure (built from original chunk hashes):
 ### 11.2 Download Queue Management
 
 **Priority Levels**:
+
 - **High**: Download immediately
 - **Normal**: Queue normally
 - **Low**: Download when bandwidth available
 
 **Queue Controls**:
+
 - Pause/Resume individual downloads
 - Cancel downloads
 - Reorder queue
@@ -719,33 +753,35 @@ Strategy borrowed from BitTorrent:
 
 ### 13.1 Network Parameters
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| **Network ID** | 98765 | Unique Chiral identifier |
-| **Chain ID** | 98765 | EIP-155 identifier |
-| **Block Time** | ~15 seconds | Target between blocks |
-| **Gas Limit** | 4,700,000 | Maximum gas per block |
-| **Mining Algorithm** | Ethash | ASIC-resistant PoW |
-| **Initial Reward** | 2 Chiral | Block reward |
-| **Precision** | 18 decimals | 1 wei = 10^-18 Chiral |
+| Parameter            | Value       | Description              |
+| -------------------- | ----------- | ------------------------ |
+| **Network ID**       | 987654      | Unique Chiral identifier |
+| **Chain ID**         | 987654      | EIP-155 identifier       |
+| **Block Time**       | ~15 seconds | Target between blocks    |
+| **Gas Limit**        | 4,700,000   | Maximum gas per block    |
+| **Mining Algorithm** | Ethash      | ASIC-resistant PoW       |
+| **Initial Reward**   | 2 Chiral    | Block reward             |
+| **Precision**        | 18 decimals | 1 wei = 10^-18 Chiral    |
 
 ### 13.2 Network Ports
 
-| Service | Port | Protocol | Description |
-|---------|------|----------|-------------|
-| **P2P** | 30304 | TCP/UDP | Peer-to-peer communication |
-| **RPC** | 8546 | HTTP | JSON-RPC interface |
-| **WebSocket** | 8547 | WS | Real-time updates |
-| **File Transfer** | 8080 | HTTP/HTTPS | File chunk transfers |
-| **DHT** | 4001 | UDP | DHT routing |
+| Service           | Port  | Protocol   | Description                |
+| ----------------- | ----- | ---------- | -------------------------- |
+| **P2P**           | 30304 | TCP/UDP    | Peer-to-peer communication |
+| **RPC**           | 8546  | HTTP       | JSON-RPC interface         |
+| **WebSocket**     | 8547  | WS         | Real-time updates          |
+| **File Transfer** | 8080  | HTTP/HTTPS | File chunk transfers       |
+| **DHT**           | 4001  | UDP        | DHT routing                |
 
 ### 13.3 Hash Format Conventions
 
 **File Hashes (Content IDs)**: Plain 64-character hex strings **without** `0x` prefix
+
 - Example: `7d8f9e8c7b6a5d4f3e2d1c0b9a8d7f6e5d4c3b2a17d8f9e8c7b6a5d4f3e2d1c0`
 - Algorithm: SHA-256
 
 **Blockchain Addresses**: Hex strings **with** `0x` prefix
+
 - Example: `0x742d35Cc6634C0532925a3b8D0C9e0c8b346b983`
 - Format: Ethereum-compatible (40 hex chars + 0x)
 
@@ -778,6 +814,7 @@ Strategy borrowed from BitTorrent:
 ### 14.2 HD Wallet Implementation
 
 **Key Derivation Path**:
+
 ```
 Master Seed (BIP39 Mnemonic)
     │
@@ -785,14 +822,15 @@ Master Seed (BIP39 Mnemonic)
     │
     └── HD Wallet (BIP32/BIP44)
         │
-        ├── m/44'/98765'/0'/0/* (Wallet Keys)
-        ├── m/44'/98765'/1'/0/* (File Encryption Keys)
-        └── m/44'/98765'/2'/0/* (Identity Keys)
+        ├── m/44'/987654'/0'/0/* (Wallet Keys)
+        ├── m/44'/987654'/1'/0/* (File Encryption Keys)
+        └── m/44'/987654'/2'/0/* (Identity Keys)
 ```
 
 ### 14.3 Wallet Operations
 
 **Wallet Service (Clef)**:
+
 - `createWallet()` – Generate new account
 - `importWallet(mnemonic)` – Restore from mnemonic
 - `getAddress()` – Return wallet address
@@ -800,6 +838,7 @@ Master Seed (BIP39 Mnemonic)
 - `sendTransaction(txUnsigned)` – Sign and return raw transaction
 
 **Blockchain Service (Geth)**:
+
 - `connect(gethRpcUrl)` – Connect to node
 - `getBalance(address)` – Query balance
 - `sendRawTransaction(txSigned)` – Submit transaction
@@ -812,10 +851,12 @@ Master Seed (BIP39 Mnemonic)
 ### 15.1 Global Pricing System
 
 **Static Rate (Default)**:
+
 - Conversion: 1 MB = 0.001 Chiral
 - Provides stability and simplicity
 
 **Dynamic Network-Based Rate**:
+
 ```
 pricePerMB = basePricePerMB × minerFactor × efficiencyFactor × normalizationFactor
 
@@ -853,6 +894,7 @@ sequenceDiagram
 ### 15.3 Payment Enforcement
 
 **Incremental Payments**:
+
 - Serve first 10 MB as initial handshake segment
 - If no payment after 10 MB → stop serving
 - If payment received → continue serving
@@ -872,19 +914,20 @@ sequenceDiagram
 
 ### 16.1 Trust Levels
 
-| Trust Level | Score Range | Description |
-|-------------|-------------|-------------|
-| **Trusted** | 0.8 - 1.0 | Highly reliable, consistently good |
-| **High** | 0.6 - 0.8 | Very reliable, above-average |
-| **Medium** | 0.4 - 0.6 | Moderately reliable, acceptable |
-| **Low** | 0.2 - 0.4 | Less reliable, below-average |
-| **Unknown** | 0.0 - 0.2 | New or unproven peers |
+| Trust Level | Score Range | Description                        |
+| ----------- | ----------- | ---------------------------------- |
+| **Trusted** | 0.8 - 1.0   | Highly reliable, consistently good |
+| **High**    | 0.6 - 0.8   | Very reliable, above-average       |
+| **Medium**  | 0.4 - 0.6   | Moderately reliable, acceptable    |
+| **Low**     | 0.2 - 0.4   | Less reliable, below-average       |
+| **Unknown** | 0.0 - 0.2   | New or unproven peers              |
 
 ### 16.2 Two-Tier System
 
 **Tier 1: On-Chain Layer (Authoritative)**
 
 The blockchain records all completed transactions:
+
 - Successful completion = positive reputation signal
 - Transaction count = measure of reliability
 - Complaint records with cryptographic proof
@@ -892,6 +935,7 @@ The blockchain records all completed transactions:
 **Tier 2: DHT Layer (Volatile Cache)**
 
 The DHT stores recent reputation updates for quick access:
+
 - Recent transaction summaries (last 100 per peer)
 - Pending complaints with evidence
 - Score cache to avoid blockchain queries
@@ -1014,12 +1058,14 @@ When honest downloader is falsely accused:
 ### 18.4 Blacklisting
 
 **Automatic Blacklist Criteria**:
+
 - Repeated `bad` verdicts from distinct issuers
 - Publishing invalid or orphaned transactions
 - Protocol violations
 - Score falls below threshold (default: 0.2)
 
 **Blacklist Settings**:
+
 - Mode: manual, automatic, or hybrid
 - Score threshold: 0.0-1.0 (default: 0.2)
 - Bad-verdicts threshold: Number of verdicts (default: 3)
@@ -1033,20 +1079,20 @@ When honest downloader is falsely accused:
 
 ### 19.1 Hash Functions
 
-| Algorithm | Purpose | Security Level |
-|-----------|---------|----------------|
-| SHA-256 | File hashing, chunk verification | 256-bit |
-| BLAKE2b | Fast hashing for non-critical ops | 256-bit |
-| Keccak-256 | Ethereum compatibility | 256-bit |
+| Algorithm  | Purpose                           | Security Level |
+| ---------- | --------------------------------- | -------------- |
+| SHA-256    | File hashing, chunk verification  | 256-bit        |
+| BLAKE2b    | Fast hashing for non-critical ops | 256-bit        |
+| Keccak-256 | Ethereum compatibility            | 256-bit        |
 
 ### 19.2 Encryption Algorithms
 
-| Algorithm | Purpose | Key Size |
-|-----------|---------|----------|
-| AES-256-GCM | File encryption | 256-bit |
-| ChaCha20-Poly1305 | Stream cipher alternative | 256-bit |
-| Ed25519 | Digital signatures | 256-bit |
-| X25519 | Key agreement | 256-bit |
+| Algorithm         | Purpose                   | Key Size |
+| ----------------- | ------------------------- | -------- |
+| AES-256-GCM       | File encryption           | 256-bit  |
+| ChaCha20-Poly1305 | Stream cipher alternative | 256-bit  |
+| Ed25519           | Digital signatures        | 256-bit  |
+| X25519            | Key agreement             | 256-bit  |
 
 ### 19.3 Key Derivation
 
@@ -1091,13 +1137,13 @@ Verification Steps:
 
 ### 20.3 Access Control
 
-| Level | Description | Capabilities |
-|-------|-------------|--------------|
-| Owner | File creator | Full control |
-| Admin | Delegated admin | Modify permissions |
-| Write | Can modify | Update file content |
-| Read | View only | Download and decrypt |
-| None | No access | Cannot access file |
+| Level | Description     | Capabilities         |
+| ----- | --------------- | -------------------- |
+| Owner | File creator    | Full control         |
+| Admin | Delegated admin | Modify permissions   |
+| Write | Can modify      | Update file content  |
+| Read  | View only       | Download and decrypt |
+| None  | No access       | Cannot access file   |
 
 ---
 
@@ -1106,6 +1152,7 @@ Verification Steps:
 ### 21.1 Anonymous Routing
 
 **Onion Routing**:
+
 ```
 Client → Proxy 1 → Proxy 2 → Proxy 3 → Destination
   ↓         ↓         ↓         ↓
@@ -1114,6 +1161,7 @@ Encrypted Encrypted Encrypted Plain
 ```
 
 **Mix Networks**:
+
 - Random delays (0-5 seconds)
 - Packet padding to fixed size
 - Traffic mixing at nodes
@@ -1122,12 +1170,14 @@ Encrypted Encrypted Encrypted Plain
 ### 21.2 Metadata Protection
 
 **What's Hidden**:
+
 - Real IP addresses (via proxies)
 - Download patterns (via caching)
 - File associations (via encryption)
 - Transaction linkability (via mixing)
 
 **What's Visible**:
+
 - Encrypted file sizes (approximate)
 - Connection times
 - Total bandwidth usage
@@ -1136,6 +1186,7 @@ Encrypted Encrypted Encrypted Plain
 ### 21.3 Anonymous Mode
 
 When enabled:
+
 - All traffic routed through relay/proxy
 - IP address masked
 - Reputation persists per peer key
@@ -1155,22 +1206,23 @@ When enabled:
 
 ### 22.1 Page Overview
 
-| Page | Purpose | Key Features |
-|------|---------|--------------|
-| **Download** | File download management | Hash search, seeder selection, progress tracking |
-| **Upload** | Shared Files (instant seeding) | Drag & drop, file versioning, bandwidth control |
-| **Network** | Peer discovery & DHT status | Connected peers, bootstrap nodes, addresses |
-| **Relay** | Circuit Relay v2 configuration | Server mode, AutoRelay, preferred relays |
-| **Mining** | CPU mining for network security | Hash rate, blocks found, rewards, power monitoring |
-| **Proxy** | SOCKS5 proxy configuration | Privacy routing, latency optimization |
-| **Analytics** | Usage statistics | Bandwidth, storage, performance metrics |
-| **Reputation** | Peer reputation system | Trust levels, analytics, relay leaderboard |
-| **Account** | Wallet management | Balance, transactions, HD wallet, QR codes |
-| **Settings** | Comprehensive configuration | Storage, network, privacy, i18n, diagnostics |
+| Page           | Purpose                         | Key Features                                       |
+| -------------- | ------------------------------- | -------------------------------------------------- |
+| **Download**   | File download management        | Hash search, seeder selection, progress tracking   |
+| **Upload**     | Shared Files (instant seeding)  | Drag & drop, file versioning, bandwidth control    |
+| **Network**    | Peer discovery & DHT status     | Connected peers, bootstrap nodes, addresses        |
+| **Relay**      | Circuit Relay v2 configuration  | Server mode, AutoRelay, preferred relays           |
+| **Mining**     | CPU mining for network security | Hash rate, blocks found, rewards, power monitoring |
+| **Proxy**      | SOCKS5 proxy configuration      | Privacy routing, latency optimization              |
+| **Analytics**  | Usage statistics                | Bandwidth, storage, performance metrics            |
+| **Reputation** | Peer reputation system          | Trust levels, analytics, relay leaderboard         |
+| **Account**    | Wallet management               | Balance, transactions, HD wallet, QR codes         |
+| **Settings**   | Comprehensive configuration     | Storage, network, privacy, i18n, diagnostics       |
 
 ### 22.2 Navigation
 
 The sidebar contains navigation to all pages. Status indicators show:
+
 - 🟢 **Connected** - DHT network active
 - 🔴 **Disconnected** - No network connection
 
@@ -1179,6 +1231,7 @@ The sidebar contains navigation to all pages. Status indicators show:
 **Supported Languages**: English, Spanish, Russian, Chinese, Korean
 
 **Implementation**:
+
 - Library: svelte-i18n
 - Auto-detection: Geolocation-based on startup
 - Persistence: User preference in localStorage
@@ -1191,6 +1244,7 @@ The sidebar contains navigation to all pages. Status indicators show:
 ### 23.1 Core Stores
 
 **File Management**:
+
 ```typescript
 files: FileItem[]              // All files
 downloadQueue: FileItem[]      // Queue of pending downloads
@@ -1198,6 +1252,7 @@ activeDownloads: number        // Current concurrent downloads
 ```
 
 **Network**:
+
 ```typescript
 peers: PeerInfo[]             // Connected peers with metrics
 networkStats: NetworkStats    // Global network statistics
@@ -1206,6 +1261,7 @@ peerGeoDistribution: Derived  // Geographic peer distribution
 ```
 
 **Wallet & Transactions**:
+
 ```typescript
 wallet: WalletInfo            // Wallet address and balance
 etcAccount: ETCAccount | null // Ethereum Classic account
@@ -1213,12 +1269,14 @@ transactions: Transaction[]   // Transaction history
 ```
 
 **Mining**:
+
 ```typescript
-miningState: MiningState       // Status, hash rate, rewards
-miningProgress: MiningProgress // Block progress tracking
+miningState: MiningState; // Status, hash rate, rewards
+miningProgress: MiningProgress; // Block progress tracking
 ```
 
 **Privacy & Security**:
+
 ```typescript
 userLocation: string           // User's region
 blacklist: BlacklistEntry[]    // Blacklisted peers
@@ -1228,10 +1286,12 @@ suspiciousActivity: ActivityLog[] // Security monitoring
 ### 23.2 Key Interfaces
 
 **FileItem States**:
+
 - Downloading, Paused, Completed, Seeding, Queued, Canceled, Failed
 - Priority levels, encryption status, file versioning, multi-CID support
 
 **AppSettings**:
+
 - Storage management, bandwidth limits with scheduling
 - Network config (port, UPnP, NAT), proxy settings
 - NAT traversal settings, DHT configuration
@@ -1277,6 +1337,7 @@ src/lib/components/
 **Router**: `@mateothegreat/svelte5-router`
 
 **Features**:
+
 - Declarative route configuration in App.svelte
 - Context-based navigation with `goto()` function
 - 404 handling via NotFound page
@@ -1336,6 +1397,7 @@ npm run check            # TypeScript type check
 ### 25.3 First Launch
 
 On first launch, the application will:
+
 1. Create default storage directory
 2. Connect to DHT network
 3. Detect region automatically
@@ -1376,14 +1438,14 @@ On first launch, the application will:
 
 ### 26.6 Configuration Defaults
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `confirmation_threshold` | 12 | Blocks required for payment finality |
-| `cache_ttl` | 10 minutes | Reputation cache duration |
-| `blacklist_score_threshold` | 0.2 | Auto-blacklist score threshold |
-| `blacklist_bad_verdicts_threshold` | 3 | Verdicts for auto-blacklist |
-| `payment_deadline_default` | 3600s | Default payment deadline |
-| `payment_grace_period` | 1800s | Grace period after deadline |
+| Parameter                          | Default    | Description                          |
+| ---------------------------------- | ---------- | ------------------------------------ |
+| `confirmation_threshold`           | 12         | Blocks required for payment finality |
+| `cache_ttl`                        | 10 minutes | Reputation cache duration            |
+| `blacklist_score_threshold`        | 0.2        | Auto-blacklist score threshold       |
+| `blacklist_bad_verdicts_threshold` | 3          | Verdicts for auto-blacklist          |
+| `payment_deadline_default`         | 3600s      | Default payment deadline             |
+| `payment_grace_period`             | 1800s      | Grace period after deadline          |
 
 ---
 
@@ -1394,6 +1456,7 @@ On first launch, the application will:
 **Location**: Settings → Diagnostics
 
 **Categories**:
+
 1. **Environment**: Tauri vs web build, platform detection
 2. **Network**: DHT connectivity, peer count, bootstrap nodes
 3. **NAT Traversal**: AutoNAT v2, Circuit Relay v2 status
@@ -1401,6 +1464,7 @@ On first launch, the application will:
 5. **Security**: Proxy config, encryption capability
 
 **Status Indicators**:
+
 - ✓ Green - Test passed
 - ⚠ Yellow - Needs attention
 - ✗ Red - Test failed
@@ -1408,13 +1472,13 @@ On first launch, the application will:
 
 ### 27.2 Common Issues
 
-| Issue | Solution |
-|-------|----------|
-| Can't connect to network | Check internet, firewall, port settings |
-| Files not downloading | Verify hash, check seeders online |
-| Mining not starting | Ensure Geth initialized, check resources |
-| Wallet issues | Verify mnemonic, check Geth sync |
-| NAT/Relay issues | Check diagnostics for AutoNAT status |
+| Issue                    | Solution                                 |
+| ------------------------ | ---------------------------------------- |
+| Can't connect to network | Check internet, firewall, port settings  |
+| Files not downloading    | Verify hash, check seeders online        |
+| Mining not starting      | Ensure Geth initialized, check resources |
+| Wallet issues            | Verify mnemonic, check Geth sync         |
+| NAT/Relay issues         | Check diagnostics for AutoNAT status     |
 
 ### 27.3 Debug Commands
 
@@ -1436,51 +1500,51 @@ npm run build
 
 ### A.1 Blockchain Parameters
 
-| Parameter | Value |
-|-----------|-------|
-| Network ID | 98765 |
-| Chain ID | 98765 |
-| Block Time | ~15 seconds |
-| Gas Limit | 4,700,000 |
-| Mining Algorithm | Ethash |
-| Initial Reward | 2 Chiral |
+| Parameter        | Value       |
+| ---------------- | ----------- |
+| Network ID       | 987654      |
+| Chain ID         | 987654      |
+| Block Time       | ~15 seconds |
+| Gas Limit        | 4,700,000   |
+| Mining Algorithm | Ethash      |
+| Initial Reward   | 2 Chiral    |
 
 ### A.2 File Processing
 
-| Aspect | Specification |
-|--------|---------------|
-| Hash Algorithm | SHA-256 |
-| Chunk Size | 256 KB |
-| Encryption | AES-256-GCM |
+| Aspect         | Specification            |
+| -------------- | ------------------------ |
+| Hash Algorithm | SHA-256                  |
+| Chunk Size     | 256 KB                   |
+| Encryption     | AES-256-GCM              |
 | Key Derivation | PBKDF2 (100k iterations) |
 
 ### A.3 DHT Parameters
 
-| Parameter | Value |
-|-----------|-------|
-| K (bucket size) | 20 |
-| α (concurrency) | 3 |
-| Key space | 160 bits |
-| Refresh interval | 3600s |
-| Record expiration | 86400s |
+| Parameter         | Value    |
+| ----------------- | -------- |
+| K (bucket size)   | 20       |
+| α (concurrency)   | 3        |
+| Key space         | 160 bits |
+| Refresh interval  | 3600s    |
+| Record expiration | 86400s   |
 
 ### A.4 Performance Targets
 
-| Metric | Target | Current |
-|--------|--------|---------|
-| TPS | 100 | 10 |
-| File Upload | 10 MB/s | 5 MB/s |
+| Metric        | Target  | Current |
+| ------------- | ------- | ------- |
+| TPS           | 100     | 10      |
+| File Upload   | 10 MB/s | 5 MB/s  |
 | File Download | 20 MB/s | 10 MB/s |
-| DHT Lookup | <2s | <5s |
+| DHT Lookup    | <2s     | <5s     |
 
 ### A.5 Scalability Limits
 
-| Resource | Soft Limit | Hard Limit |
-|----------|------------|------------|
-| Files per Node | 100,000 | 1,000,000 |
-| Peers per Node | 100 | 1,000 |
-| Concurrent Transfers | 50 | 200 |
-| DHT Entries | 10,000 | 100,000 |
+| Resource             | Soft Limit | Hard Limit |
+| -------------------- | ---------- | ---------- |
+| Files per Node       | 100,000    | 1,000,000  |
+| Peers per Node       | 100        | 1,000      |
+| Concurrent Transfers | 50         | 200        |
+| DHT Entries          | 10,000     | 100,000    |
 
 ---
 
@@ -1508,6 +1572,7 @@ npm run build
 ### B.2 Tauri Commands
 
 **FTP Operations**:
+
 - `list_ftp_directory` - Browse FTP directories
 - `delete_ftp_file` - Delete remote files/folders
 - `rename_ftp_file` - Rename files/folders
@@ -1515,6 +1580,7 @@ npm run build
 - `test_ftp_connection` - Test server connectivity
 
 **Bookmark Management**:
+
 - `load_ftp_bookmarks` - Load saved bookmarks
 - `add_ftp_bookmark` - Add new bookmark
 - `update_ftp_bookmark` - Update existing
@@ -1543,45 +1609,45 @@ npm run build
 
 ## Appendix C: Error Codes
 
-| Code | Name | Description |
-|------|------|-------------|
-| 1000 | NETWORK_ERROR | Network connectivity issue |
-| 1001 | TIMEOUT | Operation timed out |
-| 1002 | INVALID_HASH | Invalid file hash format |
-| 1003 | FILE_NOT_FOUND | File not in network |
-| 1004 | INSUFFICIENT_FUNDS | Not enough balance |
-| 1005 | PERMISSION_DENIED | Access not authorized |
-| 1006 | STORAGE_FULL | Local storage capacity reached |
-| 1007 | INVALID_CHUNK | Chunk verification failed |
-| 1008 | DHT_TIMEOUT | DHT lookup timeout |
-| 1009 | PEER_UNREACHABLE | Cannot connect to peer |
+| Code | Name               | Description                    |
+| ---- | ------------------ | ------------------------------ |
+| 1000 | NETWORK_ERROR      | Network connectivity issue     |
+| 1001 | TIMEOUT            | Operation timed out            |
+| 1002 | INVALID_HASH       | Invalid file hash format       |
+| 1003 | FILE_NOT_FOUND     | File not in network            |
+| 1004 | INSUFFICIENT_FUNDS | Not enough balance             |
+| 1005 | PERMISSION_DENIED  | Access not authorized          |
+| 1006 | STORAGE_FULL       | Local storage capacity reached |
+| 1007 | INVALID_CHUNK      | Chunk verification failed      |
+| 1008 | DHT_TIMEOUT        | DHT lookup timeout             |
+| 1009 | PEER_UNREACHABLE   | Cannot connect to peer         |
 
 ---
 
 ## Appendix D: Glossary
 
-| Term | Definition |
-|------|------------|
-| **AutoNAT** | Protocol for detecting NAT reachability status |
-| **Bitswap** | IPFS-inspired block exchange protocol |
-| **CID** | Content Identifier - SHA-256 hash of file content |
-| **Circuit Relay** | Protocol for forwarding traffic through intermediate nodes |
-| **Clef** | Ethereum external signer for secure key management |
-| **DCUtR** | Direct Connection Upgrade through Relay - hole punching protocol |
-| **DHT** | Distributed Hash Table - decentralized key-value store |
-| **Geth** | Go-Ethereum client for blockchain operations |
-| **HD Wallet** | Hierarchical Deterministic wallet (BIP32/BIP39) |
-| **Kademlia** | DHT protocol used for peer and content discovery |
-| **Leecher** | Peer actively downloading file chunks |
-| **libp2p** | Modular P2P networking stack |
-| **Merkle Tree** | Hash tree structure for efficient verification |
-| **mDNS** | Multicast DNS for local peer discovery |
-| **Noise Protocol** | Cryptographic framework for secure channels |
-| **Seeder** | Peer with complete or partial file, serving chunks |
-| **STUN** | Session Traversal Utilities for NAT |
-| **TURN** | Traversal Using Relays around NAT |
-| **UPnP** | Universal Plug and Play for automatic port forwarding |
-| **WebRTC** | Web Real-Time Communication for browser P2P |
+| Term               | Definition                                                       |
+| ------------------ | ---------------------------------------------------------------- |
+| **AutoNAT**        | Protocol for detecting NAT reachability status                   |
+| **Bitswap**        | IPFS-inspired block exchange protocol                            |
+| **CID**            | Content Identifier - SHA-256 hash of file content                |
+| **Circuit Relay**  | Protocol for forwarding traffic through intermediate nodes       |
+| **Clef**           | Ethereum external signer for secure key management               |
+| **DCUtR**          | Direct Connection Upgrade through Relay - hole punching protocol |
+| **DHT**            | Distributed Hash Table - decentralized key-value store           |
+| **Geth**           | Go-Ethereum client for blockchain operations                     |
+| **HD Wallet**      | Hierarchical Deterministic wallet (BIP32/BIP39)                  |
+| **Kademlia**       | DHT protocol used for peer and content discovery                 |
+| **Leecher**        | Peer actively downloading file chunks                            |
+| **libp2p**         | Modular P2P networking stack                                     |
+| **Merkle Tree**    | Hash tree structure for efficient verification                   |
+| **mDNS**           | Multicast DNS for local peer discovery                           |
+| **Noise Protocol** | Cryptographic framework for secure channels                      |
+| **Seeder**         | Peer with complete or partial file, serving chunks               |
+| **STUN**           | Session Traversal Utilities for NAT                              |
+| **TURN**           | Traversal Using Relays around NAT                                |
+| **UPnP**           | Universal Plug and Play for automatic port forwarding            |
+| **WebRTC**         | Web Real-Time Communication for browser P2P                      |
 
 ---
 
@@ -1592,6 +1658,7 @@ npm run build
 **Status**: Production
 
 **Related Documents**:
+
 - [CLAUDE.md](../CLAUDE.md) - Development guide
 - [README.md](../README.md) - User documentation
 - [architecture.md](architecture.md) - Detailed architecture
@@ -1600,4 +1667,5 @@ npm run build
 
 ---
 
-*This document consolidates all design and technical documentation for the Chiral Network project into a single comprehensive reference.*
+_This document consolidates all design and technical documentation for the Chiral Network project into a single comprehensive reference._
+

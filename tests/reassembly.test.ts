@@ -49,9 +49,14 @@ describe('ReassemblyManager', () => {
     expect(ok).toBe(true);
 
     const state = reassemblyManager.getState('t2');
+    // logical receipt is marked immediately
     expect(state!.receivedChunks.includes(0)).toBe(true);
     // ensure chunk state set to RECEIVED
     expect(state!.chunkStates[0]).toBe(ChunkState.RECEIVED);
+
+    // ensure backend was invoked (drain runs async)
+    await new Promise((r) => setTimeout(r, 0));
+    expect((invoke as any).mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it('rejects a chunk with bad checksum', async () => {
@@ -116,27 +121,32 @@ describe('ReassemblyManager', () => {
       return p;
     });
 
-    // Start three acceptChunk calls but don't await them yet
-    const p0 = reassemblyManager.acceptChunk('t5', 0, new Uint8Array([1]));
-    const p1 = reassemblyManager.acceptChunk('t5', 1, new Uint8Array([2]));
-    const p2 = reassemblyManager.acceptChunk('t5', 2, new Uint8Array([3]));
+    // Start three acceptChunk calls
+    const r0 = await reassemblyManager.acceptChunk('t5', 0, new Uint8Array([1]));
+    const r1 = await reassemblyManager.acceptChunk('t5', 1, new Uint8Array([2]));
+    const r2 = await reassemblyManager.acceptChunk('t5', 2, new Uint8Array([3]));
+
+    expect(r0).toBe(true);
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
 
     // allow microtasks to settle so enqueue/processing runs
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
 
     // With concurrency=1, only one write should be in flight and the rest queued
     let s = reassemblyManager.getState('t5')!;
     expect(s.writeInFlight).toBe(1);
     expect(s.writeQueueLength).toBe(2);
 
-    // With new semantics, chunks are marked RECEIVED immediately after checksum validation
+    // Chunks are marked RECEIVED immediately after checksum validation
     expect(s.chunkStates[0]).toBe(ChunkState.RECEIVED);
     expect(s.chunkStates[1]).toBe(ChunkState.RECEIVED);
     expect(s.chunkStates[2]).toBe(ChunkState.RECEIVED);
 
     // Fulfill first write
     resolves[0](true);
-    await p0; // wait for acceptChunk resolution
+    // allow drain to pick next
+    await new Promise((r) => setTimeout(r, 0));
 
     // Now one queued job should have started: still 1 in flight, queue length 1
     s = reassemblyManager.getState('t5')!;
@@ -147,9 +157,9 @@ describe('ReassemblyManager', () => {
 
     // Fulfill remaining writes
     resolves[1](true);
-    await p1;
+    await new Promise((r) => setTimeout(r, 0));
     resolves[2](true);
-    await p2;
+    await new Promise((r) => setTimeout(r, 0));
 
     // After all completed, no in-flight writes and empty queue
     s = reassemblyManager.getState('t5')!;
@@ -174,13 +184,15 @@ describe('ReassemblyManager', () => {
     (invoke as any).mockImplementation(() => new Promise(() => {}));
 
     // First accept should enqueue
-    const p0 = reassemblyManager.acceptChunk('t6', 0, new Uint8Array([1]));
-    await Promise.resolve();
+    const r0 = await reassemblyManager.acceptChunk('t6', 0, new Uint8Array([1]));
+    expect(r0).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
     const s = reassemblyManager.getState('t6')!;
     expect(s.writeQueueLength + s.writeInFlight).toBeGreaterThan(0);
 
-    // Second accept should exceed maxQueueLength and throw
-    await expect(reassemblyManager.acceptChunk('t6', 1, new Uint8Array([2]))).rejects.toThrow();
+    // Second accept should hit backpressure and return false (not throw)
+    const r1 = await reassemblyManager.acceptChunk('t6', 1, new Uint8Array([2]));
+    expect(r1).toBe(false);
   });
 
   it('emits events on chunk state changes and progress', async () => {
@@ -263,4 +275,73 @@ describe('ReassemblyManager', () => {
     sr = reassemblyManager.getState('t8r')!;
     expect(sr.receivedChunks.length).toBe(4);
   });
+
+  it('backpressure resumes after drain', async () => {
+    const manifest = {
+      fileSize: 200,
+      chunks: [{ index: 0, encryptedSize: 100 }, { index: 1, encryptedSize: 100 }],
+    };
+
+    // Use a tiny queue so backpressure is triggered while first write is in-flight
+    reassemblyManager.initReassembly('t9', manifest, '/tmp/t9', 1, 1);
+
+    const resolves: Array<(v: any) => void> = [];
+    (invoke as any).mockImplementation(() => {
+      return new Promise((res) => resolves.push(res));
+    });
+
+    // First accept should enqueue and drain will pick it (in-flight)
+    const r0 = await reassemblyManager.acceptChunk('t9', 0, new Uint8Array([1]));
+    expect(r0).toBe(true);
+
+    // allow drain to start and mark inFlight
+    await new Promise((r) => setTimeout(r, 0));
+    let s = reassemblyManager.getState('t9')!;
+    expect(s.writeInFlight).toBe(1);
+
+    // Second accept should see backpressure and return false
+    const r1 = await reassemblyManager.acceptChunk('t9', 1, new Uint8Array([2]));
+    expect(r1).toBe(false);
+
+    // Resolve first write to free capacity
+    resolves[0](true);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Now accept should succeed
+    const r2 = await reassemblyManager.acceptChunk('t9', 1, new Uint8Array([2]));
+    expect(r2).toBe(true);
+
+    // Cleanup: resolve any outstanding invokes
+    if (resolves.length > 1) {
+      resolves.slice(1).forEach((fn) => fn(true));
+    }
+  });
+
+  it('accepts chunk with valid checksum', async () => {
+    const { createHash } = require('crypto');
+    const chunk = new Uint8Array([1, 2, 3]);
+    const checksum = createHash('sha256').update(Buffer.from(chunk)).digest('hex');
+
+    const manifest = {
+      fileSize: 3,
+      chunks: [{ index: 0, encryptedSize: 3, checksum }],
+    };
+
+    reassemblyManager.initReassembly('t10', manifest, '/tmp/t10');
+
+    // Mock invoke success
+    (invoke as any).mockResolvedValue(true);
+
+    const ok = await reassemblyManager.acceptChunk('t10', 0, chunk);
+    expect(ok).toBe(true);
+
+    const state = reassemblyManager.getState('t10')!;
+    expect(state.receivedChunks.includes(0)).toBe(true);
+    expect(state.chunkStates[0]).toBe(ChunkState.RECEIVED);
+
+    // ensure backend was invoked (drain runs async)
+    await new Promise((r) => setTimeout(r, 0));
+    expect((invoke as any).mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
 });

@@ -31,7 +31,7 @@ pub async fn write_chunk_temp(
     transfer_id: String,
     chunk_index: u32,
     offset: u64,
-    bytes: Vec<u8>,
+    bytes: serde_json::Value,
     chunk_checksum: Option<String>, // NEW optional checksum param (hex sha256)
 ) -> Result<ReassemblyResult, String> {
     let temp_dir = std::env::temp_dir().join("chiral_transfers");
@@ -44,6 +44,53 @@ pub async fn write_chunk_temp(
     }
     
     let temp_file_path = temp_dir.join(format!("{}.tmp", transfer_id));
+    
+    // Decode incoming bytes which may be provided as a JSON array of numbers or a base64 string.
+    let bytes_vec: Vec<u8> = match bytes {
+        serde_json::Value::Array(arr) => {
+            let mut v = Vec::with_capacity(arr.len());
+            for item in arr.iter() {
+                if let Some(n) = item.as_u64() {
+                    v.push(n as u8);
+                } else {
+                    return Ok(ReassemblyResult { ok: false, error: Some("Invalid byte array element".to_string()) });
+                }
+            }
+            v
+        }
+        serde_json::Value::String(s) => {
+            match base64::decode(&s) {
+                Ok(v) => v,
+                Err(e) => return Ok(ReassemblyResult { ok: false, error: Some(format!("Failed to decode base64 bytes: {}", e)) }),
+            }
+        }
+        serde_json::Value::Object(map) => {
+            // Support `{ data: [...] }` shapes sometimes emitted
+            if let Some(data_val) = map.get("data") {
+                if let Some(arr) = data_val.as_array() {
+                    let mut v = Vec::with_capacity(arr.len());
+                    for item in arr.iter() {
+                        if let Some(n) = item.as_u64() {
+                            v.push(n as u8);
+                        } else {
+                            return Ok(ReassemblyResult { ok: false, error: Some("Invalid byte array element in object.data".to_string()) });
+                        }
+                    }
+                    v
+                } else if let Some(s) = data_val.as_str() {
+                    match base64::decode(s) {
+                        Ok(v) => v,
+                        Err(e) => return Ok(ReassemblyResult { ok: false, error: Some(format!("Failed to decode base64 in object.data: {}", e)) }),
+                    }
+                } else {
+                    return Ok(ReassemblyResult { ok: false, error: Some("Unsupported object.data format".to_string()) });
+                }
+            } else {
+                return Ok(ReassemblyResult { ok: false, error: Some("Unsupported bytes object format".to_string()) });
+            }
+        }
+        _ => return Ok(ReassemblyResult { ok: false, error: Some("Unsupported bytes format".to_string()) }),
+    };
     
     // Open file for writing at offset (create if doesn't exist)
     let mut file = match OpenOptions::new()
@@ -64,7 +111,7 @@ pub async fn write_chunk_temp(
     if let Some(expected_hex) = chunk_checksum {
         // compute sha256 hex of bytes
         let mut hasher = Sha256::new();
-        hasher.update(&bytes);
+        hasher.update(&bytes_vec);
         let computed = format!("{:x}", hasher.finalize());
         if !computed.eq_ignore_ascii_case(&expected_hex) {
             return Ok(ReassemblyResult {
@@ -95,7 +142,7 @@ pub async fn write_chunk_temp(
     }
 
     // Write the chunk data
-    if let Err(e) = file.write_all(&bytes) {
+    if let Err(e) = file.write_all(&bytes_vec) {
         let _ = file.unlock();
         return Ok(ReassemblyResult {
             ok: false,
@@ -133,7 +180,7 @@ pub async fn write_chunk_temp(
     }
 
     println!("Written chunk {} ({} bytes) at offset {} for transfer {}", 
-             chunk_index, bytes.len(), offset, transfer_id);
+             chunk_index, bytes_vec.len(), offset, transfer_id);
     
     Ok(ReassemblyResult { ok: true, error: None })
 }

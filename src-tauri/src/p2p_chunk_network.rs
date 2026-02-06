@@ -14,9 +14,13 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
+use ed25519_dalek::Verifier;
 
 // chunk size matches manager.rs and ipfs
 pub const CHUNK_SIZE: u64 = 256 * 1024;
+
+// maximum manifest JSON size we accept for signature verification (protect against DoS)
+const MAX_MANIFEST_BYTES: usize = 16 * 1024; // 16 KiB
 
 // state file extension
 const META_EXT: &str = ".chiral.chunk.meta.json";
@@ -380,12 +384,12 @@ pub async fn verify_chunk_from_disk(
         .map_err(|e| ChunkNetErr::IoErr(e.to_string()))?;
 
     let mut buf = vec![0u8; chunk.size as usize];
-    let n = file
-        .read_exact(&mut buf)
+    // read_exact returns () on success; just ensure it completes
+    file.read_exact(&mut buf)
         .await
         .map_err(|e| ChunkNetErr::IoErr(e.to_string()))?;
 
-    Ok(verify_chunk_hash(&buf[..n], &chunk.hash))
+    Ok(verify_chunk_hash(&buf, &chunk.hash))
 }
 
 // verify all downloaded chunks, update state
@@ -1435,6 +1439,78 @@ pub async fn p2p_chunk_get_progress(tmp_path: String) -> Result<CoordinatorProgr
     let state = load(&tmp).await.map_err(|e| e.to_string())?;
     let coordinator = MultiPeerCoordinator::new(state);
     Ok(coordinator.progress_info())
+}
+
+#[tauri::command]
+pub fn p2p_verify_manifest(manifest_json: String) -> Result<bool, String> {
+    // Avoid processing overly large manifests
+    if manifest_json.as_bytes().len() > MAX_MANIFEST_BYTES {
+        return Err(format!("Manifest too large: {} bytes", manifest_json.as_bytes().len()));
+    }
+
+    // Parse the manifest JSON
+    let v: serde_json::Value = serde_json::from_str(&manifest_json)
+        .map_err(|e| format!("Failed to parse manifest JSON: {}", e))?;
+
+    // Extract signature and owner_pubkey
+    let signature_b64 = v.get("signature").and_then(|s| s.as_str()).ok_or("Manifest missing 'signature' field")?;
+    let owner_pub_b64 = v.get("owner_pubkey").and_then(|s| s.as_str()).ok_or("Manifest missing 'owner_pubkey' field")?;
+
+    // Remove signature and owner_pubkey to form payload
+    let mut payload = v.clone();
+    if let Some(obj) = payload.as_object_mut() {
+        obj.remove("signature");
+        obj.remove("owner_pubkey");
+    }
+
+    // Canonicalize payload for deterministic verification
+    let canonical = canonicalize_value(&payload);
+    let payload_bytes = serde_json::to_vec(&canonical).map_err(|e| format!("Failed to canonicalize manifest payload: {}", e))?;
+
+    // Decode base64 using modern API
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+
+    let pk_bytes = STANDARD.decode(owner_pub_b64).map_err(|e| format!("Failed to decode owner_pubkey: {}", e))?;
+    let sig_bytes = STANDARD.decode(signature_b64).map_err(|e| format!("Failed to decode signature: {}", e))?;
+
+    if pk_bytes.len() != 32 {
+        return Err("owner_pubkey must be 32 bytes".into());
+    }
+    if sig_bytes.len() != 64 {
+        return Err("signature must be 64 bytes".into());
+    }
+
+    let pk_arr: [u8; 32] = pk_bytes.as_slice().try_into().map_err(|_| "owner_pubkey invalid" )?;
+    let sig_arr: [u8; 64] = sig_bytes.as_slice().try_into().map_err(|_| "signature invalid" )?;
+
+    let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk_arr).map_err(|e| format!("Invalid public key: {}", e))?;
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+
+    match vk.verify(&payload_bytes, &sig) {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            debug!("manifest signature verification failed: {}", e);
+            Err(format!("Signature verification failed: {}", e))
+        }
+    }
+}
+
+// Canonicalize JSON by sorting object keys recursively (deterministic, lightweight)
+fn canonicalize_value(v: &serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Object(map) => {
+            let mut items: Vec<(&String, &serde_json::Value)> = map.iter().collect();
+            items.sort_by(|a, b| a.0.cmp(b.0));
+            let mut new_map = serde_json::Map::new();
+            for (k, val) in items {
+                new_map.insert(k.clone(), canonicalize_value(val));
+            }
+            serde_json::Value::Object(new_map)
+        }
+        serde_json::Value::Array(arr) => serde_json::Value::Array(arr.iter().map(canonicalize_value).collect()),
+        _ => v.clone(),
+    }
 }
 
 // =========================================================================

@@ -38,7 +38,8 @@ pub mod webhook_manager;
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source, ed2k_client,
     encryption, file_transfer, ftp_bookmarks, ftp_client, http_download, keystore, logger, manager,
-    multi_source_download, p2p_chunk_network, peer_selection, protocols, reputation, stream_auth,
+    multi_source_download, p2p_chunk_network, p2p_download_recovery, peer_selection, protocols,
+    reputation, stream_auth,
     webrtc_service,
 };
 use headless::create_dht_config_from_args;
@@ -9686,7 +9687,14 @@ fn main() {
             p2p_chunk_network::p2p_chunk_create_coordinator,
             p2p_chunk_network::p2p_chunk_assign_pending,
             p2p_chunk_network::p2p_chunk_report_result,
-            p2p_chunk_network::p2p_chunk_get_progress
+            p2p_chunk_network::p2p_chunk_get_progress,
+            // P2P download recovery commands
+            p2p_download_recovery::p2p_scan_incomplete,
+            p2p_download_recovery::p2p_get_recovery,
+            p2p_download_recovery::p2p_remove_recovery,
+            p2p_download_recovery::p2p_verify_recovery,
+            p2p_download_recovery::p2p_get_stats,
+            p2p_download_recovery::p2p_check_space
         ])
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
