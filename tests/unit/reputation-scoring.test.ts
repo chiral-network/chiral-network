@@ -349,31 +349,6 @@ describe('Reputation Scoring Algorithms', () => {
     });
   });
 
-  describe('Relay Server Reputation', () => {
-    it('should give higher scores to relay servers', () => {
-      const regularPeer = { isRelay: false, baseScore: 70 };
-      const relayPeer = { isRelay: true, baseScore: 70 };
-
-      const relayBonus = 10;
-      const regularScore = regularPeer.baseScore;
-      const relayScore = relayPeer.baseScore + (relayPeer.isRelay ? relayBonus : 0);
-
-      expect(relayScore).toBeGreaterThan(regularScore);
-    });
-
-    it('should track relay-specific metrics', () => {
-      const relayMetrics = {
-        connectionsRelayed: 100,
-        relayUptime: 0.99,
-        averageRelayLatency: 30
-      };
-
-      expect(relayMetrics.connectionsRelayed).toBeGreaterThan(0);
-      expect(relayMetrics.relayUptime).toBeGreaterThan(0.95);
-      expect(relayMetrics.averageRelayLatency).toBeLessThan(100);
-    });
-  });
-
   describe('Edge Cases', () => {
     it('should handle new peer with no history', () => {
       const newPeer = {

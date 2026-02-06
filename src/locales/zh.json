@@ -133,41 +133,6 @@
           "private": "可达性已降级。{summary}",
           "unknown": "可达性状态已更新。{summary}"
         }
-      },
-      "dcutr": {
-        "title": "DCUtR 打洞",
-        "enabled": "DCUtR 已启用",
-        "disabled": "DCUtR 已禁用",
-        "attempts": "打洞尝试次数",
-        "successes": "成功",
-        "failures": "失败",
-        "successRate": "成功率",
-        "lastSuccess": "最后成功",
-        "lastFailure": "最后失败",
-        "never": "从未",
-        "description": "通过中继的直接连接升级（DCUtR）启用 NAT 打洞以建立直接的对等连接。"
-      },
-      "relay": {
-        "title": "中继状态",
-        "enabled": "自动中继已启用",
-        "disabled": "自动中继已禁用",
-        "timeline": "自动中继时间线",
-        "enabledAt": "最近启用时间",
-        "disabledAt": "最近禁用时间",
-        "noPeer": "未连接到中继",
-        "activePeer": "活动中继",
-        "status": "状态",
-        "lastSuccess": "最近成功预留",
-        "lastFailure": "最近预留失败",
-        "renewals": "预留续期次数",
-        "evictions": "预留被逐次数",
-        "never": "从未",
-        "neverEnabled": "从未启用",
-        "neverDisabled": "从未禁用",
-        "noEvictions": "无被逐记录",
-        "accepted": "预留已接受",
-        "pending": "待定",
-        "failed": "失败"
       }
     },
     "networkStatus": "网络状态",
@@ -309,11 +274,6 @@
         "button": "复制地址",
         "success": "多地址已复制！"
       },
-      "toggleAutorelay": {
-        "tooltip": "切换自动中继连接",
-        "buttonOn": "中继：开启",
-        "buttonOff": "中继：关闭"
-      },
       "startStopDht": {
         "startTooltip": "连接到DHT网络",
         "stopTooltip": "断开DHT网络连接",
@@ -345,7 +305,6 @@
     "upload": "上传",
     "torrents": "种子",
     "network": "网络",
-    "relay": "中继",
     "mining": "挖矿",
     "proxy": "代理",
     "proxySelfTest": "Proxy Self-Test",
@@ -1046,8 +1005,6 @@
     "refreshData": "刷新数据",
     "hideAnalytics": "隐藏分析",
     "showAnalytics": "显示分析",
-    "hideRelayLeaderboard": "隐藏中继排行榜",
-    "showRelayLeaderboard": "显示中继排行榜",
     "loading": "加载信誉数据中...",
     "searchPeers": "搜索节点",
     "searchPlaceholder": "按节点 ID 搜索...",
@@ -1112,14 +1069,6 @@
       "MaliciousBehaviorReport": "恶意行为报告",
       "FileShared": "文件已共享"
     },
-    "myRelay": {
-      "title": "您的中继信誉",
-      "subtitle": "您的节点正在作为中继服务器运行",
-      "rankOf": "排名 {total}",
-      "reputationScore": "信誉分数",
-      "successfulCircuits": "成功电路",
-      "reservations": "预留"
-    },
     "pagination": {
       "showing": "显示 {start}-{end}，共 {total} 个节点",
       "previous": "上一页",
@@ -1139,124 +1088,6 @@
       "encryption": "加密",
       "supported": "支持",
       "notSupported": "不支持"
-    }
-  },
-  "relay": {
-    "title": "中继基础设施",
-    "subtitle": "管理中继服务器和网络连接",
-    "server": {
-      "title": "中继服务器",
-      "subtitle": "帮助节点通过你的节点连接",
-      "running": "运行中",
-      "stopped": "已停止",
-      "description": "运行中继服务器来帮助NAT后面的节点连接到网络并获得声誉。",
-      "benefit1": "帮助节点获得声誉点数",
-      "benefit2": "改善网络连接性和去中心化",
-      "benefit3": "主动中继电路时使用带宽",
-      "enable": "启用中继服务器",
-      "disable": "禁用中继服务器",
-      "start": "启动服务器",
-      "stop": "停止服务器",
-      "starting": "启动中...",
-      "enabling": "启用中...",
-      "disabling": "禁用中...",
-      "activeMessage": "你的中继服务器正在运行并帮助节点！",
-      "earningReputation": "你正在为每次成功连接赚取声誉。",
-      "aliasLabel": "中继服务器别名（公开名称）",
-      "aliasPlaceholder": "例如：Alice的快速中继 🚀",
-      "aliasHint": "此友好名称将出现在日志中，以及其他节点通过你的中继启动时",
-      "dhtNotRunning": "DHT 网络未运行",
-      "dhtNotRunningHint": "请先从网络页面启动网络。",
-      "broadcastingAs": "广播为："
-    },
-    "client": {
-      "title": "AutoRelay 客户端",
-      "subtitle": "需要时通过中继节点连接",
-      "enableAutorelay": "启用 Circuit Relay v2（AutoRelay）",
-      "preferredRelays": "首选中继节点（可选）",
-      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\n每行一个多地址",
-      "preferredRelaysHint": "留空以使用引导节点作为中继",
-      "howItWorks": "工作原理：",
-      "description": "AutoRelay 在你处于 NAT 或防火墙后面时自动通过中继节点连接，确保你始终可以参与网络。"
-    },
-    "monitoring": {
-      "title": "中继健康和监控"
-    },
-    "errors": {
-      "dhtNotRunning": "DHT 未运行。请先从网络页面启动网络。",
-      "toggleFailed": "切换中继服务器失败：{error}"
-    },
-    "monitor": {
-      "statsTitle": "中继池统计",
-      "totalRelays": "总中继数",
-      "connected": "已连接",
-      "healthy": "健康",
-      "totalErrors": "总错误数",
-      "avgHealthScore": "平均健康分数",
-      "activeRelayTitle": "活动中继",
-      "connectedBadge": "已连接",
-      "peerId": "节点ID：",
-      "healthScore": "健康分数：",
-      "avgLatency": "平均延迟：",
-      "reservation": "预留：",
-      "successRate": "成功率：",
-      "relayPoolTitle": "中继池",
-      "noRelaysInPool": "池中无中继",
-      "primaryBadge": "主要",
-      "state": "状态：",
-      "latency": "延迟：",
-      "attempts": "尝试：",
-      "successes": "成功：",
-      "failures": "失败：",
-      "lastSuccess": "上次成功：",
-      "recentErrorsLabel": "最近错误：",
-      "recentErrorsTitle": "最近错误",
-      "clearButton": "清除",
-      "relayLabel": "中继：",
-      "retryLabel": "重试：",
-      "errorTypes": {
-        "connectionRefused": "连接被拒绝",
-        "timeout": "超时",
-        "reservationFailed": "预留失败",
-        "expired": "已过期",
-        "overloaded": "过载",
-        "unreachable": "无法到达",
-        "networkError": "网络错误",
-        "authFailed": "认证失败",
-        "protocolError": "协议错误",
-        "unknown": "未知"
-      },
-      "time": {
-        "never": "从未",
-        "justNow": "刚刚",
-        "minutesAgo": "{minutes}分钟前",
-        "hoursAgo": "{hours}小时前",
-        "na": "不适用",
-        "expired": "已过期",
-        "seconds": "{seconds}秒",
-        "minutes": "{minutes}分",
-        "hours": "{hours}时"
-      }
-    },
-    "leaderboard": {
-      "title": "顶级中继服务器",
-      "subtitle": "基于声誉的中继节点排名",
-      "refresh": "刷新",
-      "refreshing": "刷新中...",
-      "loading": "加载中继声誉数据...",
-      "rank": "排名",
-      "peerId": "节点ID",
-      "score": "分数",
-      "circuits": "电路",
-      "bandwidth": "带宽",
-      "uptime": "运行时间",
-      "points": "分",
-      "lastSeen": "最后在线",
-      "totalRelays": "总中继数",
-      "badgedRelays": "带徽章的中继",
-      "totalCircuits": "总电路数",
-      "noRelays": "未找到中继服务器",
-      "noRelaysDesc": "开始运行中继服务器以出现在排行榜上"
     }
   },
   "upload": {
@@ -1679,8 +1510,7 @@
     },
     "settings": {
       "updated": "设置已更新！",
-      "networkingError": "设置已保存，但网络更新失败",
-      "proxyRelayWarning": "启用隐藏我的 IP 之前，请先添加至少一个可信的代理中继。"
+      "networkingError": "设置已保存，但网络更新失败"
     },
     "analytics": {
       "direction": {
@@ -1757,7 +1587,6 @@
       "goToUpload": "前往上传",
       "goToNetwork": "前往网络",
       "goToMining": "前往挖矿",
-      "goToRelay": "前往中继",
       "goToAnalytics": "前往分析",
       "goToReputation": "前往声誉",
       "goToBlockchain": "前往区块链",
@@ -1861,11 +1690,7 @@
       "quit": "退出应用程序"
     }
   },
-  "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
-  "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
-  "settings.autorelay.relays": "Preferred Relay Nodes",
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
-  "settings.diagnostics.circuitRelay": "Circuit Relay",
   "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
   "settings.diagnostics.diskSpace": "Disk Space",
   "settings.diagnostics.encryptionSupport": "Encryption Support",

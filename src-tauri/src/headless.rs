@@ -76,9 +76,6 @@ pub struct CliArgs {
     #[arg(long)]
     pub disable_autonat: bool,
 
-    #[arg(long)]
-    pub enable_relay: bool,
-
     /// Interval in seconds between AutoNAT probes
     #[arg(long, default_value = "30")]
     pub autonat_probe_interval: u64,
@@ -91,10 +88,6 @@ pub struct CliArgs {
     #[arg(long)]
     pub show_reachability: bool,
 
-    /// Print DCUtR hole-punching metrics at startup
-    #[arg(long)]
-    pub show_dcutr: bool,
-
     // SOCKS5 Proxy address (e.g., 127.0.0.1:9050 for Tor or a private VPN SOCKS endpoint)
     #[arg(long)]
     pub socks5_proxy: Option<String>,
@@ -102,14 +95,6 @@ pub struct CliArgs {
     /// Print local download metrics snapshot at startup
     #[arg(long)]
     pub show_downloads: bool,
-
-    /// Disable AutoRelay behavior
-    #[arg(long)]
-    pub disable_autorelay: bool,
-
-    /// Preferred relay nodes (multiaddr form, can be specified multiple times)
-    #[arg(long)]
-    pub relay: Vec<String>,
 
     /// Enable pure DHT client mode (cannot seed files or act as DHT server)
     /// This mode uses minimal blockchain sync (~100 blocks instead of ~10,000)
@@ -153,12 +138,9 @@ pub fn create_dht_config_from_args(args: &CliArgs) -> DhtConfig<'static> {
         .port(args.dht_port)
         .bootstrap_nodes(args.bootstrap.clone())
         .enable_autonat(!args.disable_autonat)
-        .enable_autorelay(!args.disable_autorelay)
-        .enable_relay_server(args.enable_relay)
         .pure_client_mode(args.pure_client_mode)
         .force_server_mode(args.force_server_mode)
         .autonat_servers(args.autonat_server.clone())
-        .preferred_relays(args.relay.clone())
         // optional fields using maybe_<field_name>
         .maybe_autonat_probe_interval(if args.autonat_probe_interval == 0 {
             None
@@ -273,26 +255,6 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
     } else {
         None
     };
-    // ---- finalize AutoRelay flag (bootstrap OFF + ENV OFF)
-    let mut final_enable_autorelay = !args.disable_autorelay;
-    if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
-        final_enable_autorelay = false;
-        info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
-    }
-    if final_enable_autorelay {
-        if !args.relay.is_empty() {
-            info!(
-                "AutoRelay enabled with {} preferred relays",
-                args.relay.len()
-            );
-        } else {
-            info!("AutoRelay enabled, will discover relays from bootstrap nodes");
-        }
-    } else {
-        info!("AutoRelay disabled");
-    }
-    args.disable_autorelay = !final_enable_autorelay;
-
     // Build DHT configuration from CLI arguments
     let dht_config = create_dht_config_from_args(&args);
 
@@ -583,29 +545,6 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
         });
     }
 
-    if args.show_dcutr {
-        let snapshot = dht_arc.metrics_snapshot().await;
-        log_dcutr_snapshot(&snapshot);
-
-        let dht_for_logs = dht_arc.clone();
-        tokio::spawn(async move {
-            loop {
-                if Arc::strong_count(&dht_for_logs) <= 1 {
-                    break;
-                }
-
-                tokio::time::sleep(Duration::from_secs(60)).await;
-
-                let snapshot = dht_for_logs.metrics_snapshot().await;
-                log_dcutr_snapshot(&snapshot);
-
-                if !snapshot.dcutr_enabled {
-                    break;
-                }
-            }
-        });
-    }
-
     // Spawn the event pump
     let dht_clone_for_pump = Arc::clone(&dht_arc);
 
@@ -648,29 +587,6 @@ fn log_reachability_snapshot(snapshot: &DhtMetricsSnapshot) {
         info!("   Observed addresses: {:?}", snapshot.observed_addrs);
     }
     info!("   AutoNAT enabled: {}", snapshot.autonat_enabled);
-}
-
-fn log_dcutr_snapshot(snapshot: &DhtMetricsSnapshot) {
-    let success_rate = if snapshot.dcutr_hole_punch_attempts > 0 {
-        (snapshot.dcutr_hole_punch_successes as f64 / snapshot.dcutr_hole_punch_attempts as f64)
-            * 100.0
-    } else {
-        0.0
-    };
-    info!(
-        "🔀 DCUtR Metrics: {} attempts, {} successes, {} failures ({:.1}% success rate)",
-        snapshot.dcutr_hole_punch_attempts,
-        snapshot.dcutr_hole_punch_successes,
-        snapshot.dcutr_hole_punch_failures,
-        success_rate
-    );
-    if let Some(ts) = snapshot.last_dcutr_success {
-        info!("   Last success epoch: {}", ts);
-    }
-    if let Some(ts) = snapshot.last_dcutr_failure {
-        info!("   Last failure epoch: {}", ts);
-    }
-    info!("   DCUtR enabled: {}", snapshot.dcutr_enabled);
 }
 
 pub fn get_local_ip() -> Option<String> {

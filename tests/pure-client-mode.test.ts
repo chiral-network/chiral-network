@@ -312,10 +312,6 @@ describe('Pure-Client Mode - Integration Scenarios', () => {
     // Behind hard NAT, can only act as client
     expect(currentSettings.pureClientMode).toBe(true);
 
-    // Can download using relay
-    const canUseRelay = true;
-    expect(canUseRelay).toBe(true);
-
     // Cannot seed files
     const canSeed = !currentSettings.pureClientMode;
     expect(canSeed).toBe(false);

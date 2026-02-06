@@ -390,18 +390,8 @@ struct AppState {
     proof_watcher: Arc<Mutex<Option<JoinHandle<()>>>>,
     proof_contract_address: Arc<Mutex<Option<String>>>,
 
-    // Relay reputation statistics storage
-    relay_reputation: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
-
-    // Relay node aliases (peer_id -> alias)
-    relay_aliases: Arc<Mutex<std::collections::HashMap<String, String>>>,
-
     // Protocol manager for handling different download/upload protocols
     protocol_manager: Arc<ProtocolManager>,
-
-    // AutoRelay timeline persistence across DHT restarts
-    autorelay_last_enabled: Arc<Mutex<Option<SystemTime>>>,
-    autorelay_last_disabled: Arc<Mutex<Option<SystemTime>>>,
 
     // File logger writer for dynamic log configuration updates
     file_logger: Arc<Mutex<Option<logger::ThreadSafeWriter>>>,
@@ -1582,13 +1572,10 @@ async fn start_dht_node(
     autonat_probe_interval_secs: u64,
     chunk_size_kb: usize,
     cache_size_mb: usize,
-    enable_autorelay: bool,
-    enable_relay_server: bool,
     enable_upnp: bool,
 
     // Conditionally present
     autonat_servers: Option<Vec<String>>,
-    preferred_relays: Option<Vec<String>>,
     proxy_address: Option<String>,
     // Currently NOT sent by tauri frontend,
     // just using defaults present in struct for single src of truth
@@ -1604,7 +1591,6 @@ async fn start_dht_node(
     }
 
     let autonat_server_list = autonat_servers.unwrap_or(bootstrap_nodes.clone());
-    let preferred_relays_list = preferred_relays.unwrap_or_default();
 
     // Get the proxy from the command line, if it was provided at launch
     let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
@@ -1636,15 +1622,6 @@ async fn start_dht_node(
     let blockstore_db_path = proj_dirs.data_dir().join("blockstore_db");
     let async_blockstore_path = async_std::path::Path::new(blockstore_db_path.as_os_str());
 
-    let previous_autorelay_enabled = {
-        let guard = state.autorelay_last_enabled.lock().await;
-        guard.clone()
-    };
-    let previous_autorelay_disabled = {
-        let guard = state.autorelay_last_disabled.lock().await;
-        guard.clone()
-    };
-
     // Clone bootstrap nodes for health monitor before moving to DhtService::new
     let bootstrap_nodes_for_monitor = bootstrap_nodes.clone();
 
@@ -1656,12 +1633,9 @@ async fn start_dht_node(
         .autonat_probe_interval(Duration::from_secs(autonat_probe_interval_secs))
         .chunk_size_kb(chunk_size_kb)
         .cache_size_mb(cache_size_mb)
-        .enable_autorelay(enable_autorelay)
-        .enable_relay_server(enable_relay_server)
         .enable_upnp(enable_upnp)
         // conditionally present, so names are different
         .autonat_servers(autonat_server_list)
-        .preferred_relays(preferred_relays_list)
         .proxy_address(final_proxy_address)
         .build();
 
@@ -1674,16 +1648,6 @@ async fn start_dht_node(
     .await
     .map_err(|e| format!("Failed to start DHT: {}", e))?;
 
-    let (last_enabled, last_disabled) = dht_service.autorelay_history().await;
-    {
-        let mut guard = state.autorelay_last_enabled.lock().await;
-        *guard = last_enabled;
-    }
-    {
-        let mut guard = state.autorelay_last_disabled.lock().await;
-        *guard = last_disabled;
-    }
-
     let peer_id = dht_service.get_peer_id().await;
 
     // DHT node is already running in a spawned background task
@@ -1692,7 +1656,6 @@ async fn start_dht_node(
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
-    let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
     let analytics_arc = state.analytics.clone();
 
@@ -1852,47 +1815,13 @@ async fn start_dht_node(
                         impact,
                         data,
                     } => {
-                        // Update relay reputation statistics
-                        let mut stats = relay_reputation_arc.lock().await;
-                        let entry = stats.entry(peer_id.clone()).or_insert(RelayNodeStats {
-                            peer_id: peer_id.clone(),
-                            alias: None,
-                            reputation_score: 0.0,
-                            reservations_accepted: 0,
-                            circuits_established: 0,
-                            circuits_successful: 0,
-                            total_events: 0,
-                            last_seen: 0,
-                        });
-
-                        // Update statistics based on event type
-                        entry.reputation_score += impact;
-                        entry.total_events += 1;
-                        entry.last_seen = data
-                            .get("timestamp")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or_else(|| {
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or(std::time::Duration::from_secs(0))
-                                    .as_secs()
-                            });
-
-                        match event_type.as_str() {
-                            "RelayReservationAccepted" => entry.reservations_accepted += 1,
-                            "RelayCircuitEstablished" => entry.circuits_established += 1,
-                            "RelayCircuitSuccessful" => entry.circuits_successful += 1,
-                            _ => {}
-                        }
-
-                        // Emit event to frontend
                         let payload = serde_json::json!({
                             "peerId": peer_id,
                             "eventType": event_type,
                             "impact": impact,
                             "data": data,
                         });
-                        let _ = app_handle.emit("relay_reputation_event", payload);
+                        let _ = app_handle.emit("reputation_event", payload);
                     }
                     DhtEvent::BitswapChunkDownloaded {
                         file_hash,
@@ -2021,16 +1950,6 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     };
 
     if let Some(dht) = dht {
-        let (last_enabled, last_disabled) = dht.autorelay_history().await;
-        {
-            let mut guard = state.autorelay_last_enabled.lock().await;
-            *guard = last_enabled;
-        }
-        {
-            let mut guard = state.autorelay_last_disabled.lock().await;
-            *guard = last_disabled;
-        }
-
         (*dht)
             .shutdown()
             .await
@@ -8005,16 +7924,6 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
             let mut dht_guard = state.dht.lock().await;
             dht_guard.take()
         } {
-            let (last_enabled, last_disabled) = dht.autorelay_history().await;
-            {
-                let mut guard = state.autorelay_last_enabled.lock().await;
-                *guard = last_enabled;
-            }
-            {
-                let mut guard = state.autorelay_last_disabled.lock().await;
-                *guard = last_disabled;
-            }
-
             if let Err(e) = dht.shutdown().await {
                 tracing::warn!("Failed to stop DHT: {}", e);
             }
@@ -9153,7 +9062,6 @@ fn main() {
         let port = dht_port; // DHT port (configurable via env)
         let is_bootstrap = false;
         let enable_autonat = true;
-        let enable_autorelay = true;
 
         let proj_dirs = ProjectDirs::from("com", "chiral-network", "chiral-network")
             .ok_or("Failed to get project directories")
@@ -9165,7 +9073,6 @@ fn main() {
             .port(port)
             .bootstrap_nodes(bootstrap_nodes)
             .enable_autonat(enable_autonat)
-            .enable_autorelay(enable_autorelay)
             .blockstore_db_path(async_blockstore_path)
             .build();
 
@@ -9376,18 +9283,8 @@ fn main() {
             proof_watcher: Arc::new(Mutex::new(None)),
             proof_contract_address: Arc::new(Mutex::new(None)),
 
-            // Relay reputation statistics
-            relay_reputation: Arc::new(Mutex::new(std::collections::HashMap::new())),
-
-            // Relay aliases
-            relay_aliases: Arc::new(Mutex::new(std::collections::HashMap::new())),
-
             // Protocol Manager with BitTorrent support
             protocol_manager: protocol_manager_arc,
-
-            // AutoRelay timeline persistence across DHT restarts
-            autorelay_last_enabled: Arc::new(Mutex::new(None)),
-            autorelay_last_disabled: Arc::new(Mutex::new(None)),
 
             // File logger - will be initialized in setup phase after loading settings
             file_logger: Arc::new(Mutex::new(None)),
@@ -9640,9 +9537,6 @@ fn main() {
             store_file_data,
             start_proof_of_storage_watcher,
             stop_proof_of_storage_watcher,
-            get_relay_reputation_stats,
-            set_relay_alias,
-            get_relay_alias,
             save_app_settings,
             update_log_config,
             get_logs_directory,
@@ -10150,15 +10044,12 @@ fn main() {
 
                 if let Some(dht_service) = dht_clone_for_pump {
                     let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
-                    let relay_reputation_arc_for_pump =
-                        Arc::new(Mutex::new(std::collections::HashMap::new()));
 
                     tauri::async_runtime::spawn(async move {
                         pump_dht_events(
                             app_handle,
                             dht_service,
                             proxies_arc_for_pump,
-                            relay_reputation_arc_for_pump,
                         )
                         .await;
                     });
@@ -10732,87 +10623,6 @@ mod tests {
     // Add more tests for other functions/modules as needed
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct RelayReputationStats {
-    total_relays: usize,
-    top_relays: Vec<RelayNodeStats>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RelayNodeStats {
-    peer_id: String,
-    alias: Option<String>,
-    reputation_score: f64,
-    reservations_accepted: u64,
-    circuits_established: u64,
-    circuits_successful: u64,
-    total_events: u64,
-    last_seen: u64,
-}
-
-#[tauri::command]
-async fn get_relay_reputation_stats(
-    state: State<'_, AppState>,
-    limit: Option<usize>,
-) -> Result<RelayReputationStats, String> {
-    // Read from relay reputation storage
-    let stats_map = state.relay_reputation.lock().await;
-    let aliases_map = state.relay_aliases.lock().await;
-
-    let max_relays = limit.unwrap_or(100);
-
-    // Convert HashMap to Vec, populate aliases, and sort by reputation score (descending)
-    let mut all_relays: Vec<RelayNodeStats> = stats_map
-        .values()
-        .map(|stats| {
-            let mut stats_with_alias = stats.clone();
-            stats_with_alias.alias = aliases_map.get(&stats.peer_id).cloned();
-            stats_with_alias
-        })
-        .collect();
-
-    all_relays.sort_by(|a, b| {
-        b.reputation_score
-            .partial_cmp(&a.reputation_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    // Take top N relays
-    let top_relays = all_relays.into_iter().take(max_relays).collect();
-    let total_relays = stats_map.len();
-
-    Ok(RelayReputationStats {
-        total_relays,
-        top_relays,
-    })
-}
-
-#[tauri::command]
-async fn set_relay_alias(
-    state: State<'_, AppState>,
-    peer_id: String,
-    alias: String,
-) -> Result<(), String> {
-    let mut aliases = state.relay_aliases.lock().await;
-
-    if alias.trim().is_empty() {
-        aliases.remove(&peer_id);
-    } else {
-        aliases.insert(peer_id, alias.trim().to_string());
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-async fn get_relay_alias(
-    state: State<'_, AppState>,
-    peer_id: String,
-) -> Result<Option<String>, String> {
-    let aliases = state.relay_aliases.lock().await;
-    Ok(aliases.get(&peer_id).cloned())
-}
-
 #[tauri::command]
 async fn get_multiaddresses(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let dht_guard = state.dht.lock().await;
@@ -10865,7 +10675,6 @@ async fn pump_dht_events(
     app_handle: tauri::AppHandle,
     dht_service: Arc<DhtService>,
     proxies_arc: Arc<Mutex<Vec<ProxyNode>>>,
-    relay_reputation_arc: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
 ) {
     loop {
         let events = dht_service.drain_events(64).await;
@@ -10947,39 +10756,8 @@ async fn pump_dht_events(
                     impact,
                     data,
                 } => {
-                    let mut stats = relay_reputation_arc.lock().await;
-                    let entry = stats.entry(peer_id.clone()).or_insert(RelayNodeStats {
-                        peer_id: peer_id.clone(),
-                        alias: None,
-                        reputation_score: 0.0,
-                        reservations_accepted: 0,
-                        circuits_established: 0,
-                        circuits_successful: 0,
-                        total_events: 0,
-                        last_seen: 0,
-                    });
-
-                    entry.reputation_score += impact;
-                    entry.total_events += 1;
-                    entry.last_seen = data
-                        .get("timestamp")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or_else(|| {
-                            SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs()
-                        });
-
-                    match event_type.as_str() {
-                        "RelayReservationAccepted" => entry.reservations_accepted += 1,
-                        "RelayCircuitEstablished" => entry.circuits_established += 1,
-                        "RelayCircuitSuccessful" => entry.circuits_successful += 1,
-                        _ => {}
-                    }
-
                     let payload = serde_json::json!({ "peerId": peer_id, "eventType": event_type, "impact": impact, "data": data });
-                    let _ = app_handle.emit("relay_reputation_event", payload);
+                    let _ = app_handle.emit("reputation_event", payload);
                 }
                 DhtEvent::BitswapChunkDownloaded {
                     file_hash,
