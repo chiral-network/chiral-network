@@ -85,17 +85,18 @@
 
   // Load wallet balance
   async function loadBalance() {
+    console.log('[Account.loadBalance] Called, address:', $walletAccount?.address);
     if (!$walletAccount?.address) return;
 
     isLoadingBalance = true;
     try {
       const result = await walletService.getBalance($walletAccount.address);
       balance = result;
+      console.log('[Account.loadBalance] Balance loaded:', result);
       gethWarningShown = false; // Reset if successful
     } catch (error) {
-      // Only log once to avoid console spam
+      console.warn('[Account.loadBalance] Failed:', error);
       if (!gethWarningShown) {
-        console.warn('Balance unavailable - Geth may not be running');
         gethWarningShown = true;
       }
       balance = '0.00';
