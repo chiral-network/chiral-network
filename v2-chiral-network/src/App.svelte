@@ -92,15 +92,20 @@
     }
   });
 
-  // Auto-connect DHT when user logs in
+  // Auto-connect DHT once when user logs in
+  let dhtAutoConnected = false;
   $effect(() => {
-    if ($isAuthenticated && !$networkConnected) {
+    if ($isAuthenticated && !dhtAutoConnected) {
+      dhtAutoConnected = true;
       dhtService.start().catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('already running')) {
           networkConnected.set(true);
         }
       });
+    }
+    if (!$isAuthenticated) {
+      dhtAutoConnected = false;
     }
   });
 </script>
