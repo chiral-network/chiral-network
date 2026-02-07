@@ -7,6 +7,22 @@ import { logger } from './logger';
 
 const log = logger('DHT');
 
+export interface BootstrapNodeStatus {
+  address: string;
+  reachable: boolean;
+}
+
+export interface DhtHealthInfo {
+  running: boolean;
+  peerId: string | null;
+  listeningAddresses: string[];
+  connectedPeerCount: number;
+  kademliaPeers: number;
+  bootstrapNodes: BootstrapNodeStatus[];
+  sharedFiles: number;
+  protocols: string[];
+}
+
 class DhtService {
   private pollInterval: number | null = null;
   private peerDiscoveryUnlisten: (() => void) | null = null;
@@ -106,6 +122,15 @@ class DhtService {
       return result;
     } catch (error) {
       log.error('Failed to ping peer:', error);
+      throw error;
+    }
+  }
+
+  async getHealth(): Promise<DhtHealthInfo> {
+    try {
+      return await invoke<DhtHealthInfo>('get_dht_health');
+    } catch (error) {
+      log.error('Failed to get DHT health:', error);
       throw error;
     }
   }
