@@ -101,6 +101,29 @@ enum SwarmCommand {
         key: String,
         response_tx: tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
     },
+    HealthCheck {
+        response_tx: tokio::sync::oneshot::Sender<DhtHealthInfo>,
+    },
+}
+
+#[derive(Clone, Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DhtHealthInfo {
+    pub running: bool,
+    pub peer_id: Option<String>,
+    pub listening_addresses: Vec<String>,
+    pub connected_peer_count: usize,
+    pub kademlia_peers: usize,
+    pub bootstrap_nodes: Vec<BootstrapNodeStatus>,
+    pub shared_files: usize,
+    pub protocols: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapNodeStatus {
+    pub address: String,
+    pub reachable: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -256,6 +279,51 @@ impl DhtService {
         self.local_peer_id.lock().await.clone()
     }
     
+    pub async fn get_health(&self) -> DhtHealthInfo {
+        let running = *self.is_running.lock().await;
+        if !running {
+            return DhtHealthInfo {
+                running: false,
+                peer_id: None,
+                listening_addresses: vec![],
+                connected_peer_count: 0,
+                kademlia_peers: 0,
+                bootstrap_nodes: get_bootstrap_nodes().iter().map(|addr| BootstrapNodeStatus {
+                    address: addr.clone(),
+                    reachable: false,
+                }).collect(),
+                shared_files: 0,
+                protocols: vec![],
+            };
+        }
+
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            if tx.send(SwarmCommand::HealthCheck { response_tx: resp_tx }).is_ok() {
+                if let Ok(mut info) = resp_rx.await {
+                    info.peer_id = self.local_peer_id.lock().await.clone();
+                    info.shared_files = self.shared_files.lock().await.len();
+                    return info;
+                }
+            }
+        }
+
+        // Fallback if command channel fails
+        let peers = self.peers.lock().await;
+        let shared = self.shared_files.lock().await;
+        DhtHealthInfo {
+            running: true,
+            peer_id: self.local_peer_id.lock().await.clone(),
+            listening_addresses: vec![],
+            connected_peer_count: peers.len(),
+            kademlia_peers: 0,
+            bootstrap_nodes: vec![],
+            shared_files: shared.len(),
+            protocols: vec![],
+        }
+    }
+
     pub async fn ping_peer(&self, peer_id: String, app: tauri::AppHandle) -> Result<String, String> {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
@@ -521,6 +589,46 @@ async fn event_loop(
                         let record_key = kad::RecordKey::new(&key);
                         let query_id = swarm.behaviour_mut().kad.get_record(record_key);
                         pending_get_queries.insert(query_id, response_tx);
+                    }
+                    SwarmCommand::HealthCheck { response_tx } => {
+                        let listeners: Vec<String> = swarm.listeners().map(|a| a.to_string()).collect();
+                        let connected: Vec<PeerId> = swarm.connected_peers().cloned().collect();
+                        let kad_peers: usize = swarm.behaviour_mut().kad.kbuckets()
+                            .map(|b| b.num_entries())
+                            .sum();
+
+                        let bootstrap_addrs = get_bootstrap_nodes();
+                        let bootstrap_status: Vec<BootstrapNodeStatus> = bootstrap_addrs.iter().map(|addr| {
+                            // Check if any connected peer matches a bootstrap node's peer ID
+                            let reachable = if let Ok(maddr) = addr.parse::<Multiaddr>() {
+                                if let Some(pid) = extract_peer_id_from_multiaddr(&maddr) {
+                                    connected.contains(&pid)
+                                } else { false }
+                            } else { false };
+                            BootstrapNodeStatus {
+                                address: addr.clone(),
+                                reachable,
+                            }
+                        }).collect();
+
+                        let protocols = vec![
+                            "/chiral/id/1.0.0".to_string(),
+                            "/chiral/ping/1.0.0".to_string(),
+                            "/chiral/file-transfer/1.0.0".to_string(),
+                            "/chiral/file-request/1.0.0".to_string(),
+                            "/ipfs/kad/1.0.0".to_string(),
+                        ];
+
+                        let _ = response_tx.send(DhtHealthInfo {
+                            running: true,
+                            peer_id: None, // filled in by get_health()
+                            listening_addresses: listeners,
+                            connected_peer_count: connected.len(),
+                            kademlia_peers: kad_peers,
+                            bootstrap_nodes: bootstrap_status,
+                            shared_files: 0, // filled in by get_health()
+                            protocols,
+                        });
                     }
                     SwarmCommand::RequestFile { peer_id, request_id, file_hash } => {
                         println!("Requesting file {} from peer {}", file_hash, peer_id);
