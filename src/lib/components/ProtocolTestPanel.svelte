@@ -21,7 +21,7 @@
     // FTP requires Tauri backend - cannot work in browser
     if (!isTauri) {
       ftpTestStatus = 'error';
-      ftpTestMessage = '[X] FTP downloads require the Tauri desktop app. Run with: npm run tauri:dev';
+      ftpTestMessage = '❌ FTP downloads require the Tauri desktop app. Run with: npm run tauri:dev';
       showToast('FTP requires the desktop app', 'error');
       return;
     }
@@ -44,11 +44,11 @@
       });
 
       ftpTestStatus = 'success';
-      ftpTestMessage = `[OK] Success! Saved: ${outputPath} (~1 MB)`;
+      ftpTestMessage = `✅ Success! Saved: ${outputPath} (~1 MB)`;
       showToast('FTP test successful!', 'success');
     } catch (error) {
       ftpTestStatus = 'error';
-      ftpTestMessage = `[X] Error: ${error}`;
+      ftpTestMessage = `❌ Error: ${error}`;
       showToast(`FTP test failed: ${error}`, 'error');
     }
   }
@@ -66,12 +66,12 @@
       if (result.type === 'file') {
         const { file_name, file_size } = result.data;
         ed2kTestStatus = 'success';
-        ed2kTestMessage = `[OK] Success! Parsed: ${file_name} (${(file_size / 1024 / 1024 / 1024).toFixed(2)} GB)`;
+        ed2kTestMessage = `✅ Success! Parsed: ${file_name} (${(file_size / 1024 / 1024 / 1024).toFixed(2)} GB)`;
         showToast('ED2K parsing successful!', 'success');
       }
     } catch (error) {
       ed2kTestStatus = 'error';
-      ed2kTestMessage = `[X] Error: ${error}`;
+      ed2kTestMessage = `❌ Error: ${error}`;
       showToast(`ED2K test failed: ${error}`, 'error');
     }
   }
@@ -134,7 +134,7 @@
             <XCircle class="h-3 w-3 mr-2" />
             FTP Test Failed - Retry?
           {:else}
-            [NET] Test FTP Download (GNU Hello - ~1MB)
+            🌐 Test FTP Download (GNU Hello - ~1MB)
           {/if}
         </Button>
 
@@ -164,7 +164,7 @@
             <XCircle class="h-3 w-3 mr-2" />
             ED2K Test Failed - Retry?
           {:else}
-            [LINK] Test ED2K Link Parsing (Ubuntu ISO)
+            🔗 Test ED2K Link Parsing (Ubuntu ISO)
           {/if}
         </Button>
 

@@ -1102,7 +1102,7 @@ export class WalletService {
       amount,
     })) as string;
 
-    console.log(`[Transaction] [OK] Broadcast successful! Hash: ${txHash}`);
+    console.log(`[Transaction] ✅ Broadcast successful! Hash: ${txHash}`);
     console.log(
       `[Transaction] Status: PENDING - monitoring for confirmation...`
     );
@@ -1140,7 +1140,7 @@ export class WalletService {
     amount: number,
     toAddress: string
   ): Promise<void> {
-    console.log(`[TX Monitor] [WATCH] Monitoring ${txHash.substring(0, 10)}...`);
+    console.log(`[TX Monitor] 👀 Monitoring ${txHash.substring(0, 10)}...`);
 
     let attempts = 0;
     const maxAttempts = 60;
@@ -1160,7 +1160,7 @@ export class WalletService {
           const status = receipt.status === "success" ? "success" : "failed";
 
           console.log(
-            `[TX Monitor] [OK] ${status.toUpperCase()} in block ${receipt.block_number}`
+            `[TX Monitor] ✅ ${status.toUpperCase()} in block ${receipt.block_number}`
           );
           console.log(
             `[TX Monitor] Confirmations: ${confirmations}, Gas: ${receipt.gas_used}`
@@ -1214,19 +1214,19 @@ export class WalletService {
           }
         } else if (attempts % 6 === 0) {
           console.log(
-            `[TX Monitor] [WAIT] Pending... (${attempts * 5}s) - Mining active?`
+            `[TX Monitor] ⏳ Pending... (${attempts * 5}s) - Mining active?`
           );
         }
 
         if (attempts >= maxAttempts) {
           clearInterval(checkInterval);
           console.warn(
-            `[TX Monitor] [WARN] Timeout after ${maxAttempts * 5}s - check Blockchain page`
+            `[TX Monitor] ⚠️ Timeout after ${maxAttempts * 5}s - check Blockchain page`
           );
         }
       } catch (error) {
         if (attempts % 12 === 0) {
-          console.log(`[TX Monitor] [WAIT] Still pending (${attempts * 5}s)...`);
+          console.log(`[TX Monitor] ⏳ Still pending (${attempts * 5}s)...`);
         }
       }
     }, 5000);
