@@ -181,7 +181,7 @@ impl Default for BackendSettings {
 }
 
 /// Get a unique file path by adding (1), (2), etc. if the file already exists
-/// Example: "file.txt" -> "file (1).txt" if "file.txt" exists
+/// Example: "file.txt" → "file (1).txt" if "file.txt" exists
 fn get_unique_filepath(path: &Path) -> PathBuf {
     if !path.exists() {
         return path.to_path_buf();
@@ -823,7 +823,7 @@ async fn record_download_payment(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     println!(
-        "[NOTE] Download payment recorded: {} Chiral to wallet {} (peer: {}) from {} (peer: {}) tx: {}",
+        "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) from {} (peer: {}) tx: {}",
         amount,
         seeder_wallet_address,
         seeder_peer_id,
@@ -832,10 +832,10 @@ async fn record_download_payment(
         transaction_hash
     );
     println!(
-        "[SEARCH] IMPORTANT: downloader_peer_id value: '{}'",
+        "🔍 IMPORTANT: downloader_peer_id value: '{}'",
         downloader_peer_id
     );
-    println!("[SEARCH] IMPORTANT: seeder_peer_id value: '{}'", seeder_peer_id);
+    println!("🔍 IMPORTANT: seeder_peer_id value: '{}'", seeder_peer_id);
 
     // Send P2P payment notification message to the seeder's peer
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -872,7 +872,7 @@ async fn record_download_payment(
         .map_err(|e| format!("Failed to emit payment notification: {}", e))?;
 
     println!(
-        "[OK] Payment notification emitted locally for seeder: {}",
+        "✅ Payment notification emitted locally for seeder: {}",
         seeder_wallet_address
     );
 
@@ -885,7 +885,7 @@ async fn record_download_payment(
             dht.record_transfer_success(&seeder_peer_id, file_size, 0)
                 .await;
             println!(
-                "[OK] Updated reputation for seeder peer {} after successful payment of {} Chiral",
+                "✅ Updated reputation for seeder peer {} after successful payment of {} Chiral",
                 seeder_peer_id, amount
             );
         }
@@ -906,7 +906,7 @@ async fn record_seeder_payment(
 ) -> Result<(), String> {
     // Log the seeder payment receipt for analytics/audit purposes
     println!(
-        "[PAY] Seeder payment received: {} Chiral from {}",
+        "💰 Seeder payment received: {} Chiral from {}",
         _amount, _downloader_address
     );
     Ok(())
@@ -1002,14 +1002,14 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
 
 #[tauri::command]
 async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, String> {
-    info!("[TEST] Testing backend connection...");
+    info!("🧪 Testing backend connection...");
 
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
-        info!("[OK] DHT service is available");
+        info!("✅ DHT service is available");
         Ok("DHT service is running".to_string())
     } else {
-        info!("[X] DHT service is not available");
+        info!("❌ DHT service is not available");
         Err("DHT not running".into())
     }
 }
@@ -1439,14 +1439,14 @@ async fn start_mining_monitor(app: tauri::AppHandle, data_dir: String) -> Result
                             // Check if this line indicates a block was mined
                             // Only trigger on "Successfully sealed new block" to avoid duplicate events
                             if line.contains("Successfully sealed new block") {
-                                // [DONE] WE MINED A BLOCK! [DONE]
+                                // 🎉 WE MINED A BLOCK! 🎉
                                 // Get the current mining address and increment the counter for that address
                                 if let Some(miner_address) =
                                     CURRENT_MINER_ADDRESS.lock().await.clone()
                                 {
                                     increment_mined_blocks(miner_address).await;
                                 } else {
-                                    println!("[WARN]  Block mined but no current miner address set!");
+                                    println!("⚠️  Block mined but no current miner address set!");
                                 }
 
                                 // Emit event to frontend - that's it!
@@ -1497,7 +1497,7 @@ async fn increment_mined_blocks(miner_address: String) {
     let count = counts.entry(normalized_address.clone()).or_insert(0);
     *count += 1;
     println!(
-        "[DONE] Block mined by {}! Total blocks mined by this address: {}",
+        "🎉 Block mined by {}! Total blocks mined by this address: {}",
         normalized_address, *count
     );
 }
@@ -1516,7 +1516,7 @@ pub async fn set_mined_blocks_count(miner_address: &str, count: u64) {
     let mut counts = TOTAL_MINED_BLOCKS.lock().await;
     counts.insert(normalized_address.clone(), count);
     println!(
-        "[STATS] Initialized mined blocks count for {}: {}",
+        "📊 Initialized mined blocks count for {}: {}",
         normalized_address, count
     );
 }
@@ -1836,10 +1836,10 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
-                        println!("[SEARCH] DEBUG MAIN: PublishedFile event received");
-                        println!("[SEARCH] DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
+                        println!("🔍 DEBUG MAIN: PublishedFile event received");
+                        println!("🔍 DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
                         let payload = serde_json::json!(metadata);
-                        println!("[SEARCH] DEBUG MAIN: Emitting published_file event to frontend");
+                        println!("🔍 DEBUG MAIN: Emitting published_file event to frontend");
                         let _ = app_handle.emit("published_file", payload);
                         // Update analytics: record upload completion
                         analytics_arc.record_upload_completed().await;
@@ -1847,7 +1847,7 @@ async fn start_dht_node(
                     }
                     DhtEvent::FileDiscovered(metadata) => {
                         info!(
-                            "[NET] Emitting found_file event to frontend for: {}",
+                            "🌐 Emitting found_file event to frontend for: {}",
                             metadata.file_name
                         );
                         let payload = serde_json::json!(metadata);
@@ -1883,7 +1883,7 @@ async fn start_dht_node(
                     }
                     DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
                         println!(
-                            "[PAY] Payment notification received from peer {}: {:?}",
+                            "💰 Payment notification received from peer {}: {:?}",
                             from_peer, payload
                         );
                         // Convert payload to match the expected format for seeder_payment_received
@@ -1903,7 +1903,7 @@ async fn start_dht_node(
                             });
                             // Emit the same event that local payments use
                             let _ = app_handle.emit("seeder_payment_received", formatted_payload);
-                            println!("[OK] Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
+                            println!("✅ Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
                         }
                     }
                     _ => {}
@@ -1954,7 +1954,7 @@ async fn start_dht_node(
 
             if peer_count < MINIMUM_PEERS {
                 tracing::warn!(
-                    "[WARN] Low peer count: {} (minimum: {}). Attempting to reconnect to bootstrap nodes...",
+                    "⚠️ Low peer count: {} (minimum: {}). Attempting to reconnect to bootstrap nodes...",
                     peer_count,
                     MINIMUM_PEERS
                 );
@@ -1963,7 +1963,7 @@ async fn start_dht_node(
                 for bootstrap_node in &bootstrap_nodes_for_monitor {
                     match dht_for_monitor.connect_peer(bootstrap_node.clone()).await {
                         Ok(_) => {
-                            tracing::info!("[NET] Reconnected to bootstrap node: {}", bootstrap_node);
+                            tracing::info!("🌐 Reconnected to bootstrap node: {}", bootstrap_node);
                         }
                         Err(e) => {
                             tracing::debug!("Failed to reconnect to {}: {}", bootstrap_node, e);
@@ -1978,7 +1978,7 @@ async fn start_dht_node(
                     "message": format!("DHT has only {} peers. Reconnecting to bootstrap nodes...", peer_count)
                 }));
             } else {
-                tracing::debug!("[OK] DHT peer count healthy: {}", peer_count);
+                tracing::debug!("✅ DHT peer count healthy: {}", peer_count);
             }
         }
     });
@@ -2082,10 +2082,10 @@ async fn get_peer_id(state: State<'_, AppState>) -> Result<String, String> {
 
     if let Some(dht) = dht {
         let peer_id = dht.get_peer_id().await;
-        println!("[SEARCH] get_peer_id() called -> returning: {}", peer_id);
+        println!("🔍 get_peer_id() called -> returning: {}", peer_id);
         Ok(peer_id)
     } else {
-        println!("[X] get_peer_id() called but DHT is not running");
+        println!("❌ get_peer_id() called but DHT is not running");
         Err("DHT is not running. Cannot get peer ID.".to_string())
     }
 }
@@ -3451,7 +3451,7 @@ fn get_windows_temperature() -> Option<f32> {
     let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
     if let Ok(mut logged) = log_state.lock() {
         if !*logged {
-            info!("[WARN] No WMI temperature sensors detected. Temperature monitoring disabled.");
+            info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
             *logged = true;
         }
     }
@@ -3960,14 +3960,14 @@ async fn upload_file_to_network(
                         return Ok(());
                     }
                     Err(e) => {
-                        println!("[X] ED2K seeding failed: {}", e);
+                        println!("❌ ED2K seeding failed: {}", e);
                         return Err(format!("ED2K seeding failed: {}", e));
                     }
                 }
             }
             "FTP" => {
                 // FTP upload uses the built-in FTP server
-                println!("[NET] FTP upload: Using built-in FTP server");
+                println!("🌐 FTP upload: Using built-in FTP server");
 
                 // Ensure FTP server is running
                 if !state.ftp_server.is_running().await {
@@ -4032,7 +4032,7 @@ async fn upload_file_to_network(
                     .await
                     .map_err(|e| format!("Failed to add file to FTP server: {}", e))?;
 
-                println!("[OK] File added to FTP server: {}", ftp_url);
+                println!("✅ File added to FTP server: {}", ftp_url);
 
                 let metadata = FileMetadata {
                     merkle_root: file_hash.clone(),
@@ -4087,13 +4087,13 @@ async fn upload_file_to_network(
                     }
                 }
 
-                println!("[OK] FTP upload complete - file available at: {}", ftp_url);
+                println!("✅ FTP upload complete - file available at: {}", ftp_url);
                 return Ok(());
             }
             "BITSWAP" => {
                 // Use streaming upload for Bitswap to handle large files
                 println!(
-                    "[NET] Using streaming Bitswap upload for protocol: {}",
+                    "🌐 Using streaming Bitswap upload for protocol: {}",
                     protocol_name
                 );
 
@@ -4108,7 +4108,7 @@ async fn upload_file_to_network(
                 let total_chunks = ((file_size + chunk_size - 1) / chunk_size) as usize;
 
                 println!(
-                    "[NET] Starting Bitswap streaming upload: {} chunks of {} bytes each",
+                    "🌐 Starting Bitswap streaming upload: {} chunks of {} bytes each",
                     total_chunks, chunk_size
                 );
 
@@ -4161,7 +4161,7 @@ async fn upload_file_to_network(
                     // Progress logging for large files
                     if chunk_index % 100 == 0 || is_last_chunk {
                         println!(
-                            "[STATS] Upload progress: {}/{} chunks ({:.1}%)",
+                            "📊 Upload progress: {}/{} chunks ({:.1}%)",
                             chunk_index + 1,
                             total_chunks,
                             (chunk_index + 1) as f64 / total_chunks as f64 * 100.0
@@ -4297,7 +4297,7 @@ async fn upload_file_to_network(
                         };
 
                         info!(
-                            "[NET] Bitswap publish metadata: merkle_root={} root_cid={} cids={:?} seeders={:?}",
+                            "🌐 Bitswap publish metadata: merkle_root={} root_cid={} cids={:?} seeders={:?}",
                             merkle_root,
                             root_cid,
                             metadata.cids,
@@ -4312,7 +4312,7 @@ async fn upload_file_to_network(
                         }
 
                         let file_hash = root_cid.to_string();
-                        println!("[OK] Bitswap streaming upload completed: {}", file_hash);
+                        println!("✅ Bitswap streaming upload completed: {}", file_hash);
 
                         // Clean up session
                         upload_sessions.remove(&upload_id);
@@ -4326,7 +4326,7 @@ async fn upload_file_to_network(
                 // WebRTC and other protocols use the default Chiral flow
                 // Spawn in background task to avoid callback timeout issues
                 println!(
-                    "[NET] Using Chiral network upload for protocol: {}",
+                    "🌐 Using Chiral network upload for protocol: {}",
                     protocol_name
                 );
 
@@ -5304,7 +5304,7 @@ async fn download_file_from_network(
 ) -> Result<String, String> {
     use std::path::Path;
 
-    // [OK] VALIDATE OUTPUT PATH BEFORE STARTING DOWNLOAD
+    // ✅ VALIDATE OUTPUT PATH BEFORE STARTING DOWNLOAD
     let path = Path::new(&output_path);
 
     // Check if parent directory exists
@@ -8166,7 +8166,7 @@ async fn download_file_http(
     };
 
     if let Some(ref local_id) = downloader_peer_id {
-        tracing::info!("[OUT] Downloader peer ID: {}", local_id);
+        tracing::info!("📤 Downloader peer ID: {}", local_id);
     }
 
     // Create progress channel
@@ -8229,7 +8229,7 @@ async fn download_file_http(
                 if let Some(dht) = state.dht.lock().await.as_ref() {
                     dht.record_transfer_success(peer_id_str, file_size, duration_ms)
                         .await;
-                    tracing::info!("[STATS] Recorded successful transfer for peer: {}", peer_id_str);
+                    tracing::info!("📊 Recorded successful transfer for peer: {}", peer_id_str);
                 }
             }
 
@@ -8243,7 +8243,7 @@ async fn download_file_http(
                 if let Some(dht) = state.dht.lock().await.as_ref() {
                     dht.record_transfer_failure(peer_id_str, "http_download_error")
                         .await;
-                    tracing::info!("[STATS] Recorded failed transfer for peer: {}", peer_id_str);
+                    tracing::info!("📊 Recorded failed transfer for peer: {}", peer_id_str);
                 }
             }
 
@@ -8968,7 +8968,7 @@ fn main() {
 
         if downloader.is_geth_installed() {
             println!(
-                "[OK] Geth is already installed at: {}",
+                "✅ Geth is already installed at: {}",
                 downloader.geth_path().display()
             );
             std::process::exit(0);
@@ -8989,7 +8989,7 @@ fn main() {
         match result {
             Ok(_) => {
                 println!(
-                    "[OK] Geth downloaded successfully to: {}",
+                    "✅ Geth downloaded successfully to: {}",
                     downloader.geth_path().display()
                 );
                 println!("\nYou can now run mining commands:");
@@ -8997,7 +8997,7 @@ fn main() {
                 std::process::exit(0);
             }
             Err(e) => {
-                eprintln!("[X] Failed to download Geth: {}", e);
+                eprintln!("❌ Failed to download Geth: {}", e);
                 std::process::exit(1);
             }
         }
@@ -9204,9 +9204,9 @@ fn main() {
         verdict: reputation::TransactionVerdict,
         state: State<'_, AppState>,
     ) -> Result<(), String> {
-        println!("[STATS] RUST: publish_reputation_verdict called");
+        println!("📊 RUST: publish_reputation_verdict called");
         tracing::info!(
-            "[STATS] publish_reputation_verdict: {} -> {} ({:?})",
+            "📊 publish_reputation_verdict: {} -> {} ({:?})",
             verdict.issuer_id,
             verdict.target_id,
             verdict.outcome
@@ -9221,12 +9221,12 @@ fn main() {
         // Create ReputationDhtService and store verdict
         let mut reputation_dht = reputation::ReputationDhtService::new();
         reputation_dht.set_dht_service(Arc::clone(dht));
-        println!("[STATS] RUST: About to store verdict");
+        println!("📊 RUST: About to store verdict");
         reputation_dht.store_transaction_verdict(&verdict).await?;
 
-        println!("[OK] RUST: Verdict stored successfully");
+        println!("✅ RUST: Verdict stored successfully");
         tracing::info!(
-            "[OK] Published verdict to DHT for peer: {}",
+            "✅ Published verdict to DHT for peer: {}",
             verdict.target_id
         );
         Ok(())
@@ -9237,8 +9237,8 @@ fn main() {
         peer_id: String,
         state: State<'_, AppState>,
     ) -> Result<Vec<reputation::TransactionVerdict>, String> {
-        println!("[SEARCH] RUST: get_reputation_verdicts called for: {}", peer_id);
-        tracing::info!("[STATS] get_reputation_verdicts for peer: {}", peer_id);
+        println!("🔍 RUST: get_reputation_verdicts called for: {}", peer_id);
+        tracing::info!("📊 get_reputation_verdicts for peer: {}", peer_id);
 
         // Get DHT service from AppState
         let dht_guard = state.dht.lock().await;
@@ -9249,14 +9249,14 @@ fn main() {
         // Create ReputationDhtService and retrieve verdicts
         let mut reputation_dht = reputation::ReputationDhtService::new();
         reputation_dht.set_dht_service(Arc::clone(dht));
-        println!("[SEARCH] RUST: About to retrieve verdicts");
+        println!("🔍 RUST: About to retrieve verdicts");
         let verdicts = reputation_dht
             .retrieve_transaction_verdicts(&peer_id)
             .await?;
 
-        println!("[OK] RUST: Retrieved {} verdicts", verdicts.len());
+        println!("✅ RUST: Retrieved {} verdicts", verdicts.len());
         tracing::info!(
-            "[OK] Retrieved {} verdicts for peer: {}",
+            "✅ Retrieved {} verdicts for peer: {}",
             verdicts.len(),
             peer_id
         );
@@ -9957,7 +9957,7 @@ fn main() {
                                         e
                                     );
                                     eprintln!(
-                                        "[WARN]  HTTP server failed to start on port {}: {}",
+                                        "⚠️  HTTP server failed to start on port {}: {}",
                                         port, e
                                     );
                                     break;
@@ -9972,7 +9972,7 @@ fn main() {
                                 port_end
                             );
                             eprintln!(
-                                "[WARN]  HTTP server could not start - all ports {}-{} are in use",
+                                "⚠️  HTTP server could not start - all ports {}-{} are in use",
                                 port_start, port_end
                             );
                         }
@@ -10052,13 +10052,13 @@ fn main() {
                                 {
                                     Ok(_handle) => {
                                         info!(
-                                            "[OK] Successfully restored torrent: {} to {:?}",
+                                            "✅ Successfully restored torrent: {} to {:?}",
                                             torrent.info_hash, torrent.output_path
                                         );
                                     }
                                     Err(e) => {
                                         error!(
-                                            "[X] Failed to restore torrent {}: {}",
+                                            "❌ Failed to restore torrent {}: {}",
                                             torrent.info_hash, e
                                         );
                                     }
@@ -10249,7 +10249,7 @@ async fn create_bt_handler_with_fallback(
         {
             Ok(h) => {
                 println!(
-                    "[OK] Using BitTorrent fallback port range: {}-{}",
+                    "✅ Using BitTorrent fallback port range: {}-{}",
                     start,
                     start + 10
                 );

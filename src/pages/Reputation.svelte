@@ -176,13 +176,13 @@
 
   // Map backend metrics to UI PeerReputation[] and analytics
   async function loadPeersFromBackend() {
-    console.log('[SYNC] loadPeersFromBackend() called');
+    console.log('🔄 loadPeersFromBackend() called');
     try {
       // Use the new method that gets metrics for ALL connected DHT peers
       // This ensures we show all peers, even those without transfer history
       const metrics: BackendPeerMetrics[] =
         await PeerSelectionService.getConnectedPeerMetrics();
-      console.log(`[STATS] Loading ${metrics.length} peers from backend`);
+      console.log(`📊 Loading ${metrics.length} peers from backend`);
 
       // Load backend metrics into ReputationStore for persistence and frontend tracking
       const repStore = (await import('$lib/reputationStore')).default.getInstance();
@@ -221,7 +221,7 @@
                       score >= 0.4 ? TrustLevel.Medium :
                       score >= 0.2 ? TrustLevel.Low : TrustLevel.Unknown;
           
-          console.log(`[TARGET] Peer ${m.peer_id.substring(0,15)}... score: ${score.toFixed(3)} (${(score*5).toFixed(1)}/5.0) -> ${trustLevel}`);
+          console.log(`🎯 Peer ${m.peer_id.substring(0,15)}... score: ${score.toFixed(3)} (${(score*5).toFixed(1)}/5.0) -> ${trustLevel}`);
           
           // Cache the score
           peerScoreCache.set(m.peer_id, { score, trustLevel, timestamp: now });
@@ -231,7 +231,7 @@
         let successfulInteractions = Math.min(totalInteractions, m.successful_transfers);
 
         console.log(
-          `[STATS] Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}, ` +
+          `📊 Peer ${m.peer_id.substring(0, 20)}... - transfers: ${m.successful_transfers}/${m.transfer_count}, ` +
           `success_rate: ${m.success_rate.toFixed(2)}, reliability: ${m.reliability_score.toFixed(2)}, ` +
           `composite: ${score.toFixed(2)}, stars: ${(score * 5).toFixed(1)}/5.0, ` +
           `cached: ${cached && (now - cached.timestamp) < SCORE_CACHE_TTL ? 'yes' : 'no'}`
@@ -300,7 +300,7 @@
 
       // If no peers from backend, try to load from ReputationStore
       if (peers.length === 0) {
-        console.log('[STATS] No peers from backend, checking ReputationStore...');
+        console.log('📊 No peers from backend, checking ReputationStore...');
         const repStore = (await import('$lib/reputationStore')).default.getInstance();
         const allStoredPeers = repStore.getAllPeers();
         
@@ -335,7 +335,7 @@
         }
         
         if (storedPeers.length > 0) {
-          console.log(`[STATS] Loaded ${storedPeers.length} peers from ReputationStore`);
+          console.log(`📊 Loaded ${storedPeers.length} peers from ReputationStore`);
           peers = storedPeers;
           
           // Rebuild analytics
@@ -706,7 +706,7 @@
     <!-- Peer Cards Grid -->
     {#if filteredPeers.length === 0}
       <Card class="p-12 text-center">
-        <div class="text-gray-400 text-6xl mb-4">[SEARCH]</div>
+        <div class="text-gray-400 text-6xl mb-4">🔍</div>
         <h3 class="text-lg font-medium text-gray-900 mb-2">
           {$t("reputation.noPeersFound")}
         </h3>

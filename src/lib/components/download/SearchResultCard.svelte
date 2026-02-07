@@ -265,7 +265,7 @@
     showDecryptDialog = false;
     // Dispatch for both protocols - let Download.svelte handle the actual download
     dispatch('download', metadata);
-    console.log("[SEARCH] DEBUG: Dispatched decrypt and download event for file:", metadata.fileName);
+    console.log("🔍 DEBUG: Dispatched decrypt and download event for file:", metadata.fileName);
   }
 
   function cancelDecryptDialog() {

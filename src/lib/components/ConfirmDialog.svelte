@@ -131,7 +131,7 @@
             class={confirmVariant === 'warning' ? 'bg-yellow-600 hover:bg-yellow-700' : ''}
           >
             {#if isProcessing}
-              <span class="inline-block animate-spin mr-2">[WAIT]</span>
+              <span class="inline-block animate-spin mr-2">⏳</span>
             {/if}
             {confirmText}
           </Button>
