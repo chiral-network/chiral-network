@@ -1332,8 +1332,32 @@ async fn get_network_chain_id() -> Result<u64, String> {
 
 #[tauri::command]
 async fn is_geth_running(state: State<'_, AppState>) -> Result<bool, String> {
+    // Check local Geth process first
     let geth = state.geth.lock().await;
-    Ok(geth.is_running())
+    if geth.is_running() {
+        return Ok(true);
+    }
+    drop(geth);
+
+    // Fall back to checking if the shared RPC endpoint is reachable
+    let rpc_endpoint = &crate::ethereum::NETWORK_CONFIG.rpc_endpoint;
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+
+    match crate::ethereum::HTTP_CLIENT
+        .post(rpc_endpoint)
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(resp) => Ok(resp.status().is_success()),
+        Err(_) => Ok(false),
+    }
 }
 
 #[tauri::command]
