@@ -21,6 +21,8 @@
     ChevronDown,
     ChevronUp
   } from 'lucide-svelte';
+  import { logger } from '$lib/logger';
+  const log = logger('Network');
 
   // Types
   interface GethStatus {
@@ -132,7 +134,7 @@
       gethStatus = await invoke<GethStatus>('get_geth_status');
     } catch (err) {
       // If we can't get status, set installed to false
-      console.error('Geth status check failed:', err);
+      log.error('Geth status check failed:', err);
       gethStatus = {
         installed: false,
         running: false,
@@ -160,7 +162,7 @@
       toasts.show('Geth downloaded successfully!', 'success');
       await loadGethStatus();
     } catch (err) {
-      console.error('Failed to download Geth:', err);
+      log.error('Failed to download Geth:', err);
       toasts.show(`Download failed: ${err}`, 'error');
     } finally {
       isDownloading = false;
@@ -177,7 +179,7 @@
       toasts.show('Blockchain node started!', 'success');
       await loadGethStatus();
     } catch (err) {
-      console.error('Failed to start Geth:', err);
+      log.error('Failed to start Geth:', err);
       toasts.show(`Failed to start node: ${err}`, 'error');
     } finally {
       isStartingGeth = false;
@@ -193,7 +195,7 @@
       toasts.show('Blockchain node stopped', 'info');
       await loadGethStatus();
     } catch (err) {
-      console.error('Failed to stop Geth:', err);
+      log.error('Failed to stop Geth:', err);
       toasts.show(`Failed to stop node: ${err}`, 'error');
     }
   }
@@ -206,7 +208,7 @@
     try {
       bootstrapHealth = await invoke<BootstrapHealthReport>('check_bootstrap_health');
     } catch (err) {
-      console.error('Failed to check bootstrap health:', err);
+      log.error('Failed to check bootstrap health:', err);
     } finally {
       isCheckingBootstrap = false;
     }
@@ -222,7 +224,7 @@
         bootstrapHealth = cached;
       }
     } catch (err) {
-      console.debug('No cached bootstrap health available');
+      log.debug('No cached bootstrap health available');
     }
   }
 
@@ -247,7 +249,7 @@
         toasts.show('Reconnected to P2P network', 'success');
       } else {
         error = errMsg;
-        console.error('Failed to connect:', err);
+        log.error('Failed to connect:', err);
         toasts.show(`Connection failed: ${error}`, 'error');
       }
     } finally {
@@ -262,7 +264,7 @@
       toasts.show('Disconnected from P2P network', 'info');
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to disconnect';
-      console.error('Failed to disconnect:', err);
+      log.error('Failed to disconnect:', err);
     }
   }
 
@@ -270,10 +272,10 @@
     try {
       const result = await dhtService.pingPeer(peerId);
       toasts.show('Ping sent!', 'success');
-      console.log('Ping successful:', result);
+      log.info('Ping successful:', result);
     } catch (err) {
       toasts.show('Ping failed', 'error');
-      console.error('Ping failed:', err);
+      log.error('Ping failed:', err);
     }
   }
 

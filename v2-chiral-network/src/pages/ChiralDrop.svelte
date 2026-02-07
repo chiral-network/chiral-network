@@ -26,6 +26,8 @@
   import { peers } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import { dhtService } from '$lib/dhtService';
+  import { logger } from '$lib/logger';
+  const log = logger('ChiralDrop');
 
   // Check if running in Tauri environment (reactive)
   let isTauri = $state(false);
@@ -69,7 +71,7 @@
           setLocalPeerId(peerId);
         }
       } catch (error) {
-        console.warn('Failed to get local peer ID:', error);
+        log.warn('Failed to get local peer ID:', error);
       }
     }
 
@@ -126,7 +128,7 @@
           updateTransferStatus(transferId, 'completed');
         });
       } catch (error) {
-        console.warn('Failed to set up Tauri event listeners:', error);
+        log.warn('Failed to set up Tauri event listeners:', error);
       }
     }
 
@@ -220,7 +222,7 @@
       updateTransferStatus(transferId, 'completed');
       toasts.show(`File sent to ${toAlias.displayName}`, 'success');
     } catch (error) {
-      console.error('Failed to send file:', error);
+      log.error('Failed to send file:', error);
       updateTransferStatus(transferId, 'failed');
       toasts.show(`Failed to send file: ${error}`, 'error');
     }
@@ -242,7 +244,7 @@
       toasts.show(`Accepting file from ${transfer.fromAlias.displayName}...`, 'info');
       // The actual file-received event will show the final path
     } catch (error) {
-      console.error('Failed to accept transfer:', error);
+      log.error('Failed to accept transfer:', error);
       toasts.show(`Failed to accept transfer: ${error}`, 'error');
     }
   }
@@ -260,7 +262,7 @@
       declineTransfer(transfer.id);
       toasts.show(`Declined file from ${transfer.fromAlias.displayName}`, 'info');
     } catch (error) {
-      console.error('Failed to decline transfer:', error);
+      log.error('Failed to decline transfer:', error);
     }
   }
 
