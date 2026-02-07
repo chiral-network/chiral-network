@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
-  import { isAuthenticated, isDarkMode } from '$lib/stores';
+  import { isAuthenticated, isDarkMode, networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
+  import { dhtService } from '$lib/dhtService';
   import Navbar from '$lib/components/Navbar.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import WalletPage from './pages/Wallet.svelte';
@@ -88,6 +89,18 @@
       if (path === '/wallet' || path === '/') {
         goto('/network');
       }
+    }
+  });
+
+  // Auto-connect DHT when user logs in
+  $effect(() => {
+    if ($isAuthenticated && !$networkConnected) {
+      dhtService.start().catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('already running')) {
+          networkConnected.set(true);
+        }
+      });
     }
   });
 </script>

@@ -16,6 +16,8 @@
     BarChart3,
     Globe
   } from 'lucide-svelte';
+  import { logger } from '$lib/logger';
+  const log = logger('Mining');
 
   // Types
   interface GethStatus {
@@ -89,7 +91,7 @@
       gethStatus = geth;
       miningStatus = mining;
     } catch (error) {
-      console.error('Failed to load status:', error);
+      log.error('Failed to load status:', error);
       // Set default status on error
       gethStatus = {
         installed: false,
@@ -118,7 +120,7 @@
       toasts.show(`Mining started with ${miningThreads} thread(s)!`, 'success');
       await loadStatus();
     } catch (error) {
-      console.error('Failed to start mining:', error);
+      log.error('Failed to start mining:', error);
       toasts.show(`Failed to start mining: ${error}`, 'error');
     } finally {
       isStartingMining = false;
@@ -134,7 +136,7 @@
       toasts.show('Mining stopped', 'info');
       await loadStatus();
     } catch (error) {
-      console.error('Failed to stop mining:', error);
+      log.error('Failed to stop mining:', error);
       toasts.show(`Failed to stop mining: ${error}`, 'error');
     }
   }
