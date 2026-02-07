@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     Upload,
     FolderOpen,
@@ -415,14 +415,16 @@
   });
 
   // Set up Tauri drag-drop listener
+  let unlistenDragDrop: (() => void) | undefined;
+
   onMount(async () => {
     const tauriAvailable = checkTauriAvailability();
     if (tauriAvailable) {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const appWindow = getCurrentWindow();
-        
-        const unlisten = await appWindow.onDragDropEvent((event) => {
+
+        unlistenDragDrop = await appWindow.onDragDropEvent((event) => {
           if (event.payload.type === 'drop') {
             const paths = event.payload.paths;
             if (paths && paths.length > 0) {
@@ -437,18 +439,18 @@
             }
           } else if (event.payload.type === 'enter') {
             isDragging = true;
-          } else if (event.payload.type === 'leave' || event.payload.type === 'cancel') {
+          } else if (event.payload.type === 'leave') {
             isDragging = false;
           }
         });
-
-        return () => {
-          unlisten();
-        };
       } catch (error) {
         console.error('Failed to setup drag-drop listener:', error);
       }
     }
+  });
+
+  onDestroy(() => {
+    unlistenDragDrop?.();
   });
 </script>
 
@@ -619,11 +621,12 @@
       {:else}
         <div class="divide-y divide-gray-100 dark:divide-gray-700">
           {#each sharedFiles as file (file.id)}
+            {@const FileTypeIcon = getFileIcon(file.name)}
             <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
               <div class="flex items-center gap-4">
                 <!-- File Icon -->
                 <div class="flex items-center justify-center w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-lg flex-shrink-0">
-                  <svelte:component this={getFileIcon(file.name)} class="w-6 h-6 {getFileColor(file.name)}" />
+                  <FileTypeIcon class="w-6 h-6 {getFileColor(file.name)}" />
                 </div>
 
                 <!-- File Info -->
@@ -684,9 +687,10 @@
 
                   <!-- Magnet Link -->
                   <div class="mb-3">
-                    <label class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Magnet Link</label>
+                    <label for="magnet-{file.id}" class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Magnet Link</label>
                     <div class="flex items-center gap-2">
                       <input
+                        id="magnet-{file.id}"
                         type="text"
                         readonly
                         value={generateMagnetLink(file)}
@@ -705,9 +709,10 @@
 
                   <!-- Hash -->
                   <div class="mb-3">
-                    <label class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Merkle Hash (for direct search)</label>
+                    <label for="hash-{file.id}" class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Merkle Hash (for direct search)</label>
                     <div class="flex items-center gap-2">
                       <input
+                        id="hash-{file.id}"
                         type="text"
                         readonly
                         value={file.hash}
@@ -726,7 +731,7 @@
 
                   <!-- Export Torrent -->
                   <div>
-                    <label class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Torrent File</label>
+                    <span class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Torrent File</span>
                     <button
                       onclick={() => exportTorrentFile(file)}
                       class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"

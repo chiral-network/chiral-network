@@ -4,6 +4,7 @@
   import { walletAccount, isAuthenticated, networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import { walletService } from '$lib/services/walletService';
+  import { dhtService } from '$lib/dhtService';
   import {
     Wallet,
     Copy,
@@ -219,10 +220,15 @@
   }
 
   // Logout
-  function logout() {
+  async function logout() {
+    // Stop the DHT backend before resetting UI state
+    try {
+      await dhtService.stop();
+    } catch (e) {
+      console.warn('Failed to stop DHT during logout:', e);
+    }
     walletAccount.set(null);
     isAuthenticated.set(false);
-    networkConnected.set(false);
     showLogoutModal = false;
     toasts.show('Logged out successfully', 'info');
   }
