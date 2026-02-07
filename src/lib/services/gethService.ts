@@ -43,9 +43,10 @@ export async function getStatus(
 export async function updateGethStatus(): Promise<void> {
   try {
     const isRunning = await invoke<boolean>("is_geth_running");
+    console.log("[updateGethStatus] is_geth_running returned:", isRunning);
     gethStatus.set(isRunning ? "running" : "stopped");
   } catch (error) {
-    // Silently fail - Geth may not be running
+    console.log("[updateGethStatus] Error checking Geth status:", error);
     gethStatus.set("stopped");
   }
 }
