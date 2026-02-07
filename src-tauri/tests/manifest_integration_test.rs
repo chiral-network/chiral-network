@@ -49,7 +49,7 @@ async fn test_chunk_manager_generates_manifest() {
         assert!(chunk.size > 0);
     }
 
-    println!("✅ ChunkManager generated manifest with {} chunks", manifest.chunks.len());
+    println!("[OK] ChunkManager generated manifest with {} chunks", manifest.chunks.len());
 }
 
 /// Test FileMetadata serialization with manifest
@@ -119,7 +119,7 @@ fn test_file_metadata_with_manifest_serialization() {
     assert_eq!(extracted_manifest.chunks.len(), 2);
     assert_eq!(extracted_manifest.merkle_root, "test_merkle_root_123");
 
-    println!("✅ FileMetadata with manifest can be serialized and deserialized");
+    println!("[OK] FileMetadata with manifest can be serialized and deserialized");
 }
 
 /// Test chunk hash extraction workflow
@@ -202,7 +202,7 @@ fn test_chunk_hash_extraction_workflow() {
     assert!(chunk_hashes[1].starts_with("chunk1_hash_"));
     assert!(chunk_hashes[2].starts_with("chunk2_hash_"));
 
-    println!("✅ Chunk hash extraction workflow successful");
+    println!("[OK] Chunk hash extraction workflow successful");
     println!("   Extracted {} chunk hashes from manifest", chunk_hashes.len());
 }
 
@@ -253,7 +253,7 @@ fn test_backward_compatibility_download() {
         assert_eq!(placeholder_hashes.len(), total_chunks as usize);
     }
 
-    println!("✅ Backward compatibility maintained for old metadata");
+    println!("[OK] Backward compatibility maintained for old metadata");
 }
 
 /// Test manifest with different chunk sizes
@@ -299,7 +299,7 @@ fn test_manifest_with_variable_chunk_sizes() {
     let total_size: usize = parsed.chunks.iter().map(|c| c.size).sum();
     assert_eq!(total_size, 562 * 1024);
 
-    println!("✅ Variable chunk sizes handled correctly");
+    println!("[OK] Variable chunk sizes handled correctly");
 }
 
 /// Test manifest integrity after JSON round-trip
@@ -349,6 +349,6 @@ fn test_manifest_json_round_trip_integrity() {
         assert_eq!(original.size, restored.size);
     }
 
-    println!("✅ Manifest integrity maintained through JSON round-trip");
+    println!("[OK] Manifest integrity maintained through JSON round-trip");
 }
 

@@ -78,10 +78,10 @@ Distance = XOR(NodeID_A, NodeID_B)
 ```
 K-Buckets (k=20, b=160):
 ┌────────────────────────────────┐
-│ Bucket 0: Distance 2^0        │ → [20 nodes max]
-│ Bucket 1: Distance 2^1        │ → [20 nodes max]
+│ Bucket 0: Distance 2^0        │ -> [20 nodes max]
+│ Bucket 1: Distance 2^1        │ -> [20 nodes max]
 │ ...                            │
-│ Bucket 159: Distance 2^159    │ → [20 nodes max]
+│ Bucket 159: Distance 2^159    │ -> [20 nodes max]
 └────────────────────────────────┘
 ```
 
@@ -201,7 +201,7 @@ message ChunkInfo {
 
 ```
 1. Request Chunk
-   → REQUEST_CHUNK {
+   -> REQUEST_CHUNK {
        file_hash: "sha256...",
        chunk_index: 5,
        offset: 0,
@@ -209,7 +209,7 @@ message ChunkInfo {
      }
 
 2. Receive Chunk
-   ← CHUNK_DATA {
+   <- CHUNK_DATA {
        file_hash: "sha256...",
        chunk_index: 5,
        data: [binary],
@@ -222,7 +222,7 @@ message ChunkInfo {
    - Decrypt if needed
 
 4. Acknowledge
-   → CHUNK_ACK {
+   -> CHUNK_ACK {
        file_hash: "sha256...",
        chunk_index: 5,
        status: "verified"
@@ -725,12 +725,12 @@ network.registerProtocol({
 ### Protocol Upgrade Path
 
 ```
-Version 1.0.0 → 1.1.0:
+Version 1.0.0 -> 1.1.0:
 - Backward compatible
 - New optional fields
 - Deprecation warnings
 
-Version 1.x → 2.0.0:
+Version 1.x -> 2.0.0:
 - Breaking changes
 - Migration period
 - Dual-stack support
@@ -742,13 +742,13 @@ Version 1.x → 2.0.0:
 
 ```
 TRACE [2024-01-01 00:00:00] DHT FIND_NODE
-  → Target: 0x1234...
-  ← Nodes: 20
+  -> Target: 0x1234...
+  <- Nodes: 20
   Duration: 150ms
 
 DEBUG [2024-01-01 00:00:01] FILE_TRANSFER
-  → Request chunk 5 of file 0xabcd...
-  ← Received 262144 bytes
+  -> Request chunk 5 of file 0xabcd...
+  <- Received 262144 bytes
   Verification: OK
 ```
 

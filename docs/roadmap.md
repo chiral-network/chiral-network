@@ -8,35 +8,35 @@ Build a fully decentralized peer-to-peer file sharing platform that prioritizes 
 
 ## Development Phases
 
-### Phase 1: Core Infrastructure ✅ COMPLETED
+### Phase 1: Core Infrastructure [OK] COMPLETED
 
 **Goal**: Establish basic UI and application structure
 
 **Completed Features**:
 
-- ✅ Modern desktop interface (Svelte 5 + Tauri 2)
-- ✅ Real-time file management dashboard
-- ✅ Network monitoring & peer discovery
-- ✅ Analytics dashboard with real metrics
-- ✅ Comprehensive settings management
+- [OK] Modern desktop interface (Svelte 5 + Tauri 2)
+- [OK] Real-time file management dashboard
+- [OK] Network monitoring & peer discovery
+- [OK] Analytics dashboard with real metrics
+- [OK] Comprehensive settings management
 
 ## **Timeline**: W1-W4
 
-### Phase 2: P2P Network Infrastructure ✅ COMPLETED
+### Phase 2: P2P Network Infrastructure [OK] COMPLETED
 
 **Goal**: Implement production-ready P2P networking
 
 **Completed Features**:
 
-- ✅ Full libp2p v0.54 integration
-- ✅ Kademlia DHT integration
-- ✅ CPU mining with Geth integration
+- [OK] Full libp2p v0.54 integration
+- [OK] Kademlia DHT integration
+- [OK] CPU mining with Geth integration
 
 **Timeline**: W5-W8
 
 ---
 
-### Phase 3: Core File Sharing Features 🚧 IN PROGRESS
+### Phase 3: Core File Sharing Features [WIP] IN PROGRESS
 
 **Goal**: Complete essential file sharing functionality
 
@@ -51,7 +51,7 @@ Build a fully decentralized peer-to-peer file sharing platform that prioritizes 
 
 ---
 
-### Phase 4: Advanced Features 📅 PLANNED
+### Phase 4: Advanced Features [DATE] PLANNED
 
 **Goal**: Add sophisticated functionality
 
@@ -78,21 +78,22 @@ We welcome community input on our roadmap! Here's how to contribute:
 
 ### Voting on Features
 
-- 👍 React to issues with thumbs up for features you want
+- [OK] React to issues with thumbs up for features you want
 - Comment with your use case to help prioritize
 - Star the repository to show general support
 
 ### What We Won't Add For Now (Before core features are working and stable)
 
-**Commercial & Piracy-Enabling Features**:
+**Piracy-Enabling & External Commercial Features**:
 
 - Centralized market servers
 - Global file search/discovery (piracy risk)
-- Price/payment systems
+- External payment systems or third-party marketplaces
 - Commercial tracking
 - Social features (likes, comments, reviews)
 - Advertising systems
-- Marketplace or trading platforms
+
+**Note**: Chiral token-based features (download speed tiers, per-MB file pricing, peer-to-peer token transfers) are allowed and encouraged.
 
 **The Proxy Feature**:
 

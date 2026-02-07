@@ -281,7 +281,7 @@ pub struct HttpServerState {
     /// Path to file storage directory
     pub storage_dir: PathBuf,
 
-    /// Maps file_hash → HttpFileMetadata
+    /// Maps file_hash -> HttpFileMetadata
     pub files: Arc<RwLock<HashMap<String, HttpFileMetadata>>>,
 }
 ```
@@ -464,7 +464,7 @@ async function confirmPeerSelection() {
 }
 ```
 
-### 7.3 Transfer Event Bus Integration ✅
+### 7.3 Transfer Event Bus Integration [OK]
 
 The HTTP protocol handlers are now fully integrated with the Transfer Event Bus, enabling real-time UI updates for all HTTP downloads.
 
@@ -508,10 +508,10 @@ client.resume_download_with_events(&url, &output_path, offset, config).await?;
 
 | Method | Events |
 |--------|--------|
-| `download_with_progress()` | TransferStarted → SourceConnected → TransferProgress (every 2s) → TransferCompleted/TransferFailed |
+| `download_with_progress()` | TransferStarted -> SourceConnected -> TransferProgress (every 2s) -> TransferCompleted/TransferFailed |
 | `cancel_download()` | TransferCanceled |
 | `download_chunks_with_events()` | ChunkCompleted, ChunkFailed (per chunk) |
-| `resume_download_with_events()` | TransferResumed → SourceConnected → TransferProgress → TransferCompleted/TransferFailed |
+| `resume_download_with_events()` | TransferResumed -> SourceConnected -> TransferProgress -> TransferCompleted/TransferFailed |
 
 **ChunkFailed Event Points:**
 
@@ -530,7 +530,7 @@ Failures are categorized for proper UI display:
 
 ### 7.4 Known UI Limitations
 
-**Issue #1: Download Progress** ✅ **RESOLVED**
+**Issue #1: Download Progress** [OK] **RESOLVED**
 
 - **Previous Problem:** HTTP downloads didn't appear in UI
 - **Resolution:** Transfer Event Bus integration now emits all lifecycle events
@@ -555,7 +555,7 @@ Failures are categorized for proper UI display:
 
 ### 8.1 Current Security Posture
 
-**⚠️ WARNING:** This implementation is **not suitable for public internet use** in its current state.
+**[WARN] WARNING:** This implementation is **not suitable for public internet use** in its current state.
 
 **Missing Security Features:**
 
@@ -593,7 +593,7 @@ Failures are categorized for proper UI display:
 
 ## 9. Future Work
 
-### 9.1 UI Progress Tracking ✅ **COMPLETED**
+### 9.1 UI Progress Tracking [OK] **COMPLETED**
 
 - **Status:** Implemented via Transfer Event Bus integration
 - **What was done:**
@@ -618,8 +618,8 @@ Failures are categorized for proper UI display:
 - **Tasks:**
   - Detect public IP vs NAT status (use existing AutoNAT v2)
   - Implement `selectDefaultSeedingProtocol()`:
-    - IF public IP → return "http"
-    - ELSE → return "webtorrent"
+    - IF public IP -> return "http"
+    - ELSE -> return "webtorrent"
   - Implement `selectDownloadProtocol()` considering:
     - Network conditions (bandwidth, latency)
     - Seeder availability per protocol

@@ -597,15 +597,15 @@ impl FileTransferService {
                     private_key,
                 ) {
                     Ok(_) => {
-                        info!("✅ Stored encryption key for file: {}", original_file_hash);
+                        info!("[OK] Stored encryption key for file: {}", original_file_hash);
                     }
                     Err(e) => {
-                        warn!("⚠️  Failed to store encryption key (continuing anyway): {}", e);
+                        warn!("[WARN]  Failed to store encryption key (continuing anyway): {}", e);
                         // Don't fail the upload - encryption key storage is optional for testing
                     }
                 }
             } else {
-                warn!("⚠️  No active account - skipping encryption key storage");
+                warn!("[WARN]  No active account - skipping encryption key storage");
             }
 
             // Create temporary encrypted file path

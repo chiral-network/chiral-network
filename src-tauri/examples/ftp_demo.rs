@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match client.download_file(output_path).await {
         Ok(bytes) => {
-            println!("✓ Download successful!");
+            println!("[OK] Download successful!");
             println!("  Bytes downloaded: {}", bytes);
             println!("  File saved to: {:?}\n", output_path);
 
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Err(e) => {
-            println!("✗ Download failed: {}", e);
+            println!("[X] Download failed: {}", e);
             println!("  Note: Make sure FTP server is running!");
             return Err(e.into());
         }
@@ -70,12 +70,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== FTP Demo Complete ===");
     println!("\nSummary:");
     println!("  FTP client successfully demonstrated:");
-    println!("  ✓ URL parsing (host, port, path)");
-    println!("  ✓ FTP connection");
-    println!("  ✓ Anonymous authentication");
-    println!("  ✓ Binary mode file transfer");
-    println!("  ✓ File download and save");
-    println!("  ✓ Connection cleanup");
+    println!("  [OK] URL parsing (host, port, path)");
+    println!("  [OK] FTP connection");
+    println!("  [OK] Anonymous authentication");
+    println!("  [OK] Binary mode file transfer");
+    println!("  [OK] File download and save");
+    println!("  [OK] Connection cleanup");
 
     Ok(())
 }

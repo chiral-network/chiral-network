@@ -918,7 +918,7 @@ impl HttpDownloadClient {
         
         if let Some(ref peer_id) = self.downloader_peer_id {
             request = request.header("X-Downloader-Peer-ID", peer_id);
-            tracing::debug!("📤 Adding downloader peer ID header: {}", peer_id);
+            tracing::debug!("[OUT] Adding downloader peer ID header: {}", peer_id);
         }
 
         let response = request.send().await.map_err(|e| {

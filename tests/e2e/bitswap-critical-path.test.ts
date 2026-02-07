@@ -1,6 +1,6 @@
 /**
  * @fileoverview Bitswap Critical Path E2E Test
- * Tests the complete flow: Locating data → Handshake → Download(Bitswap) → Pay
+ * Tests the complete flow: Locating data -> Handshake -> Download(Bitswap) -> Pay
  * 
  * This test simulates the full lifecycle of a Bitswap file download:
  * 1. Locating: Search for file metadata via DHT
@@ -65,7 +65,7 @@ describe("Bitswap Critical Path E2E", () => {
     mockTauri.clear();
   });
 
-  describe("Complete Flow: Locate → Handshake → Download → Pay", () => {
+  describe("Complete Flow: Locate -> Handshake -> Download -> Pay", () => {
     it("should successfully complete full Bitswap download flow", async () => {
       // Setup test data
       const testFile = TestDataFactory.createMockFile("document.pdf", 2 * 1024 * 1024); // 2MB

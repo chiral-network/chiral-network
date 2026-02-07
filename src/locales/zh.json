@@ -176,8 +176,8 @@
       "farthest": "最远",
       "online": "在线",
       "offline": "离线",
-      "aToZ": "A → Z",
-      "zToA": "Z → A",
+      "aToZ": "A -> Z",
+      "zToA": "Z -> A",
       "anonymous": "匿名",
       "unknown": "未知",
       "joined": "加入",
@@ -386,7 +386,7 @@
   "button": {
     "clearCache": "清除缓存",
     "clearing": "正在清除...",
-    "cleared": "✓ 已清除！"
+    "cleared": "[OK] 已清除！"
   },
   "account": {
     "title": "账户",
@@ -614,8 +614,8 @@
     "from": "来自",
     "to": "发送至",
     "sort": "排序",
-    "sortNewest": "最新 → 最早",
-    "sortOldest": "最早 → 最新",
+    "sortNewest": "最新 -> 最早",
+    "sortOldest": "最早 -> 最新",
     "reset": "重置"
   },
   "actions": {
@@ -811,8 +811,8 @@
     },
     "errors": {
       "connectionTimeout": "连接超时",
-      "optimizationUnavailable": "❌ 优化状态不可用",
-      "tauriUnavailable": "❌ Tauri API不可用。请在桌面应用程序中运行此测试，而不是在浏览器中。"
+      "optimizationUnavailable": "[X] 优化状态不可用",
+      "tauriUnavailable": "[X] Tauri API不可用。请在桌面应用程序中运行此测试，而不是在浏览器中。"
     },
     "dialog": {
       "confirmRemoval": "确认移除",
@@ -1046,7 +1046,7 @@
       "hoverTooltip": "{level}: {count}",
       "prev": "上一个",
       "next": "下一个",
-      "scoreFormat": "{score}/5.0 ⭐"
+      "scoreFormat": "{score}/5.0 *"
     },
     "pageTitle": "信誉系统 - Chiral Network",
     "sortBy": "排序方式",
@@ -1136,7 +1136,7 @@
       "recipientPublicKey": "接收者公钥",
       "publicKeyPlaceholder": "输入接收者的 X25519 公钥（64 个十六进制字符）",
       "publicKeyHint": "输入接收者的 X25519 公钥（十六进制格式，64 个字符）。文件将被加密，只有他们可以解密。留空表示为自己加密。",
-      "invalidPublicKey": "⚠️ 公钥格式无效。必须是 64 个十六进制字符。",
+      "invalidPublicKey": "[WARN] 公钥格式无效。必须是 64 个十六进制字符。",
       "encryptedBadge": "已加密"
     },
     "currentProtocol": "当前协议",
@@ -1161,8 +1161,8 @@
     "versionHistoryError": "加载版本历史失败",
     "desktopAppRequired": "需要桌面应用",
     "storageMonitoringDesktopOnly": "存储监控需要桌面应用程序",
-    "dropFilesHere": "✨ 在此处拖放文件！",
-    "uploadingFiles": "🔄 正在上传文件...",
+    "dropFilesHere": "[NEW] 在此处拖放文件！",
+    "uploadingFiles": "[SYNC] 正在上传文件...",
     "releaseToUpload": "释放以立即上传文件",
     "dragDropWebNotAvailable": "网页版不支持拖放功能",
     "pleaseWaitProcessing": "文件正在处理中，请稍候...",
@@ -1706,8 +1706,8 @@
       "forcedModeMining": "您已在设置中手动启用纯客户端模式。区块链仅同步最后约100个区块，而非完整同步（约10,000个区块）。挖矿可用但使用最小存储空间。",
       "natDetected": "AutoNAT检测到您位于NAT或限制性防火墙后。您可以下载文件但无法将其共享给其他对等节点。",
       "natDetectedMining": "AutoNAT检测到您位于NAT或限制性防火墙后。区块链仅同步最后约100个区块以减少带宽/存储需求。挖矿可用但存储空间减少。",
-      "settingsForced": "⚠️ 客户端模式已强制：您将无法共享文件或充当DHT服务器。区块链使用部分同步（仅最后约100个区块）而非完整同步（约10,000个区块）。挖矿可用但存储空间减少。需要重启DHT。",
-      "serverModeDisabled": "ℹ️ 强制客户端模式时服务器模式被禁用。"
+      "settingsForced": "[WARN] 客户端模式已强制：您将无法共享文件或充当DHT服务器。区块链使用部分同步（仅最后约100个区块）而非完整同步（约10,000个区块）。挖矿可用但存储空间减少。需要重启DHT。",
+      "serverModeDisabled": "[INFO] 强制客户端模式时服务器模式被禁用。"
     },
     "banner": {
       "title": {
@@ -1723,10 +1723,10 @@
         "defaultMining": "您处于仅客户端模式。区块链仅同步最后约100个区块（最小存储）。挖矿可用。"
       },
       "help": {
-        "forced": "要启用共享，请在 设置 → 开发者 → DHT客户端模式 中禁用【强制仅客户端模式】。",
+        "forced": "要启用共享，请在 设置 -> 开发者 -> DHT客户端模式 中禁用【强制仅客户端模式】。",
         "nat": "您的文件仍将本地保存，但不会与网络共享。要启用共享，请配置端口转发或使用具有公共IP的VPN。",
         "default": "检查您的网络设置或AutoNAT配置。",
-        "forcedMining": "要启用完整区块链同步（10,000个区块），请在 设置 → 开发者 中禁用【强制仅客户端模式】。",
+        "forcedMining": "要启用完整区块链同步（10,000个区块），请在 设置 -> 开发者 中禁用【强制仅客户端模式】。",
         "natMining": "完整节点同步约10,000个区块。要升级，请配置端口转发或使用具有公共IP的VPN以变得可公开访问。",
         "defaultMining": "检查您的网络设置或AutoNAT配置以获得完整功能。"
       }
