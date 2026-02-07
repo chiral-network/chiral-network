@@ -435,15 +435,21 @@
 
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const response = await invoke<{ requestId: string; status: string }>('start_download', {
+
+      // Build params - only include wallet fields when they have values
+      const params: Record<string, unknown> = {
         fileHash: result.hash,
         fileName: result.fileName,
         seeders: result.seeders,
         speedTier: selectedTier,
-        fileSize: result.fileSize,
-        walletAddress: $walletAccount?.address || null,
-        privateKey: $walletAccount?.privateKey || null,
-      });
+        fileSize: result.fileSize || 0,
+      };
+      if ($walletAccount?.address) {
+        params.walletAddress = $walletAccount.address;
+        params.privateKey = $walletAccount.privateKey;
+      }
+
+      const response = await invoke<{ requestId: string; status: string }>('start_download', params);
 
       log.info('Download request sent:', response);
       if (cost > 0) {
@@ -832,11 +838,13 @@
           <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">⚡ Select Download Speed</p>
           <div class="grid grid-cols-3 gap-3">
             {#each TIERS as tier}
+              {@const fileSizeKnown = searchResult.fileSize > 0}
               {@const TierIcon = getTierIcon(tier.id)}
-              {@const cost = calculateCost(tier.id, searchResult.fileSize)}
+              {@const cost = fileSizeKnown ? calculateCost(tier.id, searchResult.fileSize) : 0}
+              {@const isPaid = tier.costPerMb > 0}
               {@const isSelected = selectedTier === tier.id}
-              {@const needsWallet = cost > 0 && !$walletAccount}
-              {@const insufficientBalance = cost > 0 && parseFloat(walletBalance) < cost}
+              {@const needsWallet = isPaid && !$walletAccount}
+              {@const insufficientBalance = fileSizeKnown && cost > 0 && parseFloat(walletBalance) < cost}
               {@const isDisabled = needsWallet || insufficientBalance}
               <button
                 onclick={() => { if (!isDisabled) selectedTier = tier.id; }}
@@ -854,8 +862,14 @@
                   <span class="text-sm font-semibold {isSelected ? 'text-blue-700 dark:text-blue-300' : 'dark:text-white'}">{tier.name}</span>
                 </div>
                 <p class="text-xs text-gray-500 dark:text-gray-400">{tier.speedLabel}</p>
-                <p class="text-xs font-medium mt-1 {cost === 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
-                  {formatCost(cost)}
+                <p class="text-xs font-medium mt-1 {isPaid ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}">
+                  {#if !isPaid}
+                    Free
+                  {:else if fileSizeKnown}
+                    {formatCost(cost)}
+                  {:else}
+                    {tier.costPerMb} CHR/MB
+                  {/if}
                 </p>
                 {#if needsWallet}
                   <p class="text-xs text-red-500 mt-1">Wallet required</p>
@@ -869,14 +883,16 @@
           <!-- Download button -->
           <div class="mt-4 flex items-center justify-between">
             <div class="text-sm text-gray-600 dark:text-gray-400">
-              {#if calculateCost(selectedTier, searchResult.fileSize) > 0}
+              {#if selectedTier === 'free'}
+                ✅ Free download — no payment required
+              {:else if searchResult.fileSize > 0 && calculateCost(selectedTier, searchResult.fileSize) > 0}
                 💰 Cost: <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(calculateCost(selectedTier, searchResult.fileSize))}</span>
                 {#if $walletAccount}
                   <span class="text-gray-400 mx-1">•</span>
                   Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHR</span>
                 {/if}
               {:else}
-                ✅ Free download — no payment required
+                💰 Cost calculated after download based on file size
               {/if}
             </div>
             <button
