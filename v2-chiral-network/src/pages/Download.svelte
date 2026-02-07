@@ -24,7 +24,10 @@
     Plus,
     Trash2
   } from 'lucide-svelte';
-  import { networkConnected } from '$lib/stores';
+  import { Zap, Gauge, Rocket } from 'lucide-svelte';
+  import { networkConnected, walletAccount } from '$lib/stores';
+  import { walletService } from '$lib/services/walletService';
+  import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
   const log = logger('Download');
@@ -40,6 +43,7 @@
   // Event listener cleanup functions
   let unlistenDownloadComplete: (() => void) | null = null;
   let unlistenDownloadFailed: (() => void) | null = null;
+  let unlistenDownloadProgress: (() => void) | null = null;
 
   // Types
   type SearchMode = 'hash' | 'magnet' | 'torrent';
@@ -65,6 +69,7 @@
     seeders: number;
     startedAt: Date;
     completedAt?: Date;
+    speedTier?: SpeedTier;
   }
 
   interface HistoryEntry {
@@ -134,6 +139,11 @@
   let downloadHistory = $state<HistoryEntry[]>([]);
   let showSearchHistory = $state(false);
   let showDownloadHistory = $state(true);
+
+  // Speed tier state
+  let selectedTier = $state<SpeedTier>('free');
+  let walletBalance = $state<string>('0');
+  let isProcessingPayment = $state(false);
 
   // Persistence keys
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
@@ -353,6 +363,24 @@
     }
   }
 
+  // Fetch wallet balance
+  async function refreshWalletBalance() {
+    if ($walletAccount?.address) {
+      walletBalance = await walletService.getBalance($walletAccount.address);
+    } else {
+      walletBalance = '0';
+    }
+  }
+
+  // Get tier icon component
+  function getTierIcon(tier: SpeedTier) {
+    switch (tier) {
+      case 'free': return Zap;
+      case 'standard': return Gauge;
+      case 'premium': return Rocket;
+    }
+  }
+
   // Start download
   async function startDownload(result: SearchResult) {
     const tauriAvailable = checkTauriAvailability();
@@ -373,6 +401,21 @@
       return;
     }
 
+    // Check wallet for paid tiers
+    const cost = calculateCost(selectedTier, result.fileSize);
+    if (cost > 0) {
+      if (!$walletAccount) {
+        toasts.show('Please log in with your wallet to use paid speed tiers', 'error');
+        return;
+      }
+      if (parseFloat(walletBalance) < cost) {
+        toasts.show(`Insufficient balance. Need ${formatCost(cost)}, have ${walletBalance} CHR`, 'error');
+        return;
+      }
+    }
+
+    isProcessingPayment = cost > 0;
+
     const newDownload: DownloadItem = {
       id: `download-${Date.now()}`,
       hash: result.hash,
@@ -380,10 +423,11 @@
       size: result.fileSize,
       status: 'downloading',
       progress: 0,
-      speed: 'Connecting...',
+      speed: cost > 0 ? 'Processing payment...' : 'Connecting...',
       eta: 'Requesting file...',
       seeders: result.seeders.length,
-      startedAt: new Date()
+      startedAt: new Date(),
+      speedTier: selectedTier
     };
 
     downloads = [...downloads, newDownload];
@@ -394,15 +438,25 @@
       const response = await invoke<{ requestId: string; status: string }>('start_download', {
         fileHash: result.hash,
         fileName: result.fileName,
-        seeders: result.seeders
+        seeders: result.seeders,
+        speedTier: selectedTier,
+        fileSize: result.fileSize,
+        walletAddress: $walletAccount?.address || null,
+        privateKey: $walletAccount?.privateKey || null,
       });
 
       log.info('Download request sent:', response);
-      toasts.show(`Requesting file from seeder...`, 'info');
+      if (cost > 0) {
+        toasts.show(`Payment processed! Requesting file from seeder...`, 'success');
+        // Refresh balance after payment
+        refreshWalletBalance();
+      } else {
+        toasts.show(`Requesting file from seeder...`, 'info');
+      }
 
       // Update download with request ID
       downloads = downloads.map(d =>
-        d.id === newDownload.id ? { ...d, id: response.requestId } : d
+        d.id === newDownload.id ? { ...d, id: response.requestId, speed: 'Connecting...' } : d
       );
       saveDownloadHistory();
     } catch (error) {
@@ -412,6 +466,8 @@
       );
       saveDownloadHistory();
       toasts.show(`Download failed: ${error}`, 'error');
+    } finally {
+      isProcessingPayment = false;
     }
   }
 
@@ -531,6 +587,34 @@
         toasts.show(`Download failed: ${error}`, 'error');
       });
 
+      // Listen for download progress (rate-limited writes)
+      unlistenDownloadProgress = await listen<{
+        requestId: string;
+        fileHash: string;
+        fileName: string;
+        bytesWritten: number;
+        totalBytes: number;
+        speedBps: number;
+        progress: number;
+      }>('download-progress', (event) => {
+        const { requestId, fileHash, bytesWritten, totalBytes, speedBps, progress } = event.payload;
+
+        downloads = downloads.map(d => {
+          if (d.hash === fileHash || d.id === requestId) {
+            return {
+              ...d,
+              progress,
+              speed: formatSpeed(speedBps),
+              size: totalBytes || d.size,
+              eta: speedBps > 0
+                ? `${Math.ceil((totalBytes - bytesWritten) / speedBps)}s remaining`
+                : 'Calculating...'
+            };
+          }
+          return d;
+        });
+      });
+
       log.info('Download event listeners registered');
     } catch (error) {
       log.error('Failed to setup event listeners:', error);
@@ -547,6 +631,10 @@
       unlistenDownloadFailed();
       unlistenDownloadFailed = null;
     }
+    if (unlistenDownloadProgress) {
+      unlistenDownloadProgress();
+      unlistenDownloadProgress = null;
+    }
   }
 
   // Initialize
@@ -554,6 +642,16 @@
     isTauri = checkTauriAvailability();
     loadDownloadHistory();
     setupEventListeners();
+    refreshWalletBalance();
+  });
+
+  // Refresh balance when wallet changes
+  $effect(() => {
+    if ($walletAccount?.address) {
+      refreshWalletBalance();
+    } else {
+      walletBalance = '0';
+    }
   });
 
   onDestroy(() => {
@@ -705,11 +803,12 @@
 
     <!-- Search Result -->
     {#if searchResult}
-      {@const FileIcon = getFileIcon(searchResult.fileName)}
+      {@const ResultFileIcon = getFileIcon(searchResult.fileName)}
       <div class="mt-6 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+        <!-- File info row -->
         <div class="flex items-start gap-4">
           <div class="flex items-center justify-center w-14 h-14 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 flex-shrink-0">
-            <FileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
+            <ResultFileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
           </div>
 
           <div class="flex-1 min-w-0">
@@ -726,15 +825,74 @@
               {searchResult.hash}
             </p>
           </div>
+        </div>
 
-          <button
-            onclick={() => startDownload(searchResult!)}
-            disabled={!isTauri}
-            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-all flex-shrink-0"
-          >
-            <Download class="w-4 h-4" />
-            Download
-          </button>
+        <!-- Speed Tier Selector -->
+        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+          <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">⚡ Select Download Speed</p>
+          <div class="grid grid-cols-3 gap-3">
+            {#each TIERS as tier}
+              {@const TierIcon = getTierIcon(tier.id)}
+              {@const cost = calculateCost(tier.id, searchResult.fileSize)}
+              {@const isSelected = selectedTier === tier.id}
+              {@const needsWallet = cost > 0 && !$walletAccount}
+              {@const insufficientBalance = cost > 0 && parseFloat(walletBalance) < cost}
+              {@const isDisabled = needsWallet || insufficientBalance}
+              <button
+                onclick={() => { if (!isDisabled) selectedTier = tier.id; }}
+                disabled={isDisabled}
+                class="relative p-3 rounded-lg border-2 text-left transition-all
+                  {isSelected
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 ring-1 ring-blue-500'
+                    : isDisabled
+                      ? 'border-gray-200 dark:border-gray-600 opacity-50 cursor-not-allowed'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 cursor-pointer'
+                  }"
+              >
+                <div class="flex items-center gap-2 mb-1">
+                  <TierIcon class="w-4 h-4 {isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}" />
+                  <span class="text-sm font-semibold {isSelected ? 'text-blue-700 dark:text-blue-300' : 'dark:text-white'}">{tier.name}</span>
+                </div>
+                <p class="text-xs text-gray-500 dark:text-gray-400">{tier.speedLabel}</p>
+                <p class="text-xs font-medium mt-1 {cost === 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
+                  {formatCost(cost)}
+                </p>
+                {#if needsWallet}
+                  <p class="text-xs text-red-500 mt-1">Wallet required</p>
+                {:else if insufficientBalance}
+                  <p class="text-xs text-red-500 mt-1">Low balance</p>
+                {/if}
+              </button>
+            {/each}
+          </div>
+
+          <!-- Download button -->
+          <div class="mt-4 flex items-center justify-between">
+            <div class="text-sm text-gray-600 dark:text-gray-400">
+              {#if calculateCost(selectedTier, searchResult.fileSize) > 0}
+                💰 Cost: <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(calculateCost(selectedTier, searchResult.fileSize))}</span>
+                {#if $walletAccount}
+                  <span class="text-gray-400 mx-1">•</span>
+                  Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHR</span>
+                {/if}
+              {:else}
+                ✅ Free download — no payment required
+              {/if}
+            </div>
+            <button
+              onclick={() => startDownload(searchResult!)}
+              disabled={!isTauri || isProcessingPayment}
+              class="px-5 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-all font-medium"
+            >
+              {#if isProcessingPayment}
+                <Loader2 class="w-4 h-4 animate-spin" />
+                Processing...
+              {:else}
+                <Download class="w-4 h-4" />
+                Download
+              {/if}
+            </button>
+          </div>
         </div>
       </div>
     {/if}
