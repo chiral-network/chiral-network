@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+use crate::speed_tiers::SpeedTier;
 use libp2p::{
     kad, mdns, noise, ping,
     swarm::{NetworkBehaviour, SwarmEvent},
@@ -163,6 +164,9 @@ pub struct SharedFileInfo {
     pub file_size: u64,
 }
 
+/// Map of request_id -> SpeedTier for rate-limited downloads
+pub type DownloadTiersMap = Arc<Mutex<HashMap<String, SpeedTier>>>;
+
 pub struct DhtService {
     peers: Arc<Mutex<Vec<PeerInfo>>>,
     is_running: Arc<Mutex<bool>>,
@@ -170,10 +174,14 @@ pub struct DhtService {
     command_sender: Arc<Mutex<Option<mpsc::UnboundedSender<SwarmCommand>>>>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     shared_files: SharedFilesMap,
+    download_tiers: DownloadTiersMap,
 }
 
 impl DhtService {
-    pub fn new(file_transfer_service: Arc<Mutex<crate::file_transfer::FileTransferService>>) -> Self {
+    pub fn new(
+        file_transfer_service: Arc<Mutex<crate::file_transfer::FileTransferService>>,
+        download_tiers: DownloadTiersMap,
+    ) -> Self {
         Self {
             peers: Arc::new(Mutex::new(Vec::new())),
             is_running: Arc::new(Mutex::new(false)),
@@ -181,6 +189,7 @@ impl DhtService {
             command_sender: Arc::new(Mutex::new(None)),
             file_transfer_service: Some(file_transfer_service),
             shared_files: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            download_tiers,
         }
     }
 
@@ -241,9 +250,10 @@ impl DhtService {
         let is_running_clone = self.is_running.clone();
         let file_transfer_clone = self.file_transfer_service.clone();
         let shared_files_clone = self.shared_files.clone();
+        let download_tiers_clone = self.download_tiers.clone();
 
         tokio::spawn(async move {
-            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone, shared_files_clone).await;
+            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone, shared_files_clone, download_tiers_clone).await;
         });
         
         Ok(format!("DHT started with peer ID: {}", peer_id))
@@ -504,6 +514,7 @@ async fn event_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     shared_files: SharedFilesMap,
+    download_tiers: DownloadTiersMap,
 ) {
     // Track pending get queries
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
@@ -518,7 +529,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Listening on {:?}", address);
@@ -660,6 +671,7 @@ async fn handle_behaviour_event(
     file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     pending_get_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>>,
     shared_files: &SharedFilesMap,
+    download_tiers: &DownloadTiersMap,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -902,11 +914,17 @@ async fn handle_behaviour_event(
                             }
                         }
                         request_response::Message::Response { response, .. } => {
-                            println!("Received file response from {}: hash={}, success={}",
+                            println!("📥 Received file response from {}: hash={}, success={}",
                                      peer, response.file_hash, response.file_data.is_some());
 
                             if let Some(file_data) = response.file_data {
-                                // Save the file to Downloads folder
+                                // Look up speed tier for this download
+                                let tier = {
+                                    let mut tiers = download_tiers.lock().await;
+                                    tiers.remove(&response.request_id).unwrap_or(SpeedTier::Free)
+                                };
+
+                                // Save the file to Downloads folder with rate limiting
                                 if let Some(downloads_dir) = dirs::download_dir() {
                                     let file_name = if response.file_name.is_empty() {
                                         format!("{}.download", &response.file_hash[..8])
@@ -915,29 +933,46 @@ async fn handle_behaviour_event(
                                     };
                                     let file_path = downloads_dir.join(&file_name);
 
-                                    match std::fs::write(&file_path, &file_data) {
-                                        Ok(_) => {
-                                            println!("File saved to: {:?}", file_path);
-                                            let _ = app.emit("file-download-complete", serde_json::json!({
-                                                "requestId": response.request_id,
-                                                "fileHash": response.file_hash,
-                                                "fileName": file_name,
-                                                "filePath": file_path.to_string_lossy(),
-                                                "fileSize": file_data.len(),
-                                                "status": "completed"
-                                            }));
+                                    // Spawn rate-limited write task
+                                    let app_clone = app.clone();
+                                    let request_id = response.request_id.clone();
+                                    let file_hash = response.file_hash.clone();
+                                    let file_name_clone = file_name.clone();
+
+                                    tokio::spawn(async move {
+                                        println!("⚡ Writing file with {:?} tier rate limiting", tier);
+                                        match crate::speed_tiers::rate_limited_write(
+                                            &app_clone, &file_path, &file_data, &tier,
+                                            &request_id, &file_hash, &file_name_clone,
+                                        ).await {
+                                            Ok(_) => {
+                                                println!("✅ File saved to: {:?}", file_path);
+                                                let _ = app_clone.emit("file-download-complete", serde_json::json!({
+                                                    "requestId": request_id,
+                                                    "fileHash": file_hash,
+                                                    "fileName": file_name_clone,
+                                                    "filePath": file_path.to_string_lossy(),
+                                                    "fileSize": file_data.len(),
+                                                    "status": "completed"
+                                                }));
+                                            }
+                                            Err(e) => {
+                                                println!("❌ Failed to save file: {}", e);
+                                                let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                                                    "requestId": request_id,
+                                                    "fileHash": file_hash,
+                                                    "error": format!("Failed to save file: {}", e)
+                                                }));
+                                            }
                                         }
-                                        Err(e) => {
-                                            println!("Failed to save file: {}", e);
-                                            let _ = app.emit("file-download-failed", serde_json::json!({
-                                                "requestId": response.request_id,
-                                                "fileHash": response.file_hash,
-                                                "error": format!("Failed to save file: {}", e)
-                                            }));
-                                        }
-                                    }
+                                    });
                                 }
                             } else {
+                                // Clean up tier entry on failure
+                                {
+                                    let mut tiers = download_tiers.lock().await;
+                                    tiers.remove(&response.request_id);
+                                }
                                 let _ = app.emit("file-download-failed", serde_json::json!({
                                     "requestId": response.request_id,
                                     "fileHash": response.file_hash,
