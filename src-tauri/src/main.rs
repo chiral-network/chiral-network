@@ -39,8 +39,7 @@ use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source, ed2k_client,
     encryption, file_transfer, ftp_bookmarks, ftp_client, http_download, keystore, logger, manager,
     multi_source_download, p2p_chunk_network, p2p_download_recovery, peer_selection, protocols,
-    reputation, stream_auth,
-    webrtc_service,
+    reputation, stream_auth, webrtc_service,
 };
 use headless::create_dht_config_from_args;
 
@@ -58,11 +57,13 @@ use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
-    proxy_echo, proxy_remove, ProxyNode,
+    proxy_echo, proxy_remove, proxy_self_test, proxy_self_test_all, proxy_self_test_report,
+    ProxyNode,
 };
 use bandwidth::BandwidthController;
 use chiral_network::download_paths;
 use chiral_network::payment_checkpoint::PaymentCheckpointService;
+use chiral_network::proxy_latency::{ProxyLatencyInfo, ProxyLatencyService, ProxyStatus};
 use chiral_network::transfer_events::{
     current_timestamp_ms, ErrorCategory, SourceInfo, SourceType, TransferCompletedEvent,
     TransferEventBus, TransferFailedEvent, TransferStartedEvent,
@@ -92,11 +93,14 @@ use ethereum::{
     get_txpool_content,
     get_txpool_status,
     reconnect_to_bootstrap_if_needed,
+    reconnect_to_bootstrap_with_snapshot,
+    reset_peer_recovery_state,
     start_mining,
     stop_mining,
     EthAccount,
     GethProcess,
     MinedBlock,
+    PeerRecoverySnapshot,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
@@ -181,7 +185,7 @@ impl Default for BackendSettings {
 }
 
 /// Get a unique file path by adding (1), (2), etc. if the file already exists
-/// Example: "file.txt" → "file (1).txt" if "file.txt" exists
+/// Example: "file.txt" -> "file (1).txt" if "file.txt" exists
 fn get_unique_filepath(path: &Path) -> PathBuf {
     if !path.exists() {
         return path.to_path_buf();
@@ -353,6 +357,8 @@ struct AppState {
     keystore: Arc<Mutex<Keystore>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     privacy_proxies: Arc<Mutex<Vec<String>>>,
+    proxy_latency: Arc<Mutex<ProxyLatencyService>>,
+    proxy_self_test_epoch: Arc<std::sync::atomic::AtomicU64>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
@@ -459,8 +465,9 @@ async fn start_geth_node(
 ) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
-    let rpc_url = rpc_url.unwrap_or_else(|| crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone());
+    let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
     *state.rpc_url.lock().await = rpc_url.clone();
+    reset_peer_recovery_state().await;
 
     geth.start(
         &data_dir,
@@ -616,7 +623,9 @@ async fn bittorrent_post_download_publish(
 #[tauri::command]
 async fn stop_geth_node(state: State<'_, AppState>) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
-    geth.stop()
+    let stop_res = geth.stop();
+    reset_peer_recovery_state().await;
+    stop_res
 }
 
 #[tauri::command]
@@ -687,18 +696,7 @@ async fn get_disk_space(path: String) -> Result<u64, String> {
 
 #[tauri::command]
 async fn get_account_balance(address: String) -> Result<String, String> {
-    tracing::info!("[get_account_balance] Querying balance for address: {}", address);
-    tracing::info!("[get_account_balance] Using RPC endpoint: {}", crate::ethereum::NETWORK_CONFIG.rpc_endpoint);
-    match get_balance(&address).await {
-        Ok(balance) => {
-            tracing::info!("[get_account_balance] Balance result for {}: {}", address, balance);
-            Ok(balance)
-        }
-        Err(e) => {
-            tracing::error!("[get_account_balance] Error getting balance for {}: {}", address, e);
-            Err(e)
-        }
-    }
+    get_balance(&address).await
 }
 
 #[tauri::command]
@@ -939,14 +937,12 @@ async fn is_geth_running(state: State<'_, AppState>) -> Result<bool, String> {
     // Check local Geth process first
     let geth = state.geth.lock().await;
     if geth.is_running() {
-        tracing::info!("[is_geth_running] Local Geth process is running");
         return Ok(true);
     }
     drop(geth);
 
     // Fall back to checking if the shared RPC endpoint is reachable
     let rpc_endpoint = &crate::ethereum::NETWORK_CONFIG.rpc_endpoint;
-    tracing::info!("[is_geth_running] No local Geth, checking shared RPC: {}", rpc_endpoint);
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_blockNumber",
@@ -961,15 +957,8 @@ async fn is_geth_running(state: State<'_, AppState>) -> Result<bool, String> {
         .send()
         .await
     {
-        Ok(resp) => {
-            let success = resp.status().is_success();
-            tracing::info!("[is_geth_running] Shared RPC response status: {}, is_success: {}", resp.status(), success);
-            Ok(success)
-        },
-        Err(e) => {
-            tracing::warn!("[is_geth_running] Shared RPC unreachable: {}", e);
-            Ok(false)
-        },
+        Ok(resp) => Ok(resp.status().is_success()),
+        Err(_) => Ok(false),
     }
 }
 
@@ -1120,6 +1109,7 @@ async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> R
 
     // Stop Geth
     state.geth.lock().await.stop()?;
+    reset_peer_recovery_state().await;
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await; // Brief pause for shutdown
 
     // Restart with the stored miner address
@@ -1700,6 +1690,7 @@ async fn start_dht_node(
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
+    let proxy_latency_arc = state.proxy_latency.clone();
     let dht_clone_for_pump = dht_arc.clone();
     let analytics_arc = state.analytics.clone();
 
@@ -1777,6 +1768,17 @@ async fn start_dht_node(
                             }
                         };
 
+                        {
+                            let mut svc = proxy_latency_arc.lock().await;
+                            let status_kind = match to_emit.status.as_str() {
+                                "online" => ProxyStatus::Online,
+                                "offline" => ProxyStatus::Offline,
+                                "connecting" => ProxyStatus::Connecting,
+                                _ => ProxyStatus::Error,
+                            };
+                            svc.update_proxy_latency(to_emit.id.clone(), latency_ms, status_kind);
+                        }
+
                         let _ = app_handle.emit("proxy_status_update", to_emit);
                     }
                     DhtEvent::NatStatus {
@@ -1807,6 +1809,9 @@ async fn start_dht_node(
                             p.latency = rtt_ms as u32;
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         }
+                        drop(proxies);
+                        let mut svc = proxy_latency_arc.lock().await;
+                        svc.update_ping_rtt(peer, Some(rtt_ms), ProxyStatus::Online);
                     }
                     DhtEvent::DownloadedFile(metadata) => {
                         info!(
@@ -1847,7 +1852,7 @@ async fn start_dht_node(
                     }
                     DhtEvent::FileDiscovered(metadata) => {
                         info!(
-                            "🌐 Emitting found_file event to frontend for: {}",
+                            "📡 Emitting found_file event to frontend for: {}",
                             metadata.file_name
                         );
                         let payload = serde_json::json!(metadata);
@@ -1963,7 +1968,7 @@ async fn start_dht_node(
                 for bootstrap_node in &bootstrap_nodes_for_monitor {
                     match dht_for_monitor.connect_peer(bootstrap_node.clone()).await {
                         Ok(_) => {
-                            tracing::info!("🌐 Reconnected to bootstrap node: {}", bootstrap_node);
+                            tracing::info!("📡 Reconnected to bootstrap node: {}", bootstrap_node);
                         }
                         Err(e) => {
                             tracing::debug!("Failed to reconnect to {}: {}", bootstrap_node, e);
@@ -3723,11 +3728,7 @@ async fn upload_file_to_network(
         .len();
 
     // Normalize protocol for robust matching (tests/users may send different casing like "Bitswap", "BitSwap", "BITSWAP").
-    let protocol_upper = protocol
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_uppercase();
+    let protocol_upper = protocol.as_deref().unwrap_or("").trim().to_uppercase();
     let dont_need_to_copy_protocols = vec!["BITSWAP", "WEBRTC"];
     let mut file_path = file_path.clone();
 
@@ -3967,7 +3968,7 @@ async fn upload_file_to_network(
             }
             "FTP" => {
                 // FTP upload uses the built-in FTP server
-                println!("🌐 FTP upload: Using built-in FTP server");
+                println!("📡 FTP upload: Using built-in FTP server");
 
                 // Ensure FTP server is running
                 if !state.ftp_server.is_running().await {
@@ -4093,7 +4094,7 @@ async fn upload_file_to_network(
             "BITSWAP" => {
                 // Use streaming upload for Bitswap to handle large files
                 println!(
-                    "🌐 Using streaming Bitswap upload for protocol: {}",
+                    "📡 Using streaming Bitswap upload for protocol: {}",
                     protocol_name
                 );
 
@@ -4108,7 +4109,7 @@ async fn upload_file_to_network(
                 let total_chunks = ((file_size + chunk_size - 1) / chunk_size) as usize;
 
                 println!(
-                    "🌐 Starting Bitswap streaming upload: {} chunks of {} bytes each",
+                    "📡 Starting Bitswap streaming upload: {} chunks of {} bytes each",
                     total_chunks, chunk_size
                 );
 
@@ -4297,7 +4298,7 @@ async fn upload_file_to_network(
                         };
 
                         info!(
-                            "🌐 Bitswap publish metadata: merkle_root={} root_cid={} cids={:?} seeders={:?}",
+                            "📡 Bitswap publish metadata: merkle_root={} root_cid={} cids={:?} seeders={:?}",
                             merkle_root,
                             root_cid,
                             metadata.cids,
@@ -4326,7 +4327,7 @@ async fn upload_file_to_network(
                 // WebRTC and other protocols use the default Chiral flow
                 // Spawn in background task to avoid callback timeout issues
                 println!(
-                    "🌐 Using Chiral network upload for protocol: {}",
+                    "📡 Using Chiral network upload for protocol: {}",
                     protocol_name
                 );
 
@@ -4685,8 +4686,8 @@ async fn test_ftp_connection(
 
     // Connect based on FTPS setting
     if use_ftps {
-        use suppaftp::{RustlsConnector, RustlsFtpStream};
         use std::sync::Arc;
+        use suppaftp::{RustlsConnector, RustlsFtpStream};
 
         // Create TLS connector with rustls
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -4697,7 +4698,7 @@ async fn test_ftp_connection(
                 .add(&rustls::Certificate(cert.0))
                 .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
         }
-        
+
         let tls_config = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(root_cert_store)
@@ -4811,8 +4812,8 @@ async fn upload_to_external_ftp(
 
     // Upload based on FTPS setting
     if use_ftps {
-        use suppaftp::{RustlsConnector, RustlsFtpStream};
         use std::sync::Arc;
+        use suppaftp::{RustlsConnector, RustlsFtpStream};
 
         // Create TLS connector with rustls
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -4823,7 +4824,7 @@ async fn upload_to_external_ftp(
                 .add(&rustls::Certificate(cert.0))
                 .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
         }
-        
+
         let tls_config = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(root_cert_store)
@@ -5220,11 +5221,11 @@ async fn download_blocks_from_network(
     download_path: String,
 ) -> Result<(), String> {
     info!(
-        "[DL] download_blocks_from_network called for file: {} to path: {}",
+        "🔽 download_blocks_from_network called for file: {} to path: {}",
         file_metadata.file_name, download_path
     );
     info!(
-        "[DL] file has {} seeders, cids: {:?}",
+        "🔽 file has {} seeders, cids: {:?}",
         file_metadata.seeders.len(),
         file_metadata.cids
     );
@@ -5245,14 +5246,19 @@ async fn download_blocks_from_network(
             .unwrap_or(false);
         if !has_cids {
             for _ in 0..10 {
-                if let Ok(Some(refreshed)) =
-                    dht.synchronous_search_metadata(file_metadata.merkle_root.clone(), 1_500).await
+                if let Ok(Some(refreshed)) = dht
+                    .synchronous_search_metadata(file_metadata.merkle_root.clone(), 1_500)
+                    .await
                 {
-                    if refreshed.cids.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
+                    if refreshed
+                        .cids
+                        .as_ref()
+                        .map(|c| !c.is_empty())
+                        .unwrap_or(false)
+                    {
                         info!(
-                            "[DL] Refreshed metadata now has cids for {}: {:?}",
-                            file_metadata.merkle_root,
-                            refreshed.cids
+                            "🔽 Refreshed metadata now has cids for {}: {:?}",
+                            file_metadata.merkle_root, refreshed.cids
                         );
                         file_metadata.cids = refreshed.cids;
                         break;
@@ -5280,7 +5286,7 @@ async fn download_blocks_from_network(
             let providers = dht.get_seeders_for_file(&file_metadata.merkle_root).await;
             if !providers.is_empty() {
                 info!(
-                    "[DL] Bitswap metadata had 0 seeders; using {} providers for {}",
+                    "🔽 Bitswap metadata had 0 seeders; using {} providers for {}",
                     providers.len(),
                     file_metadata.merkle_root
                 );
@@ -5288,10 +5294,10 @@ async fn download_blocks_from_network(
             }
         }
 
-        info!("[DL] DHT node is running, calling dht.download_file");
+        info!("🔽 DHT node is running, calling dht.download_file");
         dht.download_file(file_metadata, download_path).await
     } else {
-        error!("[DL] DHT node is not running!");
+        error!("🔽 DHT node is not running!");
         Err("DHT node is not running".to_string())
     }
 }
@@ -5354,7 +5360,9 @@ async fn download_file_from_network(
                     // doesn't include seeders yet, fall back to DHT provider discovery.
                     let mut metadata = metadata;
                     if metadata.seeders.is_empty() {
-                        let providers = dht_service.get_seeders_for_file(&metadata.merkle_root).await;
+                        let providers = dht_service
+                            .get_seeders_for_file(&metadata.merkle_root)
+                            .await;
                         if !providers.is_empty() {
                             info!(
                                 "Metadata had 0 seeders; using {} providers from DHT for {}",
@@ -5505,7 +5513,7 @@ async fn download_file_from_network(
                             // Check if we already have an open WebRTC connection to this peer
                             if webrtc_service.has_open_connection(&selected_peer).await {
                                 info!(
-                                    "[REUSE] Reusing existing WebRTC connection to peer {}",
+                                    "♻️ Reusing existing WebRTC connection to peer {}",
                                     selected_peer
                                 );
 
@@ -6471,35 +6479,139 @@ async fn update_proxy_latency(
     proxy_id: String,
     latency_ms: Option<u64>,
 ) -> Result<(), String> {
-    let ms = {
-        let ms_guard = state.multi_source_download.lock().await;
-        ms_guard.as_ref().cloned()
+    if proxy_id.trim().is_empty() {
+        return Err("proxy_id must not be empty".to_string());
+    }
+
+    let status = if latency_ms.is_some() {
+        ProxyStatus::Online
+    } else {
+        ProxyStatus::Offline
     };
 
-    if let Some(multi_source_service) = ms {
-        multi_source_service
-            .update_proxy_latency(proxy_id, latency_ms)
-            .await;
-        Ok(())
-    } else {
-        Err("Multi-source download service not available for proxy latency update".to_string())
+    {
+        let mut svc = state.proxy_latency.lock().await;
+        svc.update_proxy_latency(proxy_id.clone(), latency_ms, status.clone());
     }
+
+    {
+        let mut proxies = state.proxies.lock().await;
+        if let Some(node) = proxies
+            .iter_mut()
+            .find(|p| p.id == proxy_id || p.address == proxy_id)
+        {
+            node.status = match status {
+                ProxyStatus::Online => "online".to_string(),
+                ProxyStatus::Offline => "offline".to_string(),
+                ProxyStatus::Connecting => "connecting".to_string(),
+                ProxyStatus::Error => "error".to_string(),
+            };
+            if let Some(ms) = latency_ms {
+                node.latency = ms as u32;
+            }
+            node.error = None;
+        } else {
+            proxies.push(ProxyNode {
+                id: proxy_id.clone(),
+                address: proxy_id.clone(),
+                status: match status {
+                    ProxyStatus::Online => "online".to_string(),
+                    ProxyStatus::Offline => "offline".to_string(),
+                    ProxyStatus::Connecting => "connecting".to_string(),
+                    ProxyStatus::Error => "error".to_string(),
+                },
+                latency: latency_ms.unwrap_or_default() as u32,
+                error: None,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 async fn get_proxy_optimization_status(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let ms = {
-        let ms_guard = state.multi_source_download.lock().await;
-        ms_guard.as_ref().cloned()
+    let svc = state.proxy_latency.lock().await;
+    let summary = svc.get_status();
+    let top = svc.get_snapshot(Some(10));
+    Ok(serde_json::json!({
+        "summary": summary,
+        "topProxies": top
+    }))
+}
+
+#[tauri::command]
+async fn get_proxy_latency_snapshot(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<ProxyLatencyInfo>, String> {
+    let svc = state.proxy_latency.lock().await;
+    Ok(svc.get_snapshot(limit))
+}
+
+#[tauri::command]
+async fn get_best_proxy_candidate(
+    state: State<'_, AppState>,
+) -> Result<Option<ProxyLatencyInfo>, String> {
+    let svc = state.proxy_latency.lock().await;
+    Ok(svc.get_best_proxy())
+}
+
+#[tauri::command]
+async fn remove_proxy_latency_entry(
+    state: State<'_, AppState>,
+    proxy_id: String,
+) -> Result<bool, String> {
+    if proxy_id.trim().is_empty() {
+        return Err("proxy_id must not be empty".to_string());
+    }
+
+    let removed = {
+        let mut svc = state.proxy_latency.lock().await;
+        svc.remove_proxy(&proxy_id)
     };
 
-    if let Some(multi_source_service) = ms {
-        Ok(multi_source_service.get_proxy_optimization_status().await)
-    } else {
-        Err("Multi-source download service not available for proxy optimization status".to_string())
+    if removed {
+        let mut proxies = state.proxies.lock().await;
+        proxies.retain(|p| p.id != proxy_id);
     }
+
+    Ok(removed)
+}
+
+#[tauri::command]
+async fn clear_proxy_latency_data(state: State<'_, AppState>) -> Result<usize, String> {
+    let removed = {
+        let mut svc = state.proxy_latency.lock().await;
+        svc.clear()
+    };
+    Ok(removed)
+}
+
+#[tauri::command]
+async fn get_proxy_latency_entry(
+    state: State<'_, AppState>,
+    proxy_id: String,
+) -> Result<Option<ProxyLatencyInfo>, String> {
+    if proxy_id.trim().is_empty() {
+        return Err("proxy_id must not be empty".to_string());
+    }
+    let svc = state.proxy_latency.lock().await;
+    Ok(svc.get_proxy(&proxy_id))
+}
+
+#[tauri::command]
+async fn get_proxy_latency_score(
+    state: State<'_, AppState>,
+    proxy_id: String,
+) -> Result<f64, String> {
+    if proxy_id.trim().is_empty() {
+        return Err("proxy_id must not be empty".to_string());
+    }
+    let svc = state.proxy_latency.lock().await;
+    Ok(svc.get_proxy_score(&proxy_id))
 }
 
 #[tauri::command]
@@ -7125,6 +7237,15 @@ async fn clear_bootstrap_cache() -> Result<(), String> {
 async fn reconnect_geth_bootstrap(min_peers: Option<u32>) -> Result<u32, String> {
     let threshold = min_peers.unwrap_or(3);
     reconnect_to_bootstrap_if_needed(threshold).await
+}
+
+/// Reconnect to bootstrap/seed nodes and return a detailed state snapshot
+#[tauri::command]
+async fn reconnect_geth_bootstrap_snapshot(
+    min_peers: Option<u32>,
+) -> Result<PeerRecoverySnapshot, String> {
+    let threshold = min_peers.unwrap_or(3);
+    reconnect_to_bootstrap_with_snapshot(threshold).await
 }
 
 /// Add a specific peer to Geth
@@ -8950,6 +9071,22 @@ async fn remove_payment_checkpoint_session(
     state.payment_checkpoint.remove_session(&session_id).await
 }
 
+fn proxysec_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("proxysec")
+        .invoke_handler(tauri::generate_handler![
+            proxy_self_test,
+            proxy_self_test_all,
+            proxy_self_test_report,
+            get_proxy_latency_snapshot,
+            get_best_proxy_candidate,
+            remove_proxy_latency_entry,
+            clear_proxy_latency_data,
+            get_proxy_latency_entry,
+            get_proxy_latency_score
+        ])
+        .build()
+}
+
 // #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
@@ -8962,13 +9099,13 @@ fn main() {
     // Handle --download-geth flag
     if args.download_geth {
         use crate::geth_downloader::GethDownloader;
-        println!("[DL] Downloading Geth binary...");
+        println!("🔽 Downloading Geth binary...");
 
         let downloader = GethDownloader::new();
 
         if downloader.is_geth_installed() {
             println!(
-                "✅ Geth is already installed at: {}",
+                "✓ Geth is already installed at: {}",
                 downloader.geth_path().display()
             );
             std::process::exit(0);
@@ -8989,7 +9126,7 @@ fn main() {
         match result {
             Ok(_) => {
                 println!(
-                    "✅ Geth downloaded successfully to: {}",
+                    "✓ Geth downloaded successfully to: {}",
                     downloader.geth_path().display()
                 );
                 println!("\nYou can now run mining commands:");
@@ -9268,13 +9405,14 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
+        .plugin(proxysec_plugin())
         .manage(AppState {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
             miner_address: Mutex::new(None),
             active_account: Arc::new(Mutex::new(None)),
             active_account_private_key: Arc::new(Mutex::new(None)),
-            rpc_url: Mutex::new(crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone()),
+            rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
             dht: Mutex::new(Some(dht_service_arc.clone())),
             file_transfer: Mutex::new(None),
             webrtc: Mutex::new(None),
@@ -9284,6 +9422,8 @@ fn main() {
             )),
             proxies: Arc::new(Mutex::new(Vec::new())),
             privacy_proxies: Arc::new(Mutex::new(Vec::new())),
+            proxy_latency: Arc::new(Mutex::new(ProxyLatencyService::new())),
+            proxy_self_test_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             file_transfer_pump: Mutex::new(None),
             multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
@@ -9402,6 +9542,7 @@ fn main() {
             get_cached_bootstrap_health,
             clear_bootstrap_cache,
             reconnect_geth_bootstrap,
+            reconnect_geth_bootstrap_snapshot,
             add_geth_peer,
             get_geth_peers,
             get_geth_node_info,
@@ -10052,13 +10193,13 @@ fn main() {
                                 {
                                     Ok(_handle) => {
                                         info!(
-                                            "✅ Successfully restored torrent: {} to {:?}",
+                                            "✓ Successfully restored torrent: {} to {:?}",
                                             torrent.info_hash, torrent.output_path
                                         );
                                     }
                                     Err(e) => {
                                         error!(
-                                            "❌ Failed to restore torrent {}: {}",
+                                            "✗ Failed to restore torrent {}: {}",
                                             torrent.info_hash, e
                                         );
                                     }
@@ -10087,16 +10228,19 @@ fn main() {
                 };
 
                 if let Some(dht_service) = dht_clone_for_pump {
-                    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
-
-                    tauri::async_runtime::spawn(async move {
-                        pump_dht_events(
-                            app_handle,
-                            dht_service,
-                            proxies_arc_for_pump,
-                        )
-                        .await;
-                    });
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let proxies_arc_for_pump = state.proxies.clone();
+                        let proxy_lat_for_pump = state.proxy_latency.clone();
+                        tauri::async_runtime::spawn(async move {
+                            pump_dht_events(
+                                app_handle,
+                                dht_service,
+                                proxies_arc_for_pump,
+                                proxy_lat_for_pump,
+                            )
+                            .await;
+                        });
+                    }
                 }
             }
 
@@ -10249,7 +10393,7 @@ async fn create_bt_handler_with_fallback(
         {
             Ok(h) => {
                 println!(
-                    "✅ Using BitTorrent fallback port range: {}-{}",
+                    "✓ Using BitTorrent fallback port range: {}-{}",
                     start,
                     start + 10
                 );
@@ -10719,6 +10863,7 @@ async fn pump_dht_events(
     app_handle: tauri::AppHandle,
     dht_service: Arc<DhtService>,
     proxies_arc: Arc<Mutex<Vec<ProxyNode>>>,
+    proxy_latency_arc: Arc<Mutex<ProxyLatencyService>>,
 ) {
     loop {
         let events = dht_service.drain_events(64).await;
@@ -10777,6 +10922,16 @@ async fn pump_dht_events(
                             node
                         }
                     };
+                    {
+                        let mut svc = proxy_latency_arc.lock().await;
+                        let status_kind = match to_emit.status.as_str() {
+                            "online" => ProxyStatus::Online,
+                            "offline" => ProxyStatus::Offline,
+                            "connecting" => ProxyStatus::Connecting,
+                            _ => ProxyStatus::Error,
+                        };
+                        svc.update_proxy_latency(to_emit.id.clone(), latency_ms, status_kind);
+                    }
                     let _ = app_handle.emit("proxy_status_update", to_emit);
                 }
                 DhtEvent::NatStatus {
