@@ -6,7 +6,7 @@ Chiral Network is a **BitTorrent-inspired decentralized peer-to-peer file sharin
 
 Files are shared through **continuous seeding** - when you add a file, it instantly becomes available to the network, but only remains available as long as at least one peer continues to seed it. There are **no permanent storage guarantees**. Seeders earn cryptocurrency for sharing files, with payments handled on the blockchain layer regardless of which protocol is used for data transfer.
 
-All nodes are equal and can simultaneously seed files (earning cryptocurrency), download files (making payments), relay traffic for NAT-traversed peers, and participate in mining. 
+All nodes are equal and can simultaneously seed files (earning cryptocurrency), download files (making payments), and participate in mining. 
 
 ## Core Components
 
@@ -125,13 +125,6 @@ All nodes are equal and can simultaneously seed files (earning cryptocurrency), 
 - Secure the network with proof-of-work
 - Earn mining rewards and transaction fees
 - Requires computational resources
-
-**4. Relay Traffic (Optional)**
-- Run as Circuit Relay v2 server to help NAT'd peers
-- Facilitate hole punching (DCUtR)
-- Improve network connectivity
-- Earn reputation points for reliability
-- No commercial relay services
 
 ## Decoupled Architecture: Payments vs. Data Transfer
 
@@ -327,5 +320,5 @@ Chiral Network is a **BitTorrent-inspired P2P file sharing system with economic 
 - **Multiple Protocols**: Support for HTTP, WebTorrent (WebRTC), BitTorrent, and ed2k protocols
 - **Protocol-Agnostic Payments**: Same payment mechanism regardless of which protocol is used
 - **No Permanent Storage**: Files available only while seeders are online (BitTorrent-style)
-- **All Nodes Are Equal**: Everyone can seed, leech, relay, and mine simultaneously
+- **All Nodes Are Equal**: Everyone can seed, leech, and mine simultaneously
 - **Blockchain Integration**: Ethereum-compatible chain for payments and optional mining

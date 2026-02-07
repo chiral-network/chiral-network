@@ -71,7 +71,6 @@ The transition between roles is automated and dynamic, governed by the `AutoNAT`
 ## Technical Implementation
 
 ### Configuration
-*   **`enable_autorelay`**: Set to `false` by default. Relays are no longer the primary fallback.
 *   **`kademlia.set_mode`**: Initialized to `Client`.
 
 ### Logic Flow (`src-tauri/src/dht.rs`)

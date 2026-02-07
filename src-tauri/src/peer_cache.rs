@@ -55,9 +55,6 @@ pub struct PeerCacheEntry {
     /// Whether this peer is a bootstrap node
     pub is_bootstrap: bool,
     
-    /// Whether this peer supports circuit relay
-    pub supports_relay: bool,
-    
     /// Computed reliability score (0.0 to 1.0)
     pub reliability_score: f64,
 }
@@ -75,7 +72,6 @@ impl PeerCacheEntry {
         reliability_score: f64,
         last_seen: u64,
         is_bootstrap: bool,
-        supports_relay: bool,
     ) -> Self {
         Self {
             peer_id,
@@ -87,7 +83,6 @@ impl PeerCacheEntry {
             total_bytes_transferred,
             average_latency_ms: average_latency_ms.unwrap_or(0) as u32,
             is_bootstrap,
-            supports_relay,
             reliability_score,
         }
     }
@@ -243,7 +238,6 @@ impl PeerCache {
     
     /// Get statistics about the peer cache
     pub fn get_stats(&self) -> PeerCacheStats {
-        let relay_count = self.peers.iter().filter(|p| p.supports_relay).count();
         let bootstrap_count = self.peers.iter().filter(|p| p.is_bootstrap).count();
         
         let avg_reliability = if !self.peers.is_empty() {
@@ -262,7 +256,6 @@ impl PeerCache {
         
         PeerCacheStats {
             total_peers: self.peers.len(),
-            relay_capable_peers: relay_count,
             bootstrap_peers: bootstrap_count,
             average_reliability: avg_reliability,
             total_transfers,
@@ -275,7 +268,6 @@ impl PeerCache {
 #[derive(Debug, Clone)]
 pub struct PeerCacheStats {
     pub total_peers: usize,
-    pub relay_capable_peers: usize,
     pub bootstrap_peers: usize,
     pub average_reliability: f64,
     pub total_transfers: u64,
@@ -321,7 +313,6 @@ mod tests {
             0.8,
             1700000000,
             false,
-            true,
         );
         
         assert_eq!(entry.peer_id, "12D3KooWTest");
@@ -342,7 +333,6 @@ mod tests {
             total_bytes_transferred: 0,
             average_latency_ms: 0,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: 0.5,
         };
         
@@ -370,7 +360,6 @@ mod tests {
                 total_bytes_transferred: 0,
                 average_latency_ms: 0,
                 is_bootstrap: false,
-                supports_relay: false,
                 reliability_score: (i as f64) / 150.0, // Scores from 0.0 to 1.0
             };
             cache.peers.push(entry);
@@ -410,7 +399,6 @@ mod tests {
             total_bytes_transferred: 0,
             average_latency_ms: 0,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: 0.5,
         });
         
@@ -425,7 +413,6 @@ mod tests {
             total_bytes_transferred: 0,
             average_latency_ms: 0,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: 0.5,
         });
         
@@ -451,7 +438,6 @@ mod tests {
             total_bytes_transferred: 1024000,
             average_latency_ms: 50,
             is_bootstrap: false,
-            supports_relay: true,
             reliability_score: 0.8,
         });
         
@@ -465,7 +451,6 @@ mod tests {
             total_bytes_transferred: 2048000,
             average_latency_ms: 30,
             is_bootstrap: true,
-            supports_relay: false,
             reliability_score: 0.9,
         });
         
@@ -479,14 +464,12 @@ mod tests {
             total_bytes_transferred: 512000,
             average_latency_ms: 60,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: 0.7,
         });
         
         let stats = cache.get_stats();
         
         assert_eq!(stats.total_peers, 3);
-        assert_eq!(stats.relay_capable_peers, 1);
         assert_eq!(stats.bootstrap_peers, 1);
         assert_eq!(stats.total_transfers, 10 + 20 + 5);
         assert_eq!(stats.total_bytes_transferred, 1024000 + 2048000 + 512000);
@@ -501,7 +484,6 @@ mod tests {
         let stats = cache.get_stats();
         
         assert_eq!(stats.total_peers, 0);
-        assert_eq!(stats.relay_capable_peers, 0);
         assert_eq!(stats.bootstrap_peers, 0);
         assert_eq!(stats.average_reliability, 0.0);
         assert_eq!(stats.total_transfers, 0);

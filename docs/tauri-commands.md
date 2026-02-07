@@ -277,9 +277,6 @@ These commands manage pool metadata locally and persist user-created pools to di
   - `is_bootstrap?: boolean`
   - `chunk_size_kb?: number`
   - `cache_size_mb?: number`
-  - `enable_autorelay?: boolean` (disabled by default; disabled automatically for bootstrap nodes or when `CHIRAL_DISABLE_AUTORELAY=1`)
-  - `preferred_relays?: string[]`
-  - `enable_relay_server?: boolean`
 - **Returns**: `string` – the local libp2p peer ID.
 - **Description**: Boots the libp2p/Kademlia node, wires up file-transfer and multi-source services, and starts emitting events (`dht_peer_*`, `nat_status_update`, `found_file`, etc.) to the frontend.
 
@@ -325,7 +322,7 @@ These commands manage pool metadata locally and persist user-created pools to di
 
 - **Parameters**: _(none)_
 - **Returns**: `DhtMetricsSnapshot | null`
-- **Description**: Captures node health including peer counts, reachability, AutoRelay/DCUtR stats, observed addresses, and reservation metrics.
+- **Description**: Captures node health including peer counts, reachability, observed addresses, and related metrics.
 
 ### `get_dht_events`
 
