@@ -238,9 +238,18 @@
       }
       toasts.show('Connected to P2P network!', 'success');
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to connect';
-      console.error('Failed to connect:', err);
-      toasts.show(`Connection failed: ${error}`, 'error');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      // If DHT is already running (e.g. stale state after logout), sync the UI
+      if (errMsg.includes('already running')) {
+        networkConnected.set(true);
+        const peerId = await dhtService.getPeerId();
+        if (peerId) localPeerId = peerId;
+        toasts.show('Reconnected to P2P network', 'success');
+      } else {
+        error = errMsg;
+        console.error('Failed to connect:', err);
+        toasts.show(`Connection failed: ${error}`, 'error');
+      }
     } finally {
       isConnecting = false;
     }
